@@ -14,7 +14,6 @@ import type {
 
 type TestTransport = "chrome" | "chrome-node";
 type TestMode = "agent";
-type TestRequest = { url: string; agentId: string };
 export type TestSession = MeetingSessionRecord<TestTransport, TestMode> & {
   browser?: {
     launched: boolean;
@@ -26,7 +25,7 @@ export type TestSession = MeetingSessionRecord<TestTransport, TestMode> & {
 };
 const TestRuntime = MeetingSessionRuntime<
   TestSession,
-  TestRequest,
+  { url: string; agentId: string },
   TestTransport,
   TestMode,
   MeetingBrowserHealth,
@@ -36,6 +35,25 @@ const TestRuntime = MeetingSessionRuntime<
 >;
 type RuntimeOptions = ConstructorParameters<typeof TestRuntime>[0];
 export type TestJoinContext = Parameters<RuntimeOptions["joinTransport"]>[0]["context"];
+
+export const testBrowser = (
+  targetId: string,
+  overrides: Partial<NonNullable<TestSession["browser"]>> = {},
+) => ({ launched: true, tab: { targetId, openedByPlugin: true }, ...overrides });
+
+export function releaseTab(session: TestSession) {
+  if (session.browser) {
+    session.browser.tab = undefined;
+  }
+  return true;
+}
+
+export function captionSnapshot(
+  lines: MeetingTranscriptSnapshot["lines"],
+  options: Pick<MeetingTranscriptSnapshot, "epoch" | "pendingLines"> = {},
+): MeetingTranscriptSnapshot {
+  return { droppedLines: 0, epoch: "page-1", ...options, lines };
+}
 
 export function createTestRuntime(
   params: Pick<RuntimeOptions, "joinTransport" | "releaseBrowserTab"> &
@@ -115,8 +133,7 @@ export function createTestRuntime(
     releaseBrowserTab: (session) => params.releaseBrowserTab(session),
     refreshBrowserHealth: async () => {},
     refreshStatus: async () => {},
-    refreshReusableSession: async (session, request, resolved) =>
-      await params.refreshReusableSession?.(session, request, resolved),
+    refreshReusableSession: params.refreshReusableSession ?? (async () => undefined),
     ensureRealtimeBridge: params.ensureRealtimeBridge ?? (async () => undefined),
     captureTranscript: async (_session, options) => await params.captureTranscript?.(options),
     speakViaTransport: async () => undefined,
@@ -163,11 +180,10 @@ export function createParticipationTestRuntime(
       execute,
     },
     joinTransport: async ({ session }) => {
-      session.browser = {
-        launched: true,
+      session.browser = testBrowser("tracked-tab", {
         tab: { targetId: "tracked-tab", openedByPlugin: false },
         health: { inCall: true },
-      };
+      });
       return {};
     },
     releaseBrowserTab: async () => true,

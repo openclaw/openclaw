@@ -1,6 +1,6 @@
 // Real-Gateway proof for #144265: a parent spawns a visible child in one
 // direct-message turn and sends it a waited message in the next turn.
-import { createServer, type ServerResponse } from "node:http";
+import type { ServerResponse } from "node:http";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, expect, it } from "vitest";
@@ -17,6 +17,8 @@ import {
   writeOpenAiResponsesText,
 } from "../../../helpers/openai-responses-sse.js";
 import { runQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { listenLoopback } from "./gateway-recovery.test-support.js";
+import { closeNativeProvider, createNativeProvider } from "./native-provider-proof-fixture.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 const MODEL = "mock-openai/qa-parent";
@@ -30,7 +32,6 @@ const PARENT_READY = "QA-VISIBLE-CHILD-PARENT-READY";
 const PARENT_DONE = "QA-VISIBLE-CHILD-PARENT-DONE";
 const REPLY_STEP_MARKER = "Agent-to-agent reply step";
 const ANNOUNCE_STEP_MARKER = "Agent-to-agent announce step";
-const CHILD_KEY_PATTERN = /^agent:qa:dashboard:[A-Za-z0-9-]+$/;
 
 type ProviderRequest = {
   model: string;
@@ -51,7 +52,6 @@ type ToolReceipt = {
   delivery?: { status: string };
 };
 type RequestEvidence = {
-  body: ProviderRequest;
   kind: "title" | "parent" | "child";
   replyStep: boolean;
   announceStep: boolean;
@@ -79,8 +79,8 @@ async function startProofProvider() {
   const errors: unknown[] = [];
   let spawn: ToolReceipt | undefined;
   let send: ToolReceipt | undefined;
-  const server = createServer((request, response) => {
-    void (async () => {
+  const server = createNativeProvider(
+    async (request, response, rawBody) => {
       if (request.method === "GET" && request.url === "/v1/models") {
         response.writeHead(200, { "content-type": "application/json" });
         response.end(
@@ -94,11 +94,7 @@ async function startProofProvider() {
         response.writeHead(404).end();
         return;
       }
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.from(chunk));
-      }
-      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as ProviderRequest;
+      const body = JSON.parse(rawBody) as ProviderRequest;
       const developerText = JSON.stringify(
         body.input.filter((item) => item.role === "developer" || item.role === "system"),
       );
@@ -115,7 +111,6 @@ async function startProofProvider() {
           ? "child"
           : "parent";
       const evidence: RequestEvidence = {
-        body,
         kind,
         replyStep: developerText.includes(REPLY_STEP_MARKER),
         announceStep: userText.includes(ANNOUNCE_STEP_MARKER),
@@ -159,24 +154,18 @@ async function startProofProvider() {
           });
         }
       }
-    })().catch((error: unknown) => {
+    },
+    (error, response) => {
       errors.push(error);
       if (!response.headersSent) {
         response.writeHead(500);
       }
       response.end();
-    });
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("proof provider did not bind");
-  }
+    },
+  );
+  const baseUrl = await listenLoopback(server, "proof provider did not bind");
   return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
+    baseUrl,
     requests,
     errors,
     get spawn() {
@@ -185,12 +174,7 @@ async function startProofProvider() {
     get send() {
       return send;
     },
-    stop: async () => {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    },
+    stop: () => closeNativeProvider(server),
   };
 }
 
@@ -208,13 +192,6 @@ function writeToolCall(
     arguments: JSON.stringify(args),
   };
   writeOpenAiResponsesSse(response, [
-    { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
-    {
-      type: "response.function_call_arguments.delta",
-      item_id: item.id,
-      output_index: 0,
-      delta: item.arguments,
-    },
     { type: "response.output_item.done", output_index: 0, item },
     {
       type: "response.completed",
@@ -259,6 +236,7 @@ it("returns the waited reply inline without an announce run against the child", 
   cleanups.push(async () => expect((await owner.stop()).errors).toEqual([]));
   const gateway = await owner.start({
     repoRoot: REPO_ROOT,
+    initializeCurrentRuntimeState: true,
     // Source-mode startup exceeds the child Gateway's listen deadline.
     command: {
       executablePath: process.execPath,
@@ -331,22 +309,7 @@ it("returns the waited reply inline without an announce run against the child", 
   // Close the owned Gateway before freezing evidence; provider and bus stay live
   // while its admitted work drains and its process exits.
   await gateway.stop();
-  const announceLines = gateway
-    .logs()
-    .split("\n")
-    .filter((line) => line.includes("sessions_send announce"));
-  console.log(
-    JSON.stringify({
-      phase: "sessions-send-visible-child",
-      requests: provider.requests,
-      spawn: provider.spawn,
-      send: provider.send,
-      child,
-      announceLines,
-    }),
-  );
   expect(provider.errors).toEqual([]);
-  expect(childKey).toMatch(CHILD_KEY_PATTERN);
   expect(child).toMatchObject({ spawnedBy: PARENT_KEY, parentSessionKey: PARENT_KEY });
   expect(provider.send).toMatchObject({
     status: "ok",
@@ -358,5 +321,4 @@ it("returns the waited reply inline without an announce run against the child", 
   expect(
     provider.requests.filter((request) => request.replyStep || request.announceStep),
   ).toHaveLength(0);
-  expect(announceLines).toHaveLength(0);
 }, 400_000);

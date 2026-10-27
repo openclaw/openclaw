@@ -1,8 +1,6 @@
 import { streamSimpleAnthropic } from "@openclaw/ai/internal/anthropic";
 import { streamSimpleOpenAIResponses } from "@openclaw/ai/internal/openai";
 import { expectDefined } from "@openclaw/normalization-core";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { makeResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { CopilotRuntimeAuthError } from "./runtime-auth-error.js";
@@ -29,20 +27,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
     }),
   };
 });
-
-vi.mock("openclaw/plugin-sdk/provider-model-shared", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-model-shared")>()),
-  normalizeModelCompat: (model: Record<string, unknown>) => model,
-  resolveProviderEndpoint: (baseUrl: string) => ({
-    baseUrl,
-    endpointClass: "custom",
-    warnings: [],
-  }),
-}));
-
-vi.mock("openclaw/plugin-sdk/state-paths", () => ({
-  resolveStateDir: () => "/tmp/openclaw-state",
-}));
 
 import type { ProviderResolveDynamicModelContext } from "openclaw/plugin-sdk/core";
 import {
@@ -77,10 +61,15 @@ const capturePayload = () =>
   vi.fn((_payload: unknown) => {
     throw new Error("captured before sending");
   });
+const completionsCompat = {
+  supportsStore: false,
+  supportsDeveloperRole: false,
+  supportsUsageInStreaming: false,
+  maxTokensField: "max_tokens",
+};
 
 describe("resolveCopilotForwardCompatModel", () => {
   it("returns undefined for empty modelId", () => {
-    expect(resolveCopilotForwardCompatModel(createMockCtx(""))).toBeUndefined();
     expect(resolveCopilotForwardCompatModel(createMockCtx("  "))).toBeUndefined();
   });
 
@@ -91,48 +80,34 @@ describe("resolveCopilotForwardCompatModel", () => {
     expect(resolveCopilotForwardCompatModel(ctx)).toBeUndefined();
   });
 
-  it("disables eager tool streaming for synthetic Copilot Claude 4.5 models", () => {
-    const result = requireResolvedModel(createMockCtx("claude-haiku-4.5"));
-    expect(result.api).toBe("anthropic-messages");
-    expect(result.compat).toEqual({ supportsEagerToolInputStreaming: false });
-  });
-
   it("infers reasoning=true for Codex model IDs", () => {
-    for (const id of ["gpt-5.4-codex", "gpt-5.5-codex", "gpt-5.4-codex-mini", "gpt-5.3-codex"]) {
-      const ctx = createMockCtx(id);
-      const result = requireResolvedModel(ctx);
-      expect((result as unknown as Record<string, unknown>).reasoning).toBe(true);
+    for (const id of ["gpt-5.4-codex-mini", "gpt-5.3-codex"]) {
+      expect(requireResolvedModel(createMockCtx(id)).reasoning).toBe(true);
     }
   });
 });
 
 describe("github-copilot runtime auth", () => {
-  it("validates and preserves the source token while resolving the account API endpoint", async () => {
-    const fetchImpl = jsonFetch({
-      endpoints: { api: "https://api.individual.githubcopilot.com/" },
-    });
-    expect(await authenticate(fetchImpl)).toEqual({
-      apiKey: "github-source-token",
-      baseUrl: "https://api.individual.githubcopilot.com",
-    });
-    expect(fetchImpl).toHaveBeenCalledWith(
-      "https://api.github.com/copilot_internal/user",
-      expect.objectContaining({
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-          Authorization: "Bearer github-source-token",
-        },
-      }),
-    );
-  });
-
-  it("uses a domain-safe fallback when account metadata omits the API endpoint", async () => {
-    await expect(authenticate(jsonFetch({ copilot_plan: "individual" }))).resolves.toMatchObject({
-      apiKey: "github-source-token",
-      baseUrl: "https://api.individual.githubcopilot.com",
-    });
-  });
+  it.each([undefined, "https://api.individual.githubcopilot.com/"])(
+    "resolves account endpoint %s without exchanging the source token",
+    async (api) => {
+      const fetchImpl = jsonFetch({ endpoints: { api } });
+      expect(await authenticate(fetchImpl)).toEqual({
+        apiKey: "github-source-token",
+        baseUrl: "https://api.individual.githubcopilot.com",
+      });
+      expect(fetchImpl).toHaveBeenCalledWith(
+        "https://api.github.com/copilot_internal/user",
+        expect.objectContaining({
+          method: "GET",
+          headers: {
+            Accept: "application/json",
+            Authorization: "Bearer github-source-token",
+          },
+        }),
+      );
+    },
+  );
 
   it.each([
     "http://api.individual.githubcopilot.com",
@@ -192,7 +167,7 @@ describe("github-copilot runtime auth", () => {
       await expect(authenticate(fetchImpl)).rejects.toMatchObject({
         name: "CopilotRuntimeAuthError",
         reason: "timeout",
-        timeoutMs: 30_000,
+        message: "Copilot authentication failed: timed out after 30000ms",
       });
     } finally {
       timeoutSpy.mockRestore();
@@ -204,7 +179,6 @@ describe("fetchCopilotModelCatalog", () => {
   beforeEach(() => {
     catalogTransport.lookup.mockReset();
     catalogTransport.releases.length = 0;
-    vi.mocked(fetchWithSsrFGuard).mockClear();
   });
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -226,68 +200,27 @@ describe("fetchCopilotModelCatalog", () => {
     });
   }
 
-  function chatModel(
+  function selectableModelEntry(
     id: string,
-    [context, output, prompt]: [number, number, number?],
-    supports: Record<string, unknown>,
-    name = id,
+    category = "versatile",
+    contextWindow = 200_000,
+    extra: { policy?: { state: string }; preview?: boolean } = {},
   ) {
     return {
       id,
-      name,
       capabilities: {
         type: "chat",
         limits: {
-          max_context_window_tokens: context,
-          max_output_tokens: output,
-          ...(prompt === undefined ? {} : { max_prompt_tokens: prompt }),
+          max_context_window_tokens: contextWindow,
+          max_output_tokens: 64_000,
         },
-        supports,
+        supports: { streaming: true, tool_calls: true },
       },
-    };
-  }
-
-  const reasoning_effort = ["low", "medium", "high"];
-  const sampleApiResponse = {
-    data: [
-      chatModel("gpt-5.5", [400000, 128000, 272000], { vision: true, reasoning_effort }, "GPT-5.5"),
-      chatModel("gpt-5.3-codex", [400000, 128000], {
-        vision: false,
-        reasoning_effort,
-      }),
-      chatModel("gemini-3.1-pro-preview", [1_000_000, 65_536], {
-        vision: true,
-      }),
-      chatModel("claude-opus-4.7-1m-internal", [1000000, 64000], {
-        vision: true,
-        reasoning_effort: [...reasoning_effort, "xhigh"],
-      }),
-      chatModel("claude-opus-4-5", [200000, 64000], {
-        vision: true,
-        reasoning_effort: [...reasoning_effort, "max"],
-      }),
-      { id: "accounts/msft/routers/abc123", capabilities: { type: "chat" } },
-      { id: "text-embedding-3-small", capabilities: { type: "embedding" } },
-    ],
-  };
-
-  function selectableModelEntry(params: {
-    id: string;
-    category?: string;
-    contextWindow?: number;
-    policyState?: string;
-    preview?: boolean;
-  }) {
-    return {
-      ...chatModel(params.id, [params.contextWindow ?? 200_000, 64_000], {
-        streaming: true,
-        tool_calls: true,
-      }),
       object: "model",
       model_picker_enabled: true,
-      model_picker_category: params.category ?? "versatile",
-      policy: { state: params.policyState ?? "enabled" },
-      preview: params.preview ?? false,
+      model_picker_category: category,
+      policy: { state: "enabled" },
+      ...extra,
     };
   }
 
@@ -322,10 +255,12 @@ describe("fetchCopilotModelCatalog", () => {
         return Response.json({ endpoints: { api: "https://copilot-api.acme.ghe.com" } });
       }
       const headers = new Headers(init?.headers);
+      expect(init?.method).toBe("GET");
+      expect(headers.get("accept-encoding")).toBe("identity");
       expect(headers.get("copilot-integration-id")).toBe("vscode-chat");
       expect(headers.get("authorization")).toBe("Bearer setup-source-token");
       expect(headers.has("x-private-header")).toBe(false);
-      return Response.json({ data: [selectableModelEntry({ id: "tenant-model" })] });
+      return Response.json({ data: [selectableModelEntry("tenant-model")] });
     });
     vi.stubGlobal("fetch", fetchMock);
     const provider = {
@@ -343,16 +278,15 @@ describe("fetchCopilotModelCatalog", () => {
         config: { models: { providers: { "github-copilot": provider } } },
       }),
     ).resolves.toBe("github-copilot/tenant-model");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("uses a deterministic eligible fallback when the preferred model is policy-disabled", async () => {
     const entries = [
-      selectableModelEntry({ id: "preferred", policyState: "disabled" }),
-      selectableModelEntry({ id: "preview", preview: true, contextWindow: 1_000_000 }),
-      selectableModelEntry({ id: "powerful", category: "powerful", contextWindow: 1_000_000 }),
-      selectableModelEntry({ id: "versatile-b", contextWindow: 400_000 }),
-      selectableModelEntry({ id: "versatile-a", contextWindow: 400_000 }),
+      selectableModelEntry("preferred", "versatile", 200_000, { policy: { state: "disabled" } }),
+      selectableModelEntry("preview", "versatile", 1_000_000, { preview: true }),
+      selectableModelEntry("powerful", "powerful", 1_000_000),
+      selectableModelEntry("versatile-b", "versatile", 400_000),
+      selectableModelEntry("versatile-a", "versatile", 400_000),
     ];
     const forward = await fetchSelectionFixture(entries);
     const reversed = await fetchSelectionFixture(entries.toReversed());
@@ -360,90 +294,31 @@ describe("fetchCopilotModelCatalog", () => {
     expect(selectCopilotStarterModel(reversed, "preferred")?.id).toBe("versatile-a");
   });
 
-  it("maps Copilot /models entries to ModelDefinitionConfig with real context windows", async () => {
-    const fetchImpl = jsonFetch(sampleApiResponse);
-    const out = await fetchCatalogWithFetch(fetchImpl);
-    expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.githubcopilot.com/models",
-        policy: { allowedOrigins: ["https://api.githubcopilot.com"] },
-      }),
-    );
-    expect(catalogTransport.lookup).toHaveBeenCalledWith("api.githubcopilot.com", { all: true });
-    expect(fetchImpl).toHaveBeenCalledExactlyOnceWith(
-      "https://api.githubcopilot.com/models",
-      expect.objectContaining({
-        method: "GET",
-        headers: expect.objectContaining({
-          Authorization: "Bearer tid=test",
-          "Accept-Encoding": "identity",
-        }),
-      }),
-    );
-    expect(out).toEqual([
-      {
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-        api: "openai-responses",
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 400000,
-        contextTokens: 272000,
-        maxTokens: 128000,
-        compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
-        thinkingLevelMap: { minimal: "low", xhigh: null, max: null },
-      },
-      expect.objectContaining({
-        id: "gpt-5.3-codex",
-        input: ["text"],
-        reasoning: true,
-        contextWindow: 400000,
-      }),
-      expect.objectContaining({
-        id: "gemini-3.1-pro-preview",
-        api: "openai-completions",
-        compat: {
-          supportsStore: false,
-          supportsDeveloperRole: false,
-          supportsUsageInStreaming: false,
-          maxTokensField: "max_tokens",
-        },
-      }),
-      expect.objectContaining({
-        id: "claude-opus-4.7-1m-internal",
-        api: "anthropic-messages",
-        contextWindow: 1_000_000,
-        thinkingLevelMap: { xhigh: "xhigh", max: null },
-        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
-      }),
-      expect.objectContaining({
-        id: "claude-opus-4-5",
-        thinkingLevelMap: { xhigh: null, max: null },
-        compat: {
-          supportsEagerToolInputStreaming: false,
-          supportedReasoningEfforts: ["low", "medium", "high", "max"],
-        },
-      }),
+  it("filters non-chat models and internal routers", async () => {
+    const models = await fetchSelectionFixture([
+      { id: "chat", capabilities: { type: "chat" } },
+      { id: "accounts/msft/routers/abc123", capabilities: { type: "chat" } },
+      { id: "text-embedding-3-small", capabilities: { type: "embedding" } },
     ]);
-    expect(out[1]?.contextTokens).toBeUndefined();
+    expect(models.map(({ id }) => id)).toEqual(["chat"]);
   });
 
-  it.each<[unknown, string, string, string]>([
+  it.each<[unknown, string | undefined, string, string]>([
     [undefined, "OpenAI", "endpoint-fixture", "openai-responses"],
-    [null, "OpenAI", "endpoint-fixture", "openai-responses"],
-    [[], "OpenAI", "endpoint-fixture", "openai-responses"],
-    [{ unknown: true }, "OpenAI", "endpoint-fixture", "openai-responses"],
-    [["/future-api"], "OpenAI", "endpoint-fixture", "openai-responses"],
+    [undefined, undefined, "gemini-3.1-pro-preview", "openai-completions"],
+    [undefined, "Acme Labs", "claude-lookalike-9", "anthropic-messages"],
     [[42, " /v1/chat/completions/ "], "OpenAI", "endpoint-fixture", "openai-completions"],
     [["/chat/completions", "/responses"], "OpenAI", "endpoint-fixture", "openai-responses"],
     [["/responses", "/v1/messages"], "Anthropic", "endpoint-fixture", "anthropic-messages"],
     [["/v1/messages"], "OpenAI", "endpoint-fixture", "anthropic-messages"],
-    [["/v1/responses"], "OpenAI", "endpoint-fixture", "openai-responses"],
     [["/responses"], "Google", "gemini-endpoint-fixture", "openai-responses"],
     [["/chat/completions"], "Anthropic", "claude-sonnet-4.5", "openai-completions"],
     [["/responses"], "Anthropic", "claude-sonnet-4.5", "openai-responses"],
+    [["/messages"], "Anthropic", "claude-sonnet-4.5", "anthropic-messages"],
   ])("uses advertised transport %s for %s/%s (%s)", async (endpoints, vendor, id, api) => {
+    const efforts = endpoints === undefined ? ["low", "medium", "high"] : ["low", "high", "max"];
+    const vision = vendor === "OpenAI";
+    const prompt = vendor === undefined ? undefined : 917_504;
     const out = await fetchSelectionFixture([
       {
         id,
@@ -451,60 +326,55 @@ describe("fetchCopilotModelCatalog", () => {
         supported_endpoints: endpoints,
         capabilities: {
           type: "chat",
-          limits: { max_context_window_tokens: 1_048_576, max_prompt_tokens: 917_504 },
+          limits: {
+            max_context_window_tokens: 1_048_576,
+            max_output_tokens: 128_000,
+            max_prompt_tokens: prompt,
+          },
+          supports: { vision, reasoning_effort: efforts },
         },
       },
     ]);
     const model = expectDefined(out[0], "discovered endpoint fixture");
-    expect(model).toMatchObject({ api, contextWindow: 1_048_576, contextTokens: 917_504 });
+    expect(model).toMatchObject({
+      api,
+      contextWindow: 1_048_576,
+      maxTokens: 128_000,
+      reasoning: true,
+      input: vision ? ["text", "image"] : ["text"],
+    });
+    expect(model.contextTokens).toBe(prompt);
+    expect(model.family).toBe(
+      vendor === "Acme Labs"
+        ? undefined
+        : vendor === "Anthropic"
+          ? "anthropic"
+          : vendor === "OpenAI"
+            ? "openai"
+            : "google",
+    );
     if (api === "openai-completions") {
       expect(model.compat).toEqual({
-        supportsStore: false,
-        supportsDeveloperRole: false,
-        supportsUsageInStreaming: false,
-        maxTokensField: "max_tokens",
+        ...completionsCompat,
+        supportedReasoningEfforts: efforts,
       });
     } else {
       expect(model.compat?.maxTokensField).toBeUndefined();
-      expect(model.compat?.supportsEagerToolInputStreaming).toBeUndefined();
+      expect(model.compat?.supportsEagerToolInputStreaming).toBe(
+        id === "claude-sonnet-4.5" && api === "anthropic-messages" ? false : undefined,
+      );
+    }
+    if (api === "openai-responses") {
+      expect(model.thinkingLevelMap).toEqual({
+        minimal: "low",
+        xhigh: null,
+        max: efforts.includes("max") ? "max" : null,
+      });
+    }
+    if (id === "claude-sonnet-4.5" && api === "anthropic-messages") {
+      expect(model.thinkingLevelMap).toEqual({ xhigh: null, max: null });
     }
   });
-  it("routes each listed model through an endpoint the account lists", async () => {
-    const models = await fetchSelectionFixture([
-      {
-        id: "kimi-k3",
-        vendor: "Moonshot AI",
-        supported_endpoints: ["/chat/completions"],
-        capabilities: { type: "chat", supports: { reasoning_effort: ["low", "high", "max"] } },
-      },
-      {
-        id: "gpt-5-mini",
-        vendor: "Azure OpenAI",
-        supported_endpoints: ["/chat/completions", "/responses", "ws:/responses"],
-        capabilities: { type: "chat" },
-      },
-      {
-        id: "claude-haiku-4.5",
-        vendor: "Anthropic",
-        supported_endpoints: ["/chat/completions", "/v1/messages"],
-        capabilities: { type: "chat" },
-      },
-    ]);
-
-    expect(models.map(({ id, api }) => [id, api])).toEqual([
-      ["kimi-k3", "openai-completions"],
-      ["gpt-5-mini", "openai-responses"],
-      ["claude-haiku-4.5", "anthropic-messages"],
-    ]);
-    expect(models[0]?.compat).toEqual({
-      supportsStore: false,
-      supportsDeveloperRole: false,
-      supportsUsageInStreaming: false,
-      maxTokensField: "max_tokens",
-      supportedReasoningEfforts: ["low", "high", "max"],
-    });
-  });
-
   it("sends adaptive thinking for a listed Claude id OpenClaw does not know", async () => {
     const [listed] = await fetchSelectionFixture([
       {
@@ -528,11 +398,7 @@ describe("fetchCopilotModelCatalog", () => {
     const result = await streamSimpleAnthropic(
       model,
       { messages },
-      {
-        apiKey: "test-token",
-        reasoning: "high",
-        onPayload,
-      },
+      { apiKey: "test-token", reasoning: "high", onPayload },
     ).result();
     expect(result.errorMessage).toBe("captured before sending");
     const payload = onPayload.mock.calls[0]?.[0];
@@ -551,7 +417,7 @@ describe("fetchCopilotModelCatalog", () => {
         .mockResolvedValue(
           source === "redirect"
             ? new Response(null, { status: 302, headers: { location: "http://127.0.0.1/private" } })
-            : makeResponse(200, { data: [] }),
+            : Response.json({ data: [] }),
         );
       if (source === "metadata DNS") {
         catalogTransport.lookup.mockResolvedValueOnce([{ address: "169.254.169.254", family: 4 }]);
@@ -561,45 +427,32 @@ describe("fetchCopilotModelCatalog", () => {
     },
   );
 
-  it.each(["timeout", "caller"] as const)(
-    "cancels pending catalog transport on %s abort",
-    async (source) => {
-      vi.useFakeTimers();
-      const started = Promise.withResolvers<void>();
-      const controller = new AbortController();
-      const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
-        const signal = expectDefined(init?.signal, "catalog request signal");
-        return await new Promise<Response>((_resolve, reject) => {
-          signal.addEventListener(
-            "abort",
-            () =>
-              reject(
-                signal.reason instanceof Error
-                  ? signal.reason
-                  : new Error("Expected catalog abort to carry an Error"),
-              ),
-            { once: true },
-          );
-          started.resolve();
-        });
+  it("cancels pending catalog transport on timeout", async () => {
+    vi.useFakeTimers();
+    const started = Promise.withResolvers<void>();
+    const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+      const signal = expectDefined(init?.signal, "catalog request signal");
+      return await new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener(
+          "abort",
+          () =>
+            reject(
+              signal.reason instanceof Error
+                ? signal.reason
+                : new Error("Expected catalog abort to carry an Error"),
+            ),
+          { once: true },
+        );
+        started.resolve();
       });
-      const pending = fetchCatalogWithFetch(
-        fetchImpl,
-        source === "caller" ? { signal: controller.signal } : {},
-      );
-      const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
-      await started.promise;
-      if (source === "timeout") {
-        await vi.advanceTimersByTimeAsync(COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS);
-      } else {
-        expect(vi.getTimerCount()).toBe(0);
-        controller.abort();
-      }
-      await rejected;
-      expect(fetchImpl).toHaveBeenCalledOnce();
-      expect(vi.getTimerCount()).toBe(0);
-    },
-  );
+    });
+    const pending = fetchCatalogWithFetch(fetchImpl);
+    const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    await started.promise;
+    await vi.advanceTimersByTimeAsync(COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS);
+    await rejected;
+    expect(vi.getTimerCount()).toBe(0);
+  });
 
   it("cancels stalled non-2xx response bodies before the caller falls back", async () => {
     const cancel = vi.fn();

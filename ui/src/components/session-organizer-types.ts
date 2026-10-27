@@ -1,7 +1,3 @@
-import type {
-  FsListDirResult,
-  WorktreeRepositoryStatus,
-} from "../../../packages/gateway-protocol/src/index.js";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import type {
   SidebarRecentSession,
@@ -23,6 +19,7 @@ export interface SessionOrganizerDependencies {
   readonly sidebarEntries: readonly string[];
   readonly onUpdateSidebarEntries?: (entries: string[]) => void;
   sessionsGrouping: SidebarSessionsGrouping;
+  effectiveSessionsGrouping(): SidebarSessionsGrouping;
   sessionsShowCron: boolean;
   sessionsShowPreview: boolean;
   sessionsShowSystem: boolean;
@@ -30,14 +27,13 @@ export interface SessionOrganizerDependencies {
   clearSessionSelection(): void;
   findSidebarMenuSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
   knownSessionGroups(): string[];
-  listSessionGroupFolders(path?: string): Promise<FsListDirResult>;
-  inspectSessionGroupRepository(path?: string): Promise<WorktreeRepositoryStatus>;
-  sessionGroupDefaults(name: string): { cwd: string; worktree: boolean } | null;
+  sessionGroupWorkspace(): string | undefined;
   knownSessionCatalogIds(): string[];
   knownSectionOrder(): string[];
   pruneSidebarSessionEntry(key: string): void;
   reconciledSidebarZone(): {
     sidebarEntries: readonly string[];
+    sessionRows: ReadonlyMap<string, SidebarRecentSession>;
   };
   selectSession(sessionKey: string): void;
   sidebarSessionStatusFilter(): SidebarSessionStatusFilter;

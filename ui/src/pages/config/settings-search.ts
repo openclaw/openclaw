@@ -17,20 +17,21 @@ import {
 } from "../../components/config-form.search.ts";
 import { splitConfigSchemaByTier } from "../../components/config-form.tiers.ts";
 import { t } from "../../i18n/index.ts";
+import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { schemaType, type JsonSchema } from "../../lib/config-form-utils.ts";
 import { settingsSearchTextMatches } from "../../lib/settings-navigation.ts";
 import { PLUGIN_SETTINGS_VISIBLE_KEYS } from "../plugins/settings-model.ts";
-import { configPageForSection } from "./config-sections.ts";
-import { MEMORY_SETTINGS_KEYS } from "./memory-schema.ts";
+import {
+  configPageForSection,
+  MEMORY_SETTINGS_KEYS,
+  omitCuratedOwnedConfigLeaves,
+} from "./config-sections.ts";
 import { SETTINGS_SEARCH_TARGETS, type SettingsSearchTarget } from "./settings-targets.ts";
 import { setupVisibleSchema } from "./setup-schema.ts";
 
 registerSettingsEnglish();
-
-type StaticSettingsBlock = SettingsSearchBlock & {
-  searchText: string;
-};
+registerProfileEnglish();
 
 const STATIC_SETTINGS_BLOCKS: readonly SettingsSearchTarget[] =
   Object.values(SETTINGS_SEARCH_TARGETS);
@@ -38,7 +39,7 @@ const STATIC_SETTINGS_BLOCKS: readonly SettingsSearchTarget[] =
 function resolveStaticSettingsBlock(
   block: SettingsSearchTarget,
   snapshot: NativeDeviceSettingsSnapshot | null,
-): StaticSettingsBlock {
+): SettingsSearchBlock & { searchText: string } {
   const label = t(block.labelKey);
   const nativeKeys = snapshot
     ? Object.entries(block.nativeSearchKeys ?? {})
@@ -156,10 +157,12 @@ export function findSettingsSearchBlocks(params: {
     }
     let section = prepared.sections.get(key);
     if (!section) {
-      const sectionSchema =
+      const sectionSchema = omitCuratedOwnedConfigLeaves(
         key === "wizard"
           ? setupVisibleSchema(rawSectionSchema)
-          : visibleSectionSchema(routeId, rawSectionSchema);
+          : visibleSectionSchema(routeId, rawSectionSchema),
+        key,
+      );
       section = {
         schema: sectionSchema,
         tiers: splitConfigSchemaByTier({

@@ -1,9 +1,10 @@
 import { copyFileSync, renameSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -18,6 +19,7 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { appendTranscriptMessage } from "./session-accessor.sqlite-transcript-write.js";
 import { test } from "./session-entry-fixture.test-support.js";
+import { readSessionEntryList } from "./session-entry-list.worker.js";
 import {
   iteratePendingExecNotificationEntriesInWorker,
   readPendingInputRecoveryEntriesInWorker,
@@ -28,30 +30,41 @@ import type { InternalSessionEntry } from "./types.js";
 
 type InputScope = Parameters<typeof stageSessionPendingInput>[0];
 type InputOptions = Parameters<typeof stageSessionPendingInput>[1];
-function stageInput(
-  scope: InputScope,
-  runId: string,
-  message: Partial<InputOptions["message"]> = {},
-  trackCompletion = false,
+function seed(
+  database: Parameters<typeof writeSessionEntry>[0],
+  name: string,
+  fields: Partial<InternalSessionEntry> = {},
 ) {
-  return stageSessionPendingInput(scope, {
-    runId,
-    message: {
-      role: "user",
-      content: `Synthetic ${runId} input`,
-      timestamp: 1,
-      idempotencyKey: `${runId}:user`,
-      __openclaw: { sessionSendDelivery: { version: 1 } },
-      ...message,
-    },
-    assertCurrent() {},
-    trackCompletion,
-  }).then((receipt) => expectDefined(receipt, "Expected accepted input custody"));
+  writeSessionEntry(database, `agent:main:${name}`, { sessionId: name, updatedAt: 1, ...fields });
 }
 
-function inputReceipts() {
+function inputReceipts(scope: InputScope | ((runId: string) => InputScope)) {
   const receipts: SessionPendingInputReceipt[] = [];
   return Object.assign(receipts, {
+    async stage(
+      runId: string,
+      message: Partial<InputOptions["message"]> = {},
+      trackCompletion = false,
+    ) {
+      const receipt = expectDefined(
+        await stageSessionPendingInput(typeof scope === "function" ? scope(runId) : scope, {
+          runId,
+          message: {
+            role: "user",
+            content: `Synthetic ${runId} input`,
+            timestamp: 1,
+            idempotencyKey: `${runId}:user`,
+            __openclaw: { sessionSendDelivery: { version: 1 } },
+            ...message,
+          },
+          assertCurrent() {},
+          trackCompletion,
+        }),
+        "Expected accepted input custody",
+      );
+      receipts.push(receipt);
+      return receipt;
+    },
     async [Symbol.asyncDispose]() {
       for (const receipt of receipts) {
         receipt.finish("interrupted");
@@ -128,6 +141,52 @@ test("selects recovery claims and main-session startup orphans", async ({ store:
   expect(await keys()).toHaveLength(Object.keys(entries).length);
 });
 
+test("restricts orphan discovery to the active-session index", async ({
+  store: { database, store },
+}) => {
+  for (let index = 0; index < 32; index++) {
+    seed(database, `archived-${index}`, { archivedAt: 1, abortedLastRun: true });
+  }
+  seed(database, "orphan", { abortedLastRun: true });
+  const plans: string[] = [];
+  const prototype = requireNodeSqlite().StatementSync.prototype;
+  const observers = (["all", "iterate"] as const).map((method) => {
+    const read = prototype[method];
+    return vi.spyOn(prototype, method).mockImplementation(
+      new Proxy(read, {
+        apply(target, statement: StatementSync, args) {
+          const rows = Reflect.apply(target, statement, args);
+          if (
+            statement.sourceSQL.startsWith('select "session_key" from "session_nodes"') &&
+            statement.sourceSQL.includes("json_extract")
+          ) {
+            plans.push(
+              ...database.db
+                .prepare(`EXPLAIN QUERY PLAN ${statement.expandedSQL}`)
+                .all()
+                .map((row) => String(row.detail)),
+            );
+          }
+          return rows;
+        },
+      }),
+    );
+  });
+  try {
+    const result = await readSessionEntryList({
+      kind: "session-entry-list",
+      database: { agentId: store.agentId, path: store.storePath },
+      scope: { ...store, mainSessionRecovery: "orphans" },
+    });
+    expect(result.entries.map(({ sessionKey }) => sessionKey)).toEqual(["agent:main:orphan"]);
+    expect(plans).toEqual([expect.stringContaining("idx_agent_session_nodes_active")]);
+  } finally {
+    for (const observer of observers) {
+      observer.mockRestore();
+    }
+  }
+});
+
 test("pages exec owners without unrelated entries or saved prompts", async ({
   store: { database, store },
 }) => {
@@ -154,16 +213,9 @@ test("pages exec owners without unrelated entries or saved prompts", async ({
         },
       },
     );
-    writeSessionEntry(database, `agent:main:unrelated-${index}`, {
-      sessionId: `unrelated-${index}`,
-      updatedAt: 1,
-    });
+    seed(database, `unrelated-${index}`);
   }
-  writeSessionEntry(database, "agent:main:empty-exec", {
-    sessionId: "empty-exec",
-    updatedAt: 1,
-    pendingExecNotifications: {},
-  });
+  seed(database, "empty-exec", { pendingExecNotifications: {} });
 
   const selected = [];
   for await (const item of iteratePendingExecNotificationEntriesInWorker(store)) {
@@ -179,20 +231,15 @@ test("pages exec owners without unrelated entries or saved prompts", async ({
 test("pages saved deliveries while preserving live custody", async ({
   store: { database, store },
 }) => {
-  const scope = {
-    ...store,
-    sessionKey: "agent:main:mixed-recovery",
-    sessionId: "mixed-recovery",
-  };
-  writeSessionEntry(database, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
-  await using receipts = inputReceipts();
+  const scope = { ...store, sessionKey: "agent:main:mixed-recovery", sessionId: "mixed-recovery" };
+  seed(database, scope.sessionId);
+  await using receipts = inputReceipts(scope);
   for (let index = 0; index < 24; index++) {
-    const receipt = await stageInput(scope, `input-${index}`, {
+    const receipt = await receipts.stage(`input-${index}`, {
       content: `Synthetic input ${index}`,
       timestamp: index,
       ...(index === 22 ? { __openclaw: undefined } : {}),
     });
-    receipts.push(receipt);
     if (index !== 21) {
       await finishInput(receipt, index === 23 ? "cancelled" : "interrupted");
     }
@@ -212,14 +259,13 @@ test("reconciles interrupted and crash-left chat inputs at startup", async ({
   store: { database, store },
 }) => {
   const scope = { ...store, sessionKey: "agent:main:chat-recovery", sessionId: "chat-recovery" };
-  writeSessionEntry(database, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
-  await using receipts = inputReceipts();
+  seed(database, scope.sessionId);
+  await using receipts = inputReceipts(scope);
   for (const runId of ["terminated", "killed", "legacy"]) {
-    const receipt = await stageInput(scope, runId, {
+    const receipt = await receipts.stage(runId, {
       content: `Saved ${runId} chat input`,
       __openclaw: runId === "legacy" ? undefined : { chatInputRecovery: { version: 1 } },
     });
-    receipts.push(receipt);
     await finishInput(receipt);
     if (runId !== "terminated") {
       // Crash-left rows have no live receipt for lifecycle rotation to finish.
@@ -245,10 +291,7 @@ test("skips an admitted store without optional pending-input storage", async ({
   store: { database, store },
 }) => {
   const { env } = store;
-  writeSessionEntry(database, "agent:main:recovery-old-store", {
-    sessionId: "old-store-session",
-    updatedAt: 1,
-  });
+  seed(database, "recovery-old-store", { sessionId: "old-store-session" });
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   copyFileSync(database.path, `${database.path}.previous`);
@@ -281,27 +324,16 @@ test("refreshes empty recovery reads with only recoverable inputs", async ({
     "ordinary",
   ];
   for (const name of states) {
-    const target = scope(name);
-    writeSessionEntry(database, target.sessionKey, { sessionId: target.sessionId, updatedAt: 1 });
+    seed(database, scope(name).sessionId);
   }
-  await using receipts = inputReceipts();
-  const stage = async (name: string, trackCompletion = false) => {
-    const receipt = await stageInput(
-      scope(name),
-      name,
-      name === "ordinary" ? { __openclaw: undefined } : {},
-      trackCompletion,
-    );
-    receipts.push(receipt);
-    return receipt;
-  };
+  await using receipts = inputReceipts(scope);
 
   expect(await readPendingInputRecoveryEntriesInWorker(store)).toEqual([]);
-  await stage("queued");
-  await finishInput(await stage("ordinary"));
-  await finishInput(await stage("interrupted"));
-  await finishInput(await stage("cancelled"), "cancelled");
-  const completed = await stage("completed", true);
+  await receipts.stage("queued");
+  await finishInput(await receipts.stage("ordinary", { __openclaw: undefined }));
+  await finishInput(await receipts.stage("interrupted"));
+  await finishInput(await receipts.stage("cancelled"), "cancelled");
+  const completed = await receipts.stage("completed", {}, true);
   await expectDefined(
     completed.completeAsync,
     "Expected completion owner",
@@ -309,7 +341,7 @@ test("refreshes empty recovery reads with only recoverable inputs", async ({
   await finishInput(completed);
 
   // Collected sources retain their queued row with a consumption receipt.
-  const consumed = await stage("consumed");
+  const consumed = await receipts.stage("consumed");
   const aggregate = expectDefined(
     bindSessionPendingInputSources([consumed], {
       role: "user",
@@ -325,11 +357,8 @@ test("refreshes empty recovery reads with only recoverable inputs", async ({
   );
   expect(consumed.state).toBe("consumed");
 
-  await finishInput(await stage("old"));
-  writeSessionEntry(database, scope("old").sessionKey, {
-    sessionId: "replacement-session",
-    updatedAt: 2,
-  });
+  await finishInput(await receipts.stage("old"));
+  seed(database, "recovery-old", { sessionId: "replacement-session", updatedAt: 2 });
 
   const candidates = await readPendingInputRecoveryEntriesInWorker(store);
   expect(

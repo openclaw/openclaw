@@ -17,7 +17,12 @@ import { ignoreMissingPath } from "../../infra/errno.js";
 import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
 import { readJsonIfExists, writeJson } from "../../infra/json-files.js";
+import { mergeProcessEnv } from "../../infra/process-env.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
 import {
@@ -34,7 +39,8 @@ import {
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { supportsPostCoreExecutor } from "../../infra/update-post-core-capability.js";
 import {
-  buildPostCoreHandoffEnv,
+  POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV,
+  POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
   POST_CORE_UPDATE_ENV,
   POST_CORE_UPDATE_CHANNEL_ENV,
   POST_CORE_UPDATE_RESULT_PATH_ENV,
@@ -390,12 +396,16 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
     const jsonMode = params.opts.json === true;
     // Windows descendants must not retain console handles after the updater exits (#78445).
     const childStdio = process.platform === "win32" || jsonMode ? "pipe" : "inherit";
-    const handoffEnv = buildPostCoreHandoffEnv({
+    const handoffEnv = mergeProcessEnv([
       baseEnv,
-      compatHostVersion: postCoreHostVersion,
-      requestedChannel: params.requestedChannel,
-      sourceConfigPath: params.preUpdateConfig ? sourceConfigPath : undefined,
-    });
+      {
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: postCoreHostVersion || undefined,
+        [POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV]: params.requestedChannel || undefined,
+        [POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV]: params.preUpdateConfig
+          ? sourceConfigPath
+          : undefined,
+      },
+    ]);
     const sentinelMeta = await readControlPlaneUpdateSentinelMeta(baseEnv);
     authority.assertCurrent();
     if (sentinelMeta?.root) {
@@ -432,6 +442,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
             executor,
             runId,
             originalRecoveryCapture: params.opts.run?.originalRecoveryCapture,
+            busyTimeoutMs: params.opts.run?.busyTimeoutMs,
             root: params.root,
             requester: authority.requester?.requester,
             opts: {
@@ -446,10 +457,12 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
           const result = await runUtf8CommandWithTimeout(
             [
               nodeRunner,
-              path.join(
-                params.root,
-                "dist",
-                runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
+              ...resolveRuntimeWorkerArgv(
+                resolveRuntimeWorkerUrl({
+                  ...runtimeProcessEntrypoints.updateMigratedFinalize,
+                  root: params.root,
+                }),
+                nodeRunner,
               ),
               "--post-core",
             ],

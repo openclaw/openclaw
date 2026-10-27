@@ -52,6 +52,21 @@ export type ReplyRunVerbosity = {
 };
 
 type InternalReplySessionOptions = {
+  /** Dispatch-owned command requester binding; never part of the public plugin API. */
+  withCommandNativeSubagents?: <T>(
+    binding: {
+      agentId: string;
+      sessionKey: string;
+      entry: SessionEntry;
+      storePath?: string;
+      commandBody?: string;
+    },
+    run: (
+      create:
+        | import("../../plugins/runtime/native-subagent-context.js").NativeSubagentCommandFactory
+        | undefined,
+    ) => Promise<T>,
+  ) => Promise<T>;
   /** Settles attribution before tool effects; model preparation may run concurrently. */
   awaitSessionDiffBaseline?: () => Promise<void>;
   /** One-shot model selection for host-owned turns; never persisted as a user preference. */
@@ -64,6 +79,8 @@ type InternalReplySessionOptions = {
   queuedFollowupAbortSignal?: AbortSignal;
   /** Host-minted original operator authority; never restored from session metadata. */
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  /** Live channel policy retained from ingress through awaited lifecycle mutations. */
+  assertChannelAuthority?: () => void;
   extractedFileImages?: ExtractedFileImage[];
   /** Rechecks the live Gateway caller before a chat login has a durable effect. */
   assertProviderLoginAuthority?: () => void;
@@ -92,9 +109,7 @@ type InternalReplySessionOptions = {
   resolveReplyDelivery?: ReplyDeliveryObserver;
   /** Distinguishes committed source-tool custody from ordinary transcript presentation. */
   resolveReplyDeliveryFacts?: ReplyDeliveryFactsObserver;
-  /** Heartbeat-owner policy: only an admitted current source permits implicit message replies. */
-  requireExplicitMessageTarget?: boolean;
-  /** Retire the run's bundle MCP runtime at settlement. Set by one-shot isolated runs (isolated heartbeats) whose session ID is never reused. */
+  /** Retire the run's bundle MCP runtime at settlement. Set by one-shot isolated runs whose session ID is never reused. */
   cleanupBundleMcpOnRunEnd?: boolean;
   /** Defers child completion until the waiting status or explicit silent handoff settles. */
   onPendingContinuation?: (settlement?: PendingContinuationSettlement) => void;

@@ -108,6 +108,15 @@ the CLI fallback on the Gateway host.
 
 ## Doctor cannot enter maintenance during finalization
 
+When a state lease is lost during Doctor or plugin finalization, update history
+and the failure report retain a `lease loss` reason when the database can identify
+it: `expired`, `replaced`, or `missing`. Expiry diagnostics include the recorded
+deadline, time since expiry, and age of the last heartbeat. A delayed native renewal
+timer also reports its measured lateness; a large delay can indicate event-loop
+starvation, but does not establish its cause. Replacement owners are redacted.
+These diagnostics do not change lease duration or ownership checks. If state cannot
+be inspected safely, the original generic lease-loss error is preserved.
+
 `finalize:doctor` can report `Doctor could not enter maintenance` when a Gateway
 still owns the selected state directory. A starting Gateway and a healthy serving
 Gateway retain that ownership for their entire process lifetime; waiting for
@@ -289,6 +298,56 @@ Version **2026.9.5** and versions containing
 [#177563](https://github.com/openclaw/openclaw/pull/177563) are not affected.
 Updating to a fixed version still needs this workaround when the installed
 updater is affected.
+
+## Extended-stable 2026.9.33 to development builds
+
+When updating an installed **2026.9.33** directly to current development builds,
+activation can fail with `SQLite migration source changed after update capture`.
+The older updater and the candidate use different database fingerprint formats.
+This error alone does not establish that another process changed the database.
+The failed update preserves current databases and recovery snapshots, but may
+leave the Gateway stopped with the candidate package installed.
+
+Before switching to development, create a
+[verified backup](/install/updating#before-updating-create-a-verified-backup),
+then update through **2026.10.5**:
+
+```bash
+openclaw update --channel stable --tag 2026.10.5
+openclaw --version
+openclaw gateway stop
+openclaw update --channel dev
+openclaw gateway start
+```
+
+Continue to the development update only after the first update completes and
+`openclaw --version` reports `2026.10.5`. Keep the same service account, profile,
+and state/configuration paths throughout. Set console logging to `info` for both
+updates as described [above](#debug-logging-blocks-the-update-handoff).
+The older updater can report that automatic database restoration is unavailable
+during the intermediate update; retain your verified backup.
+
+Stop other OpenClaw processes using the same state before the development update.
+For a foreground Gateway, use its original terminal or supervisor to stop and
+restart it. Custom state/configuration paths can make the updater skip service
+management; follow that warning. Doctor reporting `An agent database is in use`
+means maintenance was deferred, even if an earlier step completed.
+
+If the direct update has already failed, preserve its snapshots and candidate.
+Run `openclaw update repair` and follow its process-ownership instructions before
+starting another update. Once the named old updater processes have exited, use
+the installed candidate to finish maintenance:
+
+```bash
+openclaw doctor --fix
+openclaw update repair
+openclaw gateway start
+openclaw gateway status --deep
+```
+
+Do not delete update records, change schema markers, or discard recovery files
+to bypass the refusal. The fingerprint incompatibility needs support across
+migration and rollback receipts; ignoring the mismatch would lose that protection.
 
 ## Candidate migration rehearsal timeouts
 

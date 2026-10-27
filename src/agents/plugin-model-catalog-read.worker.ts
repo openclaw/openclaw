@@ -29,9 +29,12 @@ if (parentPort && workerData?.pluginCatalogRead === true) {
       const scope = new OpenClawAgentDatabaseReadOnlyScope();
       let catalogs;
       try {
-        catalogs = scope.run(input, () =>
-          readPluginModelCatalogEntries(input, PLUGIN_MODEL_CATALOG_CACHE_SCOPE, input.pluginIds),
+        const result = scope.read(
+          ({ db }) =>
+            readPluginModelCatalogEntries(db, PLUGIN_MODEL_CATALOG_CACHE_SCOPE, input.pluginIds),
+          input,
         );
+        catalogs = result.found ? result.value : [];
       } catch (error) {
         // Report ordinary refusal only after native cleanup succeeds; failed close retires the worker.
         return { error: error instanceof Error ? error.message : String(error) };

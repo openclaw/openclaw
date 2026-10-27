@@ -19,6 +19,7 @@ import {
   assertDoctorMaintenanceReady,
   classifyDoctorMaintenanceRefusal,
 } from "./doctor-maintenance-inspection.js";
+import { sessionSqlFixture } from "./doctor-session-sqlite.sql.test-support.js";
 
 it.each([
   "intact",
@@ -46,17 +47,10 @@ it.each([
     await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(state.env));
     const pathname = path.join(state.agentDir(agentId), "openclaw-agent.sqlite");
     fs.mkdirSync(path.dirname(pathname), { recursive: true });
-    const transcript = JSON.stringify({
-      type: "message",
-      id: "reply",
-      parentId: null,
-      timestamp: 1,
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "preserved schema-26 reply" }],
-      },
-    });
+    const transcript =
+      '{"type":"message","id":"reply","parentId":null,"timestamp":1,"message":{"role":"assistant","content":[{"type":"text","text":"preserved schema-26 reply"}]}}';
     using seed = new DatabaseSync(pathname);
+    const seedSql = sessionSqlFixture(seed);
     seed.exec(
       fs.readFileSync(
         new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v26.sql", import.meta.url),
@@ -75,11 +69,7 @@ it.each([
       VALUES ('history', 'agent:main:main', 1, 1);
       INSERT INTO session_participants (session_key, identity_namespace, actor_id, contribution_count, first_prompted_at, last_prompted_at)
       VALUES ('agent:main:main', '{"type":"observation","pluginId":null,"accountId":null,"senderKind":"unknown"}', 'cli', 1, 1, 1);`);
-      seed
-        .prepare(
-          "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES ('history', 0, ?, 1)",
-        )
-        .run(transcript);
+      seedSql`INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES ('history', 0, ${transcript}, 1)`.run();
     } else {
       // The observed turn-less 70ca91f3 store has these first-use memory rows.
       seed.exec(`
@@ -99,59 +89,50 @@ it.each([
     seed.close();
     if (scenario.startsWith("recorded-")) {
       runOpenClawStateWriteTransaction(
-        (database) => {
-          recordAgentDeletionRecoveryHolds(database, [{ agentId, path: pathname }]);
-        },
+        (database) => recordAgentDeletionRecoveryHolds(database, [{ agentId, path: pathname }]),
         { env: state.env },
       );
     }
     const before = fs.readFileSync(pathname);
-    const preflight = await prepareDoctorDatabasePreflight();
     const recovery = await repairDoctorAgentDeletionJournal({
-      preflight,
+      preflight: await prepareDoctorDatabasePreflight(),
       shouldRepair: true,
       env: state.env,
     });
-    const next = await prepareDoctorDatabasePreflight();
     await migrateLegacyMediaPersistence({
       env: state.env,
-      preparedDiscovery: next.agentDatabaseMigrationDiscovery,
+      preparedDiscovery: (await prepareDoctorDatabasePreflight()).agentDatabaseMigrationDiscovery,
     });
     const ready = assertDoctorMaintenanceReady(cfg, state.env, () => {});
-    if (scenario === "recorded-secondary") {
-      await expect(ready).resolves.toEqual({ schemaPublicationDeferred: false });
-      expect(fs.readFileSync(pathname)).toEqual(before);
-      return;
-    }
-    if (
-      scenario === "lost-with-history" ||
-      scenario === "lost-empty-sequence" ||
-      scenario === "recorded-empty"
-    ) {
+    const refused = ["lost-with-history", "lost-empty-sequence", "recorded-empty"].includes(
+      scenario,
+    );
+    if (refused) {
       if (scenario === "lost-with-history") {
         expect(recovery.warnings.join("\n")).toContain("agents add main");
       }
-      const error = await ready.then(
-        () => undefined,
-        (cause: unknown) => cause,
-      );
+      const error = await ready.catch((cause: unknown) => cause);
       expect(error).toBeInstanceOf(Error);
       expect(String(error)).toContain("schema version 26");
       expect(classifyDoctorMaintenanceRefusal(error)).toEqual({
         kind: "data-at-risk",
         reason: "incomplete-migration",
       });
-      expect(fs.readFileSync(pathname)).toEqual(before);
     } else {
       await expect(ready).resolves.toEqual({ schemaPublicationDeferred: false });
+    }
+    if (refused || scenario === "recorded-secondary") {
+      expect(fs.readFileSync(pathname)).toEqual(before);
+    } else {
       using migrated = new DatabaseSync(pathname, { readOnly: true });
-      expect(migrated.prepare("PRAGMA user_version").get()).toEqual({
+      const sql = sessionSqlFixture(migrated);
+      expect(sql`PRAGMA user_version`.get()).toEqual({
         user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
       });
-      expect(migrated.prepare("SELECT event_json FROM transcript_events").all()).toEqual(
+      expect(sql`SELECT event_json FROM transcript_events`.all()).toEqual(
         empty ? [] : [{ event_json: transcript }],
       );
-      expect(migrated.prepare("SELECT actor_id FROM session_participants").all()).toEqual(
+      expect(sql`SELECT actor_id FROM session_participants`.all()).toEqual(
         empty ? [] : [{ actor_id: "cli" }],
       );
     }

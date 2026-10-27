@@ -20,7 +20,6 @@ import { createExecApprovalHandlers } from "./exec-approval.js";
 
 type ExecApprovalHandlers = ReturnType<typeof createExecApprovalHandlers>;
 export type ExecApprovalRequestArgs = Parameters<ExecApprovalHandlers["exec.approval.request"]>[0];
-export type ExecApprovalResolveArgs = Parameters<ExecApprovalHandlers["exec.approval.resolve"]>[0];
 
 type ApprovalCall = {
   handlers: ExecApprovalHandlers;

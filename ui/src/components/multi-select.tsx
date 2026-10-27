@@ -2,17 +2,33 @@ import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/stri
 import { For, Show, createMemo, createSignal, merge, onSettled } from "solid-js";
 import { acquireNativeOverlaySurface } from "../lib/native-overlay-occlusion.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import type { MultiSelectOption, MultiSelectProps } from "./multi-select-types.ts";
+import type { ModelPickerOption } from "./model-picker-options.ts";
 import { createOverlayAnchor } from "./overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "./overlay-lifecycle.ts";
 import { Icon } from "./solid/icon.tsx";
 import { useMenuMachine } from "./solid/menu-machine.ts";
+import { MenuNavigationError } from "./solid/menu-navigation-error.tsx";
 import { useOverlayControl } from "./solid/overlay-control.ts";
 import { ProviderBrandIcon } from "./solid/provider-icon.tsx";
 import "./solid/overlay.css";
 import "../styles/multi-select.css";
 
-type MultiSelectRow = MultiSelectOption & { custom?: boolean };
+type MultiSelectProps = {
+  options: readonly ModelPickerOption[];
+  /** Current values in display order. Controlled: the host owns them. */
+  value: readonly string[];
+  isExcluded: (value: string) => boolean;
+  /** The caller owns value identity; search remains case-insensitive. */
+  getValueKey: (value: string) => string;
+  placeholder: string;
+  accessibleLabel: string;
+  allowCustom: boolean;
+  disabled: boolean;
+  onChange: (value: string[]) => void;
+  onOpen: () => void;
+};
+
+type MultiSelectRow = ModelPickerOption & { custom?: boolean };
 let instanceCounter = 0;
 
 function providerFromValue(value: string): string | undefined {
@@ -62,7 +78,7 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
         exact = option;
       } else if (
         !search ||
-        [option.label, option.value, option.provider, option.detail].some((text) =>
+        [option.label, option.value, option.provider, option.description].some((text) =>
           text?.toLowerCase().includes(search),
         )
       ) {
@@ -104,7 +120,7 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
       props.onChange([...props.value, ...additions]);
     }
     setQuery("");
-    menu.service.send({ type: "HIGHLIGHTED.SET", value: null });
+    menu.setHighlightedValue(null);
   };
   const select = (value: string) => {
     const row = rows().find((item) => item.value === value);
@@ -125,8 +141,8 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
     },
   );
   const activeId = () => {
-    const value = menu.read().highlightedValue;
-    return value ? menu.read().getItemProps({ value }).id : undefined;
+    const value = menu.highlightedValue();
+    return value ? menu.itemId(value) : undefined;
   };
   const openMenu = () => {
     if (!props.disabled && !overlay.open) {
@@ -243,7 +259,7 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
           value={query()}
           disabled={props.disabled}
           onInput={(event) => {
-            menu.service.send({ type: "HIGHLIGHTED.SET", value: null });
+            menu.setHighlightedValue(null);
             setQuery(event.currentTarget.value);
             openMenu();
           }}
@@ -262,6 +278,7 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
         id={`${id}-content`}
         aria-label={label()}
       >
+        <MenuNavigationError binding={menu} />
         <For each={rows()}>
           {(row) => {
             const itemRef = menu.itemRef();
@@ -271,7 +288,7 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
                 ref={itemRef}
                 class="multi-select__option"
                 role="option"
-                aria-selected={menu.read().highlightedValue === row.value ? "true" : "false"}
+                aria-selected={menu.highlightedValue() === row.value ? "true" : "false"}
                 aria-disabled={row.disabled ? "true" : "false"}
                 data-value={row.value}
                 data-custom={row.custom ? "" : undefined}
@@ -289,8 +306,8 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
                       ? t("common.multiSelect.addCustom", { value: row.value })
                       : row.label}
                   </span>
-                  <Show when={row.detail}>
-                    <span class="picker-select__description">{row.detail}</span>
+                  <Show when={row.description}>
+                    <span class="picker-select__description">{row.description}</span>
                   </Show>
                 </span>
               </div>

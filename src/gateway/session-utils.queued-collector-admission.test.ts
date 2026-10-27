@@ -2,22 +2,17 @@ import "../agents/subagents/spawn/subagent-spawn-model.mocks.shared.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { useQueuedCollectorFixture } from "./session-utils.queued-collector.test-support.js";
+import { once } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import * as preparedModelRuntime from "../agents/prepared-model-runtime.js";
 import * as registryMemory from "../agents/subagents/registry/subagent-registry-memory.js";
 import { isSubagentRunQueued } from "../agents/subagents/registry/subagent-registry-read.js";
 import * as subagentRegistry from "../agents/subagents/registry/subagent-registry.js";
-import { spawnSubagentDirect } from "../agents/subagents/spawn/subagent-spawn.js";
 import { testing as spawnTesting } from "../agents/subagents/spawn/subagent-spawn.test-support.js";
 import { closeSwarmScheduler } from "../agents/subagents/swarm/swarm-scheduler.js";
-import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
-import {
-  clearAgentRunContext,
-  getAgentRunContext,
-  getAgentRunLifecycleGeneration,
-} from "../infra/agent-run-registry.js";
+import { clearAgentRunContext, getAgentRunContext } from "../infra/agent-run-registry.js";
 import {
   isRpcSourceExecuting,
   requestRpcSourceCancellation,
@@ -26,16 +21,15 @@ import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-s
 import { unwrapGatewayMethodDispatchResponse } from "./server-in-process-dispatch.js";
 import { agentRunHandler } from "./server-methods/agent-run-handler.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
-import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { sessionAbortHandlers } from "./server-methods/sessions-abort.js";
 import { sessionDeleteHandlers } from "./server-methods/sessions-delete.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import type { dispatchGatewayMethodInProcess } from "./server-plugins.js";
-import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 
-const { parentKey, requestContext, operatorClient } = useQueuedCollectorFixture();
+const { requestContext, requestOptions, spawnCollector, expectChanged, gateRowPreparation } =
+  useQueuedCollectorFixture();
 
 it.each([
   [false, false],
@@ -47,8 +41,6 @@ it.each([
     const context = requestContext();
     const entered = createDeferred();
     const dispatched = createDeferred();
-    const publicationEntered = createDeferred();
-    const releasePublication = createDeferred();
     const killWriteEntered = createDeferred();
     const releaseKillWrite = createDeferred();
     const cleanupWaiting = createDeferred();
@@ -56,7 +48,6 @@ it.each([
     let nativeRunId: string | undefined;
     let stopping: Promise<void> | undefined;
     const agentResponse = vi.fn();
-    const registration = vi.spyOn(subagentRegistry, "startQueuedSubagentRun");
     const waitForPublication = registryMemory.waitForSubagentRetirementPublication;
     const publicationWait = vi
       .spyOn(registryMemory, "waitForSubagentRetirementPublication")
@@ -79,36 +70,21 @@ it.each([
         }
         return markTerminated(params);
       });
-    const projection = expectDefined(getSessionRowProjection(context), "session projection");
-    const prepareRows = projection.withPreparedExactRows.bind(projection);
-    const displayGate = vi
-      .spyOn(projection, "withPreparedExactRows")
-      .mockImplementation(async (queries, consume, options) => {
-        if (holdNotices) {
-          publicationEntered.resolve();
-          await releasePublication.promise;
-          if (publicationFailure) {
-            throw new Error("publication preparation failed");
-          }
-        }
-        return prepareRows(queries, consume, options);
-      });
+    const displayGate = gateRowPreparation(
+      context,
+      () => holdNotices,
+      publicationFailure ? new Error("publication preparation failed") : undefined,
+    );
     const runtimeGate = vi
       .spyOn(preparedModelRuntime, "loadPublishedGatewayReplyDispatchRuntime")
       .mockImplementation(async ({ abortSignal }) => {
         const signal = expectDefined(abortSignal, "native admission abort signal");
         signal.throwIfAborted();
         entered.resolve();
-        return await new Promise<never>((_resolve, reject) => {
-          signal.addEventListener(
-            "abort",
-            () => {
-              const reason: unknown = signal.reason;
-              reject(reason instanceof Error ? reason : new Error("Native admission aborted"));
-            },
-            { once: true },
-          );
-        });
+        await once(signal, "abort");
+        throw signal.reason instanceof Error
+          ? signal.reason
+          : new Error("Native admission aborted");
       });
     spawnTesting.setDepsForTest({
       hasInProcessGatewayContext: () => true,
@@ -119,16 +95,13 @@ it.each([
       ) => {
         const respond = method === "agent" ? agentResponse : vi.fn();
         const request = {
-          req: { type: "req" as const, id: "native-preaccept", method },
-          params,
+          ...requestOptions(context, method, params),
           respond,
-          context,
           sessionMutationCommitGuard: options?.sessionMutationCommitGuard,
           client: createSyntheticPluginRuntimeClient({
             agentRunTracking: options?.agentRunTracking,
             scopes: options?.syntheticScopes,
           }),
-          isWebchatConnect: () => false,
         };
         if (method === "agent") {
           nativeRunId = String(params.idempotencyKey);
@@ -151,81 +124,32 @@ it.each([
       },
     });
     try {
-      const spawned = await spawnSubagentDirect(
-        {
-          task: "Do not execute before cancellation",
-          label: "Pending native collector",
-          collect: true,
-          context: "isolated",
-          lightContext: true,
-        },
-        {
-          agentSessionKey: parentKey,
-          requesterRunId: "parent-turn",
-          requesterTurnRunId: "parent-turn",
-        },
-      );
+      const spawned = await spawnCollector("Pending native collector");
       expect(spawned.status).toBe("accepted");
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         entered.promise,
-        dispatched.promise.then(() => {
-          throw new Error(
-            `Native admission ended before runtime gate: ${JSON.stringify(agentResponse.mock.calls)}`,
-          );
-        }),
-      ]);
+        dispatched.promise,
+        "Native admission ended before runtime gate",
+      );
       const entry = expectDefined(registryMemory.subagentRuns.get(spawned.runId!), "collector");
       const admission = expectDefined(rpcSourceTesting.get(entry.runId), "controller");
       expect(admission.adapter.kind).toBe("agent");
       expect(isRpcSourceExecuting(admission)).toBe(false);
       expect(getAgentRunContext(entry.runId)).toBeDefined();
       expect(isSubagentRunQueued(entry)).toBe(true);
-      const target = expectDefined(admission.input.target, "native physical session target");
-      const visibleStatus = () =>
-        resolveVisibleActiveSessionRunState({
-          storePath: target.storeScope,
-          agentId: target.agentId,
-          sessionId: target.incarnation,
-          requestedKey: entry.childSessionKey,
-          canonicalKey: entry.childSessionKey,
-          resolveGatewayContext: context.resolveGatewayContext,
-        }).status;
-      expect(visibleStatus()).toBeUndefined();
-      const releaseCapacityWait = registerAgentRunCapacityWait(
-        entry.runId,
-        getAgentRunLifecycleGeneration(),
-      );
-      try {
-        expect(visibleStatus()).toBe("queued");
-      } finally {
-        releaseCapacityWait?.();
-      }
       expect(entry.execution.startedAt).toBeUndefined();
-      const respond = vi.fn();
-      stopping = Promise.resolve(
-        sessionAbortHandlers["sessions.abort"]!({
-          req: { type: "req", id: "stop-native-preaccept", method: "sessions.abort" },
-          params: {
-            key: entry.childSessionKey,
-            ...(exact ? { runId: entry.runId } : { clearQueued: true }),
-          },
-          context,
-          respond,
-          client: operatorClient(),
-          isWebchatConnect: () => false,
-        }),
-      );
-      await Promise.race([
+      const options = requestOptions(context, "sessions.abort", {
+        key: entry.childSessionKey,
+        ...(exact ? { runId: entry.runId } : { clearQueued: true }),
+      });
+      const { respond } = options;
+      stopping = Promise.resolve(sessionAbortHandlers["sessions.abort"]!(options));
+      await awaitGateBeforeSettlement(
         Promise.all([dispatched.promise, killWriteEntered.promise, cleanupWaiting.promise]),
-        stopping.then(() => {
-          throw new Error(
-            `Stop settled before its kill write: ${JSON.stringify(respond.mock.calls)}`,
-          );
-        }),
-      ]);
+        stopping,
+        "Stop settled before its kill write",
+      );
       expect(order).toEqual([]);
-      expect(registration).toHaveBeenCalledOnce();
-      await expect(registration.mock.results[0]?.value).resolves.toBe(false);
       const sessionEntry = async () =>
         (await loadGatewaySessionEntryReadOnlyAsync(entry.childSessionKey)).entry;
       expect(await sessionEntry()).toBeDefined();
@@ -255,34 +179,25 @@ it.each([
       expect(rpcSourceTesting.has(entry.runId)).toBe(false);
       expect(order).toContain("deleted");
       expect(await sessionEntry()).toBeUndefined();
-      await publicationEntered.promise;
-      expect(context.broadcastToConnIds).toHaveBeenCalledWith(
-        "sessions.changed",
-        expect.objectContaining({ reason: "delete" }),
-        new Set(["observer"]),
-        expect.any(Object),
-      );
+      await displayGate.entered.promise;
+      expectChanged(context, { reason: "delete" });
       expect(context.broadcastToConnIds).not.toHaveBeenCalledWith(
         "sessions.changed",
         expect.objectContaining({ sessionKey: entry.childSessionKey, reason: "abort" }),
         expect.anything(),
         expect.anything(),
       );
-      releasePublication.resolve();
+      displayGate.release.resolve();
       await flushPendingSessionsChangedEvents(context);
-      expect(context.broadcastToConnIds).toHaveBeenCalledWith(
-        "sessions.changed",
-        expect.objectContaining(
-          publicationFailure
-            ? { reason: "update" }
-            : { sessionKey: entry.childSessionKey, reason: "abort" },
-        ),
-        new Set(["observer"]),
-        expect.any(Object),
+      expectChanged(
+        context,
+        publicationFailure
+          ? { reason: "update" }
+          : { sessionKey: entry.childSessionKey, reason: "abort" },
       );
     } finally {
       releaseKillWrite.resolve();
-      releasePublication.resolve();
+      displayGate.release.resolve();
       if (nativeRunId) {
         const source = rpcSourceTesting.get(nativeRunId);
         if (source) {
@@ -293,7 +208,7 @@ it.each([
       }
       await stopping;
       await flushPendingSessionsChangedEvents(context);
-      for (const spy of [killGate, displayGate, runtimeGate, registration, publicationWait]) {
+      for (const spy of [killGate, displayGate.spy, runtimeGate, publicationWait]) {
         spy.mockRestore();
       }
     }

@@ -43,20 +43,26 @@ import {
 import { isSessionEntryPublicationSourceCurrent } from "./session-entry-publication-source.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
+import { internSessionSkillSnapshot } from "./session-skill-snapshot-intern.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
 import { readPreparedSessionTranscriptChange } from "./session-transcript-authority.js";
 import type { SessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts.types.js";
+import type { SessionEntry } from "./types.js";
 
 const MAX_SNAPSHOTS = 128;
 const MAX_BYTES = 8 * 1024 * 1024;
 
-// Transcript producers replace changed rows and envelopes; shared subtrees stay
-// immutable. Weak keys do not keep evicted payloads alive.
+// Transcript producers replace changed rows and envelopes. Memoize array items
+// (rows or exact-context events), not their immutable payload descendants.
 const transcriptSizes = new WeakMap<object, number>();
 
 // Residency is a heap estimate, not a wire-size limit. Trusted postimages are
 // acyclic plain data; count strings without allocating or scanning their JSON.
-function estimateReplicaBytes(value: unknown, sizes?: WeakMap<object, number>): number {
+function estimateReplicaBytes(
+  value: unknown,
+  sizes?: WeakMap<object, number>,
+  memoizeDescendants = true,
+): number {
   if (typeof value === "string") {
     return 16 + value.length * 2;
   }
@@ -67,15 +73,17 @@ function estimateReplicaBytes(value: unknown, sizes?: WeakMap<object, number>): 
   if (known !== undefined) {
     return known;
   }
+  const childSizes = memoizeDescendants ? sizes : undefined;
   let bytes = 32;
   if (Array.isArray(value)) {
-    bytes = value.reduce<number>(
-      (total, child) => total + 16 + estimateReplicaBytes(child, sizes),
-      bytes,
-    );
+    for (let index = 0; index < value.length; index++) {
+      if (index in value) {
+        bytes += 16 + estimateReplicaBytes(value[index], childSizes, false);
+      }
+    }
   } else {
     for (const key in value) {
-      bytes += 16 + key.length * 2 + estimateReplicaBytes(Reflect.get(value, key), sizes);
+      bytes += 16 + key.length * 2 + estimateReplicaBytes(Reflect.get(value, key), childSizes);
     }
   }
   sizes?.set(value, bytes);
@@ -259,7 +267,7 @@ export function ensureReplicaSubscription(): void {
           const sharingUnchanged = readPreparedSessionSharingChange(change) === "unchanged";
           retainEntry(cell, {
             target: cell.target,
-            entry: structuredClone(prepared.fullEntry),
+            entry: prepared.fullEntry,
             dependencySessionIds,
             writeToken,
             snapshots: "full",
@@ -290,8 +298,25 @@ function discard(cell: ReplicaCell): void {
   cell.bytes = 0;
 }
 
+function shareEntrySkills(entry: SessionEntry | undefined): SessionEntry | undefined {
+  if (!entry?.skillsSnapshot) {
+    return entry;
+  }
+  const snapshot = entry.skillsSnapshot;
+  const shared = internSessionSkillSnapshot(snapshot);
+  if (shared !== snapshot) {
+    // Prepared publications can be frozen; worker-decoded entries remain owned here.
+    if (Object.isFrozen(entry)) {
+      return { ...entry, skillsSnapshot: shared };
+    }
+    entry.skillsSnapshot = shared;
+  }
+  return entry;
+}
+
 function retainEntry(cell: ReplicaCell, entry: SessionActorEntryFacts): void {
   discard(cell);
+  entry.entry = shareEntrySkills(entry.entry);
   cell.entry = freezeTrustedJsonSnapshot(entry);
   cell.bytes = estimateReplicaBytes(entry);
   pool.snapshots += 1;
@@ -312,6 +337,7 @@ function retainSnapshot(
   // Worker-decoded facts are plain data. Protect borrowed reads without inspecting
   // their shape again; unchanged frozen subtrees retain their identity.
   freezeTrustedJsonSnapshot(state.target);
+  state.entry = shareEntrySkills(state.entry);
   freezeTrustedJsonSnapshot(state.entry);
   freezeTrustedJsonSnapshot(state.members);
   freezeTrustedJsonSnapshot(state.participants);
@@ -498,16 +524,25 @@ export function hasSessionActorEmptyPendingInputHistory(
   );
 }
 
+/** Borrow current physical facts; the admitted reader retains disclosure authority. */
+export function readSessionActorTranscriptStateFromReplica(params: {
+  path: string;
+  sessionKey: string;
+  sessionId: string;
+}) {
+  const snapshot = readCurrentEntryCellForPath(params)?.cell.snapshot;
+  return snapshot?.entry?.sessionId === params.sessionId ? snapshot : undefined;
+}
+
 /** Complete transcript bodies share the actor's receipt token and bounded residency. */
 export function readSessionActorCompleteTranscriptFromReplica(params: {
   path: string;
   sessionKey: string;
   sessionId: string;
 }) {
-  const current = readCurrentEntryCellForPath(params);
-  const snapshot = current?.cell.snapshot;
-  const context = current?.cell.transcript?.context;
-  return snapshot?.entry?.sessionId === params.sessionId && context?.rows
+  const snapshot = readSessionActorTranscriptStateFromReplica(params);
+  const context = snapshot && readSessionActorTranscriptReplica(snapshot)?.context;
+  return snapshot && context?.rows
     ? {
         snapshot,
         rows: context.rows,
@@ -554,13 +589,14 @@ export function readSessionActorRowFacts(params: {
   if (summary && !projection.activitySummaryWatermark) {
     return undefined;
   }
-  return structuredClone({
+  // The row owns its mutable shell; nested facts already belong to the frozen replica.
+  return {
     sessionKey: params.sessionKey,
     entry: attachSessionEntrySnapshots({ ...state.entry }, {}, "list"),
     hasBoard: projection.hasBoard,
     transcriptAssistantMessage: "unknown",
     ...(summary ? { activitySummaryWatermark: projection.activitySummaryWatermark } : {}),
-  });
+  };
 }
 
 /** A single cold entry batch and actor commands publish into the same bounded MAIN owner. */
@@ -685,6 +721,8 @@ export function createSessionActorReplica(params: {
       const previousGeneration = owned.generation;
       const expectedGeneration = begin();
       return {
+        // Compression only: the worker must confirm this exact revision before using it.
+        preimage: previousGeneration === expectedGeneration ? previous : undefined,
         settle<Value>(outcome: SessionActorOutcome<Value>): boolean {
           if (outcome.kind === "rolled-back") {
             const restored = previous !== undefined && install(previous, previousGeneration);

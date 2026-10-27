@@ -181,6 +181,12 @@ runtime availability, image state, and mounted-path existence without filesystem
 paths. Local runs leave runtime installation to the operator. Boot and capture
 failures still stop the lane without retrying screenshots.
 
+If Apple removes the Watch runtime registration but cannot reclaim its MobileAsset,
+CI follows Apple's recovery instruction once: scan and mount orphaned runtimes,
+resolve the selected Watch image again, and retry its deletion before downloading.
+Other errors or a second deletion failure stop the repair. The replacement must
+report `Ready` with an existing mounted runtime directory before simulator creation.
+
 The screenshot-only job enables `OPENCLAW_SNAPSHOT_DIAGNOSTICS=1`. To collect the
 same diagnostics locally:
 
@@ -260,9 +266,11 @@ commit subjects. Focused endpoint diffs support the notes; current source and
 build configuration check feature availability. Localization catalogs contribute
 structural summaries instead of raw translation diffs. A separate factual review
 can request one correction. Each stage reports progress, with at most five model
-requests per audience and a five-minute generation budget. Exhausted budgets or
-unapproved notes stop preparation before upload. Retrying a saved, valid artifact
-reuses its exact text without another model call.
+stages per audience. Each stage permits one SDK retry for a transient connection,
+timeout, or retryable API failure, including backoff within the unchanged
+five-minute generation budget. Exhausted budgets or unapproved notes stop
+preparation before upload. Retrying a saved, valid artifact reuses its exact text
+without another model call.
 
 After Apple processes the IPA, the pipeline records its source ref, writes
 What's New, selects that exact build, and reads both back. For the sole first

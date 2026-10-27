@@ -69,6 +69,7 @@ suite.define(() => {
     }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      subscriptionInitialHistory: false,
       deferredMethods: ["chat.startup", "chat.startup"],
       historyMessages: [timedText("assistant", "Shared cold startup proof.")],
       methodResponses: { "sessions.list": chatSessionListResponse() },
@@ -195,6 +196,7 @@ suite.define(() => {
     const { page, gateway } = await chatFixture(
       suite,
       {
+        subscriptionInitialHistory: false,
         historyMessages: [timedText("assistant", "Split toolbar proof.")],
         methodResponses: { "sessions.list": chatSessionListResponse() },
         sessionKey: "agent:main:session-a",
@@ -322,7 +324,8 @@ suite.define(() => {
       );
     }
 
-    await panes.first().click({ position: { x: 20, y: 80 } });
+    // Activate through the composer; a retained hovercard can cover a pane-relative pixel.
+    await panes.first().locator(".agent-chat__composer-combobox textarea").click();
     await expect.poll(() => cells.first().getAttribute("class")).toContain("--active");
     await expect.poll(visibleActionLabels).toEqual([activeActions, ["Details"]]);
     expect(await headers.first().locator(".chat-header-session-menu__trigger").isVisible()).toBe(
@@ -345,7 +348,7 @@ suite.define(() => {
     ]);
 
     const lastPane = page.locator(".chat-split-view__pane").last();
-    await lastPane.click({ position: { x: 20, y: 80 } });
+    await lastPane.locator(".agent-chat__composer-combobox textarea").click();
     await expect.poll(() => cells.last().getAttribute("class")).toContain("--active");
     await expect.poll(visibleActionLabels).toEqual([["Details"], activeActions]);
     expect(await headers.last().locator(".chat-header-session-menu__trigger").isVisible()).toBe(
@@ -505,19 +508,14 @@ suite.define(() => {
       await expectTextContains(popover, "~190k / 200k · ~95%");
     } else {
       await expect.poll(() => popover.isVisible()).toBe(true);
-      for (const text of [
-        "46k / 200k · 23%",
-        "757.3k",
-        "42.3k",
-        "Est. cost",
-        "$0.023",
-        "Cost by Type",
-        "$0.0035",
-        "$0.018",
-        "$0.0015",
-        "$0.0005",
-      ]) {
+      for (const text of ["46k / 200k · 23%", "757.3k", "42.3k", "Cost", "$0.023"]) {
         await expectTextContains(popover, text);
+      }
+      const costBreakdown = await popover
+        .locator(".context-usage__stats > div[title]")
+        .getAttribute("title");
+      for (const amount of ["$0.0035", "$0.018", "$0.0015", "$0.0005"]) {
+        expect(costBreakdown).toContain(amount);
       }
       await page.keyboard.press("Escape");
       await expect.poll(() => popover.isHidden()).toBe(true);
@@ -543,7 +541,7 @@ suite.define(() => {
       .poll(() => composer.evaluate((element) => element === document.activeElement))
       .toBe(true);
 
-    await page.getByRole("button", { name: "Open command palette" }).click();
+    await page.getByRole("button", { name: "Command palette" }).click();
     const paletteInput = page.locator(".cmd-palette__input");
     await paletteInput.waitFor({ state: "visible", timeout: 10_000 });
     await expect
@@ -593,21 +591,16 @@ suite.define(() => {
     );
     const pinnedSessionKey = "agent:main:session-pinned";
     const createdOrder = [pinnedSessionKey, ...createdSessionKeys];
-    const updatedOrder = [...createdSessionKeys.toReversed(), pinnedSessionKey];
-    const sessions = {
-      count: createdSessionKeys.length + 1,
-      defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
-      path: "",
-      sessions: [
-        sessionRow(pinnedSessionKey, "Pinned Session", 50, { createdAt: 2_000 }),
-        ...createdSessionKeys.map((key, index) =>
-          sessionRow(key, `Session ${key.slice(-1).toUpperCase()}`, (index + 1) * 100, {
-            createdAt: 1_000 - index,
-          }),
-        ),
-      ],
-      ts: Date.now(),
-    };
+    // Personal pins lead the list in their Pinned section regardless of sort mode.
+    const updatedOrder = [pinnedSessionKey, ...createdSessionKeys.toReversed()];
+    const sessions = chatSessionListResponse([
+      sessionRow(pinnedSessionKey, "Pinned Session", 50, { createdAt: 2_000 }),
+      ...createdSessionKeys.map((key, index) =>
+        sessionRow(key, `Session ${key.slice(-1).toUpperCase()}`, (index + 1) * 100, {
+          createdAt: 1_000 - index,
+        }),
+      ),
+    ]);
     await page.addInitScript(
       ({ storageKey, entry }) => {
         const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
@@ -627,12 +620,12 @@ suite.define(() => {
     await page
       .locator('.sidebar-recent-session[data-session-key="agent:main:session-a"]')
       .waitFor({ timeout: 10_000 });
-    // Personal shortcuts do not add a row to the ten-row Sessions page.
+    // Pinned rows sit above, and do not occupy, the ten-row Sessions page.
     const pinnedLink = page.locator(
-      `.sidebar-rail [data-sidebar-entry="session:${pinnedSessionKey}"] a`,
+      `[data-session-section="pinned"] .sidebar-recent-session[data-session-key="${pinnedSessionKey}"] a.sidebar-recent-session__link`,
     );
     await pinnedLink.waitFor();
-    await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder.slice(0, 10));
+    await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder.slice(0, 11));
     await page.getByRole("button", { name: "Show more" }).click();
     await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
 
@@ -655,7 +648,7 @@ suite.define(() => {
       .locator('.sidebar-recent-session[data-session-key="agent:main:session-a"]')
       .locator(".sidebar-recent-session__name")
       .evaluate((label) => getComputedStyle(label).fontWeight);
-    expect(activeWeight).toBe("600");
+    expect(activeWeight).toBe(inactiveWeight);
     expect(inactiveWeight).toBe("500");
 
     const filterAndSort = page.getByRole("button", { name: "Filter & sort", exact: true });
@@ -718,7 +711,7 @@ suite.define(() => {
     const label = row.locator(".sidebar-recent-session__name");
     const link = row.locator("a.sidebar-recent-session__link");
     const tree = row.locator("..");
-    const list = tree.locator("..");
+    const list = tree.locator('xpath=ancestor::*[@role="list"][1]');
     await expectText(label, readableTitle);
     expect(await list.getAttribute("role")).toBe("list");
     expect(await tree.getAttribute("role")).toBe("listitem");

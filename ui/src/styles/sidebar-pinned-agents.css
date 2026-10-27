@@ -9,6 +9,7 @@
 }
 
 .sidebar-pinned-agent {
+  position: relative;
   min-width: 0;
 }
 

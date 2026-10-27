@@ -152,8 +152,16 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
     reuseCleanClose?: boolean;
     /** Selected reports acquire shared bytes only when a reader actually needs them. */
     lazy?: boolean;
+    /** Command owners may cancel preparation before the callback acquires its read scope. */
+    signal?: AbortSignal;
   } = {},
 ): Promise<T> {
+  const inheritedSignal = resolveStateReadCallerSignal();
+  const callerSignal =
+    options.signal && inheritedSignal
+      ? AbortSignal.any([options.signal, inheritedSignal])
+      : (options.signal ?? inheritedSignal);
+  callerSignal?.throwIfAborted();
   const postgres = isStatePostgres();
   if (!postgres) {
     assertStateFileSnapshotAllowed();
@@ -168,7 +176,6 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
     return await operation();
   }
   const env = options.env ?? process.env;
-  const callerSignal = resolveStateReadCallerSignal();
   const controller = new AbortController();
   let closeSnapshotWork: ((reason: unknown) => void) | undefined;
   const run = async () => {

@@ -8,6 +8,7 @@ import {
   resolveControlUiRootOverrideSync,
   resolveControlUiRootSync,
 } from "../infra/control-ui-assets.js";
+import type { HttpRepresentationEncoding } from "../infra/http-content-encoding.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
@@ -89,24 +90,33 @@ export function readControlUiRootAsset(
   root: ReadyRoot,
   fileRel: string,
   readBody: boolean,
+  encodings: readonly HttpRepresentationEncoding[] = ["identity"],
 ): Promise<ControlUiRootAsset | null> {
   const runtime = fileRuntime();
   const owner = rootFiles(runtime, root);
   owner.controller.signal.throwIfAborted();
-  const key = `${readBody ? "body" : "metadata"}:${fileRel}`;
-  const cachedKey = owner.cached.peek(`body:${fileRel}`) ? `body:${fileRel}` : key;
+  const preferences =
+    root.kind === "bundled" &&
+    fileRel.startsWith("assets/") &&
+    isControlUiCompressibleAsset(fileRel)
+      ? encodings
+      : (["identity"] as const);
+  const identity = `${preferences.join(",")}:${fileRel}`;
+  const key = `${readBody ? "body" : "metadata"}:${identity}`;
+  const bodyKey = `body:${identity}`;
+  const cachedKey = owner.cached.peek(bodyKey) ? bodyKey : key;
   const cached = owner.cached.get(cachedKey);
   if (cached) {
     return Promise.resolve(cached.asset);
   }
-  const pending =
-    owner.pending.get(key) ?? (!readBody ? owner.pending.get(`body:${fileRel}`) : undefined);
+  const pending = owner.pending.get(key) ?? (!readBody ? owner.pending.get(bodyKey) : undefined);
   if (pending) {
     return pending;
   }
   const pool = (runtime.pool ??= new WorkerTaskPool({
     workerUrl: resolveRuntimeProcessEntrypointUrl("controlUiFile"),
     workerClass: "file-reader",
+    workerOptions: { resourceLimits: { maxYoungGenerationSizeMb: 16 } },
     // Reuse the bounded reader pool across UI visits several minutes apart.
     idleTimeoutMs: 10 * 60_000,
     maxPendingTasks: 2_048,
@@ -114,9 +124,10 @@ export function readControlUiRootAsset(
   }));
   const read = async (
     input: Omit<ControlUiFileRead, "readBody">,
+    includeBody: boolean,
   ): Promise<ControlUiPreparedFile | null> => {
     const file = await pool.run(
-      { ...input, readBody },
+      { ...input, readBody: includeBody },
       {
         signal: owner.controller.signal,
         inputBytes:
@@ -138,22 +149,32 @@ export function readControlUiRootAsset(
       filePath: path.resolve(root.path, fileRel),
       rejectHardlinks: root.kind !== "bundled",
     };
-    const file = await read(location);
+    // Pin the source's metadata and canonical path even when serving a sidecar.
+    const file = await read(location, readBody && preferences[0] === "identity");
     if (!file) {
       return null;
     }
     const asset: ControlUiRootAsset = { file };
-    if (
-      root.kind === "bundled" &&
-      fileRel.startsWith("assets/") &&
-      isControlUiCompressibleAsset(fileRel)
-    ) {
-      const sourcePath = file.path;
-      const sidecar = (suffix: string) =>
-        read({ ...location, filePath: `${sourcePath}${suffix}` }).catch((error: unknown) =>
-          error instanceof Error ? error : new Error(String(error)),
-        );
-      [asset.br, asset.gzip] = await Promise.all([sidecar(".br"), sidecar(".gz")]);
+    for (const encoding of preferences) {
+      if (encoding === "identity") {
+        if (readBody && !file.body) {
+          const body = await read(location, true);
+          if (!body) {
+            return null;
+          }
+          asset.file = body;
+        }
+        break;
+      }
+      const sidecar = await read(
+        { ...location, filePath: `${file.path}${encoding === "br" ? ".br" : ".gz"}` },
+        readBody,
+      ).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
+      asset[encoding] = sidecar;
+      // A missing file falls through; the selector owns errors for the chosen encoding.
+      if (sidecar) {
+        break;
+      }
     }
     owner.controller.signal.throwIfAborted();
     if (
@@ -163,7 +184,7 @@ export function readControlUiRootAsset(
       !(asset.gzip instanceof Error)
     ) {
       const bytes =
-        (file.body?.byteLength ?? 0) +
+        (asset.file.body?.byteLength ?? 0) +
         (asset.br?.body?.byteLength ?? 0) +
         (asset.gzip?.body?.byteLength ?? 0);
       if (bytes <= MAX_PREPARED_BYTES) {

@@ -1,4 +1,4 @@
-import { createSignal, getObserver } from "@solidjs/signals";
+import { createSignal, getObserver, type Signal } from "@solidjs/signals";
 
 /**
  * Track pane-owned fields without changing their synchronous read/write contract.
@@ -16,14 +16,16 @@ export function projectChatFields(
       continue;
     }
     let value: unknown = descriptor.value;
-    // Wrapping the value keeps callback fields from becoming signal derivations.
-    const [published, publish] = createSignal({ value }, { ownedWrite: true });
+    let publication: Signal<{ value: unknown }> | undefined;
     Object.defineProperty(owner, key, {
       configurable: true,
       enumerable: descriptor.enumerable,
       get() {
         if (getObserver()) {
-          published();
+          // Unobserved pane features need neither signals nor queued publications.
+          // Wrapping the value keeps callbacks from becoming signal derivations.
+          publication ??= createSignal({ value }, { ownedWrite: true });
+          publication[0]();
         }
         return value;
       },
@@ -32,7 +34,7 @@ export function projectChatFields(
           return;
         }
         value = next;
-        publish({ value });
+        publication?.[1]({ value });
       },
     });
   }

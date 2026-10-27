@@ -1,5 +1,4 @@
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getRecentDiagnosticPhases,
@@ -99,14 +98,8 @@ afterEach(() => {
 });
 
 describe("diagnostic-events", () => {
-  function expectConsoleErrorPrefix(errorSpy: { mock: { calls: unknown[][] } }, prefix: string) {
-    expect(errorSpy.mock.calls).toHaveLength(1);
-    const [message] = expectDefined(errorSpy.mock.calls[0], "console error call");
-    expect(typeof message).toBe("string");
-    expect((message as string).startsWith(prefix)).toBe(true);
-  }
-
   it("does not read or queue payloads until a consumer accepts their trust and type", async () => {
+    const clone = vi.spyOn(globalThis, "structuredClone");
     let payloadReads = 0;
     const event = {
       ...modelStartedEvent(),
@@ -121,6 +114,7 @@ describe("diagnostic-events", () => {
     onInternal(() => {}, { includeTrusted: ["model.call.error"] });
     emitTrusted(event);
     expect(payloadReads).toBe(0);
+    expect(clone).not.toHaveBeenCalled();
     expect(hasPending(() => true)).toBe(false);
 
     emit(event);
@@ -274,6 +268,141 @@ describe("diagnostic-events", () => {
     expect(propagatedTraceparent(diagnosticTrace)).toBeUndefined();
   });
 
+  it("shares one frozen event and metadata across trace preparation, queue inspection and listeners", async () => {
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    const freeze = vi.spyOn(Object, "freeze");
+    const trace = { ...diagnosticTraceInput };
+    const prepared: Event[] = [];
+    const preparedMetadata: Metadata[] = [];
+    registerBridge({
+      prepareEvent: (event: Event, metadata: Metadata) => {
+        prepared.push(event);
+        preparedMetadata.push(metadata);
+      },
+      resolveTraceContext: () => undefined,
+    });
+    const received = captureEvents(onInternal);
+    const trusted = captureEvents(onTrusted);
+
+    emitTrusted({ ...modelStartedEvent(), trace });
+    trace.spanId = "changed-after-emit";
+    expect(
+      hasPending((event, metadata) => event === prepared[0] && metadata === preparedMetadata[0]),
+    ).toBe(true);
+    await drain();
+
+    expect(received.mock.calls[0]?.[0]).toBe(prepared[0]);
+    expect(trusted.mock.calls[0]?.[0]).toBe(prepared[0]);
+    expect(received.mock.calls[0]?.[1]).toBe(preparedMetadata[0]);
+    expect(trusted.mock.calls[0]?.[1]).toBe(preparedMetadata[0]);
+    expect(Object.isFrozen(preparedMetadata[0])).toBe(true);
+    expect(prepared[0]?.trace?.spanId).toBe(diagnosticTraceInput.spanId);
+    expect(clone).toHaveBeenCalledTimes(1);
+    expect(freeze.mock.calls.filter(([value]) => value === prepared[0])).toHaveLength(1);
+  });
+
+  it("shares owned events with immutable plain leaves without cloning", async () => {
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    const cycleTrackers = vi.spyOn(globalThis, "WeakSet");
+    const trace = Object.freeze({ ...diagnosticTraceInput });
+    const received = collectEvents(onInternal);
+    emitTrusted(Object.freeze({ ...modelStartedEvent(), trace }));
+    emitTrusted({ ...modelStartedEvent(), trace });
+    await drain();
+
+    expect(received[0]?.trace).toBe(trace);
+    expect(received[1]?.trace).toBe(trace);
+    expect(Object.isFrozen(received[0])).toBe(true);
+    expect(clone).not.toHaveBeenCalled();
+    expect(cycleTrackers).not.toHaveBeenCalled();
+  });
+
+  it("keeps cyclic frozen graphs with mutable descendants isolated", async () => {
+    const leaf = { value: "original" };
+    const root: { child?: object; leaf: typeof leaf } = { child: undefined, leaf };
+    const child = Object.freeze({ root });
+    root.child = child;
+    Object.freeze(root);
+    const received = collectEvents(onPublic);
+    const parentEvent = { ...modelStartedEvent(), extra: root };
+    const childEvent = { ...modelStartedEvent(), extra: child };
+    emit(parentEvent);
+    emit(childEvent);
+    leaf.value = "changed";
+    await drain();
+
+    const second = received[1] as Event & { extra: typeof child };
+    expect(second.extra.root.leaf.value).toBe("original");
+    expect(Object.isFrozen(leaf)).toBe(false);
+  });
+
+  it("captures queued public and private payloads before the producer changes them", async () => {
+    const trace = { ...diagnosticTraceInput };
+    const privateData = { modelContent: { inputMessages: ["original"] } };
+    const received = collectPrivateEvents();
+    emitPrivate({ ...modelStartedEvent(), trace }, privateData);
+    trace.spanId = "changed-after-emit";
+    privateData.modelContent.inputMessages[0] = "changed-after-emit";
+    await drain();
+
+    expect(received[0]?.event.trace?.spanId).toBe(diagnosticTraceInput.spanId);
+    expect(received[0]?.privateData.modelContent?.inputMessages).toEqual(["original"]);
+  });
+
+  it("shares captured tool payloads while preserving the independent audit sequence", async () => {
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    const audit = collectEvents(onTool);
+    const events = collectEvents(onInternal);
+    emitTrusted(modelStartedEvent());
+    emitTrusted({ ...toolErrorEvent("run", "call"), trace: { ...diagnosticTraceInput } });
+    await drain();
+
+    expect(audit[0]?.seq).toBe(1);
+    expect(events[1]?.seq).toBe(2);
+    expect(audit[0]?.trace).toBe(events[1]?.trace);
+    expect(clone).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not snapshot disabled-diagnostics skill events without an interested trusted consumer", () => {
+    setEnabled(false);
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    onInternal(() => {});
+    onTrusted(() => {}, { include: ["model.usage"] });
+    emitSkill({
+      type: "skill.used",
+      skillName: "synthetic",
+      skillSource: "bundled",
+      activation: "read",
+      trace: { ...diagnosticTraceInput },
+    });
+    expect(clone).not.toHaveBeenCalled();
+    expect(hasPending(() => true)).toBe(false);
+  });
+
+  it.each(["mutable leaf", "frozen getter"])(
+    "snapshots a frozen %s instead of trusting its envelope",
+    async (kind) => {
+      const leaf = { value: "original" };
+      const extra = Object.freeze(
+        kind === "frozen getter"
+          ? {
+              get leaf() {
+                return leaf;
+              },
+            }
+          : { leaf },
+      );
+      const input = { ...modelStartedEvent(), extra };
+      const received = collectEvents(onPublic);
+      emit(input);
+      leaf.value = "producer changed";
+      await drain();
+
+      expect((received[0] as Event & typeof input).extra.leaf.value).toBe("original");
+      expect(Object.isFrozen(leaf)).toBe(false);
+    },
+  );
+
   it("shares semantic provenance across duplicate module instances", async () => {
     const events = captureEvents(onInternal);
 
@@ -355,6 +484,7 @@ describe("diagnostic-events", () => {
         expect.objectContaining({ trusted: true }),
         {},
       );
+      expect(Object.isFrozen(metadataOnly.mock.calls[0]?.[1])).toBe(true);
       expect(Object.isFrozen(metadataOnly.mock.calls[0]?.[2])).toBe(true);
     },
   );
@@ -369,16 +499,11 @@ describe("diagnostic-events", () => {
       outcome: "denied",
       severity: "medium",
     } as const;
-    emit({
-      ...security,
-      type: "security.event",
-      eventId: "untrusted-security-event",
-    } as unknown as Parameters<typeof emit>[0]);
-    emitTrusted({
-      ...security,
-      type: "security.event",
-      eventId: "generic-trusted-security-event",
-    } as unknown as Parameters<typeof emitTrusted>[0]);
+    for (const send of [emit, emitTrusted]) {
+      send({ ...security, type: "security.event", eventId: "forged" } as unknown as Parameters<
+        typeof emit
+      >[0]);
+    }
     emitSecurity({ ...security, eventId: "security-event-1" });
 
     expect(internalEvents).toHaveBeenCalledExactlyOnceWith(
@@ -392,57 +517,39 @@ describe("diagnostic-events", () => {
     expect(publicEvents).toStrictEqual([]);
   });
 
-  it("isolates diagnostic metadata from listener mutation", () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const seen: boolean[] = [];
-    onInternal((eventValue, metadata) => {
-      (metadata as { trusted: boolean }).trusted = true;
-    });
-    onInternal((eventValue, metadata) => {
-      seen.push(metadata.trusted);
-    });
+  it.each([false, true])(
+    "isolates shared snapshots and trust from mutation (trusted: %s)",
+    (trusted) => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const usage = { total: 42 };
+      const events: Event[] = [];
+      const seen: Array<{ total: number | undefined; trusted: boolean }> = [];
+      onInternal((event, metadata) => {
+        events.push(event);
+        expect(Reflect.set(metadata, "trusted", !trusted)).toBe(false);
+        usage.total = 7;
+        if (event.type === "model.usage") {
+          event.usage.total = 0;
+        }
+      });
+      onInternal((event, metadata) => {
+        events.push(event);
+        if (event.type === "model.usage") {
+          seen.push({ total: event.usage.total, trusted: metadata.trusted });
+        }
+      });
+      onTrusted((event) => events.push(event));
 
-    emit({ type: "message.queued", source: "plugin" });
+      (trusted ? emitTrusted : emit)({ type: "model.usage", usage });
 
-    expect(seen).toEqual([false]);
-    expectConsoleErrorPrefix(
-      errorSpy,
-      "[diagnostic-events] listener error type=message.queued seq=1: TypeError",
-    );
-  });
-
-  it("shares a frozen snapshot isolated from listener and producer mutation", () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const usage = { total: 42 };
-    const events: Event[] = [];
-    const seen: Array<{ total: number | undefined; trusted: boolean }> = [];
-    onInternal((event) => {
-      events.push(event);
-      usage.total = 7;
-      if (event.type === "model.usage") {
-        event.usage.total = 0;
-      }
-    });
-    onInternal((event, metadata) => {
-      events.push(event);
-      if (event.type === "model.usage") {
-        seen.push({ total: event.usage.total, trusted: metadata.trusted });
-      }
-    });
-    onTrusted((event) => events.push(event));
-
-    emitTrusted({ type: "model.usage", usage });
-
-    expect(events).toHaveLength(3);
-    expect(events[1]).toBe(events[0]);
-    expect(events[2]).toBe(events[0]);
-    expect(usage.total).toBe(7);
-    expect(seen).toEqual([{ total: 42, trusted: true }]);
-    expectConsoleErrorPrefix(
-      errorSpy,
-      "[diagnostic-events] listener error type=model.usage seq=1: TypeError",
-    );
-  });
+      expect(events).toHaveLength(3);
+      expect(events[1]).toBe(events[0]);
+      expect(events[2]).toBe(events[0]);
+      expect(usage.total).toBe(7);
+      expect(seen).toEqual([{ total: 42, trusted }]);
+      expect(errorSpy).toHaveBeenCalledOnce();
+    },
+  );
 
   it("keeps opaque plugin values isolated across listeners", () => {
     const extra = {
@@ -720,6 +827,9 @@ describe("queued runtime diagnostic phases", () => {
   it("uses the bounded diagnostic queue without displacing required lifecycle terminals", async () => {
     const publicEvents = collectEvents(onPublic);
     const events = collectEvents(onTrusted);
+    const dropped = captureEvents((listener) =>
+      onInternal(listener, { include: ["diagnostic.async_queue.dropped"] }),
+    );
     const emitPhase = phaseEmitter()!;
     for (let index = 0; index < 9_999; index++) {
       emitPhase(phase);
@@ -748,6 +858,7 @@ describe("queued runtime diagnostic phases", () => {
       "model.call.started",
       "diagnostic.async_queue.dropped",
     ]);
+    expect(Object.isFrozen(dropped.mock.calls[0]?.[1])).toBe(true);
   });
 });
 
@@ -820,6 +931,89 @@ describe("diagnostic event plugin usage attribution", () => {
 });
 
 describe("private diagnostic data", () => {
+  it("keeps queued delivery and trace preparation when private data cannot be cloned", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const prepared: Event[] = [];
+    registerBridge({
+      prepareEvent: (event: Event) => prepared.push(event),
+      resolveTraceContext: () => undefined,
+    });
+    const internal = collectEvents(onInternal);
+    const metadataOnly = collectEvents((listener) =>
+      onTrusted(listener, undefined, { includePrivateData: false }),
+    );
+    const privateEvents = collectPrivateEvents();
+
+    emitPrivate(modelStartedEvent(), { modelContent: { inputMessages: () => {} } });
+    await drain();
+
+    expect(prepared).toHaveLength(1);
+    expect(internal).toEqual(prepared);
+    expect(metadataOnly).toEqual(prepared);
+    expect(privateEvents).toEqual([{ event: prepared[0], privateData: {} }]);
+    expect(errors).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("private snapshot error type=model.call.started"),
+    );
+  });
+
+  it("clones plain private data once per dispatch for interested trusted listeners", () => {
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    const producer = { modelContent: { inputMessages: [{ content: "synthetic prompt" }] } };
+    const received: PrivateData[] = [];
+    const mutations: boolean[] = [];
+    onTrusted(() => {}, undefined, { includePrivateData: false });
+    onTrusted(() => {}, { include: ["log.record"] });
+    for (let index = 0; index < 4; index++) {
+      onTrusted((_event, _metadata, data) => {
+        received.push(data);
+        mutations.push(Reflect.set(data.modelContent!, "systemPrompt", "changed"));
+      });
+    }
+
+    emitPrivate({ type: "model.usage", usage: { input: 1 } }, producer);
+
+    expect(clone.mock.calls.filter(([value]) => value === producer)).toHaveLength(1);
+    expect(new Set(received).size).toBe(1);
+    expect(received).toHaveLength(4);
+    expect(mutations).toEqual([false, false, false, false]);
+    producer.modelContent.inputMessages[0]!.content = "producer changed";
+    expect(received[0]).toEqual({
+      modelContent: { inputMessages: [{ content: "synthetic prompt" }] },
+    });
+  });
+
+  it("keeps mutable opaque private values isolated between listeners and producers", () => {
+    const values = { map: new Map([["key", "original"]]), bytes: new Uint8Array([1]) };
+    const producer = { toolContent: { toolInput: values } };
+    onTrusted((_event, _metadata, data) => {
+      const input = data.toolContent!.toolInput as typeof values;
+      input.map.set("key", "listener changed");
+      input.bytes[0] = 2;
+    });
+    const received = collectPrivateEvents();
+
+    emitPrivate({ type: "model.usage", usage: { input: 1 } }, producer);
+
+    expect(received[0]?.privateData).toEqual(producer);
+    expect(values.map.get("key")).toBe("original");
+    expect(values.bytes[0]).toBe(1);
+  });
+
+  it("removes forged OTel attribution without altering another listener's private snapshot", () => {
+    const producer = { hostPluginId: "spoof", errorMessage: "synthetic error" };
+    const ordinary = collectPrivateEvents();
+    const otel = vi.fn<Listener>();
+    onTrusted(markTrustedOtelDiagnosticListener(otel));
+    const afterOtel = collectPrivateEvents();
+
+    emitInternal({ type: "model.usage", usage: { input: 1 } }, producer);
+
+    expect(ordinary[0]?.privateData).toEqual(producer);
+    expect(afterOtel[0]?.privateData).toEqual(producer);
+    expect(otel.mock.calls[0]?.[2]).toEqual({ errorMessage: "synthetic error" });
+    expect(Object.isFrozen(otel.mock.calls[0]?.[2])).toBe(true);
+  });
+
   it("shares the frozen empty private payload with OTel listeners", () => {
     const received: PrivateData[] = [];
     onTrusted((_evt, _meta, data) => received.push(data));

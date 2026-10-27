@@ -12,7 +12,10 @@ import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entri
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import { renderQrTerminal } from "../../media/qr-terminal.js";
-import { trimTextPreservingCode } from "../../shared/text/text-projection.js";
+import {
+  combineNonStreamingReplyParts,
+  trimTextPreservingCode,
+} from "../../shared/text/text-projection.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
 import {
   buildManagedMediaFailureBlock,
@@ -29,26 +32,6 @@ export type AssistantDisplayMediaBySource = ReadonlyMap<
   string,
   readonly AssistantDisplayContentBlock[]
 >;
-
-/** Recombine non-streamed text without destroying Markdown's meaningful indentation. */
-export function combineNonStreamingReplyParts(parts: readonly string[]): string {
-  let combined = "";
-  for (const part of parts) {
-    if (!part.trim()) {
-      continue;
-    }
-    // Outbound media normalization trims a chunk's trailing newline, so an
-    // indented following chunk still needs its original single-line boundary.
-    const separator =
-      !combined || /[\r\n]$/.test(combined) || /^[\r\n]/.test(part)
-        ? ""
-        : /^[\t ]+\S/.test(part)
-          ? "\n"
-          : "\n\n";
-    combined += separator + part;
-  }
-  return trimTextPreservingCode(combined);
-}
 
 export function isMediaBearingPayload(payload: ReplyPayload): boolean {
   return (

@@ -25,6 +25,7 @@ import { seedClawPackageBootstrap } from "./bootstrap.js";
 import {
   ClawCronInstallError,
   clawCronGatewayJobConfigRevision,
+  clawCronGatewayJobMatchesRef,
   installClawCronJobsStateless,
   type ClawCronGateway,
   type PersistedClawCronRef,
@@ -45,6 +46,7 @@ import {
 } from "./packages.js";
 import type { ClawPluginRuntimeOptions } from "./plugin-runtime.js";
 import type { PersistedClawPackageRef } from "./provenance.js";
+import type { ClawMutationStateOptions } from "./state-mutation-options.js";
 import { CLAW_OUTPUT_STABILITY, type ClawAddPlan } from "./types.js";
 import { createClawWorkspaceFiles, type PersistedClawWorkspaceFile } from "./workspace.js";
 
@@ -52,8 +54,7 @@ type ConfigCommit = (
   transform: (config: OpenClawConfig, runtimeConfig?: OpenClawConfig) => OpenClawConfig,
 ) => Promise<void>;
 
-export type StatelessClawAddOptions = {
-  assertCurrent?: () => void;
+export type StatelessClawAddOptions = ClawMutationStateOptions & {
   assertForwardCurrent?: () => void;
   assertReviewedConfig?: (config: OpenClawConfig, phase?: "after-agent-commit") => void;
   getCurrentConfig?: () => OpenClawConfig;
@@ -64,7 +65,10 @@ export type StatelessClawAddOptions = {
   skillConsent?: ClawSkillInstallConsent;
   reloadPlugins?: PluginInstallBatchReload;
   runtimeBatch?: ClawPluginRuntimeOptions["runtimeBatch"];
-  cronGateway?: Pick<ClawCronGateway, "add" | "list" | "waitUntilAgentAvailable"> &
+  cronGateway?: Pick<
+    ClawCronGateway,
+    "add" | "list" | "waitUntilAgentAvailable" | "writeScratch" | "enable"
+  > &
     Partial<Pick<ClawCronGateway, "get" | "remove">>;
   commitConfig?: ConfigCommit;
   configWriteOptions?: ConfigWriteOptions;
@@ -148,6 +152,8 @@ async function commitConfig(
   options: StatelessClawAddOptions,
 ): Promise<void> {
   if (options.commitConfig) {
+    await options.prepareEffect?.();
+    options.assertCurrent?.();
     await options.commitConfig(transform);
     return;
   }
@@ -155,6 +161,10 @@ async function commitConfig(
     afterWrite: { mode: "auto" },
     writeOptions: copyRuntimeConfigWriteApplication(options.configWriteOptions, {
       assertCurrent: options.assertCurrent,
+      beforeCommit: async () => {
+        await options.configWriteOptions?.beforeCommit?.();
+        await options.prepareEffect?.();
+      },
     }),
     transform: (config, context) => ({
       nextConfig: transform(config, context.snapshot.runtimeConfig),
@@ -246,6 +256,8 @@ export async function stageClawAddHostRequirementsStateless(
     if (configCommitted) {
       try {
         if (options.rollbackNewAgent) {
+          await options.prepareEffect?.();
+          options.assertCurrent?.();
           await options.rollbackNewAgent(plan, cronJobs);
         } else {
           for (const ref of cronJobs.toReversed()) {
@@ -253,10 +265,17 @@ export async function stageClawAddHostRequirementsStateless(
               throw new Error("Gateway automation rollback is unavailable");
             }
             const live = await options.cronGateway.get(ref.schedulerJobId);
+            if (!clawCronGatewayJobMatchesRef(plan.agent.finalId, ref, live)) {
+              throw new Error(
+                "Agent automations changed during Claw Add; rollback left it intact.",
+              );
+            }
             const revision = clawCronGatewayJobConfigRevision(live);
             if (!revision) {
               throw new Error(`Automation ${ref.schedulerJobId} has no rollback revision`);
             }
+            await options.prepareEffect?.();
+            options.assertCurrent?.();
             await options.cronGateway.remove(ref.schedulerJobId, {
               commitGuard: options.assertCurrent,
               expectedConfigRevision: revision,
@@ -288,6 +307,8 @@ export async function stageClawAddHostRequirementsStateless(
         ) {
           throw new Error("Workspace changed after the agent became available; left it in place.");
         }
+        await options.prepareEffect?.();
+        options.assertCurrent?.();
         await rm(workspace, { recursive: true, force: false });
         workspaceCreated = false;
       } catch (error) {
@@ -353,7 +374,10 @@ export async function stageClawAddHostRequirementsStateless(
           `Workspace ${JSON.stringify(workspace)} was created after planning.`,
         );
       }
+      await options.prepareEffect?.();
+      assertForwardCurrent();
       await mkdir(dirname(workspace), { recursive: true });
+      await options.prepareEffect?.();
       assertForwardCurrent();
       assertWorkspacePathUnchanged(workspace);
       await mkdir(workspace);
@@ -395,14 +419,15 @@ export async function stageClawAddHostRequirementsStateless(
       }, options);
       configCommitted = true;
       workspaceExposed = true;
-      if (
-        deletion?.cleanupCompleted &&
-        !(await claimCompletedAgentDeletion(plan.agent.finalId, deletion.operationId))
-      ) {
-        throw new ClawAddMutationError(
-          "agent_deletion_changed",
-          `Agent ${JSON.stringify(plan.agent.finalId)} deletion changed during Add.`,
-        );
+      if (deletion?.cleanupCompleted) {
+        await options.prepareEffect?.();
+        assertForwardCurrent("after-agent-commit");
+        if (!(await claimCompletedAgentDeletion(plan.agent.finalId, deletion.operationId))) {
+          throw new ClawAddMutationError(
+            "agent_deletion_changed",
+            `Agent ${JSON.stringify(plan.agent.finalId)} deletion changed during Add.`,
+          );
+        }
       }
       let finished = false;
       const finishOnce = (nextOptions: StatelessClawAddOptions) => {
@@ -426,6 +451,13 @@ export async function stageClawAddHostRequirementsStateless(
           } catch (error) {
             if (error instanceof ClawCronInstallError) {
               cronJobs = error.cronJobs;
+              if (error.code === "cron_scratch_import_incomplete") {
+                // A scratch conflict or lost write acknowledgement may contain user edits.
+                return result("partial", {
+                  code: error.code,
+                  message: `${error.message} The new agent and its automations were kept. Inspect their scratch and enabled state before retrying.`,
+                });
+              }
             }
             return await fail(
               error,

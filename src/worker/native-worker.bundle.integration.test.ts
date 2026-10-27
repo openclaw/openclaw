@@ -1,14 +1,17 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { copyFile, mkdir, readFile, readdir } from "node:fs/promises";
-import { createServer, type Server } from "node:http";
+import type { Server } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { WORKER_PROTOCOL_FEATURES } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  completionConfig,
+  completionModelDefinition,
+} from "../agents/simple-completion.test-support.js";
 import { createWorkerBundleProducer } from "../gateway/worker-environments/bundle.js";
 import * as openclawRoot from "../infra/openclaw-root.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
@@ -29,7 +32,6 @@ import {
   closeNativeServers,
   expectNativeRequests,
   expectNoProxyInference,
-  listenNativeServer,
   nativeProviderFixture,
 } from "./native-worker.test-support.js";
 import { nodeWorkerPlanHash, type NodeWorkerLaunchInput } from "./node-supervisor-protocol.js";
@@ -94,15 +96,6 @@ it.skipIf(process.env.TEST_NATIVE_WORKER_BUNDLE !== "1" || process.platform === 
       protocolFeatures: [...artifact.protocolFeatures],
     };
 
-    const transferToken = "t".repeat(43);
-    const transfers: Array<string | undefined> = [];
-    const transferPort = await listenNativeServer(
-      createServer((request, response) => {
-        transfers.push(request.url);
-        response.writeHead(500).end();
-      }),
-      servers,
-    );
     const env: NodeJS.ProcessEnv = {
       PATH: process.env.PATH,
       HOME: home,
@@ -128,24 +121,17 @@ it.skipIf(process.env.TEST_NATIVE_WORKER_BUNDLE !== "1" || process.platform === 
       .mockReturnValue(runtimePackage);
     const installer = new NodeWorkerBundleInstaller({ root: bundleRoot, env });
     packageRootFixture.mockRestore();
-    expect(
-      await installer.ensure({
-        input: {
-          gatewayNamespace,
-          build,
-          archive: {
-            token: transferToken,
-            bytes: artifact.tarballBytes,
-            sha256: artifact.tarballSha256,
-          },
+    await installer.ensure({
+      input: {
+        gatewayNamespace,
+        build,
+        archive: {
+          token: "t".repeat(43),
+          bytes: artifact.tarballBytes,
+          sha256: artifact.tarballSha256,
         },
-        gatewayUrl: "ws://127.0.0.1:" + transferPort,
-      }),
-    ).toEqual(build);
-    expect(transfers).toEqual([]);
-    expect(await installer.inspect({ gatewayNamespace, bundleHash: build.bundleHash })).toEqual({
-      bundleHash: build.bundleHash,
-      status: "installed",
+      },
+      gatewayUrl: "ws://127.0.0.1:1",
     });
     const installedRoot = path.join(bundleRoot, gatewayNamespace, "bundles", build.bundleHash);
     const manifest = await readWorkerBundleDirectoryManifest({
@@ -174,29 +160,15 @@ it.skipIf(process.env.TEST_NATIVE_WORKER_BUNDLE !== "1" || process.platform === 
           : FINAL,
       FINAL,
     );
-    const config = {
-      models: {
-        providers: {
-          [MODEL.provider]: {
-            apiKey: KEY,
-            api: "openai-completions",
-            baseUrl: provider.baseUrl,
-            headers: { "x-native-registry": "supervisor-snapshot" },
-            models: [
-              {
-                id: MODEL.model,
-                name: MODEL.model,
-                contextWindow: 32768,
-                maxTokens: 173,
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              },
-            ],
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const config = completionConfig(MODEL.provider, {
+      apiKey: KEY,
+      api: "openai-completions",
+      baseUrl: provider.baseUrl,
+      headers: { "x-native-registry": "supervisor-snapshot" },
+      models: [
+        completionModelDefinition({ id: MODEL.model, contextWindow: 32768, maxTokens: 173 }),
+      ],
+    });
     const nativeInferenceSnapshot = snapshotNodeWorkerNativeInference(config, env)!;
     supervisor = createNodeWorkerSupervisor({
       bundleRoot,

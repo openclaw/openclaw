@@ -20,7 +20,7 @@ import { resolveFirstGithubToken } from "./auth.js";
 import { resolveGithubCopilotDomain } from "./domain.js";
 import { COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS } from "./models.js";
 import { CopilotRuntimeAuthError } from "./runtime-auth-error.js";
-import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotRuntimeAuth } from "./runtime-auth.js";
+import { resolveCopilotRuntimeAuth } from "./runtime-auth.js";
 import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
 
 const COPILOT_EMBEDDING_PROVIDER_ID = "github-copilot";
@@ -180,7 +180,7 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
         env: process.env,
         githubDomain,
       }));
-    const baseUrl = runtimeAuth.baseUrl || DEFAULT_COPILOT_API_BASE_URL;
+    const baseUrl = runtimeAuth.baseUrl;
     const ssrfPolicy = buildRemoteBaseUrlPolicy(baseUrl);
     const headers = buildCopilotRuntimeHeaders({
       config: options.config,
@@ -249,7 +249,7 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
       return await withRemoteHttpResponse({
         url,
         fetchImpl,
-        ssrfPolicy: buildRemoteBaseUrlPolicy(baseUrl),
+        ssrfPolicy,
         signal,
         init: {
           method: "POST",

@@ -1,8 +1,9 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { SessionsUsageResult } from "../api/types.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import type { MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
+import { pauseVirtualClock, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
 
@@ -98,23 +99,20 @@ function installUsage(page: Page, usage: unknown, responses: Record<string, unkn
 }
 
 async function setVisibility(page: Page, visible: boolean, advanceMs = 0) {
-  await page.evaluate(
-    ({ visible: isVisible, advanceMs: clockOffset }) => {
-      if (clockOffset) {
-        const staleNow = Date.now() + clockOffset;
-        Date.now = () => staleNow;
-      }
-      Object.defineProperties(document, {
-        visibilityState: { configurable: true, get: () => (isVisible ? "visible" : "hidden") },
-        hasFocus: { configurable: true, value: () => isVisible },
-      });
-      document.dispatchEvent(new Event("visibilitychange"));
-      if (isVisible) {
-        window.dispatchEvent(new Event("focus"));
-      }
-    },
-    { visible, advanceMs },
-  );
+  if (advanceMs) {
+    // Expire the payload without running five minutes of unrelated timers.
+    await page.clock.setSystemTime((await page.evaluate(() => Date.now())) + advanceMs);
+  }
+  await page.evaluate((isVisible) => {
+    Object.defineProperties(document, {
+      visibilityState: { configurable: true, get: () => (isVisible ? "visible" : "hidden") },
+      hasFocus: { configurable: true, value: () => isVisible },
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+    if (isVisible) {
+      window.dispatchEvent(new Event("focus"));
+    }
+  }, visible);
 }
 
 async function requestCount(gateway: MockGatewayControls, method: string): Promise<number> {
@@ -134,10 +132,26 @@ async function proxyReconnect(
   gateway: MockGatewayControls,
   expectedSocketCount: number,
 ): Promise<void> {
+  await pauseVirtualClock(page);
   await gateway.closeLatest(1001, "proxy idle timeout");
+  await expect
+    .poll(() =>
+      evaluateControlUiContext(page, ({ gateway: source }) => source.snapshot.reconnectAt ?? 0),
+    )
+    .toBeGreaterThan(0);
+  const retryDelay = await evaluateControlUiContext(
+    page,
+    ({ gateway: source }) => (source.snapshot.reconnectAt ?? Number.NaN) - Date.now(),
+  );
+  expect(retryDelay).toBeGreaterThan(0);
+  await page.clock.fastForward(retryDelay);
+  await page.clock.resume();
   await expect.poll(() => gateway.getSocketCount(), { timeout: 10_000 }).toBe(expectedSocketCount);
   await waitForControlUiGatewayReady(page);
-  await page.locator(".sidebar-shell__footer .gateway-status").waitFor({ state: "detached" });
+  await page
+    .locator(".sidebar-shell__footer .gateway-status")
+    .getByText("Connected", { exact: true })
+    .waitFor();
 }
 
 async function usageBadges(page: Page): Promise<string[]> {
@@ -232,7 +246,7 @@ suite.define(() => {
         }
         await expect
           .poll(() => usageBadges(page))
-          .toEqual(["100 Tokens", "$0.01 Cost", "1 session"]);
+          .toEqual(["100 Tokens", "$0.01 Cost", "1 Sessions"]);
         await expect.poll(() => refresh.isEnabled()).toBe(true);
         expect(await page.locator(".usage-callout.danger").count()).toBe(0);
 
@@ -248,7 +262,7 @@ suite.define(() => {
         expect(await requestCount(gateway, "models.list")).toBe(catalogsBefore);
         await expect
           .poll(() => usageBadges(page))
-          .toEqual(["320 Tokens", "$0.01 Cost", "1 session"]);
+          .toEqual(["320 Tokens", "$0.01 Cost", "1 Sessions"]);
         await expect.poll(() => refresh.isEnabled()).toBe(true);
         expect(await page.locator(".usage-callout.danger").count()).toBe(0);
       }
@@ -257,6 +271,7 @@ suite.define(() => {
 
   it("avoids a reload storm but retries Usage work interrupted by a proxy drop", async () => {
     await withPage(async ({ page }) => {
+      await page.clock.install();
       const gateway = await installUsage(page, sessionsUsage());
 
       expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
@@ -266,7 +281,9 @@ suite.define(() => {
       await expect.poll(() => new URL(page.url()).pathname).toBe("/usage");
       await waitForRequestCount(gateway, "sessions.usage", 1);
       await page.locator(".daily-chart-compact").waitFor({ timeout: 10_000 });
-      await expect.poll(() => usageBadges(page)).toEqual(["120 Tokens", "$0.01 Cost", "1 session"]);
+      await expect
+        .poll(() => usageBadges(page))
+        .toEqual(["120 Tokens", "$0.01 Cost", "1 Sessions"]);
 
       for (const socketCount of [2, 3, 4]) {
         await proxyReconnect(page, gateway, socketCount);
@@ -287,7 +304,9 @@ suite.define(() => {
       await proxyReconnect(page, gateway, 6);
       await waitForRequestCount(gateway, "sessions.usage", 4);
       await page.locator(".daily-chart-compact").waitFor({ timeout: 10_000 });
-      await expect.poll(() => usageBadges(page)).toEqual(["120 Tokens", "$0.01 Cost", "1 session"]);
+      await expect
+        .poll(() => usageBadges(page))
+        .toEqual(["120 Tokens", "$0.01 Cost", "1 Sessions"]);
     });
   });
 

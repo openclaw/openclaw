@@ -1,8 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as json5Runtime from "../json5-runtime.ts";
+import { configRawForDisplay } from "./config-draft-model.ts";
+import { configSnapshot } from "./config-snapshot.test-support.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
   createGatewayHarness,
@@ -13,6 +16,76 @@ import {
 import { createRuntimeConfigCapability } from "./runtime-config-capability.ts";
 
 describe("config draft model", () => {
+  it("keeps scalar form edits bounded before and after autosave replay", async () => {
+    vi.useFakeTimers();
+    const config = {
+      messages: { usageTemplate: "x".repeat(2_500_000) },
+      gateway: { port: 18789 },
+    };
+    const { request, firstSet } = createDeferredSetServerMock();
+    await request("config.apply", { raw: JSON.stringify(config), baseHash: "hash-1" });
+    const firstWriteStarted = deferred();
+    const { runtimeConfig } = createConfigCapabilityHarness((method, params) => {
+      const response = request(method, params);
+      if (method === "config.set") {
+        firstWriteStarted.resolve();
+      }
+      return response;
+    });
+    await runtimeConfig.ensureLoaded();
+    expect(runtimeConfig.state.configForm).toEqual(config);
+    const savedConfig = runtimeConfig.state.configSnapshot?.config;
+    const acknowledged = deferred();
+    const stop = runtimeConfig.subscribe((state) => {
+      if (state.configDraftBaseHash === "hash-3") {
+        acknowledged.resolve();
+      }
+    });
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    const stringify = vi.spyOn(JSON, "stringify");
+
+    try {
+      for (const port of [18790, 18791, 18789]) {
+        clone.mockClear();
+        stringify.mockClear();
+        runtimeConfig.patchForm(["gateway", "port"], port);
+        expect({
+          fullDocumentClones: clone.mock.calls.filter(
+            ([value]) => value !== null && typeof value === "object" && "messages" in value,
+          ).length,
+          fullDocumentSerializations: stringify.mock.calls.filter(
+            ([value]) => value !== null && typeof value === "object" && "messages" in value,
+          ).length,
+        }).toEqual({ fullDocumentClones: 0, fullDocumentSerializations: 0 });
+        expect(runtimeConfig.state.configForm?.gateway).toEqual({ port });
+        expect(runtimeConfig.state.configFormDirty).toBe(port !== 18789);
+        expect(savedConfig?.gateway).toEqual({ port: 18789 });
+        expect(JSON.parse(configRawForDisplay(runtimeConfig.state)).gateway).toEqual({ port });
+      }
+
+      runtimeConfig.patchForm(["gateway", "port"], 18790);
+      const flush = runtimeConfig.flushFormChanges();
+      await firstWriteStarted.promise;
+      runtimeConfig.patchForm(["gateway", "port"], 18791);
+      firstSet.resolve({});
+      await acknowledged.promise;
+
+      const messages = runtimeConfig.state.configForm?.messages;
+      const keys = vi.spyOn(Object, "keys");
+      runtimeConfig.patchForm(["gateway", "port"], 18792);
+      expect(keys.mock.calls.filter(([value]) => value === messages)).toHaveLength(0);
+      keys.mockRestore();
+      expect(runtimeConfig.state.configForm?.gateway).toEqual({ port: 18792 });
+      await expect(flush).resolves.toBe(true);
+      expect(runtimeConfig.state.configSnapshot?.config?.gateway).toEqual({ port: 18792 });
+      expect(runtimeConfig.state.configFormDirty).toBe(false);
+    } finally {
+      stop();
+      runtimeConfig.dispose();
+      vi.restoreAllMocks();
+    }
+  });
+
   it.each([
     { edit: "delete", dispose: false, unavailable: false },
     { edit: "revert", dispose: true, unavailable: true },
@@ -25,13 +98,9 @@ describe("config draft model", () => {
       if (unavailable) {
         vi.spyOn(json5Runtime, "parseJson5Text").mockImplementation(JSON.parse);
         vi.spyOn(json5Runtime, "warmJson5").mockRejectedValue(new Error("Chunk unavailable"));
-        request.mockResolvedValueOnce({
-          config: { count: 1 },
-          raw: '// operator comment\n{"count":1}',
-          hash: "hash-1",
-          valid: true,
-          issues: [],
-        });
+        request.mockResolvedValueOnce(
+          configSnapshot({ count: 1 }, "hash-1", '// operator comment\n{"count":1}'),
+        );
       }
       const { runtimeConfig } = createConfigCapabilityHarness(
         request as GatewayBrowserClient["request"],
@@ -158,6 +227,11 @@ describe("config draft model", () => {
               enabled: { type: "boolean" },
               tags: { type: "array", items: { type: "integer" } },
               label: { type: "string", minLength: 1 },
+              ownMap: {
+                type: "object",
+                properties: { keep: { type: "boolean" } },
+                additionalProperties: { type: "number" },
+              },
             },
           },
           uiHints: {},
@@ -176,6 +250,12 @@ describe("config draft model", () => {
     runtimeConfig.patchForm(["enabled"], "true");
     runtimeConfig.patchForm(["tags"], ["7", ""]);
     runtimeConfig.patchForm(["label"], "");
+    runtimeConfig.patchForm(["ownMap"], {
+      keep: true,
+      constructor: "12",
+      prototype: "13",
+      ["__proto__"]: "14",
+    });
 
     await expect(runtimeConfig.save()).resolves.toBe(true);
     const submission = submitted.find((entry) => entry.method === "config.set");
@@ -187,6 +267,7 @@ describe("config draft model", () => {
       composedCount: 8.5,
       enabled: true,
       tags: [7],
+      ownMap: { keep: true, constructor: 12, prototype: 13, ["__proto__"]: 14 },
     });
     runtimeConfig.dispose();
   });
@@ -514,7 +595,7 @@ describe("config draft model", () => {
     };
     const request = vi.fn(async (method: string) => {
       if (method === "config.get") {
-        return { config, raw: JSON.stringify(config), hash: "hash-1", valid: true, issues: [] };
+        return configSnapshot(config, "hash-1", JSON.stringify(config));
       }
       if (method === "config.set" || method === "config.apply") {
         throw rejection;
@@ -559,7 +640,7 @@ describe("config draft model", () => {
     };
     const request = vi.fn(async (method: string) => {
       if (method === "config.get") {
-        return { config, raw: JSON.stringify(config), hash: "hash-1", valid: true, issues: [] };
+        return configSnapshot(config, "hash-1", JSON.stringify(config));
       }
       if (method === "config.set") {
         throw new GatewayRequestError({
@@ -595,7 +676,7 @@ describe("config draft model", () => {
     };
     const request = vi.fn(async (method: string) => {
       if (method === "config.get") {
-        return { config, raw: JSON.stringify(config), hash: "hash-1", valid: true, issues: [] };
+        return configSnapshot(config, "hash-1", JSON.stringify(config));
       }
       if (method === "config.set") {
         throw new GatewayRequestError({
@@ -639,13 +720,7 @@ describe("config draft model", () => {
     };
     const request = vi.fn((method: string) => {
       if (method === "config.get") {
-        return Promise.resolve({
-          config,
-          raw: JSON.stringify(config),
-          hash: "hash-1",
-          valid: true,
-          issues: [],
-        });
+        return Promise.resolve(configSnapshot(config, "hash-1", JSON.stringify(config)));
       }
       if (method === "config.set" || method === "config.apply") {
         return pendingWrite.promise;
@@ -705,13 +780,7 @@ describe("config draft model", () => {
     let setCalls = 0;
     const request = vi.fn(async (method: string) => {
       if (method === "config.get") {
-        return {
-          config: { count: 1 },
-          raw: '{\n  "count": 1\n}\n',
-          hash: "hash-1",
-          valid: true,
-          issues: [],
-        };
+        return configSnapshot({ count: 1 }, "hash-1", '{\n  "count": 1\n}\n');
       }
       if (method === "config.set") {
         setCalls += 1;

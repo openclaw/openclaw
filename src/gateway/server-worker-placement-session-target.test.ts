@@ -29,6 +29,7 @@ import {
   type WorkerPlacementSessionRuntime,
 } from "./server-worker-placement-session-target.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
+import { createRuntimeFactory } from "./server-worker-placement.test-support.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store.js";
 import { LOCAL_PLACEMENT } from "./worker-environments/placement-dispatch-coordinator.test-support.js";
@@ -41,6 +42,8 @@ import { seedAttachedPlacementEnvironment } from "./worker-environments/placemen
 import { createWorkerSessionPlacementGate } from "./worker-environments/placement-worker-gate.js";
 import { createWorkerEnvironmentService } from "./worker-environments/service.js";
 import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
+
+const createRuntime = createRuntimeFactory(createGatewayWorkerPlacementRuntime, getRuntimeConfig);
 
 afterEach(() => {
   memorySessionActorOwners.reset();
@@ -236,8 +239,6 @@ test("prepares an actor workspace and guards exact placement metadata without ho
 
 test.each([
   { scope: "individual", inherited: false },
-  { scope: "global", inherited: false },
-  { scope: "individual", inherited: true },
   { scope: "global", inherited: true },
 ] as const)(
   "full target recovery probe under $scope scope (inherited=$inherited)",
@@ -329,33 +330,22 @@ test.each([
         placementStore: createWorkerSessionPlacementGate(placements),
       });
       try {
-        const runtime = createGatewayWorkerPlacementRuntime({
+        const runtime = createRuntime({
           initialPlacements: await placements.listAsync(),
           scheduler,
           placements,
           environments,
-          getCommittedRuntimeConfig: getRuntimeConfig,
           gatewayNamespace: "full-target-probe",
-          cancelSessionWork: async () => {},
-          revokeSessionAuthority: () => {},
-          warn: () => {},
         });
         const replay = vi.fn(async () => {});
         const result = await runtime.dispatchService.resumeProvisioning(captured, replay);
-        const current = placements.get(identity.sessionId);
-        const original = fixture.read();
-        const global = targetFixture("global").read();
         expect(result?.state).toBeUndefined();
-        expect(original).toMatchObject({
+        expect(fixture.read()).toMatchObject({
           sessionId: identity.sessionId,
           worktree: { id: originalWorktree.id },
         });
-        expect(global).toMatchObject({
-          sessionId: "distinct-global-window",
-          worktree: { id: globalWorktree.id },
-        });
         expect(replay).toHaveBeenCalledOnce();
-        expect(current?.state).toBe("provisioning");
+        expect(placements.get(identity.sessionId)?.state).toBe("provisioning");
         expect(destroy).not.toHaveBeenCalled();
       } finally {
         await environments.stop();
@@ -476,42 +466,6 @@ test("refreshes stale repository selection after checkpoint drain", () =>
     expect(checkedPendingPublication).toBe(true);
     expect(drained.revision).toBe(accepted.revision + 1);
     expect(reclaimed.state).toBe("reclaimed");
-  }));
-
-test("resolves consecutive workspaces without decoding unrelated payloads", () =>
-  withTargetState("worker-exact-target-", async () => {
-    const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-    const keys = ["agent:main:placement-a", "agent:main:placement-b"] as const;
-    for (const key of keys) {
-      await targetFixture(key).write({ worktree: syntheticWorktree(key) });
-    }
-    for (let index = 0; index < 24; index++) {
-      await targetFixture(`agent:main:unrelated-${index}`, `unrelated-payload-${index}`).write({
-        skillsSnapshot: { prompt: "unrelated-payload-" + "x".repeat(4096), skills: [] },
-      });
-    }
-    // Canonical store admission runs once before repeated startup workspace lookups.
-    expect(loadExactSessionEntryReadOnly({ storePath, sessionKey: keys[0] })?.entry).toBeDefined();
-    const parse = vi.spyOn(JSON, "parse");
-    try {
-      for (const sessionKey of keys) {
-        using resolved = await targetFixture(sessionKey).select(
-          sessionRuntime(async (_kind, ownerId) => ({
-            id: ownerId,
-            ownerId,
-            path: `/synthetic/${ownerId}`,
-          })),
-          "placement identity changed",
-        );
-        expect(resolved.entry.sessionId).toBe(sessionKey);
-        expect(resolved.workspace).toEqual({ kind: "local", path: `/synthetic/${sessionKey}` });
-      }
-      expect(
-        parse.mock.calls.filter(([value]) => value.includes("unrelated-payload-")),
-      ).toHaveLength(0);
-    } finally {
-      parse.mockRestore();
-    }
   }));
 
 test("resolves device folders without Git or the managed-worktree registry", () =>

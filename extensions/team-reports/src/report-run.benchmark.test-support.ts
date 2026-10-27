@@ -10,16 +10,21 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { parseTeamReportsConfig, resolveTeamReportsConfig } from "./config.js";
 import { describePeriod } from "./periods.js";
+import { installReportFixtureTransport } from "./report-fixture-transport.test-support.js";
 import {
-  createReportRunFixtureFetch,
   fixtureChannels,
   fixtureDay,
   fixturePeople,
 } from "./report-run.benchmark-fixtures.test-support.js";
 import { TeamReportsRunner } from "./run-worker.js";
-import { createReportSources, generateReportPeriods } from "./run.js";
 import { teamReportsSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createTeamReportsStore } from "./store.js";
+
+const fixtureHttp = installReportFixtureTransport(
+  "./report-run.benchmark-fixtures.test-support.ts",
+  "Benchmark attempted a real network request",
+);
+const { generateReportPeriods } = await import("./run.js");
 
 const directory = await mkdtemp(path.join(os.tmpdir(), "team-reports-benchmark-"));
 const store = await createTeamReportsStore({
@@ -86,13 +91,12 @@ try {
     resolved,
     store,
     periods,
-    sources: (runtime) => createReportSources(runtime, true),
     llm: {
       complete: async () => {
         throw new Error("Benchmark must not invoke a model");
       },
     },
-    runtime: { logger, fetchImpl: createReportRunFixtureFetch() },
+    runtime: { logger },
     onRoster: () => {},
   };
   const statuses = runner
@@ -144,4 +148,5 @@ try {
   await runner?.close();
   await store.close();
   await rm(directory, { recursive: true, force: true });
+  fixtureHttp.deregister();
 }

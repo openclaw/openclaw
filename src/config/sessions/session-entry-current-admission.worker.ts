@@ -84,8 +84,10 @@ function createCurrentEntryRead(
           ? {}
           : { repositoryWorkspaceId: current.repositoryWorkspaceId }),
         ...(current.deviceFolder ? { deviceFolder: { ...current.deviceFolder } } : {}),
+        goal: current.goal,
         lifecycleRevision: current.lifecycleRevision,
         lifecycleRunId: current.lifecycleRunId,
+        lastRunId: current.lastRunId,
         activeWriterRunId: current.activeWriterRunId,
         skillLibrarySelections: current.skillLibrarySelections,
         executionPolicy: captureSessionExecutionPolicy(current),

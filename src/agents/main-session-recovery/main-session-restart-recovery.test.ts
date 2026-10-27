@@ -74,12 +74,6 @@ import {
   restoreActivePluginRegistrySnapshot,
 } from "../../plugins/runtime.js";
 import * as commandQueue from "../../process/command-queue.js";
-import {
-  enqueueCommandInLane,
-  getCommandLaneSnapshot,
-  getQueueSize,
-  setCommandLaneConcurrency,
-} from "../../process/command-queue.js";
 import * as gatewayWorkAdmission from "../../process/gateway-work-admission.js";
 import {
   GatewayDrainingError,
@@ -90,7 +84,6 @@ import {
   tryBeginGatewaySuspendAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
-import { CommandLane } from "../../process/lanes.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import {
   captureSessionTarget,
@@ -168,8 +161,10 @@ import * as recoveryOwnerRelease from "./main-session-recovery-owner-release.js"
 import { registerReplayBoundaryRecoveryCases } from "./main-session-recovery-replay-boundary.test-harness.js";
 import {
   createRecoveryRuntimeFixture,
+  observeRecoveryRoots,
   runRecoveryCommandDuringStop,
 } from "./main-session-recovery-runtime.test-support.js";
+import { registerSaturatedRestartRecoveryCases } from "./main-session-recovery-saturation.test-harness.js";
 import * as recoveryStore from "./main-session-recovery-store.js";
 import {
   claimMainSessionRecoveryOwner,
@@ -512,38 +507,6 @@ async function loadTestTranscript(
   })) as Array<{ message?: Record<string, unknown> }>;
 }
 
-function observeRecoveryRoots(
-  expectedOrigin: "main-session:startup-recovery" | "main-session:restart-recovery",
-  expectedCount: number,
-) {
-  const requested = createDeferred();
-  const completed = createDeferred();
-  const admit = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
-  let count = 0;
-  const spy = vi
-    .spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission")
-    .mockImplementation(
-      async <T>(run: () => Promise<T>, origin?: string, signal?: AbortSignal): Promise<T> => {
-        try {
-          const result = admit(run, origin, signal);
-          if (origin === expectedOrigin) {
-            requested.resolve();
-          }
-          return await result;
-        } finally {
-          if (origin === expectedOrigin && ++count === expectedCount) {
-            completed.resolve();
-          }
-        }
-      },
-    );
-  return {
-    requested: requested.promise,
-    completed: completed.promise,
-    restore: () => spy.mockRestore(),
-  };
-}
-
 async function deliverRecoveryReply(
   request: Record<string, unknown>,
   sessionEntry: SessionEntry | undefined,
@@ -593,136 +556,12 @@ function getHarnessRecoveryFixture() {
 }
 
 describe("main-session-restart-recovery", () => {
-  it.for(["finish", "stop"] as const)(
-    "starts recovery in interruption order across stores and preserves waiting work on %s",
-    async (outcome, { signal }) => {
-      const cfg = { agents: { entries: { main: {}, worker: {} } } };
-      const sessions = Array.from({ length: 8 }, (_, index) => {
-        const agentId = index % 2 === 0 ? "worker" : "main";
-        return {
-          agentId,
-          sessionKey: `agent:${agentId}:dashboard:recovery-${7 - index}`,
-          entry: mainSessionEntry({
-            sessionId: `recovery-${index}`,
-            endedAt: index + 1,
-            updatedAt: 100 - index,
-          }),
-        };
-      });
-      for (const agentId of ["main", "worker"]) {
-        const owned = sessions.filter((session) => session.agentId === agentId);
-        const { sessionsDir } = await makeStoreFixture(
-          Object.fromEntries(owned.map(({ sessionKey, entry }) => [sessionKey, entry])),
-          agentId,
-        );
-        for (const { entry } of owned) {
-          await writeUserTurn(sessionsDir, "finish the interrupted task", entry.sessionId);
-        }
-      }
-      const originalConcurrency = getCommandLaneSnapshot(CommandLane.RestartRecovery).maxConcurrent;
-      expect(originalConcurrency).toBe(4);
-      const cancellation = new AbortController();
-      const gates = sessions.map(() => createDeferred());
-      const backgroundStarted = createDeferred();
-      const releaseBackground = createDeferred();
-      const background = enqueueCommandInLane(CommandLane.Background, async () => {
-        backgroundStarted.resolve();
-        await releaseBackground.promise;
-      });
-      await backgroundStarted.promise;
-      const started: number[] = [];
-      const firstFourStarted = createDeferred();
-      let active = 0;
-      let peak = 0;
-      const runtime: GatewayRecoveryRuntime = {
-        ...mockRecoveryRuntime,
-        dispatchAgent: <T>(
-          request: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[0],
-          _timeout?: number,
-          options?: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[2],
-        ) => {
-          const index = sessions.findIndex(({ sessionKey }) => sessionKey === request.sessionKey);
-          let executionStarted = false;
-          options?.onStartOwner?.({
-            observe: () => ({ executionStarted, startDeadlineAtMs: Date.now() + 60_000 }),
-            abort: () => false,
-          });
-          options?.onAccepted?.({ runId: request.idempotencyKey });
-          return enqueueCommandInLane(request.lane ?? "main", async () => {
-            active++;
-            peak = Math.max(peak, active);
-            started.push(index);
-            executionStarted = true;
-            options?.onExecutionStarted?.();
-            if (started.length === 4) {
-              firstFourStarted.resolve();
-            }
-            try {
-              await gates[index]!.promise;
-              return { runId: request.idempotencyKey, status: "ok" } as T;
-            } finally {
-              active--;
-            }
-          });
-        },
-      };
-      const recovery = recover({
-        cfg,
-        signal: cancellation.signal,
-        shouldContinue: () => !cancellation.signal.aborted,
-        gatewayRuntime: runtime,
-      });
-      try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            firstFourStarted.promise,
-            recovery,
-            "recovery settled before four interrupted sessions started",
-          ),
-          signal,
-        );
-        expect(started).toEqual([0, 1, 2, 3]);
-        await waitForFast(() => expect(getQueueSize(CommandLane.RestartRecovery)).toBe(5));
-        await expect(enqueueCommandInLane("main", async () => "interactive reply")).resolves.toBe(
-          "interactive reply",
-        );
-        expect(peak).toBe(4);
-        if (outcome === "stop") {
-          cancellation.abort(new Error("recovery stopped"));
-          await expect(recovery).rejects.toThrow("recovery stopped");
-          for (const { agentId, sessionKey } of sessions.slice(4)) {
-            expect(
-              loadSessionEntry({
-                agentId,
-                storePath: path.join(tmpDir, "agents", agentId, "sessions", "sessions.json"),
-                sessionKey,
-              }),
-            ).toMatchObject({
-              status: "interrupted",
-              abortedLastRun: true,
-              mainRestartRecovery: { chargedAttempts: 0 },
-            });
-          }
-        } else {
-          for (const gate of gates.slice(0, 4)) {
-            gate.resolve();
-          }
-          await expect(recovery).resolves.toEqual(recoveryCounts({ started: 8 }));
-          expect(started).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
-        }
-      } finally {
-        cancellation.abort(new Error("recovery test finished"));
-        releaseBackground.resolve();
-        for (const gate of gates) {
-          gate.resolve();
-        }
-        await Promise.all([background, recovery.catch(() => {})]);
-        setCommandLaneConcurrency(CommandLane.RestartRecovery, originalConcurrency);
-      }
-      expect(started).toEqual(outcome === "finish" ? [0, 1, 2, 3, 4, 5, 6, 7] : [0, 1, 2, 3]);
-      expect(peak).toBe(4);
-    },
-  );
+  registerSaturatedRestartRecoveryCases(() => ({
+    tmpDir,
+    makeStoreFixture,
+    writeUserTurn,
+    gatewayRuntime: mockRecoveryRuntime,
+  }));
 
   it("preserves exact restart identities against stale same-id rows", async () => {
     const sessionKeys = ["agent:main:active", "agent:main:sibling"];
@@ -750,8 +589,8 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("marks only recoverable sessions owned by active runs", async () => {
-    // Only top-level admitted main sessions are restart-recoverable. Completed,
-    // child, cron, and non-active sessions must not be marked.
+    // Session history does not exclude an independent child turn. Completed,
+    // cron, and non-active sessions must not be marked.
 
     const { sessionsDir } = await makeStoreFixture({
       "agent:main:main": runningSessionEntry("main-session"),
@@ -782,10 +621,10 @@ describe("main-session-restart-recovery", () => {
     });
 
     const store = readStore(path.join(sessionsDir, "sessions.json"));
-    expect(result).toEqual({ marked: 1, skipped: 1 });
+    expect(result).toEqual({ marked: 2, skipped: 0 });
     expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
     expect(store["agent:main:completed"]?.abortedLastRun).toBeUndefined();
-    expect(store["agent:main:subagent:child"]?.abortedLastRun).toBeUndefined();
+    expect(store["agent:main:subagent:child"]?.abortedLastRun).toBe(true);
     expect(store["cron:nightly"]?.abortedLastRun).toBeUndefined();
     expect(store["agent:main:other"]?.abortedLastRun).toBeUndefined();
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -1521,7 +1360,7 @@ describe("main-session-restart-recovery", () => {
 
       resetGatewayWorkAdmission();
       rotateAgentEventLifecycleGeneration();
-      const recovery = scheduleRecovery({ delayMs: 0, maxRetries: 1 });
+      const recovery = scheduleRecovery({ maxRetries: 1 });
       await mockRecoveryRuntime.expectAdmission(1, recovery, { sessionKey, storePath });
 
       expect(gatewayParams()).toMatchObject({
@@ -2762,7 +2601,7 @@ describe("main-session-restart-recovery", () => {
       );
     }
 
-    const recovery = scheduleRecovery({ delayMs: 0 });
+    const recovery = scheduleRecovery({});
     try {
       await mockRecoveryRuntime.expectAdmission(1, recovery, {
         sessionKey: "agent:main:control",
@@ -2794,7 +2633,7 @@ describe("main-session-restart-recovery", () => {
       release: releaseMarker,
       spy: replacementSpy,
     } = pauseFirstDurableWrite();
-    const recovery = scheduleRecovery({ delayMs: 0 });
+    const recovery = scheduleRecovery({});
     await markerEntered.promise;
     expect(getActiveGatewayRootWorkCount()).toBe(1);
 
@@ -2870,7 +2709,6 @@ describe("main-session-restart-recovery", () => {
 
     const recovery = scheduleRecovery({
       getConfig: () => ({ session: { store: customStorePath } }),
-      delayMs: 0,
     });
     await mockRecoveryRuntime.expectAdmission(1, recovery, {
       sessionKey: "agent:main:main",
@@ -2927,7 +2765,6 @@ describe("main-session-restart-recovery", () => {
     });
     const recovery = scheduleRecovery({
       getConfig: () => cfg,
-      delayMs: 0,
     });
     try {
       await firstDispatch.promise;
@@ -2948,31 +2785,6 @@ describe("main-session-restart-recovery", () => {
     }
   });
 
-  it("cancels startup recovery when its gateway lifecycle stops", async () => {
-    tmpDir = transcriptFixture.prepareRoot();
-    const { sessionsDir } = await makeMainSessionFixture({
-      pendingFinalDelivery: makePendingFinalDelivery(),
-    });
-
-    vi.useFakeTimers();
-    try {
-      const recovery = scheduleRecovery({ delayMs: 5_000 });
-
-      await Promise.all([recovery.stop(), recovery.stop()]);
-      await vi.advanceTimersByTimeAsync(5_000);
-
-      expect(callGateway).not.toHaveBeenCalled();
-      expect(
-        loadSessionEntry({
-          sessionKey: "agent:main:main",
-          storePath: path.join(sessionsDir, "sessions.json"),
-        }),
-      ).toMatchObject({ status: "interrupted", abortedLastRun: true });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("stops startup recovery while its Gateway admission is suspended", async ({ signal }) => {
     tmpDir = transcriptFixture.prepareRoot();
     const { readEntry } = await makeMainSessionFixture({
@@ -2981,7 +2793,7 @@ describe("main-session-restart-recovery", () => {
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspension).not.toBeNull();
     const admission = observeRecoveryRoots("main-session:startup-recovery", 1);
-    const recovery = scheduleRecovery({ delayMs: 0 });
+    const recovery = scheduleRecovery({});
     try {
       await withinTest(admission.requested, signal);
       expect(getActiveGatewayRootWorkCount()).toBe(0);
@@ -3005,7 +2817,6 @@ describe("main-session-restart-recovery", () => {
     await writeToolTurn(sessionsDir, "resume the interrupted work", "done", "pre-start-session");
 
     const recovery = scheduleRecovery({
-      delayMs: 0,
       waitForStart: () => releaseStartup.promise,
     });
     await Promise.resolve();
@@ -3043,7 +2854,6 @@ describe("main-session-restart-recovery", () => {
     let currentConfig = { agents: { entries: { main: {} } } } as OpenClawConfig;
 
     const recovery = scheduleRecovery({
-      delayMs: 0,
       getConfig: () => currentConfig,
       waitForStart: () => releaseStartup.promise,
     });
@@ -3068,10 +2878,9 @@ describe("main-session-restart-recovery", () => {
     });
 
     const recovery = scheduleRecovery({
-      delayMs: 0,
       waitForStart: () => releaseStartup.promise,
     });
-    await recovery.stop();
+    await Promise.all([recovery.stop(), recovery.stop()]);
     releaseStartup.resolve();
     await Promise.resolve();
 
@@ -3112,7 +2921,7 @@ describe("main-session-restart-recovery", () => {
           return { runId: "run-resumed" };
         });
       }
-      const recovery = scheduleRecovery({ delayMs: 0 });
+      const recovery = scheduleRecovery({});
       let stopping: Promise<void> | undefined;
       try {
         await gate.entered.promise;
@@ -3209,9 +3018,10 @@ describe("main-session-restart-recovery", () => {
         return { runId: "run-resumed" };
       });
       const attempts = observeRecoveryRoots("main-session:startup-recovery", transient ? 2 : 1);
+      vi.useFakeTimers();
+      const { scheduled: retryScheduled, spy: setTimeoutSpy } = observeRetryTimer();
       const recovery = scheduleRecovery({
         getConfig: () => cfg,
-        delayMs: transient ? 1 : 0,
         maxRetries: transient ? 2 : 1,
       });
       try {
@@ -3220,6 +3030,8 @@ describe("main-session-restart-recovery", () => {
           await firstDispatch.promise;
           expect(callGateway).toHaveBeenCalledOnce();
           dispatchSettlement.resolve(); // Retried stores share the same bounded recovery slot.
+          await retryScheduled.promise;
+          await vi.advanceTimersByTimeAsync(5_000);
         }
         await attempts.completed;
         expect(getActiveGatewayRootWorkCount()).toBe(0);
@@ -3246,6 +3058,8 @@ describe("main-session-restart-recovery", () => {
         await recovery.stop();
         attempts.restore();
         replacementSpy.mockRestore();
+        setTimeoutSpy.mockRestore();
+        vi.useRealTimers();
         rotateAgentEventLifecycleGeneration();
       }
     },
@@ -3280,7 +3094,7 @@ describe("main-session-restart-recovery", () => {
     const { scheduled: retryScheduled, spy: setTimeoutSpy } = observeRetryTimer();
     let recovery: ReturnType<typeof scheduleRecovery> | undefined;
     try {
-      recovery = scheduleRecovery({ delayMs: 0, maxRetries: 2 });
+      recovery = scheduleRecovery({ maxRetries: 2 });
       await retryScheduled.promise;
       expect(callGateway).toHaveBeenCalledTimes(1);
       expect(gatewayParams()).toMatchObject({ sessionKey: healthyKey });
@@ -3327,7 +3141,7 @@ describe("main-session-restart-recovery", () => {
     const { scheduled: retryScheduled, spy: setTimeoutSpy } = observeRetryTimer();
     let recovery: ReturnType<typeof scheduleRecovery> | undefined;
     try {
-      recovery = scheduleRecovery({ delayMs: 0, maxRetries: 2, gatewayRuntime: runtime });
+      recovery = scheduleRecovery({ maxRetries: 2, gatewayRuntime: runtime });
       await firstPreparation.promise;
       await retryScheduled.promise;
       expect(readEntry()).toMatchObject({
@@ -3381,7 +3195,6 @@ describe("main-session-restart-recovery", () => {
     try {
       recovery = scheduleRecovery({
         getConfig: () => cfg,
-        delayMs: 0,
         maxRetries: 2,
       });
       await firstDispatch.promise;
@@ -5113,7 +4926,6 @@ describe("main-session startup recovery", () => {
       vi.useFakeTimers();
       const recovery = scheduleRecovery({
         getConfig: () => cfg,
-        delayMs: 0,
         maxRetries: 2,
       });
       try {
@@ -5675,7 +5487,6 @@ describe("main-session startup recovery", () => {
           );
         const recovery = scheduleRecovery({
           getConfig: () => cfg,
-          delayMs: 0,
           maxRetries: 1,
         });
         try {

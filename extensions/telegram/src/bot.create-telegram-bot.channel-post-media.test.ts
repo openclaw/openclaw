@@ -189,10 +189,6 @@ function expectTelegramIngestHook(messageIds: number[], expectedCalls = 1) {
   );
 }
 
-function setOpenTelegramDirectConfig(mediaMaxMb?: number) {
-  setTelegramConfig({ dmPolicy: "open", allowFrom: ["*"], mediaMaxMb });
-}
-
 const commandEntities = (text: string, offset = 0) => [
   { type: "bot_command", offset, length: text.length - offset },
 ];
@@ -212,11 +208,6 @@ function expectTelegramDownloadWarning(messageId: number, warning?: string, chat
 
 function mediaFile(fileId: string, file_path: string): TelegramFile {
   return { file_id: fileId, file_unique_id: `unique-${fileId}`, file_path };
-}
-
-function expectOversizedDocument(messageId: number, limit: string) {
-  expectTelegramDownloadWarning(messageId, `⚠️ File too large. Maximum size is ${limit}.`);
-  expectUnavailableMediaPayload("document", "", `[media unavailable: file exceeds ${limit} limit]`);
 }
 
 describe("createTelegramBot channel_post media", () => {
@@ -242,50 +233,19 @@ describe("createTelegramBot channel_post media", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it.each([
-    { configuredLimit: 100, reportedLimit: "20MB", messageId: 100021 },
-    { configuredLimit: 0.5, reportedLimit: "512KB", messageId: 100022 },
-    { configuredLimit: 0.3, reportedLimit: "307.20KB", messageId: 100023 },
-  ])(
-    "reports the effective Bot API limit with $configuredLimit MB configured",
-    async ({ configuredLimit, reportedLimit, messageId }) => {
-      setOpenTelegramDirectConfig(configuredLimit);
-      await createTelegramBot();
-      await handleUpdate()(
-        createTelegramPrivateMediaContext({
-          messageId,
-          fileId: "doc-100001",
-          fileName: "large.bin",
-          getFile: async () => {
-            throw new Error("Bad Request: file is too big");
-          },
-        }),
-      );
-      await waitForTelegramMockCalls(sendMessageSpy, 1);
-      expectOversizedDocument(messageId, reportedLimit);
-      expect(replySpy).toHaveBeenCalledOnce();
-      expect(saveRemoteMedia).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    ["retryable shutdown abort", 98076, undefined, undefined, "aborted"],
-    [
-      "permanent oversized media",
-      98077,
-      undefined,
-      "100MB",
-      "Failed to fetch media: payload exceeds maxBytes 10",
-    ],
-    ["fractional oversized media", 98078, 0.5, "512KB", "payload exceeds maxBytes 524288"],
-    ["non-binary-exact oversized media", 98079, 0.3, "307.20KB", "payload exceeds maxBytes 314572"],
+    ["Bot API cap", 100021, 100, "20MB", true],
+    ["fractional Bot API cap", 100022, 0.5, "512KB", true],
+    ["non-binary-exact Bot API cap", 100023, 0.3, "307.20KB", true],
+    ["permanent oversized media", 98077, undefined, "100MB", false],
+    ["retryable shutdown abort", 98076, undefined, undefined, false],
   ] as const)(
-    "preserves durable replay handling for %s (#98076)",
-    async (_name, messageId, limit, reportedLimit, error) => {
-      setOpenTelegramDirectConfig(limit);
+    "reports and settles %s correctly (#98076)",
+    async (_name, messageId, limit, reportedLimit, botApiCap) => {
+      setTelegramConfig({ dmPolicy: "open", allowFrom: ["*"], mediaMaxMb: limit });
       saveRemoteMedia.mockRejectedValue(
         reportedLimit
-          ? new MediaFetchError("max_bytes", error)
-          : new MediaFetchError("fetch_failed", error, {
+          ? new MediaFetchError("max_bytes", "payload exceeds maxBytes 10")
+          : new MediaFetchError("fetch_failed", "aborted", {
               cause: Object.assign(new Error("aborted"), { name: "AbortError" }),
             }),
       );
@@ -299,6 +259,13 @@ describe("createTelegramBot channel_post media", () => {
         fileId: `doc-${messageId}`,
         fileName: "document.pdf",
         update,
+        ...(botApiCap
+          ? {
+              getFile: async () => {
+                throw new Error("Bad Request: file is too big");
+              },
+            }
+          : {}),
       });
       // Durable ingress reads the participant's settlement when the handler
       // created one; the frame result covers handlers that never reached it.
@@ -318,9 +285,16 @@ describe("createTelegramBot channel_post media", () => {
       const expectedWarnings = warning ? 1 : 0;
       expect(sendMessageSpy).toHaveBeenCalledTimes(expectedWarnings);
       expect(replySpy).toHaveBeenCalledTimes(expectedWarnings);
-      expect(sendMessageSpy.mock.calls[0]?.[1]).toBe(warning);
       if (reportedLimit) {
-        expectOversizedDocument(messageId, reportedLimit);
+        expectTelegramDownloadWarning(messageId, warning);
+        expectUnavailableMediaPayload(
+          "document",
+          "",
+          `[media unavailable: file exceeds ${reportedLimit} limit]`,
+        );
+      }
+      if (botApiCap) {
+        expect(saveRemoteMedia).not.toHaveBeenCalled();
       }
     },
   );

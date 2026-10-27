@@ -77,6 +77,10 @@ export function formatCronSchedule(job: Pick<CronJob, "schedule">) {
 
 export function formatCronPayload(job: CronJob) {
   const p = job.payload;
+  // Newer Gateways name the stored kind; its agentTurn payload is only a placeholder.
+  if (job.payloadSource?.kind === "pluginCommand") {
+    return `Plugin command: /${job.payloadSource.command} (${job.payloadSource.pluginId})`;
+  }
   if (p.kind === "systemEvent") {
     return `System: ${p.text}`;
   }
@@ -85,9 +89,6 @@ export function formatCronPayload(job: CronJob) {
   }
   if (p.kind === "script") {
     return `Script: ${p.script}`;
-  }
-  if (p.kind === "heartbeat") {
-    return "Heartbeat monitor";
   }
   const base = `Agent: ${p.message}`;
   const delivery = job.delivery;

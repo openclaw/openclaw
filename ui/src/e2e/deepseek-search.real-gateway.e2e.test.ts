@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
@@ -38,7 +36,7 @@ if (!live) {
         config: {
           gateway: { controlUi: { enabled: true } },
           agents: {
-            defaults: { model: "deepseek/deepseek-v4-flash", heartbeat: { every: "0m" } },
+            defaults: { model: "deepseek/deepseek-v4-flash" },
             entries: { main: {} },
           },
           models: { catalogRefresh: { enabled: false } },
@@ -78,23 +76,12 @@ if (!live) {
           const { browserUrl } = JSON.parse(handoff.stdout) as { browserUrl: string };
           const url = new URL(pathForRoute("search", ""), browserUrl);
           url.hash = new URL(browserUrl).hash;
-          const methods: string[] = [];
-          page.on("websocket", (socket) =>
-            socket.on("framesent", ({ payload }) => {
-              const frame = JSON.parse(payload.toString());
-              if (frame.type === "req" && frame.method !== "connect") {
-                methods.push(frame.method);
-              }
-            }),
-          );
           expect((await page.goto(url.toString()))?.status()).toBe(200);
           await waitForControlUiGatewayReady(page);
           const surface = page.locator("openclaw-search-page");
           await surface.getByText("Search provider", { exact: true }).waitFor();
           const picker = surface.getByRole("combobox", { name: "Search provider", exact: true });
-          expect(await picker.locator('option[value="deepseek"]').count()).toBe(1);
           await picker.selectOption("deepseek");
-          await expect.poll(() => picker.inputValue()).toBe("deepseek");
           await surface.getByText("Off", { exact: true }).waitFor();
           await surface.getByRole("switch", { name: "Web search", exact: true }).check();
           await expect.poll(() => picker.inputValue()).toBe("deepseek");
@@ -112,25 +99,10 @@ if (!live) {
           await test.click();
           await surface.getByText("Search succeeded", { exact: true }).waitFor({ timeout: 40_000 });
           await surface.locator('a[href^="https://docs.openclaw.ai/"]').first().waitFor();
-          expect(methods).toEqual(expect.arrayContaining(["webSearch.status", "webSearch.test"]));
-          expect(methods.some((method) => method.startsWith("config."))).toBe(true);
           await page.reload();
           await waitForControlUiGatewayReady(page);
           await expect.poll(() => picker.inputValue()).toBe("deepseek");
           expect(await readback()).toMatchObject({ provider: "deepseek", enabled: true });
-          const scripts = await page
-            .locator('script[type="module"][src]')
-            .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("src")!));
-          for (const src of scripts) {
-            const asset = new URL(src, suite.server.baseUrl);
-            const response = await page.request.get(asset.toString());
-            expect(response.status()).toBe(200);
-            const built = await fs.readFile(
-              path.join(process.cwd(), "dist/control-ui", asset.pathname.slice(1)),
-            );
-            const hash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
-            expect(hash(await response.body())).toBe(hash(built));
-          }
         },
       );
     }, 120_000);

@@ -13,7 +13,10 @@ const SKIPPED_UPDATE_RUN_HEADLINES = new Map<string | null, string>([
   ["already-current", "✅ OpenClaw is already up to date."],
   ["still-starting", "⏳ OpenClaw is installed and still starting."],
   ["gateway-readiness-unverified", "⚠️ OpenClaw is installed, but we couldn't confirm it's ready."],
-  ["managed-service-handoff-already-running", "⬆️ OpenClaw is already updating."],
+  [
+    "managed-service-handoff-already-running",
+    "⚠️ A previous update still holds this installation.",
+  ],
 ]);
 
 /** Chat shows the outcome; the update views keep diagnostics and recovery instructions. */
@@ -29,6 +32,18 @@ export function renderUpdateRunSummary(
     ? `Open Settings → Updates in the Control UI for details. To continue, run \`${options.manualCommand}\` in your terminal.`
     : "For details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.";
   return `${headline}\n${nextStep}`;
+}
+
+/** Only this renderer's terminal summaries may settle an earlier completion. */
+export function isUpdateRunTerminalNoticeText(text: string): boolean {
+  return (
+    [...UPDATE_RUN_HEADLINES.keys()].some(
+      (status) => status !== "running" && text === renderUpdateRunSummary({ status, reason: null }),
+    ) ||
+    [null, ...SKIPPED_UPDATE_RUN_HEADLINES.keys()].some(
+      (reason) => text === renderUpdateRunSummary({ status: "skipped", reason }),
+    )
+  );
 }
 
 /** Only the current milestone may produce a conversation notice. */

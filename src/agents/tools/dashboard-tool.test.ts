@@ -1,5 +1,5 @@
 import { Value } from "typebox/value";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
 import {
   createGatewayMethodDescriptorsFromHandlers,
@@ -14,7 +14,10 @@ import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gate
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDashboardTool } from "./dashboard-tool.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import * as inProcessGateway from "./in-process-gateway.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 const snapshot: BoardSnapshot = {
   sessionKey: "agent:main:main",
@@ -43,10 +46,10 @@ function recorder(boardSnapshot: BoardSnapshot = snapshot) {
     }
     return boardSnapshot as T;
   };
+  vi.spyOn(inProcessGateway, "callInProcessGatewayTool").mockImplementation(callGateway);
   return {
     tool: createDashboardTool({
       agentSessionKey: snapshot.sessionKey,
-      callGateway,
     }),
     calls,
     commands,
@@ -196,8 +199,8 @@ it("returns content ownership and valid update paths in model-visible snapshot d
   const ownership = [
     { name: "custom-html", contentOwner: "html" },
     { name: "trusted-plugin", contentOwner: "plugin" },
-    { name: "registered-source", contentOwner: "registered", registeredContentKind: "diagram" },
     { name: "mcp-app", contentOwner: "mcp-app" },
+    { name: "retired", contentOwner: "registered" },
   ] as const;
   const widget = (fields: (typeof ownership)[number]): Widget => ({
     tabId: "main",
@@ -217,13 +220,13 @@ it("returns content ownership and valid update paths in model-visible snapshot d
     contentUpdatePaths: {
       html: expect.stringMatching(/authoring.*tool catalog.*same name/i),
       plugin: expect.stringMatching(/widget_put.*same name.*pluginKind/i),
-      registered: expect.stringMatching(/authoring.*tool catalog.*same source kind/i),
       "mcp-app": expect.stringMatching(/MCP app/i),
+      registered: expect.stringMatching(/retired.*recreate.*HTML/i),
     },
   });
   expect(result.content[0]).toMatchObject({
     type: "text",
-    text: expect.stringContaining('"contentOwner":"registered"'),
+    text: expect.stringContaining('"contentOwner":"html"'),
   });
   expect(JSON.stringify(result.details)).not.toMatch(/show_widget|widget_code|\bpin\b/);
 });

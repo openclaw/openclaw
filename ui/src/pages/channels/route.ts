@@ -1,4 +1,4 @@
-import { defineSolidPage } from "../../app-route-types.ts";
+import { defineSolidPage } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
 
 export const page = defineSolidPage(
@@ -7,7 +7,9 @@ export const page = defineSolidPage(
   {
     loader: (context: ApplicationContext) => {
       const primaryRefresh = Promise.all([
-        context.channels.refresh(false),
+        import("../../lib/channels/index.ts").then(({ createChannelCapability }) =>
+          context.acquireChannels(createChannelCapability).refresh(false),
+        ),
         context.runtimeConfig.ensureLoaded(),
       ]);
       void primaryRefresh.then(

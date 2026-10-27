@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isMainThread } from "node:worker_threads";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
@@ -33,6 +34,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-identity.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { resolveSessionTranscriptRuntimeTarget } from "./session-accessor.transcript-target.js";
 import {
   captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
@@ -102,12 +104,15 @@ export async function appendExpectedSessionTranscriptTurn(
       return result;
     }
   }
+  using phase = observeDiagnosticsTimelinePhases("persist.transcript.ownerAuthority");
   if (requestedOptions.ownerSource) {
-    return appendPreparedSessionTranscriptTurn(scope, requestedOptions, assertOwnedWrite);
+    phase.mark("persist.transcript.append");
+    return await appendPreparedSessionTranscriptTurn(scope, requestedOptions, assertOwnedWrite);
   }
   const ownerSource = await prepareSessionSourceAuthority(assertOwnedWrite);
   const errors: unknown[] = [];
   try {
+    phase.mark("persist.transcript.append");
     return await appendPreparedSessionTranscriptTurn(
       scope,
       { ...requestedOptions, ownerSource },
@@ -117,6 +122,7 @@ export async function appendExpectedSessionTranscriptTurn(
     errors.push(error);
     throw error;
   } finally {
+    phase.mark("persist.transcript.releaseAuthority");
     await releaseSessionSourceAuthorities([ownerSource], errors);
   }
 }
@@ -212,6 +218,26 @@ async function appendPreparedSessionTranscriptTurn(
   }
   if (memory || inputActor) {
     throw new Error("Actor transcript turns require preparation outside the transaction");
+  }
+  if (options.resolveRuntimeTarget) {
+    const runtimeTarget = await resolveSessionTranscriptRuntimeTarget(
+      { ...scope, ...resolved, storePath: resolved.path },
+      options.config,
+      { keyFormat: options.keyFormat },
+    );
+    const result = await appendPreparedSessionTranscriptTurn(
+      { ...scope, ...runtimeTarget },
+      {
+        ...options,
+        resolveRuntimeTarget: undefined,
+        selectedSessionId: runtimeTarget.selectedSessionId,
+        selectedLifecycleRevision: runtimeTarget.selectedLifecycleRevision,
+        sessionFile: runtimeTarget.sessionKey,
+      },
+      assertOwnedWrite,
+      nativeReservation,
+    );
+    return { ...result, runtimeTarget };
   }
   if (options.ownerSource?.checks.length) {
     throw new Error(

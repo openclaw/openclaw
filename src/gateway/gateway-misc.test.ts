@@ -88,7 +88,7 @@ describe("GatewayClient", () => {
   }
 
   function registerGatewayOnlyProxy() {
-    return registerActiveManagedProxyUrl(new URL("http://127.0.0.1:3128"), "gateway-only");
+    return registerActiveManagedProxyUrl(new URL("http://127.0.0.1:3128"));
   }
 
   test("uses the admitted pairing identity for shared-auth connect failures", async () => {
@@ -817,7 +817,7 @@ describe("resolveNodeCommandAllowlist", () => {
       },
     );
 
-    expectDenied(allow, ["canvas.present", "canvas.a2ui.pushJSONL"]);
+    expectDenied(allow, ["canvas.present"]);
     expectAllowed(allow, [
       "camera.list",
       "location.get",

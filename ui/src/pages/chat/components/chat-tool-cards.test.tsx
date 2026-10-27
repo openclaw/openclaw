@@ -10,14 +10,17 @@ import {
 } from "../../../components/mcp-app-security.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
+import type { DiffLine } from "../../../lib/chat/tool-call-diff.ts";
 import {
   resolveCollapsedToolArgumentPreview,
   extractToolCardsCached,
 } from "../../../lib/chat/tool-cards.ts";
+import { mountSolid as mountComponent } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { attachHistoryActivity } from "../chat-history-request.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
+import { DiffBlock } from "./chat-diff-render.solid.tsx";
 import { createActivityGroupHarness } from "./chat-message-native.test-support.tsx";
 import { createMessageEntry, createToolGroup } from "./chat-message.test-support.ts";
 import { mountCard, mountPreview } from "./chat-tool-cards.test-support.tsx";
@@ -28,6 +31,12 @@ const canvas = { kind: "canvas", surface: "assistant_message", render: "url" } a
 const query = (root: ParentNode | null | undefined, selector: string) =>
   root?.querySelector<HTMLElement>(selector) ?? null;
 const textOf = (root: ParentNode, selector: string) => root.querySelector(selector)?.textContent;
+const cardPart = (root: ParentNode, part: string) => query(root, `.chat-tool-card__${part}`);
+const diffText = (root: ParentNode | null | undefined, kind: string) =>
+  Array.from(
+    root?.querySelectorAll(`.chat-diff__row--${kind} .chat-diff__text`) ?? [],
+    (node) => node.textContent,
+  );
 const change = (path: string, diff: string, type = "update") => ({ path, kind: { type }, diff });
 const patchCard = (args: ToolCard["args"], extra: Partial<ToolCard> = {}): ToolCard => ({
   id: "patch",
@@ -49,21 +58,11 @@ function mountTool(
   return mountCard({ id: name, name, ...card }, options, container);
 }
 
-it("routes MCP App previews through the dedicated double-iframe host", async () => {
+it("does not render MCP App previews on the tool surface", () => {
   const container = document.createElement("div");
   const preview = { ...canvas, viewId: "cv_app", mcpApp: { viewId: "cv_app" } } as const;
-  const options = { sessionKey: "agent:main:main" };
-  mountPreview(preview, "chat_message", options, container);
-
-  const view = query(container, "mcp-app-view");
-  expect(view?.getAttribute("src")).toBeNull();
-  expect(view).toMatchObject({ sessionKey: "agent:main:main", viewId: "cv_app", height: 600 });
-  await customElements.whenDefined("mcp-app-view");
-  expect(view).toMatchObject({ sessionKey: "agent:main:main", viewId: "cv_app" });
-
-  const toolContainer = document.createElement("div");
-  mountPreview(preview, "chat_tool", options, toolContainer);
-  expect(toolContainer.querySelector("mcp-app-view")).toBeNull();
+  mountPreview(preview, "chat_tool", { sessionKey: "agent:main:main" }, container);
+  expect(container.querySelector("mcp-app-view")).toBeNull();
 });
 
 it("switches a completed patch between mutually exclusive diff and raw bodies", async () => {
@@ -81,19 +80,12 @@ it("switches a completed patch between mutually exclusive diff and raw bodies", 
   const diff = query(container, ".chat-diff");
   expect(diff?.getAttribute("aria-label")).toBe("File changes");
   const fileRows = Array.from(diff?.querySelectorAll(".chat-diff__row--file") ?? []);
-  expect(fileRows.map((row) => textOf(row, ".chat-diff__text"))).toEqual([
-    "Update src/a.ts",
-    "Add src/b.ts",
-  ]);
+  expect(diffText(diff, "file")).toEqual(["Update src/a.ts", "Add src/b.ts"]);
   expect(fileRows.every((row) => row.querySelector(".chat-diff__gutter") !== null)).toBe(true);
-  expect(query(diff, ".chat-diff__row--del .chat-diff__text")?.textContent).toBe("old a");
-  expect(
-    Array.from(diff?.querySelectorAll(".chat-diff__row--add .chat-diff__text") ?? []).map(
-      (row) => row.textContent,
-    ),
-  ).toEqual(["new a", "new b"]);
+  expect(diffText(diff, "del")).toEqual(["old a"]);
+  expect(diffText(diff, "add")).toEqual(["new a", "new b"]);
 
-  const tabGroup = query(container, ".chat-tool-card__modes");
+  const tabGroup = cardPart(container, "modes");
   const tabList = query(tabGroup, '[role="tablist"]');
   await waitForSolid(() => expect(tabList?.getAttribute("aria-label")).toBe("Tool detail view"));
   const tabs = Array.from(tabGroup?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? []);
@@ -106,12 +98,14 @@ it("switches a completed patch between mutually exclusive diff and raw bodies", 
   const expectPanels = (raw: boolean) =>
     expect([diffBody?.hidden, rawBody?.hidden]).toEqual([raw, !raw]);
   expectPanels(false);
+  expect(query(rawBody, "code")).toBeNull();
 
   tabs[1]?.click();
   await waitForSolid(() =>
     expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual(["false", "true"]),
   );
   expectPanels(true);
+  expect(query(diffBody, ".chat-diff")).toBe(diff);
   expect(query(rawBody, "code")?.textContent).toBe("Applied patch");
 
   await mountCard(
@@ -124,11 +118,32 @@ it("switches a completed patch between mutually exclusive diff and raw bodies", 
     container,
   );
   await waitForSolid(() => {
-    expect(query(container, ".chat-tool-card__modes")).toBe(tabGroup);
+    expect(cardPart(container, "modes")).toBe(tabGroup);
     expect(rawBody?.hidden).toBe(false);
     expect(tabList?.getAttribute("aria-label")).toBe("Tool detail view");
   });
+  tabs[0]?.click();
+  await waitForSolid(() => expectPanels(false));
+  expect(query(rawBody, "code")?.textContent).toBe("Applied patch");
+  expect(textOf(diffBody!, ".chat-diff__row--add .chat-diff__text")).toBe("new");
   container.remove();
+});
+
+it("scans unnumbered diff lines once while rendering every row", () => {
+  let numberReads = 0;
+  const lines: DiffLine[] = Array.from({ length: 256 }, (_, index) => ({
+    kind: "ctx",
+    text: `line ${index}`,
+    get lineNo() {
+      numberReads += 1;
+      return undefined;
+    },
+  }));
+  const view = mountComponent(DiffBlock, { lines });
+  onTestFinished(view.dispose);
+  expect(view.container.querySelectorAll(".chat-diff__row")).toHaveLength(lines.length);
+  expect(view.container.querySelector(".chat-diff__gutter")).toBeNull();
+  expect(numberReads).toBeLessThanOrEqual(lines.length * 2);
 });
 
 it.each([
@@ -152,6 +167,7 @@ it.each([
   const rawBody = query(container, '[id$="-raw-panel"]');
   expect(rawBody?.hidden).toBe(false);
   expect(query(rawBody, "code")?.textContent).toBe(outputText);
+  expect(query(container, ".chat-diff")).toBeNull();
   container.remove();
 });
 
@@ -161,7 +177,10 @@ it("labels a completed Codex file creation from its recorded operation", async (
   const container = await mountCard(
     patchCard(
       { changes: [change("src/new.ts", "export const created = true;\n", "add")] },
-      { id: "msg:patch:add", completed: true },
+      {
+        id: "msg:patch:add",
+        completed: true,
+      },
     ),
     { expanded: false, onOpenWorkspaceFile, onToggleExpanded },
   );
@@ -172,9 +191,7 @@ it("labels a completed Codex file creation from its recorded operation", async (
   expect(onOpenWorkspaceFile).toHaveBeenCalledWith({ path: "src/new.ts" });
   expect(onToggleExpanded).not.toHaveBeenCalled();
 
-  expect(query(container, ".chat-tool-row__toggle")?.getAttribute("aria-label")).toBe(
-    "Created new.ts",
-  );
+  expect(query(container, ".chat-tool-row__toggle")).toMatchObject({ ariaLabel: "Created new.ts" });
   query(container, ".chat-tool-row__toggle")?.click();
   expect(onToggleExpanded).toHaveBeenCalledWith("msg:patch:add");
   expect(onOpenWorkspaceFile).toHaveBeenCalledOnce();
@@ -190,7 +207,10 @@ it.each([
   const container = await mountCard(
     patchCard(
       { patch: `*** Begin Patch\n${body}\n*** End Patch` },
-      { id: `msg:patch:${target}`, completed: true },
+      {
+        id: `msg:patch:${target}`,
+        completed: true,
+      },
     ),
     { expanded: false, onOpenWorkspaceFile, onToggleExpanded },
   );
@@ -215,15 +235,9 @@ it("renders edit and write rows from their result outcome", async () => {
       { running: "Writing", succeeded: "Wrote", neutral: "Write" },
     ],
   ] as const;
+  const live = { live: true, liveDiffStat: { added: 12, removed: 3 } };
   const states = [
-    [
-      { live: true, liveDiffStat: { added: 12, removed: 3 } },
-      true,
-      "running",
-      "Attempted changes",
-      true,
-      false,
-    ],
+    [live, true, "running", "Attempted changes", true, false],
     [{ completed: true }, false, "succeeded", "File changes", true, false],
     [{ completed: true, isError: true }, false, "neutral", "Attempted changes", false, true],
     [{}, false, "neutral", "Attempted changes", false, false],
@@ -362,7 +376,7 @@ it("marks expanded raw block-art output so QR whitespace uses block-art renderin
 
   const rawToggle = query(container, ".chat-tool-card__raw-toggle");
   const rawBody = query(container, ".chat-tool-card__raw-body");
-  expect(query(container, ".chat-tool-card__preview-frame")).toBeNull();
+  expect(cardPart(container, "preview-frame")).toBeNull();
   expect(rawToggle?.getAttribute("aria-expanded")).toBe("false");
   expect(rawBody?.hidden).toBe(true);
   rawToggle!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -592,9 +606,9 @@ it("keeps command progress neutral across the row, expanded body, and sidebar un
   expect(query(container, ".chat-tool-row--running")).not.toBeNull();
   expect(query(container, ".chat-tool-card--error")).toBeNull();
   expect(query(container, ".chat-tool-failure")).toBeNull();
-  expect(textOf(container, ".chat-tool-card__outcome")).toBe("Running");
+  expect(cardPart(container, "outcome")).toMatchObject({ textContent: "Running" });
   expect(container.textContent).toContain(card.outputText);
-  query(container, ".chat-tool-card__action-btn")?.click();
+  cardPart(container, "action-btn")?.click();
   expect(onOpenSidebar).toHaveBeenCalledWith(
     expect.objectContaining({ kind: "tool-output", card }),
   );
@@ -606,7 +620,7 @@ it("keeps command progress neutral across the row, expanded body, and sidebar un
   await show();
   expect(query(container, ".chat-tool-row--running")).toBeNull();
   expect(query(container, ".chat-tool-card--error")).toBeNull();
-  expect(textOf(container, ".chat-tool-card__outcome")).toBe("Completed");
+  expect(cardPart(container, "outcome")).toMatchObject({ textContent: "Completed" });
   card.isError = true;
   await show();
   expect(query(container, ".chat-tool-card--error")).not.toBeNull();
@@ -660,9 +674,11 @@ it("keeps diagnostics inside expanded tool details", async () => {
 it("renders a plain error detail when a failed tool has no output", async () => {
   const container = await mountTool("lookup", { isError: true });
 
-  expect(query(container, ".chat-tool-card__status-badge")).toBeNull();
-  expect(textOf(container, ".chat-tool-card__block-label")).toBe("Tool error");
-  expect(textOf(container, ".chat-tool-card__block-content")).toBe("No output — tool failed.");
+  expect(cardPart(container, "status-badge")).toBeNull();
+  expect(cardPart(container, "block-label")).toMatchObject({ textContent: "Tool error" });
+  expect(cardPart(container, "block-content")).toMatchObject({
+    textContent: "No output — tool failed.",
+  });
 });
 
 it.each([

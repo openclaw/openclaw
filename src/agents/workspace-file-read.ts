@@ -16,6 +16,15 @@ const TRANSIENT_WORKSPACE_READ_CODES = new Set(["EAGAIN", "EWOULDBLOCK", "EINTR"
 const TRANSIENT_WORKSPACE_READ_ERRNOS = new Set([-11, -4]);
 const TRANSIENT_WORKSPACE_READ_MESSAGE = /Unknown system error -(?:11|4)\b/i;
 
+export function retryWorkspaceRead<T>(operation: () => Promise<T>): Promise<T> {
+  return retryAsync(operation, {
+    attempts: 3,
+    minDelayMs: 50,
+    maxDelayMs: 50,
+    shouldRetry: (error) => isTransientWorkspaceReadError(error),
+  });
+}
+
 type WorkspaceFileSourceIdentity = readonly [
   canonicalPath: string,
   stat: FileIdentityStat | undefined,
@@ -126,52 +135,44 @@ export async function readWorkspaceFileWithGuards(params: {
     // each attempt uses a fresh fd (retrying readFileSync on the same fd could
     // return truncated content after a partial read); the inode-identity guard
     // in openRootFile still protects against a swapped file between attempts.
-    return await retryAsync(
-      async () => {
-        const opened = await openRootFile({
-          absolutePath: params.filePath,
-          rootPath: params.workspaceDir,
-          boundaryLabel: "workspace root",
-          symlinks: params.rejectAliases ? "reject" : "follow-parents-within-root",
-        });
-        if (!opened.ok) {
-          // Boundary resolution can report transient IO as "validation", while
-          // pinned open failures use "io". Classify the underlying error so
-          // deterministic path and validation failures still return unchanged.
-          if (isTransientWorkspaceReadError(opened.error)) {
-            throw opened.error;
-          }
-          return opened;
+    return await retryWorkspaceRead(async () => {
+      const opened = await openRootFile({
+        absolutePath: params.filePath,
+        rootPath: params.workspaceDir,
+        boundaryLabel: "workspace root",
+        symlinks: params.rejectAliases ? "reject" : "follow-parents-within-root",
+      });
+      if (!opened.ok) {
+        // Boundary resolution can report transient IO as "validation", while
+        // pinned open failures use "io". Classify the underlying error so
+        // deterministic path and validation failures still return unchanged.
+        if (isTransientWorkspaceReadError(opened.error)) {
+          throw opened.error;
         }
+        return opened;
+      }
 
-        const identity = workspaceFileIdentity(opened.stat, opened.exactIdentity, opened.path);
-        const sourceIdentity = [opened.path, opened.exactIdentity] as const;
-        const cached =
-          params.useCache === false ? undefined : readWorkspaceFileCache(opened.path, identity);
-        try {
-          const content = cached ?? (await readWorkspaceBootstrapFile(opened.fd));
-          if (cached === undefined && params.useCache !== false) {
-            writeWorkspaceFileCache({ filePath: opened.path, content, identity });
-          }
-          return { ok: true, content, sourceIdentity };
-        } finally {
-          syncFs.closeSync(opened.fd);
+      const identity = workspaceFileIdentity(opened.stat, opened.exactIdentity, opened.path);
+      const sourceIdentity = [opened.path, opened.exactIdentity] as const;
+      const cached =
+        params.useCache === false ? undefined : readWorkspaceFileCache(opened.path, identity);
+      try {
+        const content = cached ?? (await readWorkspaceBootstrapFile(opened.fd));
+        if (cached === undefined && params.useCache !== false) {
+          writeWorkspaceFileCache({ filePath: opened.path, content, identity });
         }
-      },
-      {
-        attempts: 3,
-        minDelayMs: 50,
-        maxDelayMs: 50,
-        shouldRetry: (err) => isTransientWorkspaceReadError(err),
-      },
-    );
+        return { ok: true, content, sourceIdentity };
+      } finally {
+        syncFs.closeSync(opened.fd);
+      }
+    });
   } catch (error) {
     // Non-transient read failure, or transient retries exhausted.
     return { ok: false, reason: error instanceof RangeError ? "validation" : "io", error };
   }
 }
 
-export function isTransientWorkspaceReadError(error: unknown): boolean {
+function isTransientWorkspaceReadError(error: unknown): boolean {
   if (error && typeof error === "object") {
     if (
       "code" in error &&

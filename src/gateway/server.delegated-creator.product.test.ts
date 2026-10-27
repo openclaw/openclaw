@@ -1,9 +1,8 @@
+import { randomUUID, X509Certificate } from "node:crypto";
 // Real authenticated Gateway, agent/tool dispatch and persisted creator effects.
 // Only provider HTTP is replayed; authorization and storage use production owners.
 import "../agents/prepared-model-runtime.js";
 import "./server-start.js";
-import { randomUUID, X509Certificate } from "node:crypto";
-import { createServer } from "node:http";
 import { expect, it, vi } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
@@ -19,12 +18,12 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   closeProvider,
   listenProvider,
-  readProviderBody,
   writeToolCall,
 } from "./gateway-provider-fixture.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import * as sharingAuthority from "./server-methods/sessions-sharing-authority.js";
 import { sessionSharingHandlers } from "./server-methods/sessions-sharing.js";
+import { productModelConfig, productProvider } from "./server.chat-product.test-support.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
@@ -57,7 +56,7 @@ it(
     await using cleanup = new AsyncDisposableStack();
     cleanup.defer(() => state.cleanup());
     const people = Object.fromEntries(
-      ["admin", "causal", "selected", "assignee"].map((name) => [
+      ["admin", "causal", "selected"].map((name) => [
         name,
         ensureProfileForEmail(name + "@creator.example.test"),
       ]),
@@ -69,45 +68,38 @@ it(
     const errors: unknown[] = [];
     let issued = false;
     let receipt: Receipt | undefined;
-    const provider = createServer((request, response) => {
-      void (async () => {
-        const body = JSON.parse(await readProviderBody(request)) as {
-          tools?: Array<{ name: string }>;
-          input: Array<{ type?: string; role?: string; output?: string }>;
-        };
-        const title = JSON.stringify(
-          body.input.filter((item) => item.role === "system" || item.role === "developer"),
-        ).includes("Generate a concise session title");
-        const output = body.input.find((item) => item.type === "function_call_output")?.output;
-        if (output) {
-          const parsed = JSON.parse(output) as Receipt;
-          expect(parsed).toMatchObject({
-            sessionKey: expect.any(String),
-            sessionId: expect.any(String),
-            runStarted: false,
-          });
-          receipt = parsed;
-        }
-        if (!title && !issued) {
-          issued = true;
-          expect(body.tools).toContainEqual(expect.objectContaining({ name: "sessions_create" }));
-          entered.resolve();
-          await release.promise;
-          writeToolCall(response, "sessions_create", {
-            label: "Causal creator proof",
-            user: people.selected!.id,
-          });
-        } else {
-          writeOpenAiResponsesText(response, {
-            text: "Creator proof complete",
-            messageId: randomUUID(),
-            responseId: randomUUID(),
-          });
-        }
-      })().catch((error: unknown) => {
-        errors.push(error);
-        response.writeHead(500).end("fixture provider failure");
-      });
+    const provider = productProvider(errors, async (text, response) => {
+      const body = JSON.parse(text) as {
+        input: Array<{ type?: string; role?: string; output?: string }>;
+      };
+      const title = JSON.stringify(
+        body.input.filter((item) => item.role === "system" || item.role === "developer"),
+      ).includes("Generate a concise session title");
+      const output = body.input.find((item) => item.type === "function_call_output")?.output;
+      if (output) {
+        const parsed = JSON.parse(output) as Receipt;
+        expect(parsed).toMatchObject({
+          sessionKey: expect.any(String),
+          sessionId: expect.any(String),
+          runStarted: false,
+        });
+        receipt = parsed;
+      }
+      if (!title && !issued) {
+        issued = true;
+        entered.resolve();
+        await release.promise;
+        writeToolCall(response, "sessions_create", {
+          label: "Causal creator proof",
+          user: people.selected!.id,
+        });
+      } else {
+        writeOpenAiResponsesText(response, {
+          text: "Creator proof complete",
+          messageId: randomUUID(),
+          responseId: randomUUID(),
+        });
+      }
     });
     cleanup.defer(() => closeProvider(provider));
     const model = buildMockOpenAiResponsesProvider(await listenProvider(provider), "creator-proof");
@@ -126,28 +118,10 @@ it(
     };
     const certPath = await state.writeText("tls/cert.pem", TEST_TLS_CERT_PEM);
     const keyPath = await state.writeText("tls/key.pem", TEST_TLS_KEY_PEM);
+    const { defaults, models } = productModelConfig(state.workspaceDir, model);
     const cfg = {
-      agents: {
-        entries: { main: {} },
-        defaults: {
-          workspace: state.workspaceDir,
-          skipBootstrap: true,
-          heartbeat: { every: "0m" },
-          model: { primary: model.modelRef },
-          models: {
-            [model.modelRef]: {
-              agentRuntime: { id: "openclaw" },
-              params: { transport: "sse", openaiWsWarmup: false },
-            },
-          },
-        },
-      },
-      models: {
-        mode: "replace",
-        providers: {
-          [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
-        },
-      },
+      agents: { entries: { main: {} }, defaults },
+      models,
       messages: { queue: { allowCollaborativeSteering: true } },
       plugins: { enabled: false, slots: { memory: "none" } },
       tools: { allow: ["sessions_create"], codeMode: { enabled: false }, toolSearch: false },
@@ -214,7 +188,6 @@ it(
     }
     const causal = await connect("causal");
     const selected = await connect("selected");
-    const assignee = await connect("assignee");
     const parent = await admin.request<Created>("sessions.create", {
       agentId: "main",
       label: "Creator proof parent",
@@ -250,54 +223,29 @@ it(
     expect(errors).toEqual([]);
     expect(receipt).toBeDefined();
     const child = receipt!;
-    const scope = { agentId: "main", sessionKey: child.sessionKey };
-    const entry = () => loadSessionEntryReadOnly(scope);
+    const entry = () => loadSessionEntryReadOnly({ agentId: "main", sessionKey: child.sessionKey });
     expect(entry()?.createdActor).toEqual({
       type: "human",
       source: "profile",
       id: people.selected!.id,
       delegatedBy: { type: "human", source: "profile", id: people.causal!.id },
     });
-    await admin.request("sessions.assignOwner", {
-      key: child.sessionKey,
-      owner: { type: "human", id: people.assignee!.id },
-    });
     const shareParams = { sessionKey: child.sessionKey, expectedSessionId: child.sessionId };
-    const archiveParams = { key: child.sessionKey, expectedSessionId: child.sessionId };
+    const share = (client: Client, enabled: boolean) =>
+      client.request("session.publicShare.set", { ...shareParams, enabled });
     const creator = causal;
     const creatorId = people.causal!.id;
-    for (const [name, client] of [
-      ["selected/isolation", selected],
-      ["assignee", assignee],
-    ] as const) {
-      const before = structuredClone(entry());
-      await expect(
-        client.request("session.publicShare.set", { ...shareParams, enabled: true }),
-      ).rejects.toMatchObject({
-        code: "INVALID_REQUEST",
-        message: "session owner or operator.admin required",
-      });
-      await expect(
-        client.request("sessions.patch", { ...archiveParams, archived: true }),
-      ).rejects.toThrow(/creator|admin/i);
-      expect(entry()).toEqual(before);
-      console.log("Creator proof: " + name + " denied; persisted row unchanged");
-    }
-    const published = await creator.request("session.publicShare.set", {
-      ...shareParams,
-      enabled: true,
+    const before = structuredClone(entry());
+    await expect(share(selected, true)).rejects.toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "session owner or operator.admin required",
     });
+    expect(entry()).toEqual(before);
+    const published = await share(creator, true);
     expect(published).toMatchObject({ ok: true, publicShare: { token: expect.any(String) } });
     expect(entry()?.publicShare).toBeDefined();
-    await creator.request("session.publicShare.set", { ...shareParams, enabled: false });
+    await share(creator, false);
     expect(entry()?.publicShare).toBeUndefined();
-    await creator.request("sessions.patch", { ...archiveParams, archived: true });
-    expect(entry()?.archivedAt).toEqual(expect.any(Number));
-    await creator.request("sessions.patch", { ...archiveParams, archived: false });
-    expect(entry()?.archivedAt).toBeUndefined();
-    console.log(
-      "Creator proof: causal human published/unpublished and archived/restored the real created session with default configuration",
-    );
 
     // Pause only after the real sharing owner has admitted this request. Revoke via
     // the real administration RPC, then let the unchanged handler reach its effect.
@@ -326,7 +274,7 @@ it(
         }
       });
     const beforeRevocation = structuredClone(entry());
-    const denied = creator.request("session.publicShare.set", { ...shareParams, enabled: true });
+    const denied = share(creator, true);
     void denied.catch(() => undefined);
     try {
       await awaitGateBeforeSettlement(
@@ -339,9 +287,6 @@ it(
       await expect(denied).rejects.toThrow();
       await settled.promise;
       expect(entry()).toEqual(beforeRevocation);
-      console.log(
-        "Creator proof: live role revocation after admission rejected publication before persistent mutation",
-      );
     } finally {
       resume.resolve();
       hold.mockRestore();

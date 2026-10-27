@@ -124,8 +124,11 @@ type ToolCallInputRepairOptions = {
 type ErroredAssistantResultPolicy = "preserve" | "drop";
 
 type ToolUseResultPairingOptions = {
+  // Prepared synchronously by replay input sanitization; discard if it changes the history.
+  pairing?: ReturnType<typeof classifyToolUseResultPairing>;
   erroredAssistantResultPolicy?: ErroredAssistantResultPolicy;
   missingToolResultText?: string;
+  missingToolResultTimestamp?: "assistant";
   // A valid Responses checkpoint may split a call from its later output.
   // Only that replay owner may retain results that normal repair treats as orphaned.
   preserveUnframedToolResults?: boolean;
@@ -285,14 +288,20 @@ export function sanitizeToolUseResultPairing(
   messages: AgentMessage[],
   options?: ToolUseResultPairingOptions,
 ): AgentMessage[] {
-  return repairToolUseResultPairing(messages, options).messages;
+  // Replay-only repairs must not rewrite the prefix when the wall clock advances.
+  return repairToolUseResultPairing(messages, {
+    ...options,
+    missingToolResultTimestamp: "assistant",
+  }).messages;
 }
 
 export function sanitizeToolUseResultPairingForModel(
   messages: AgentMessage[],
   isOpenAIResponsesApi: boolean,
+  pairing?: ReturnType<typeof classifyToolUseResultPairing>,
 ): AgentMessage[] {
   return sanitizeToolUseResultPairing(messages, {
+    pairing,
     erroredAssistantResultPolicy: "drop",
     // Match upstream Codex history normalization for OpenAI Responses.
     ...(isOpenAIResponsesApi ? { missingToolResultText: "aborted" } : {}),
@@ -317,9 +326,11 @@ export function repairToolUseResultPairing(
   // Provider ids are opaque and can legitimately repeat on later assistant turns.
   const added: Array<Extract<AgentMessage, { role: "toolResult" }>> = [];
   const preserveUnframed = options?.preserveUnframedToolResults === true;
-  const frames = classifyToolUseResultPairing(messages, {
-    preserveUnframedToolResults: preserveUnframed,
-  });
+  const frames =
+    options?.pairing ??
+    classifyToolUseResultPairing(messages, {
+      preserveUnframedToolResults: preserveUnframed,
+    });
 
   const out: AgentMessage[] = [];
   let cursor = 0;
@@ -351,8 +362,12 @@ export function repairToolUseResultPairing(
             toolCallId: occurrence.id,
             toolName: occurrence.name,
             text: options?.missingToolResultText,
+            // Sparse legacy turns have no recorded time; use a stable sentinel in projections.
+            timestamp:
+              options?.missingToolResultTimestamp === "assistant"
+                ? (frame.assistant.timestamp ?? 0)
+                : undefined,
           });
-          occurrence.result = missing;
           added.push(missing);
           out.push(missing);
         }

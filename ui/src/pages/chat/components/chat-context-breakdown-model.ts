@@ -41,34 +41,6 @@ const basename = (path: string) =>
     .split(/[\\/]/)
     .pop();
 
-function fileGroups(files: SessionSystemPromptReport["injectedWorkspaceFiles"]): ContextGroup[] {
-  const groups = new Map<string, ContextGroup>();
-  for (const file of files) {
-    const kind = file.origin?.kind ?? "other";
-    const path = file.origin?.rootPath ?? parentPath(file.path);
-    const key = kind + ":" + path;
-    let group = groups.get(key);
-    if (!group) {
-      group = {
-        key,
-        kind,
-        path,
-        name: kind === "execution-project" || kind === "other" ? basename(path) : undefined,
-        tokens: 0,
-        entries: [],
-      };
-      groups.set(key, group);
-    }
-    group.entries.push({
-      key: file.path,
-      name: file.name,
-      path: file.path,
-      tokens: file.injectedChars === null ? null : estimate(file.injectedChars),
-    });
-  }
-  return Array.from(groups.values(), (group) => ({ ...group, tokens: sumTokens(group.entries) }));
-}
-
 export function buildDeferredContextGroups(report: SessionSystemPromptReport): ContextGroup[] {
   return toolGroups(report.tools.deferred?.entries ?? []);
 }
@@ -111,7 +83,34 @@ export function buildChatContextCategories(
   report: SessionSystemPromptReport,
   used: number,
 ): ContextCategory[] {
-  const files = fileGroups(report.injectedWorkspaceFiles);
+  const groups = new Map<string, ContextGroup>();
+  for (const file of report.injectedWorkspaceFiles) {
+    const kind = file.origin?.kind ?? "other";
+    const path = file.origin?.rootPath ?? parentPath(file.path);
+    const key = kind + ":" + path;
+    let group = groups.get(key);
+    if (!group) {
+      group = {
+        key,
+        kind,
+        path,
+        name: kind === "execution-project" || kind === "other" ? basename(path) : undefined,
+        tokens: 0,
+        entries: [],
+      };
+      groups.set(key, group);
+    }
+    group.entries.push({
+      key: file.path,
+      name: file.name,
+      path: file.path,
+      tokens: file.injectedChars === null ? null : estimate(file.injectedChars),
+    });
+  }
+  const files = Array.from(groups.values(), (group) => ({
+    ...group,
+    tokens: sumTokens(group.entries),
+  }));
   const tools = toolGroups(report.tools.entries);
   const fileEntries = files.flatMap((group) => group.entries);
   const fileChars = report.injectedWorkspaceFiles.some((file) => file.injectedChars === null)

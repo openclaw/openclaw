@@ -1,21 +1,35 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
-import { createMemo, For } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import {
+  createMemo,
+  Errored,
+  For,
+  isPending,
+  latest,
+  Loading,
+  omit,
+  type Accessor,
+} from "solid-js";
 import { resolveNodeIdFromCandidates } from "../../../../src/shared/node-match.js";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsRow, SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import "../../styles/devices.css";
+import type { DevicePolicyRead } from "./devices-policy-reads.ts";
 import { ExecApprovals, resolveExecApprovalsState } from "./view-exec-approvals.tsx";
-import { DeviceInventory } from "./view-inventory.tsx";
+import { DeviceInventory } from "./view-inventory-readiness.tsx";
 import { resolveConfigAgents, resolveNodeTargets } from "./view-shared.tsx";
 import type { DevicesProps } from "./view.types.ts";
 
 registerEnglishCatalog(registerDevicesEnglish);
 
 export function DevicesView(props: DevicesProps) {
-  const bindingState = createMemo(() => resolveBindingsState(props));
-  const approvalsState = createMemo(() => resolveExecApprovalsState(props));
+  const bindingState = createMemo(() => resolveBindingsState(omit(props, "inventorySaving")));
+  const approvalsState = createMemo(() =>
+    resolveExecApprovalsState(omit(props, "inventorySaving")),
+  );
   return (
     <SettingsPage wide={true}>
       <>
@@ -30,10 +44,61 @@ export function DevicesView(props: DevicesProps) {
             )}
           </div>
         ) : undefined}
-        <DeviceInventory {...props} /> <ExecApprovals {...approvalsState()} />
-        <Bindings {...bindingState()} />
+        {props.devicesError ? (
+          <div class="callout danger" role="alert">
+            {props.devicesError}
+          </div>
+        ) : undefined}
+        {props.lastError ? (
+          <div class="callout danger" role="alert">
+            {props.lastError}
+          </div>
+        ) : undefined}
+        <DeviceInventory {...props} />
+        <PolicyRead read={props.execApprovalsRead} onRetry={() => props.onLoadExecApprovals()}>
+          {(pending) => (
+            <ExecApprovals
+              {...approvalsState()}
+              loading={pending() || approvalsState().loading}
+              disabled={pending() || approvalsState().disabled}
+            />
+          )}
+        </PolicyRead>
+        <PolicyRead read={props.configRead} onRetry={() => props.onLoadConfig()}>
+          {(pending) => (
+            <Bindings
+              {...bindingState()}
+              configLoading={pending() || props.configLoading}
+              disabled={pending() || bindingState().disabled}
+            />
+          )}
+        </PolicyRead>
       </>
     </SettingsPage>
+  );
+}
+
+function PolicyRead(props: {
+  read: DevicePolicyRead;
+  onRetry: () => void;
+  children: (pending: Accessor<boolean>) => JSX.Element;
+}) {
+  return (
+    <Errored
+      fallback={(error) => (
+        <div class="callout danger" role="alert">
+          {String(error())}
+          <button class="btn" onClick={() => props.onRetry()}>
+            {t("common.retry")}
+          </button>
+        </div>
+      )}
+    >
+      <Loading on={props.read.scope()} fallback={props.children(() => true)}>
+        {(latest(props.read.value), null)}
+        {props.children(() => isPending(props.read.value))}
+      </Loading>
+    </Errored>
   );
 }
 
@@ -81,7 +146,7 @@ function Bindings(props: BindingState) {
             <button
               class="btn"
               disabled={!props.connected || props.configLoading}
-              onClick={props.onLoadConfig}
+              onClick={() => props.onLoadConfig()}
             >
               {props.configLoading ? t("common.loading") : t("common.loadConfig")}
             </button>
@@ -174,8 +239,7 @@ function BindingSelect(props: BindingState & { agent: BindingAgent | null }) {
   });
 
   return (
-    <select
-      class="settings-select"
+    <SettingsSelect
       aria-label={t(isDefault() ? "devices.binding.node" : "devices.binding.binding")}
       value={selected()}
       disabled={props.disabled || (props.nodes.length === 0 && selected() === sentinel())}
@@ -187,18 +251,18 @@ function BindingSelect(props: BindingState & { agent: BindingAgent | null }) {
           props.onBindAgent(props.agent.id, value === "__default__" ? null : value);
         }
       }}
-    >
-      <option value={sentinel()} selected={selected() === sentinel()}>
-        {t(isDefault() ? "devices.binding.anyNode" : "devices.binding.useDefault")}
-      </option>
-      <For each={options()} keyed={(node) => node.id}>
-        {(node) => (
-          <option value={node().id} selected={selected() === node().id} disabled={node().disabled}>
-            {node().label}
-          </option>
-        )}
-      </For>
-    </select>
+      options={[
+        {
+          value: sentinel(),
+          label: t(isDefault() ? "devices.binding.anyNode" : "devices.binding.useDefault"),
+        },
+        ...options().map((node) => ({
+          value: node.id,
+          label: node.label,
+          disabled: node.disabled,
+        })),
+      ]}
+    />
   );
 }
 

@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createRestartRecoveryOperatorSource } from "../../agents/operator-run-recovery-source.js";
 import { captureRequesterOrigin } from "../../agents/requester-origin.js";
 import { createRestartRecoveryRequesterSource } from "../../agents/requester-run-recovery-source.js";
 import {
   buildRestartRecoveryClaimCleanupPatch,
+  canReplaceAbortedRestartRecoveryClaim,
   getRestartRecoveryPendingFinalSourceRunId,
   hasRestartRecoverySourceClaim,
   hasRestartRecoveryTerminalRun,
@@ -15,10 +17,7 @@ import {
 import { patchSessionEntryTarget } from "../../config/sessions/session-accessor.js";
 import { applySessionEntryTargetOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionEntryTargetPatchScope } from "../../config/sessions/session-accessor.types.js";
-import type {
-  SessionActor,
-  SessionActorAuthority,
-} from "../../config/sessions/session-actor-contract.js";
+import type { SessionActor } from "../../config/sessions/session-actor-contract.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { bindUserTurnInputActor } from "../../config/sessions/session-input-actor.js";
 import type { SessionTranscriptTurnLifecyclePatch } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
@@ -42,7 +41,11 @@ import {
   isAgentRunStaleLifecycleError,
 } from "../../infra/agent-lifecycle-error.js";
 import { wrapSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
-import { isMainSessionRestartRecoveryInputProvenance } from "../../sessions/input-provenance.js";
+import {
+  isCronExecutionInputProvenance,
+  isMainSessionRestartRecoveryInputProvenance,
+} from "../../sessions/input-provenance.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { AgentTurnRestartClaimCleanup } from "./agent-runner-completion.types.js";
 import type {
   ReplyAdmissionPatch,
@@ -57,6 +60,8 @@ export function createReplyRestartRecoveryClaimController(
   params: ReplyRestartRecoveryClaimControllerParams,
 ): ReplyRestartRecoveryClaimController {
   const requesterOrigin = captureRequesterOrigin({ requesterOrigin: params.requesterOrigin });
+  // Recovery custody must not turn a scheduled check into conversation activity.
+  const preserveActivity = isCronExecutionInputProvenance(params.inputProvenance);
   const sourceTurnId = normalizeOptionalString(params.sourceTurnId);
   // The retry shares delivery correlation with its parent, but owns one internal admission.
   const strandedRetryRunId =
@@ -75,12 +80,8 @@ export function createReplyRestartRecoveryClaimController(
   let sessionActor: SessionActor | undefined;
   let readTarget: SessionEntryTargetPatchScope | undefined;
   const recordReadTarget = (target: SessionEntryTargetPatchScope) => (readTarget ??= target);
-  const preparedTarget = () => {
-    if (!readTarget) {
-      throw new Error("Restart recovery claim has no admitted session target");
-    }
-    return readTarget;
-  };
+  const preparedTarget = () =>
+    expectDefined(readTarget, "restart recovery admitted session target");
   const isExecutionFence = (run: NonNullable<SessionEntry["restartRecoveryRuns"]>[number]) =>
     run.runId === executionRunId && run.lifecycleGeneration === executionGeneration;
   const isTrackedClaim = (entry: SessionEntry | undefined) =>
@@ -113,7 +114,7 @@ export function createReplyRestartRecoveryClaimController(
     }
   };
 
-  const readAuthority: SessionActorAuthority = {
+  const readAuthority = {
     assertCurrent: assertReadCurrent,
     authorize: assertReadCurrent,
   };
@@ -424,52 +425,55 @@ export function createReplyRestartRecoveryClaimController(
       return "admitted";
     }
 
-    const deliveryContext = params.resolveDeliveryContext(entry);
-    const recoverableDeliveryContext =
-      deliveryContext && sourceTurnId ? deliveryContext : undefined;
-    if (recoverableDeliveryContext && !strandedRetryRunId) {
+    const resolvedDeliveryContext = params.resolveDeliveryContext(entry);
+    const deliveryContext = sourceTurnId ? resolvedDeliveryContext : undefined;
+    if (deliveryContext && !strandedRetryRunId) {
       const sourceMessage = recorder?.getPersistedMessage?.() ?? (await recorder?.resolveMessage());
       const persistedSourceTurnId = normalizeOptionalString(sourceMessage?.idempotencyKey);
       if (!recorder || persistedSourceTurnId !== sourceTurnId) {
         throw new Error("channel restart recovery requires source-keyed user-turn admission");
       }
     }
-    const operatorSource =
-      !recoverableDeliveryContext && !sourceTurnId
-        ? createRestartRecoveryOperatorSource({
-            authority: params.operatorAuthority,
-            entry,
-            agentId: params.agentId,
-            sessionKey: params.sessionKey,
-            sourceRunId: recoveryRunId,
-            inputProvenance: params.inputProvenance,
-            requesterOrigin,
-          })
-        : undefined;
+    const claimSourceRunId = deliveryContext && sourceTurnId ? sourceTurnId : recoveryRunId;
+    const operatorSource = sourceTurnId
+      ? undefined
+      : createRestartRecoveryOperatorSource({
+          authority: params.operatorAuthority,
+          entry,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          sourceRunId: recoveryRunId,
+          inputProvenance: params.inputProvenance,
+          requesterOrigin,
+        });
+    // Internal children retain requester custody even without an outward delivery route.
+    const requesterSource = createRestartRecoveryRequesterSource({
+      requesterOrigin,
+      entry,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sourceRunId: claimSourceRunId,
+    });
+    const requesterChannel = requesterSource?.requesterOrigin.messageProvider;
     if (
-      !recoverableDeliveryContext &&
+      !deliveryContext &&
       !activeClaimRunId &&
       (!recorder || recorder.hasPersisted()) &&
-      !operatorSource
+      !operatorSource &&
+      !requesterSource
     ) {
       // These turns have no admission write to extend; lifecycle start owns their claim.
       return "admitted";
     }
     const updatedAt = Date.now();
-    const canTransferAbortedControlUiClaim = Boolean(
-      admissionRunId &&
-      activeClaimRunId &&
-      admissionRunId !== activeClaimRunId &&
-      entry.abortedLastRun === true &&
-      (entry.status === undefined || entry.status === "interrupted") &&
-      entry.pendingFinalDelivery === undefined &&
-      entry.restartRecoveryBeforeAgentReplyState === undefined &&
-      entry.restartRecoveryDeliveryReceiptState === undefined &&
-      entry.restartRecoverySourceIngress === "control-ui",
+    const canReplaceAbortedClaim = canReplaceAbortedRestartRecoveryClaim(
+      entry,
+      params.sessionKey,
+      admissionRunId,
     );
     if (
       activeClaimRunId &&
-      !canTransferAbortedControlUiClaim &&
+      !canReplaceAbortedClaim &&
       (entry.abortedLastRun === true ||
         !isTerminalSessionStatus(entry.status) ||
         entry.status === "interrupted" ||
@@ -484,13 +488,12 @@ export function createReplyRestartRecoveryClaimController(
           terminalSourceRunId: normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId),
         })
       : {};
-    const transfersControlUiClaim = canTransferAbortedControlUiClaim && !recoverableDeliveryContext;
-    const claimSourceRunId =
-      transfersControlUiClaim || operatorSource
-        ? recoveryRunId
-        : recoverableDeliveryContext
-          ? sourceTurnId
-          : undefined;
+    const transfersControlUiClaim =
+      canReplaceAbortedClaim &&
+      entry.restartRecoverySourceIngress === "control-ui" &&
+      !deliveryContext;
+    const hasClaim =
+      deliveryContext || transfersControlUiClaim || operatorSource || requesterSource;
     const patch: SessionTranscriptTurnLifecyclePatch = {
       ...retiredClaim,
       abortedLastRun: false,
@@ -500,23 +503,12 @@ export function createReplyRestartRecoveryClaimController(
       restartRecoveryBeforeAgentReplyState: undefined,
       restartRecoveryDeliveryReceiptState: undefined,
       restartRecoveryDeliveryToolCallId: undefined,
-      restartRecoveryDeliveryContext: recoverableDeliveryContext,
+      restartRecoveryDeliveryContext: deliveryContext,
       restartRecoveryDeliveryRequestFingerprint: undefined,
-      restartRecoveryDeliveryRunId:
-        recoverableDeliveryContext || transfersControlUiClaim || operatorSource
-          ? recoveryRunId
-          : undefined,
+      restartRecoveryDeliveryRunId: hasClaim ? recoveryRunId : undefined,
       restartRecoveryOperatorSource: operatorSource,
-      restartRecoveryRequesterSource: claimSourceRunId
-        ? createRestartRecoveryRequesterSource({
-            requesterOrigin,
-            entry,
-            agentId: params.agentId,
-            sessionKey: params.sessionKey,
-            sourceRunId: claimSourceRunId,
-          })
-        : undefined,
-      restartRecoveryDeliverySourceRunId: claimSourceRunId,
+      restartRecoveryRequesterSource: requesterSource,
+      restartRecoveryDeliverySourceRunId: hasClaim ? claimSourceRunId : undefined,
       restartRecoveryRequesterAccountId: transfersControlUiClaim
         ? undefined
         : normalizeOptionalString(params.requesterAccountId),
@@ -525,13 +517,23 @@ export function createReplyRestartRecoveryClaimController(
         : normalizeOptionalString(params.requesterSenderId),
       restartRecoverySameChannelThreadRequired:
         !transfersControlUiClaim && params.sameChannelThreadRequired === true ? true : undefined,
-      restartRecoverySourceIngress: recoverableDeliveryContext
+      restartRecoverySourceIngress: deliveryContext
         ? "channel"
         : transfersControlUiClaim
           ? "control-ui"
-          : operatorSource && params.inputProvenance?.kind === "inter_session"
+          : (operatorSource || requesterSource) &&
+              params.inputProvenance &&
+              params.inputProvenance.kind !== "external_user"
             ? "internal"
-            : operatorSource?.snapshot.sourceIngress,
+            : (operatorSource?.snapshot.sourceIngress ??
+              (requesterSource
+                ? requesterChannel && !isInternalMessageChannel(requesterChannel)
+                  ? "channel"
+                  : "internal"
+                : undefined)),
+      restartRecoverySourceMessageChannel: transfersControlUiClaim
+        ? entry.restartRecoverySourceMessageChannel
+        : undefined,
       restartRecoverySourceReplyDeliveryMode: transfersControlUiClaim
         ? undefined
         : params.sourceReplyDeliveryMode,
@@ -539,7 +541,7 @@ export function createReplyRestartRecoveryClaimController(
       startedAt: updatedAt,
       status: undefined,
       lastRunError: undefined,
-      updatedAt,
+      updatedAt: preserveActivity ? entry.updatedAt : updatedAt,
     };
     patch.restartRecoveryRuns = entry.restartRecoveryRuns;
     if (isMainRestartRecoveryCandidate(entry, params.sessionKey)) {
@@ -603,7 +605,7 @@ export function createReplyRestartRecoveryClaimController(
               restartRecoveryForceSafeTools: true,
             }
           : {}),
-        updatedAt,
+        updatedAt: preserveActivity ? current.updatedAt : updatedAt,
       },
       committed: params.setEntry,
     });

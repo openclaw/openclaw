@@ -26,11 +26,7 @@ export async function prepareGatewayRunLoop(
     "cli.bootstrap.lifecycle-runtime",
     () => lifecycleRuntimeLoader.load(),
   );
-  const supervisor = lifecycleRuntime.detectGatewayRespawnSupervisorIdentity(
-    process.env,
-    process.platform,
-    { includeLinuxOpenClawGatewayServiceMarker: true },
-  );
+  const supervisor = lifecycleRuntime.detectGatewayRespawnSupervisorIdentity();
   const supervisorMode = supervisor?.kind ?? null;
   const restartDecision = lifecycleRuntime.resolveGatewayRestartDecision();
   // Resolve the native deadline before acquiring custody that needs final settlement.
@@ -141,15 +137,7 @@ export function createGatewayRestartRecovery(
   };
 }
 
-export function createGatewayStartupOperations(): {
-  run: GatewayStartupOperation;
-  close(): void;
-  cancelledWith(error: unknown): boolean;
-  failedWith(error: unknown): boolean;
-  getStopCompletion(): Promise<void> | undefined;
-  retainStopCompletion(completion: Promise<void>): void;
-  drain(): Promise<void>;
-} {
+export function createGatewayStartupOperations() {
   const scope = new AsyncWorkScope();
   let stopCompletion: Promise<void> | undefined;
   let failure: { error: unknown } | undefined;
@@ -177,7 +165,7 @@ export function createGatewayStartupOperations(): {
   return {
     run,
     getStopCompletion: () => stopCompletion,
-    retainStopCompletion: (completion) => {
+    retainStopCompletion: (completion: Promise<void>) => {
       stopCompletion = completion;
     },
     close: () => scope.beginClose(),

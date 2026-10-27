@@ -1,4 +1,4 @@
-import { createMemo, createUniqueId, For, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createUniqueId, Errored, For, Loading, onSettled, Show } from "solid-js";
 import { normalizeAgentModelRefForConfig } from "../../../../src/config/model-input.js";
 import type {
   AgentIdentityResult,
@@ -9,8 +9,10 @@ import { AgentEmojiPicker } from "../../components/agent-emoji-picker.tsx";
 import { MultiSelect } from "../../components/multi-select.tsx";
 import { createOverlayAnchor } from "../../components/overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "../../components/overlay-lifecycle.ts";
+import { failPanelRefresh } from "../../components/panel-refresh-status-state.ts";
 import "../../components/tooltip.ts";
 import { DecisionModelPicker } from "../../components/solid/decision-model-picker.tsx";
+import { useAvatarGatewayContext } from "../../components/solid/identity-avatar-view.ts";
 import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { PanelRefreshStatus as PanelRefreshNotice } from "../../components/solid/panel-refresh-status.tsx";
@@ -31,6 +33,7 @@ import {
 } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { createIdentityAvatars } from "../../lib/identity-avatar-loader.ts";
 import { projectApplicationConfig } from "../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
@@ -39,6 +42,7 @@ import { projectOwner } from "../../lib/reactive/projection.ts";
 import type { AgentsPageView } from "./agents-page-state.ts";
 import { AvatarPicker } from "./avatar-picker.tsx";
 import { AgentConfigButtons, type AgentConfigActions } from "./config-actions.tsx";
+import type { AgentIdentityOutcome } from "./identity-actions.ts";
 import { renderAgentPanelFacts } from "./panel-ui.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
@@ -54,6 +58,7 @@ export function AgentOverview(
       agentFilesList: AgentsFilesListResult | null;
       agentIdentity: AgentIdentityResult | null;
       canUpdateIdentity: boolean;
+      identitySavePending: boolean;
       onSelectPanel: (panel: AgentsPanel) => void;
     },
 ) {
@@ -62,8 +67,9 @@ export function AgentOverview(
     ? projectApplicationConfig(applicationConfig)
     : undefined;
   const uploadsEnabled = () => configProjection?.read().uploadsEnabled !== false;
+  const avatarGateway = useAvatarGatewayContext();
   const avatarLoader = createIdentityAvatars();
-  onCleanup(avatarLoader.connect());
+  onSettled(() => avatarLoader.connect());
   const avatarProjection = projectOwner(avatarLoader, (owner) => owner);
   const catalogOwnsChoices = createMemo(
     () => params.modelCatalogRetired || params.modelSelectionPolicy?.restricted,
@@ -161,6 +167,7 @@ export function AgentOverview(
     identityDraft().avatar ? null : resolveAgentAvatarUrl(params.agent, params.agentIdentity),
   );
   const identityAvatarUrl = createMemo(() => {
+    avatarGateway();
     const source = persistedAvatarUrl();
     const draftAvatar = identityDraft().avatar;
     return avatarProjection
@@ -308,11 +315,32 @@ export function AgentOverview(
                   </div>
                 </div>
               </div>
-              {params.readData().identityError ? (
-                <div class="settings-row__desc" role="alert" style={{ color: "var(--danger)" }}>
-                  {params.readData().identityError}
-                </div>
-              ) : undefined}
+              <Show when={params.identitySavePending}>
+                <span class="settings-row__desc" role="status">
+                  {t("common.saving")}
+                </span>
+              </Show>
+              <For
+                each={params.readData().identityOutcome ? [params.readData().identityOutcome] : []}
+              >
+                {(request) => (
+                  <Errored
+                    fallback={(error) => (
+                      <div
+                        class="settings-row__desc"
+                        role="alert"
+                        style={{ color: "var(--danger)" }}
+                      >
+                        {formatUiError(error())}
+                      </div>
+                    )}
+                  >
+                    <Loading>
+                      <IdentityCompletion request={request} />
+                    </Loading>
+                  </Errored>
+                )}
+              </For>
             </div>
             <div
               ref={(element) => (avatarSurface = element)}
@@ -375,7 +403,38 @@ export function AgentOverview(
       ) : undefined}
       <SettingsSection
         title={t("agents.overview.modelSelection")}
-        notice={<PanelRefreshNotice status={params.readData().chatModelCatalogStatus} />}
+        notice={
+          <For
+            each={
+              params.readData().chatModelCatalogRead
+                ? [params.readData().chatModelCatalogRead!]
+                : []
+            }
+          >
+            {(read) => (
+              <Errored
+                fallback={(error) => (
+                  <PanelRefreshNotice
+                    status={failPanelRefresh(
+                      {
+                        error: null,
+                        hasLoaded: params.modelCatalogHasSnapshot,
+                        stale: false,
+                        awaitingGateway: false,
+                      },
+                      error(),
+                      params.modelCatalogGateway,
+                    )}
+                  />
+                )}
+              >
+                <Loading>
+                  <ModelCatalogCompletion read={read} />
+                </Loading>
+              </Errored>
+            )}
+          </For>
+        }
         actions={<AgentConfigButtons {...params} buttonType="button" />}
       >
         <SettingsRow
@@ -453,4 +512,20 @@ export function renderAgentContextSection(
       ])}
     </SettingsSection>
   );
+}
+
+function ModelCatalogCompletion(props: { read: Promise<void> }) {
+  const completion = createMemo(() => props.read.then(() => null));
+  return <>{completion()}</>;
+}
+
+function IdentityCompletion(props: { request: Promise<AgentIdentityOutcome> | null }) {
+  const completion = createMemo(async () => {
+    const outcome = await props.request;
+    if (outcome?.error) {
+      throw new Error(outcome.error);
+    }
+    return null;
+  });
+  return <>{completion()}</>;
 }

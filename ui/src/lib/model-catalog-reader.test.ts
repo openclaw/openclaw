@@ -1,11 +1,11 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { ModelsListParams } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ModelCatalogResult } from "../api/types.ts";
 import { createGatewayStoreTestStore } from "../app/gateway-store.test-support.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import {
   clearModelCatalogCache,
-  invalidateModelCatalogCache,
   beginModelCatalogRead,
   publishModelCatalogResult,
 } from "./model-catalog-cache.ts";
@@ -17,7 +17,7 @@ const second = { models: [{ provider: "fixture", id: "second", name: "Second" }]
 const main = { agentId: "main" },
   other = { agentId: "other" };
 
-function fixture() {
+function fixture(options?: ConstructorParameters<typeof ModelCatalogReader>[1]) {
   const { gateway, current } = createGatewayStoreTestStore();
   gateway.start();
   current().testOptions.onHello?.(gatewayHelloForMethods([]));
@@ -26,7 +26,7 @@ function fixture() {
     throw new Error("Expected connected fixture client");
   }
   const notify = vi.fn(),
-    reader = new ModelCatalogReader(notify);
+    reader = new ModelCatalogReader(notify, options);
   reader.bind(gateway, main);
   onTestFinished(() => {
     reader.clear();
@@ -147,15 +147,29 @@ it("follows subscription intent while keeping global observers global", () => {
   expect(global).toHaveBeenCalledTimes(5);
   reader.clear();
   stopGlobal();
-  const replacement = vi.fn();
-  const stopReplacement = subscribeModelCatalogCache(client, replacement);
-  onTestFinished(stopReplacement);
-  stopGlobal();
-  publish(other);
-  expect(replacement).toHaveBeenCalledWith({ type: "published", matches: expect.any(Function) });
-  expect(global).toHaveBeenCalledTimes(5);
-  stopReplacement();
-  replacement.mockClear();
-  invalidateModelCatalogCache(client);
-  expect(replacement).not.toHaveBeenCalled();
+});
+
+it("observes each admitted read while preserving the non-throwing request contract", async () => {
+  const onRead = vi.fn<(read: Promise<ModelCatalogResult | undefined>) => void>();
+  const { reader, current, publish, client } = fixture({ onRead });
+  const failure = new Error("Synthetic catalog failure");
+  current().request.mockRejectedValueOnce(failure);
+  const legacy = reader.read();
+  const observed = onRead.mock.calls[0]![0];
+  await expect(observed).rejects.toBe(failure);
+  await expect(legacy).resolves.toBeUndefined();
+  expect(reader.failed).toBe(true);
+
+  publish(main);
+  await expect(reader.read()).resolves.toEqual(first);
+  await expect(onRead.mock.calls[1]![0]).resolves.toEqual(first);
+  clearModelCatalogCache(client);
+  const pending = createDeferred<ModelCatalogResult>();
+  current().request.mockReturnValueOnce(pending.promise);
+  const retired = reader.read();
+  reader.clear();
+  pending.reject(failure);
+  await expect(onRead.mock.calls[2]![0]).resolves.toBeUndefined();
+  await expect(retired).resolves.toBeUndefined();
+  expect(onRead).toHaveBeenCalledTimes(3);
 });

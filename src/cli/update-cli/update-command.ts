@@ -61,6 +61,8 @@ export async function updateCommand(
     if (await tryRunImmutableUpdateCommand(inputOpts)) {
       return;
     }
+    const { preparePostgresPoolForUpdate } = await import("../../infra/postgres-sync/pool.js");
+    await preparePostgresPoolForUpdate("openclaw update repair");
     const { withRetainedUpdateRuntime } = await import("../../infra/update-retained-runtime.js");
     return await withRetainedUpdateRuntime(import.meta.url, (retainRuntime) =>
       updateCommandWithRuntime(inputOpts, retainRuntime, executorOptions),
@@ -99,7 +101,11 @@ async function withUpdateDatabaseEngine<T>(
   }
   // Candidate Doctor owns config recovery; admission only needs the authored engine choice.
   const selection = await resolveDatabaseEngineSelection(snapshot.sourceConfig, configEnv);
-  return await withDatabaseEngineSelection(selection, run);
+  return await withDatabaseEngineSelection(selection, async () => {
+    const { preparePostgresPoolForUpdate } = await import("../../infra/postgres-sync/pool.js");
+    await preparePostgresPoolForUpdate("openclaw update repair");
+    return await run();
+  });
 }
 
 async function updateCommandWithRuntime(
@@ -293,7 +299,7 @@ async function updateCommandInternal(
         },
         before: { version: currentVersion ?? VERSION },
       },
-      { env: run.env },
+      run,
     );
     if (
       opts.channel &&
@@ -301,7 +307,7 @@ async function updateCommandInternal(
       !legacyConfigPlan &&
       !run.candidateAdmissionChecks?.includes("config")
     ) {
-      const failure = createUpdateConfigFailure(configSnapshot);
+      const failure = createUpdateConfigFailure(configSnapshot, target.configReadFailure);
       return await refuseUpdate(failure.reason, failure.message, failure.failureFacts);
     }
     const schemaPreflight = await preflightUpdateCommandSchemas({
@@ -319,7 +325,7 @@ async function updateCommandInternal(
     }
 
     if (opts.dryRun) {
-      finishUpdateRun(run.runId, { status: "skipped", reason: "dry-run" }, { env: run.env });
+      finishUpdateRun(run.runId, { status: "skipped", reason: "dry-run" }, run);
       return await previewUpdateCommand({
         target,
         prepared,

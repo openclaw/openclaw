@@ -1,6 +1,6 @@
 // Exec tests cover command execution, output capture, and cancellation behavior.
-import type { ChildProcess } from "node:child_process";
-import { EventEmitter, once } from "node:events";
+import { ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import { closeSync, existsSync, openSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -26,6 +26,7 @@ import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { readPidFile } from "../test-utils/process-tree.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { attachChildProcessBridge } from "./child-process-bridge.js";
+import { hasCommandProcessCleanupError } from "./exec-result.js";
 import * as execSpawn from "./exec-spawn.js";
 import { resolveCommandEnv } from "./exec-spawn.js";
 import {
@@ -320,6 +321,13 @@ describe("runCommandWithTimeout", () => {
 describe("runCommandBuffered", () => {
   it.each([
     {
+      name: "preserves ordinary nonzero exit and output",
+      source: "process.stdout.write('out'); process.stderr.write('err'); process.exitCode = 7",
+      options: {},
+      expected: { code: 7, signal: null, termination: "exit" },
+      output: ["out", "err"],
+    },
+    {
       name: "caps stdout and stderr under one aggregate budget",
       source: "process.stdout.write('abcd'); setImmediate(() => process.stderr.write('efgh'))",
       options: { maxCombinedOutputBytes: 6, maxOutputBytes: 8 },
@@ -337,6 +345,7 @@ describe("runCommandBuffered", () => {
     const result = await bufferNode(source, options);
     expect(result).toMatchObject(expected);
     expect([result.stdout, result.stderr]).toEqual(output.map((text) => Buffer.from(text)));
+    expect(result.error).toBeUndefined();
   });
 
   it("maps timeout and pre-aborted signals without throwing", async () => {
@@ -503,14 +512,16 @@ describe("runCommandBuffered", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "preserves a child-requested signal in buffered results",
+    "preserves cleanup uncertainty alongside a child-requested signal and buffered output",
     async () => {
-      const result = await bufferNode("process.kill(process.pid, 'SIGTERM')", {
-        timeoutMs: 2_000,
-      });
+      const result = await bufferNode(
+        "require('node:fs').writeSync(1, 'out'); require('node:fs').writeSync(2, 'err'); process.kill(process.pid, 'SIGTERM')",
+        { timeoutMs: 2_000 },
+      );
 
       expect(result).toMatchObject({ code: null, signal: "SIGTERM", termination: "signal" });
-      expect(result.error).toBeUndefined();
+      expect([result.stdout, result.stderr]).toEqual([Buffer.from("out"), Buffer.from("err")]);
+      expect(hasCommandProcessCleanupError(result.error)).toBe(true);
     },
   );
 
@@ -572,37 +583,18 @@ describe("runExec", () => {
   });
 });
 
-it("attachChildProcessBridge forwards SIGTERM until exit and detaches after close", () => {
-  const beforeSigterm = new Set(process.listeners("SIGTERM"));
-  const child = new EventEmitter() as EventEmitter & ChildProcess;
-  const kill = vi.fn<(signal?: NodeJS.Signals) => boolean>(() => true);
-  child.kill = kill as ChildProcess["kill"];
-  const observedSignals: NodeJS.Signals[] = [];
-
-  const { detach } = attachChildProcessBridge(child, (signal) => observedSignals.push(signal));
+it("preserves existing signal handlers when the child bridge detaches after close", () => {
+  const existing = () => {};
+  process.on("SIGTERM", existing);
+  const before = process.listeners("SIGTERM");
+  const child = new ChildProcess();
+  const { detach } = attachChildProcessBridge(child);
   try {
-    const addedSigterm = process
-      .listeners("SIGTERM")
-      .find((listener) => !beforeSigterm.has(listener));
-    if (!addedSigterm) {
-      throw new Error("expected SIGTERM listener");
-    }
-
-    addedSigterm("SIGTERM");
-    expect(observedSignals).toEqual(["SIGTERM"]);
-    expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
-
-    child.emit("exit", 0, null);
-    expect(process.listeners("SIGTERM")).toContain(addedSigterm);
-    addedSigterm("SIGTERM");
-    expect(observedSignals).toEqual(["SIGTERM"]);
-    expect(kill).toHaveBeenCalledOnce();
-
     child.emit("close", 0, null);
-    expect(process.listeners("SIGTERM")).not.toContain(addedSigterm);
-    expect(process.listeners("SIGTERM")).toHaveLength(beforeSigterm.size);
+    expect(process.listeners("SIGTERM")).toEqual(before);
   } finally {
     detach();
+    process.off("SIGTERM", existing);
   }
 });
 

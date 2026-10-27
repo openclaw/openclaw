@@ -1,4 +1,5 @@
 // Exercises built-in session tools through the real in-process router and SQLite store.
+import assert from "node:assert/strict";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsCreateResult } from "../../packages/gateway-protocol/src/index.js";
@@ -28,12 +29,9 @@ import { maybeSpawnVisibleSession } from "../agents/tools/sessions-spawn-visible
 import { createSessionsTool } from "../agents/tools/sessions-tool.js";
 import { configureExecutionDecisionWorkSink } from "../audit/execution-decision-work.js";
 import type { ExecutionDecisionWork } from "../audit/execution-decision-work.types.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
   listSessionEntriesCore,
-  loadSessionEntry,
-  loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -67,6 +65,10 @@ import {
   seedSessionToolsFixtureSession,
   withParticipantSessionToolsFixture,
   drainSessionToolsFixture,
+  sessionToolsContext as localContext,
+  sessionToolsEntry as mainSession,
+  sessionToolsStorePath,
+  sessionToolsTranscript,
 } from "./local-request-context.session-tools.test-support.js";
 import { createGatewayInstanceRuntime } from "./server-instance-runtime.js";
 import { createRequestGatewayMethodRegistry, handleGatewayRequest } from "./server-methods.js";
@@ -84,8 +86,6 @@ vi.mock("../browser-lifecycle-cleanup.js", () => ({
   cleanupBrowserSessionsForLifecycleEnd: async () => {},
 }));
 
-const mainSession = (sessionKey: string) => loadSessionEntry({ agentId: "main", sessionKey });
-const localContext = () => expectDefined(getPluginRuntimeGatewayRequestScope()?.context, "Gateway");
 const draftMessages = {
   messages: [expect.objectContaining({ content: "Alice's distinctive draft marker" })],
 };
@@ -401,11 +401,9 @@ describe("built-in session tool role authority", () => {
 
   it("keeps runtime-identity-only session reads under the incumbent after steering", async () => {
     await withParticipantSessionToolsFixture(async ({ turn, alice, bob }) => {
-      const context = getPluginRuntimeGatewayRequestScope()?.context;
+      const context = localContext();
       const operatorRunAuthority = getGatewayToolCallerIdentity()?.operatorAuthority;
-      if (!context || !operatorRunAuthority) {
-        throw new Error("expected local Gateway context and admitted operator");
-      }
+      assert(operatorRunAuthority, "expected local Gateway context and admitted operator");
       const client = sharingPolicyClient({ user: alice.profileId });
       client.connect.client.id = "gateway-client";
       client.internal = {
@@ -509,7 +507,7 @@ describe("built-in session tool role authority", () => {
           });
         }
         const admission = await beginSessionEffect({
-          scope: resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" }),
+          scope: sessionToolsStorePath(cfg),
           identities: [REQUESTER, sessionId],
           assertAllowed: () => {},
         });
@@ -560,16 +558,10 @@ describe("built-in session tool role authority", () => {
           const result = await spawn();
           expect(result).toMatchObject({ status: "accepted" });
           const childKey = result?.childSessionKey;
-          if (typeof childKey !== "string") {
-            throw new Error("expected created child session key");
-          }
+          assert(typeof childKey === "string", "expected created child session key");
           const child = expectDefined(mainSession(childKey), "persisted child session");
           expect(child.parentSessionId).toBe(sessionId);
-          const transcript = await loadTranscriptEvents({
-            agentId: "main",
-            sessionKey: childKey,
-            sessionId: child.sessionId,
-          });
+          const transcript = await sessionToolsTranscript(childKey, child.sessionId);
           const inherited = messages.map((message) =>
             expect.objectContaining({ type: "message", message: expect.objectContaining(message) }),
           );
@@ -593,7 +585,7 @@ describe("built-in session tool role authority", () => {
           expect(childParams.message).toContain("inherited conversation is background context");
           expect(childParams.message).toContain("Continue from the inherited reproduction");
           expect(registerRun).toHaveBeenCalledOnce();
-          expect(loadSessionEntry(scope)?.sessionId).toBe(sessionId);
+          expect(mainSession(REQUESTER)?.sessionId).toBe(sessionId);
         } finally {
           startChild.mockRestore();
           admission.release();
@@ -609,7 +601,7 @@ describe("built-in session tool role authority", () => {
         const context = localContext();
         let current = true;
         let childKey: string | undefined;
-        let successor: ReturnType<typeof loadSessionEntry>;
+        let successor: ReturnType<typeof mainSession>;
         let registeredRun: ReturnType<typeof registerChatAbortController> | undefined;
         // Use the production spawn transport for every fixture mutation. A request
         // deadline can reject while setup is still mutating this fixture's state.
@@ -627,9 +619,7 @@ describe("built-in session tool role authority", () => {
           // Initial task dispatch and explicit-model catalog preparation are outside rollback.
           const { task: _task, model: _model, ...creation } = params;
           const created = await callInProcessGatewayTool<SessionsCreateResult>(method, creation);
-          if (!created.sessionId) {
-            throw new Error("session creation did not return its incarnation");
-          }
+          assert(created.sessionId, "session creation did not return its incarnation");
           childKey = created.key;
           if (generation === "replaced") {
             await callInProcessGatewayTool("sessions.delete", { key: childKey });
@@ -637,10 +627,7 @@ describe("built-in session tool role authority", () => {
           } else if (generation === "reset") {
             await callInProcessGatewayTool("sessions.reset", { key: childKey });
           }
-          successor = mainSession(childKey);
-          if (!successor) {
-            throw new Error("expected persisted child before rollback");
-          }
+          successor = expectDefined(mainSession(childKey), "persisted child before rollback");
           if (generation === "replaced") {
             expect(successor.sessionId).not.toBe(created.sessionId);
           } else if (generation === "reset") {
@@ -650,7 +637,7 @@ describe("built-in session tool role authority", () => {
           if (generation === "reset" || generation === "active") {
             registeredRun = registerChatAbortController({
               target: captureSessionTarget({
-                storeScope: resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" }),
+                storeScope: sessionToolsStorePath(cfg),
                 sessionKey: childKey,
                 incarnation: successor.sessionId,
                 agentId: "main",
@@ -686,9 +673,7 @@ describe("built-in session tool role authority", () => {
                 : "Session changed; newer session kept.",
             ),
           });
-          if (!childKey) {
-            throw new Error("expected a created child");
-          }
+          assert(childKey, "expected a created child");
           if (registeredRun) {
             expect.soft(registeredRun.controller.signal.aborted).toBe(generation === "active");
           }
@@ -770,7 +755,7 @@ describe("built-in session tool role authority", () => {
             archived.resolve();
           }
         };
-        const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" });
+        const storePath = sessionToolsStorePath(cfg);
         const admission = await beginSessionEffect({
           scope: storePath,
           identities: [sessionKey, sessionId],

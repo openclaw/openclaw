@@ -2,9 +2,9 @@
 export function selectBoundedContextRows<T extends { serialized_bytes: number }>(
   rows: Iterable<T>,
   headerBytes: number,
-  limits: { maxBytes: number; maxEvents: number },
+  limits?: { maxBytes: number; maxEvents: number },
 ): { selectedRows: T[]; serializedBytes: number; truncated: boolean } {
-  if (headerBytes > limits.maxBytes) {
+  if (limits && headerBytes > limits.maxBytes) {
     throw new RangeError("Session transcript header exceeds the active-context byte limit");
   }
   const selectedRows: T[] = [];
@@ -12,8 +12,9 @@ export function selectBoundedContextRows<T extends { serialized_bytes: number }>
   let truncated = false;
   for (const row of rows) {
     if (
-      selectedRows.length >= limits.maxEvents ||
-      serializedBytes + row.serialized_bytes > limits.maxBytes
+      limits &&
+      (selectedRows.length >= limits.maxEvents ||
+        serializedBytes + row.serialized_bytes > limits.maxBytes)
     ) {
       truncated = true;
       break;

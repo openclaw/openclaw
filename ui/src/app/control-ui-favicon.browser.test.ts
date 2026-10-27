@@ -38,6 +38,7 @@ function mascot(value: "claw" | "none") {
   root.dataset.themeMascot = value;
 }
 const dotColor = () => svgDocument().documentElement.lastElementChild?.getAttribute("fill");
+const environmentPath = () => svgDocument().querySelector('path[fill="rgb(40, 100, 180)"]');
 const animations = (svg = svgDocument()) =>
   Array.from(svg.querySelectorAll("animate, animateTransform"), (animation) =>
     new XMLSerializer().serializeToString(animation),
@@ -146,7 +147,7 @@ it("keeps personal artwork SVG-preferred without cropping or changing its status
   await Promise.resolve();
   expect(svgIcon.href).toBe(idleHref);
   applyControlUiFaviconImage(null);
-  expect(svgDocument().querySelector('path[fill="rgb(40, 100, 180)"]')).not.toBeNull();
+  expect(environmentPath()).not.toBeNull();
   applyControlUiPresentation({ environment: null });
   expectOriginals();
 });
@@ -198,6 +199,10 @@ function drawingContext() {
 }
 function expectSvg(selector: string, attribute: string, value: string) {
   expect(svgDocument().querySelector(selector)?.getAttribute(attribute)).toBe(value);
+}
+function expectMark(fill: string, stroke: string) {
+  expectSvg("rect", "fill", fill);
+  expectSvg("path", "stroke", stroke);
 }
 
 async function changePresentation(change: () => void) {
@@ -316,6 +321,21 @@ it("reuses palette reads through session publications while retaining retries an
     expect(styleReads).not.toHaveBeenCalled();
     expect(svgIcon.href).toBe(workingHref);
 
+    for (const property of [
+      "--shell-viewport-height",
+      "--shell-safe-area-bottom",
+      "--control-ui-system-chrome-background",
+      ...["assistant", "terminal", "browser", "link-reader", "desktop"].flatMap((owner) => [
+        `--oc-${owner}-reserve-bottom`,
+        `--oc-${owner}-reserve-right`,
+      ]),
+    ]) {
+      root.style.setProperty(property, "123px");
+    }
+    await painted();
+    expect(styleReads).not.toHaveBeenCalled();
+    expect(svgIcon.href).toBe(workingHref);
+
     root.style.setProperty("--accent", "rgb(70, 140, 190)");
     await expectDot("rgb(70, 140, 190)");
     root.style.setProperty("--info", "rgb(20, 100, 180)");
@@ -323,44 +343,32 @@ it("reuses palette reads through session publications while retaining retries an
     root.dataset.themeMode = "light";
     await expectDot("rgb(20, 100, 180)");
     applyControlUiPresentation({ environment: { label: "Preview", color: "blue" } });
-    await vi.waitFor(() =>
-      expect(svgDocument().querySelector('path[fill="rgb(40, 100, 180)"]')).not.toBeNull(),
-    );
+    await vi.waitFor(() => expect(environmentPath()).not.toBeNull());
     await expectDot("rgb(20, 100, 180)");
-    await changePresentation(() => {
-      mascot("none");
-    });
-    expectSvg("rect", "fill", "rgb(180, 20, 40)");
-    expectSvg("path", "stroke", "rgb(250, 250, 250)");
-    expect(svgDocument().querySelector('path[fill="rgb(40, 100, 180)"]')).toBeNull();
+    await changePresentation(() => mascot("none"));
+    expectMark("rgb(180, 20, 40)", "rgb(250, 250, 250)");
+    expect(environmentPath()).toBeNull();
     expect(dotColor()).toBe("rgb(20, 100, 180)");
     await changePresentation(() => {
       root.dataset.theme = "favicon-neutral";
     });
-    expectSvg("rect", "fill", "rgb(190, 30, 50)");
-    expectSvg("path", "stroke", "rgb(240, 240, 240)");
+    expectMark("rgb(190, 30, 50)", "rgb(240, 240, 240)");
     await changePresentation(() => {
       root.style.setProperty("--primary", "rgb(160, 40, 60)");
     });
     expectSvg("rect", "fill", "rgb(160, 40, 60)");
-    await changePresentation(() => {
-      mascot("claw");
-    });
-    expect(svgDocument().querySelector('path[fill="rgb(40, 100, 180)"]')).not.toBeNull();
+    await changePresentation(() => mascot("claw"));
+    expect(environmentPath()).not.toBeNull();
     applyControlUiPresentation({ environment: null });
     await vi.waitFor(() => expect(animations().length).toBeGreaterThan(0));
     await expectDot("rgb(20, 100, 180)");
     publishRow({ status: "failed", hasActiveRun: false, activeRunIds: [] });
     expectOriginals();
-    await changePresentation(() => {
-      mascot("none");
-    });
+    await changePresentation(() => mascot("none"));
     expectSvg("rect", "fill", "rgb(190, 30, 50)");
     expect(svgDocument().querySelector("circle")).toBeNull();
     expect(pngIcon.href).toBe(svgIcon.href);
-    await changePresentation(() => {
-      mascot("claw");
-    });
+    await changePresentation(() => mascot("claw"));
     expectOriginals();
   } finally {
     disconnect?.();

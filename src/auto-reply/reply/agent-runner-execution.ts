@@ -16,6 +16,7 @@ import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-erro
 import { leaseMcpAppModelContextForSessionTurn } from "../../agents/mcp-ui-resource.js";
 import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
 import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
+import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { prepareCronRunInference, type CronRunInference } from "../../cron/run-inference.js";
@@ -31,7 +32,10 @@ import { bindAgentRunTerminalWriteSettlement } from "../../infra/agent-run-termi
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
-import { progressCardRefreshRunProjection } from "../../sessions/input-provenance.js";
+import {
+  isCronExecutionInputProvenance,
+  progressCardRefreshRunProjection,
+} from "../../sessions/input-provenance.js";
 import { markReplyOperationExecutionStarted } from "../../sessions/session-controller.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { notifyPreparedAgentRunStart } from "../agent-run-start.js";
@@ -69,7 +73,6 @@ import { buildReplyMediaContextParams } from "./agent-runner-media-context.js";
 import { createAgentTurnPresentation } from "./agent-runner-presentation.js";
 import { prepareReplySubagentContinuation } from "./agent-runner-subagent.js";
 import { createAgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
-import { resolveQueuedReplyRuntimeConfig } from "./agent-runner-utils.js";
 import { shouldNotifyUserAboutCompaction } from "./compaction-notice.js";
 import { type CurrentTurnImages, resolveCurrentTurnImages } from "./current-turn-images.js";
 import type { FollowupRun } from "./queue.js";
@@ -109,7 +112,7 @@ async function executeAgentTurnInternalLoop(
   if (runnableRun !== params.followupRun.run) {
     params.followupRun.run = runnableRun;
   }
-  const runtimeConfig = resolveQueuedReplyRuntimeConfig(runnableRun.config);
+  const runtimeConfig = selectLiveRuntimeConfig(runnableRun.config);
   const effectiveRun =
     runtimeConfig === runnableRun.config
       ? runnableRun
@@ -153,9 +156,12 @@ async function executeAgentTurnInternalLoop(
       agentId: params.followupRun.run.agentId,
       lifecycleGeneration,
       verboseLevel: params.resolvedVerboseLevel,
-      isHeartbeat: params.isHeartbeat,
       isControlUiVisible: shouldSurfaceToControlUi,
       ...progressCardRefreshRunProjection(params.followupRun.run.inputProvenance),
+      // Scheduled checks must not replace foreground status; their authored results still publish.
+      ...(isCronExecutionInputProvenance(params.followupRun.run.inputProvenance)
+        ? { projectSessionActive: false, projectSessionLifecycle: false }
+        : {}),
       completionSource: params.completionSource,
       sessionEventDelivery: resolveReplySessionEventDelivery(params.opts, params.followupRun.run),
     });
@@ -446,11 +452,12 @@ async function executeAgentTurnInternalLoop(
       }
     }
     if (cycle.kind === "aborted") {
-      return cycle;
+      return { ...cycle, sessionWriter: fallbackCycleState.sessionWriter };
     }
     if (cycle.kind === "final") {
       return {
         ...cycle,
+        sessionWriter: fallbackCycleState.sessionWriter,
         resolved: {
           provider: fallbackCycleState.attemptedRuntimeProvider,
           model: fallbackCycleState.attemptedRuntimeModel,
@@ -512,11 +519,10 @@ async function executeAgentTurnInternalLoop(
         result: runResult,
         run: {
           ...params.followupRun.run,
+          scheduledAutomation: params.followupRun.run.scheduledAutomation !== undefined,
           trigger: resolveReplyRunTrigger(params),
-          isHeartbeat: params.isHeartbeat,
           currentInboundEventKind: params.followupRun.currentInboundEventKind,
         },
-        useHeartbeatFailureCopy: params.opts?.useHeartbeatFailureCopy,
         visibleReplyDelivered: () =>
           resolveReplyFailureVisibility(params.resolveVisibleReplyDelivery, directBlockDeliveries),
       })
@@ -559,14 +565,12 @@ async function executeAgentTurnOutcome(
   let modelContextLease: AppContextTurnParams["mcpAppContextLease"];
   const prepareMcpAppModelContext = async () => {
     requester?.assertCurrent();
-    modelContextLease = executionParams.isHeartbeat
-      ? undefined
-      : await leaseMcpAppModelContextForSessionTurn({
-          agentId: executionParams.followupRun.run.agentId,
-          sessionId: executionParams.followupRun.run.sessionId,
-          sessionKey: executionParams.sessionKey ?? executionParams.followupRun.run.sessionKey,
-          requesterId: requester?.profileId,
-        });
+    modelContextLease = await leaseMcpAppModelContextForSessionTurn({
+      agentId: executionParams.followupRun.run.agentId,
+      sessionId: executionParams.followupRun.run.sessionId,
+      sessionKey: executionParams.sessionKey ?? executionParams.followupRun.run.sessionKey,
+      requesterId: requester?.profileId,
+    });
     requester?.assertCurrent();
     return modelContextLease;
   };
@@ -616,7 +620,7 @@ async function executeAgentTurnOutcome(
           if (binding) {
             scheduledInference = await prepareCronRunInference({
               binding,
-              cfg: resolveQueuedReplyRuntimeConfig(executionParams.followupRun.run.config),
+              cfg: selectLiveRuntimeConfig(executionParams.followupRun.run.config),
               agentDir: executionParams.followupRun.run.agentDir,
             });
           }
@@ -653,12 +657,21 @@ async function executeAgentTurnOutcome(
       internal.kind !== "aborted" &&
       resolveReplyOperationAbortReason(executionParams.replyOperation);
     if (abortReason) {
-      return { runId, outcome: { kind: "aborted", reason: abortReason, ...completedCompaction() } };
+      return {
+        runId,
+        outcome: {
+          kind: "aborted",
+          reason: abortReason,
+          sessionWriter: internal.sessionWriter,
+          ...completedCompaction(),
+        },
+      };
     }
     const outcome: AgentTurnExecutionResult["outcome"] =
       internal.kind === "final"
         ? {
             kind: "rejected",
+            sessionWriter: internal.sessionWriter,
             payload: internal.payload,
             resolved: internal.resolved,
             ...(internal.postCompactionModelFailure

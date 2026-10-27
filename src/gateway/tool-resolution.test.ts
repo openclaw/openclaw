@@ -297,7 +297,7 @@ it.each(["worker", "main"])(
     expect(result.agentId).toBe("main");
     expect(result.tools.find((tool) => tool.name === "gateway")?.parameters).toHaveProperty(
       "properties.action.enum",
-      ["update.run"],
+      ["update.run", "restart", "update.cleanup"],
     );
   },
 );

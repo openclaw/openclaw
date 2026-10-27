@@ -1,4 +1,14 @@
-import { createEffect, createMemo, createSignal, createUniqueId, onSettled, Show } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  createUniqueId,
+  Errored,
+  lazy,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import {
@@ -7,37 +17,33 @@ import {
   type MenuEntry,
   type MenuHandle,
 } from "../../../components/solid/menu.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { countSessionToolOverrides } from "../../../lib/sessions/tool-overrides.ts";
 import { uploadsEnabled } from "../../../lib/uploads.ts";
 import type {
   ChatComposerPlusMenuContentProps,
+  ChatComposerPlusMenuHandlers,
   ChatComposerPlusMenuProps,
 } from "./chat-composer-plus-menu.types.ts";
 
-type MenuContent = typeof import("./chat-composer-plus-menu-content.tsx");
-type ContentState =
-  | { kind: "loading" }
-  | { kind: "ready"; module: MenuContent }
-  | { kind: "error"; error: unknown };
+registerEnglishCatalog(registerChatComposerEnglish);
 
 function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
+  const Content = lazy(() => import("./chat-composer-plus-menu-content.tsx"), {
+    export: "ChatComposerPlusMenuContent",
+  });
   const controls = createMenuControls();
   let handle!: MenuHandle;
   let host!: HTMLDivElement;
   const id = createUniqueId();
   let releaseAnchor = () => {};
   let disposed = false;
-  let loading: Promise<void> | undefined;
+  const [handlers, setHandlers] = createSignal<ChatComposerPlusMenuHandlers>();
   let focusOnReady = false;
   let focusLastOnReady = false;
   let openingFocus: Element | null | undefined;
-  const [content, setContent] = createSignal<ContentState>({ kind: "loading" });
-  const runtime = createMemo(() => {
-    const current = content();
-    return current.kind === "ready" ? current.module : undefined;
-  });
   const focusLoadedItems = () => {
     const { overlay } = handle;
     const active = host.ownerDocument.activeElement;
@@ -57,36 +63,6 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
         handle.focusFirst();
       }
     }
-  };
-  const loadContent = () => {
-    if (runtime()) {
-      return;
-    }
-    openingFocus = host.ownerDocument.activeElement;
-    if (loading) {
-      return;
-    }
-    setContent({ kind: "loading" });
-    // Menu requires synchronous entries during native admission; its trigger and
-    // loading row stay mounted while the cold entry builders arrive.
-    loading = import("./chat-composer-plus-menu-content.tsx")
-      .then(
-        (module) => {
-          if (!disposed) {
-            setContent({ kind: "ready", module });
-            onSettled(focusLoadedItems);
-          }
-        },
-        (error: unknown) => {
-          if (!disposed) {
-            setContent({ kind: "error", error });
-            onSettled(focusLoadedItems);
-          }
-        },
-      )
-      .finally(() => {
-        loading = undefined;
-      });
   };
   onSettled(() => {
     const stopKeyboard = listen(
@@ -115,50 +91,53 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
     };
   });
   const view = createMemo(() => (props.menu.showCapabilities ? props.menu.view : "root"));
-  const inputs = createMemo(
-    () => {
-      const current = view();
-      const menu = props.menu;
-      const module = runtime();
-      return { module, view: current, menu, values: module?.menuRenderInputs(menu, current) ?? [] };
-    },
+  const items: MenuEntry[] = [
     {
-      lazy: true,
-      equals: (previous, next) =>
-        previous.module === next.module &&
-        previous.view === next.view &&
-        previous.values.length === next.values.length &&
-        previous.values.every((value, index) => Object.is(value, next.values[index])),
-    },
-  );
-  const items = createMemo(
-    () => {
-      const current = content();
-      if (current.kind === "error") {
-        return [
-          {
-            kind: "content",
-            id: "plus-menu-error",
-            content: (
+      kind: "group",
+      id: "plus-menu-content",
+      get items() {
+        return handlers()?.items() ?? [];
+      },
+      render: (renderItems) => (
+        <Errored
+          fallback={(error, reset) => {
+            onSettled(focusLoadedItems);
+            return (
               <LazyViewError
-                error={current.error}
-                onRetry={loadContent}
+                error={error()}
+                onRetry={() => {
+                  openingFocus = host.ownerDocument.activeElement;
+                  reset();
+                }}
                 retryRef={controls.ref()}
                 inline
               />
-            ),
-          },
-        ] satisfies MenuEntry[];
-      }
-      if (current.kind === "loading") {
-        return [{ id: "plus-menu-loading", label: t("common.loading"), disabled: true }];
-      }
-      // Only a changed presentation snapshot recreates owned nodes; actions read live props.
-      const { view: selected, menu } = inputs();
-      return current.module.menuItems(menu, selected);
+            );
+          }}
+        >
+          <Loading
+            fallback={renderItems(() => [
+              { id: "plus-menu-loading", label: t("common.loading"), disabled: true },
+            ])}
+          >
+            <Content
+              menu={props.menu}
+              controls={controls}
+              view={view()}
+              readMenu={() => handle}
+              onReady={(next) => {
+                setHandlers(next);
+                if (next) {
+                  onSettled(focusLoadedItems);
+                }
+              }}
+              renderItems={renderItems}
+            />
+          </Loading>
+        </Errored>
+      ),
     },
-    { lazy: true },
-  );
+  ];
   return (
     <div
       ref={(element) => {
@@ -169,6 +148,7 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
     >
       <Menu
         lazy
+        class="agent-chat__attach-control"
         id={`chat-composer-plus-${id}`}
         panelClass="agent-chat__capability-menu-panel"
         placement="top-start"
@@ -185,21 +165,23 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
         ]}
         triggerAttributes={{ title: t("chat.composer.addAttachment") }}
         trigger={<Icon name="plus" />}
-        items={items()}
+        items={items}
         controls={controls}
         ref={(next) => {
           handle = next;
           releaseAnchor();
           releaseAnchor = props.menu.inputHandle.bindAnchor(next.overlay.trigger);
         }}
-        onSelect={(item, event) => runtime()?.handleMenuSelection(item, event, handle, props)}
+        onSelect={(item, event) => handlers()?.select(item, event)}
         onNavigate={({ value }) =>
           props.menu.onNavigate(value === "manage-skills" ? "skills" : "plugins")
         }
+        onBeforeShow={() => {
+          openingFocus = host.ownerDocument.activeElement;
+        }}
         onOpenChange={(open) => {
           host.toggleAttribute("open", open);
           if (open) {
-            loadContent();
             props.menu.onLoadSkills();
           } else {
             focusOnReady = false;
@@ -244,8 +226,7 @@ export function ChatComposerPlusMenu(props: { menu: ChatComposerPlusMenuProps })
       showCapabilities: capabilityMenu !== undefined,
       basePath: capabilityMenu?.basePath ?? "",
       skills: capabilityMenu?.skills ?? null,
-      skillsLoading: capabilityMenu?.skillsLoading ?? false,
-      skillsError: capabilityMenu?.skillsError ?? false,
+      skillsRead: capabilityMenu?.skillsRead ?? null,
       mcpServers: capabilityMenu?.mcpServers ?? [],
       toolsEffectiveResult: capabilityMenu?.toolsEffectiveResult ?? null,
       toolsEffectiveLoading: capabilityMenu?.toolsEffectiveLoading ?? false,

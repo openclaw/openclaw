@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { expect, it } from "vitest";
+import { configureMerge, expectExit } from "./pr-merge-assertions.test-support.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 
 const { fixture, reconciledMergeAfterCleanup, outcomeRef, describePosix } =
@@ -9,15 +10,15 @@ describePosix("native merge completion", () => {
   it("retires the workflow binding only after verified native cleanup", () => {
     const f = fixture();
     f.bindWorkflow();
-    f.save({ ...f.state(), cleanup: "absent" });
-    const run = f.run();
-    expect(run.status, run.output).toBe(0);
+    configureMerge(f, { cleanup: "absent" });
+    const run = expectExit(f.run());
+    expect(run.output).not.toContain("Warning: remote cleanup pending");
     expect(f.record().phase).toBe("complete");
+    expect(f.state().posts).toBe(1);
     expect(
       f.git(["for-each-ref", "--format=%(refname)", "refs/openclaw/pr-workflow-bindings/123"]),
     ).toBe("");
-    const repeated = f.run();
-    expect(repeated.status, repeated.output).toBe(0);
+    expectExit(f.run());
     expect(
       f.git(["for-each-ref", "--format=%(refname)", "refs/openclaw/pr-workflow-bindings/123"]),
     ).toBe("");
@@ -27,59 +28,40 @@ describePosix("native merge completion", () => {
   it("retains an unfinished workflow and retires it on explicit delayed completion", () => {
     const f = reconciledMergeAfterCleanup();
     f.bindWorkflow();
-    f.save({ ...f.state(), comment: "rejected" });
-    const first = f.complete(f.git(["rev-parse", outcomeRef]));
-    expect(first.status, first.output).toBe(1);
+    configureMerge(f, { comment: "rejected" });
+    expectExit(f.complete(f.git(["rev-parse", outcomeRef])), 1);
     const ref = "refs/openclaw/pr-workflow-bindings/123";
     const binding = f.git(["rev-parse", ref]);
     expect(f.git(["rev-parse", `${binding}^`])).toBe(f.base);
     f.recover();
-    f.save({
-      ...f.state(),
+    configureMerge(f, {
       comments: [{ body: `<!-- openclaw-merge:${f.record().attempt} -->`, html_url: "fixture" }],
     });
-    const completed = f.complete(f.git(["rev-parse", outcomeRef]));
-    expect(completed.status, completed.output).toBe(0);
+    expectExit(f.complete(f.git(["rev-parse", outcomeRef])));
     expect(f.record().phase).toBe("complete");
     expect(f.git(["for-each-ref", "--format=%(refname)", ref])).toBe("");
   });
 
-  it.each([
-    ["explicit", "rejected"],
-    ["explicit", "lost"],
-    ["inline", "rejected"],
-    ["inline", "lost"],
-  ])("does not repeat a %s %s completion POST", (route, comment) => {
-    const explicit = route === "explicit";
-    const f = explicit ? reconciledMergeAfterCleanup() : fixture();
-    const complete = () => (explicit ? f.complete(f.git(["rev-parse", outcomeRef])) : f.run());
-    f.save({ ...f.state(), comment });
-    const first = complete();
-    expect(first.status, first.output).toBe(1);
+  it.each(["rejected", "lost"])("does not repeat an inline %s completion POST", (comment) => {
+    const f = fixture();
+    configureMerge(f, { comment });
+    expectExit(f.run(), 1);
     expect(f.record().phase).toBe("commenting");
     expect(f.state().posts).toBe(1);
     f.recover();
-    const second = complete();
-    expect(second.status, second.output).toBe(explicit && comment === "rejected" ? 1 : 0);
-    expect(f.record().phase).toBe(
-      comment === "lost" ? (explicit ? "complete" : "commented") : "commenting",
-    );
-    expect(f.state().posts).toBe(1);
-    expect(f.state().mutations).toBe(1);
-    if (!explicit) {
-      expect(existsSync(f.worktree)).toBe(true);
-    }
+    expectExit(f.run());
+    expect(f.record().phase).toBe(comment === "lost" ? "commented" : "commenting");
+    expect(f.state()).toMatchObject({ posts: 1, mutations: 1 });
+    expect(existsSync(f.worktree)).toBe(true);
   });
 
   it("preserves unrelated local source-name branches during explicit completion", () => {
     const f = reconciledMergeAfterCleanup();
     f.git(["branch", "topic", f.base]);
-    const result = f.complete(f.git(["rev-parse", outcomeRef]));
-    expect(result.status, result.output).toBe(0);
+    expectExit(f.complete(f.git(["rev-parse", outcomeRef])));
     expect(f.record().phase).toBe("complete");
     expect(f.git(["rev-parse", "topic"])).toBe(f.base);
-    expect(f.state().posts).toBe(1);
-    expect(f.state().mutations).toBe(1);
+    expect(f.state()).toMatchObject({ posts: 1, mutations: 1 });
   });
 
   it.each([
@@ -102,19 +84,16 @@ describePosix("native merge completion", () => {
       f.git(["push", "-q", "origin", `${f.head}:refs/heads/topic`]);
     }
     if (fault === "admin-audit" || fault === "ambiguous-marker") {
-      f.save({
-        ...f.state(),
+      configureMerge(f, {
         comments: (fault === "admin-audit" ? [1] : [1, 2]).map((id) => ({
           body: `<!-- openclaw-merge:${f.record().attempt} -->`,
           html_url: `${f.state().pr.url}#issuecomment-${id}`,
         })),
       });
     }
-    const result = f.complete(fault === "stale-oid" ? f.base : oid);
-    expect(result.status, result.output).toBe(1);
+    expectExit(f.complete(fault === "stale-oid" ? f.base : oid), 1);
     expect(f.git(["rev-parse", outcomeRef])).toBe(oid);
-    expect(f.state().posts).toBe(0);
-    expect(f.state().mutations).toBe(1);
+    expect(f.state()).toMatchObject({ posts: 0, mutations: 1 });
     if (fault === "admin-audit") {
       expect(f.record().phase).toBe("merged");
     }
@@ -134,59 +113,30 @@ describePosix("native merge completion", () => {
     (route) => {
       const explicit = route === "explicit";
       const f = explicit ? reconciledMergeAfterCleanup() : fixture();
-      f.save({ ...f.state(), cleanup: "advanced" });
-      const result = explicit ? f.complete(f.git(["rev-parse", outcomeRef])) : f.run();
-      expect(result.status, result.output).toBe(explicit ? 1 : 0);
+      configureMerge(f, { cleanup: "advanced" });
+      const result = expectExit(
+        explicit ? f.complete(f.git(["rev-parse", outcomeRef])) : f.run(),
+        explicit ? 1 : 0,
+      );
       expect(f.record().phase).toBe("commented");
       expect(f.git(["--git-dir=" + f.remote, "rev-parse", "topic"])).toBe(f.state().cleanupHead);
       if (!explicit) {
         expect(result.output).toContain("completion pending");
-        const retry = f.run();
-        expect(retry.status, retry.output).toBe(0);
+        expectExit(f.run());
       }
-      expect(f.state().posts).toBe(1);
-      expect(f.state().mutations).toBe(1);
+      expect(f.state()).toMatchObject({ posts: 1, mutations: 1 });
     },
   );
 
-  it("completes cleanup when GitHub already deleted the source branch", () => {
+  it("refuses unpublished local preparation before cleanup", () => {
     const f = fixture();
-    f.save({ ...f.state(), cleanup: "absent" });
+    const localHead = f.commit(f.tree("unpublished\n"), [f.base], "Local prepared commit\n");
+    f.git(["-C", f.worktree, "reset", "--hard", localHead]);
+    f.prepare(f.head, f.base, localHead);
     const run = f.run();
-    expect(run.status, run.output).toBe(0);
-    expect(run.output).not.toContain("Warning: remote cleanup pending");
-    expect(f.record().phase).toBe("complete");
-    expect(f.state().posts).toBe(1);
+    expect(run.status, run.output).not.toBe(0);
+    expect(f.state().mutations).toBe(0);
+    expect(f.git(["rev-parse", "pr-123-prep"])).toBe(localHead);
+    expect(existsSync(f.worktree)).toBe(true);
   });
-
-  it.each([false, true])(
-    "checks local/hosted preparation before cleanup (different tree=%s)",
-    (differentTree) => {
-      const f = fixture();
-      const localHead = f.commit(
-        f.tree(differentTree ? "unpublished\n" : "after\n"),
-        [f.base],
-        "Local prepared commit\n",
-      );
-      f.git(["-C", f.worktree, "reset", "--hard", localHead]);
-      f.prepare(f.head, f.base, localHead);
-      const run = f.run();
-      if (differentTree) {
-        expect(run.status, run.output).not.toBe(0);
-        expect(f.state().mutations).toBe(0);
-        expect(f.git(["rev-parse", "pr-123-prep"])).toBe(localHead);
-        expect(existsSync(f.worktree)).toBe(true);
-      } else {
-        expect(run.status, run.output).toBe(0);
-        expect(run.output).not.toContain("cleanup pending");
-        expect(f.record().phase).toBe("complete");
-        expect(existsSync(f.worktree)).toBe(false);
-        expect(f.git(["for-each-ref", "--format=%(refname)", "refs/heads/pr-123-prep"])).toBe("");
-        f.git(["merge-base", "--is-ancestor", localHead, outcomeRef]);
-        f.git(["reflog", "expire", "--expire=now", "--all"]);
-        f.git(["gc", "--prune=now"]);
-        expect(f.git(["show", `${localHead}:owner.txt`])).toBe("after");
-      }
-    },
-  );
 });

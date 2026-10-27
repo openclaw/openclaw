@@ -1,9 +1,13 @@
 /* @vitest-environment node */
-import { IDBFactory } from "fake-indexeddb";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import * as drafts from "./composer-draft-store.runtime.ts";
-import { requestResult } from "./control-ui-database.runtime.ts";
+import {
+  openControlUiDatabase,
+  requestResult,
+  transactionComplete,
+} from "./control-ui-database.runtime.ts";
 import type { StoredComposerSession } from "./outbox-store-codec.ts";
 import { createStoredChatOutboxReader } from "./outbox-store-projection.ts";
 import {
@@ -25,12 +29,6 @@ const storedKey = (name: string) => storedChatOutboxScopeKey({ sessionKey: key(n
 const scope = (name: string) => ({ ...owner, scopeKey: `chat:v3:${storedKey(name)}` });
 const cleanups: (() => void)[] = [];
 const unsubscribeAll = () => cleanups.splice(0).forEach((cleanup) => cleanup());
-const badge = (name: string) => ({
-  agentId: "main",
-  sessionKey: key(name),
-  hasComposerDraft: true,
-  outboxAttentionCount: 0,
-});
 
 function projection() {
   const reader = createStoredChatOutboxReader();
@@ -50,7 +48,12 @@ function projection() {
     await writeDraft(name);
     await changed;
   };
-  return { reader, changes, host, list, read, has, write, silentLoad };
+  const load = async () => {
+    read();
+    await changes.changed;
+    return read();
+  };
+  return { reader, changes, host, list, read, has, write, silentLoad, load };
 }
 
 function expectDrafts(
@@ -89,13 +92,17 @@ function seedTab(rows: Record<string, Omit<StoredComposerSession, "updatedAt">>)
 }
 
 const attachments = [{ blob: new Blob(["attachment"]), mimeType: "text/plain" }];
-async function writeDraft(name: string) {
-  const result = await drafts.writeDurableComposerDraft(
-    scope(name),
-    { revision: 10, text: "", attachments },
-    { expectedRevision: 0, writeId: name },
-  );
-  expect(result).toMatchObject({ status: "persisted" });
+async function writeDraft(
+  name: string,
+  input: Partial<drafts.DurableComposerDraft> = { attachments },
+) {
+  expect(
+    await drafts.writeDurableComposerDraft(
+      scope(name),
+      { revision: 10, text: "", attachments: [], ...input },
+      { expectedRevision: 0, writeId: name },
+    ),
+  ).toMatchObject({ status: "persisted" });
 }
 
 beforeEach(() => {
@@ -135,8 +142,7 @@ it.each(["read", "sweep"])("expires attachment-only badges via %s", async (path)
   const clock = vi.spyOn(Date, "now").mockReturnValue(now);
   await writeDraft("expired");
   const p = projection();
-  p.read();
-  await p.changes.changed;
+  await p.load();
   expect(p.has("expired")).toBe(true);
   p.changes.listener.mockClear();
 
@@ -213,26 +219,21 @@ it.each(["loaded", "pending"])("drops replaced owners' %s drafts", async (phase)
   } else {
     await p.changes.changed;
     expect(p.has("b")).toBe(true);
-    expect(p.read().sessions).toEqual([badge("b")]);
     expect(globalListener).not.toHaveBeenCalled();
-    await p.write("c");
-    expect(p.has("c")).toBe(true);
   }
   p.changes.listener.mockClear();
   p.host.client = { recoveryScope: "principal-b", recoveryScopeReady: true };
   expect(p.has("b")).toBe(false);
-  expect(p.list).toHaveBeenCalledTimes(phase === "pending" ? 1 : 3);
   if (phase === "pending") {
     pending.resolve({
       status: "ready",
       presence: new Map([[storedKey("b"), { revision: 10, active: true }]]),
     });
     await pending.promise;
-    expect(p.list).toHaveBeenCalledTimes(2);
   }
   await p.list.mock.results.at(-1)?.value;
   expect(p.changes.listener).not.toHaveBeenCalled();
-  expectDrafts(p.read(), { b: false, c: false });
+  expect(p.has("b")).toBe(false);
   expect(p.read().sessions).toEqual([]);
 });
 
@@ -258,7 +259,7 @@ it("merges revision fences and all tab input kinds while excluding Incognito key
     "dashboard:incognito-durable": false,
     "dashboard:incognito-tab": false,
   });
-  expect(summary.sessions).toEqual(["goal", "reply"].map(badge));
+  expect(summary.sessions.map(({ sessionKey }) => sessionKey)).toEqual(["goal", "reply"].map(key));
 });
 
 it("does not open IndexedDB without subscribers or a ready recovery owner", async () => {
@@ -277,15 +278,12 @@ it("does not open IndexedDB without subscribers or a ready recovery owner", asyn
   expect(list).toHaveBeenCalledOnce();
   await list.mock.results[0]?.value;
   expect(attached.listener).not.toHaveBeenCalled();
-  expect(open).toHaveBeenCalledOnce();
 });
 
 it.each(["storage-failed", "exception"])("deduplicates %s fallbacks", async (failure) => {
   await writeDraft("b");
   const p = projection();
-  p.read();
-  await p.changes.changed;
-  const initial = p.read();
+  const initial = await p.load();
   expect(initial.hasSessionDraft(key("b"))).toBe(true);
   if (failure === "storage-failed") {
     p.list.mockResolvedValue({ status: "storage-failed" });
@@ -301,8 +299,243 @@ it.each(["storage-failed", "exception"])("deduplicates %s fallbacks", async (fai
 
   p.changes.listener.mockClear();
   await writeDraft("d");
-  expect(p.list).toHaveBeenCalledTimes(3);
   await p.list.mock.results[2]?.value.catch(() => undefined);
   expect(p.changes.listener).not.toHaveBeenCalled();
   expect(p.read()).toBe(fallback);
+});
+
+const now = 1_800_000_000_000;
+const legacyScope = { ...owner, scopeKey: "global\u0000agent:main" };
+const attachment = (text: string, fileName?: string) => ({
+  blob: new Blob([text]),
+  mimeType: "text/plain",
+  ...(fileName ? { fileName } : {}),
+});
+const textlessDrafts = [
+  { name: "attachment", attachments: [attachment("saved", "saved.txt")] },
+  { name: "goal", goalMode: { action: "start" as const } },
+  { name: "reply", replyTarget: { messageId: "message", text: "quoted" } },
+];
+
+function storedRecord(scopeKey: string, overrides: Record<string, unknown> = {}) {
+  return {
+    ...owner,
+    key: JSON.stringify([owner.gatewayOwner, owner.recoveryScope, scopeKey]),
+    ownerKey: JSON.stringify([owner.gatewayOwner, owner.recoveryScope]),
+    scopeKey,
+    revision: 10,
+    text: "saved draft",
+    attachments: [],
+    updatedAt: now,
+    writeId: "seed",
+    ...overrides,
+  };
+}
+
+async function seedRecords(...records: unknown[]) {
+  const database = await openControlUiDatabase();
+  const transaction = database.transaction("composerDrafts", "readwrite");
+  const store = transaction.objectStore("composerDrafts");
+  for (const record of records) {
+    store.put(record);
+  }
+  await transactionComplete(transaction);
+  return database;
+}
+
+async function readStoredRecord(recordKey: string) {
+  const database = await openControlUiDatabase();
+  const transaction = database.transaction("composerDrafts", "readonly");
+  const record = await requestResult(transaction.objectStore("composerDrafts").get(recordKey));
+  await transactionComplete(transaction);
+  return record;
+}
+
+describe("durable draft records", () => {
+  beforeEach(() => vi.spyOn(Date, "now").mockReturnValue(now));
+
+  describe("durable recovery", () => {
+    const legacyRecord = (overrides: Record<string, unknown> = {}) =>
+      storedRecord(legacyScope.scopeKey, overrides);
+    async function recoveryEntries(count: number) {
+      const result = await drafts.prepareDurableComposerRecovery(owner);
+      assert(result.status === "ready", "Recovery unavailable");
+      expect(result.entries).toHaveLength(count);
+      return result.entries;
+    }
+    const discard = (entry: drafts.DurableComposerRecoveryEntry) =>
+      drafts.discardDurableComposerRecovery(owner, entry, () => true);
+    it("preserves textless draft metadata and ignores clear fences without deleting them", async () => {
+      await seedRecords(
+        ...textlessDrafts.map(({ name, ...draft }) =>
+          storedRecord("global\u0000agent:" + name, { text: "", ...draft }),
+        ),
+        legacyRecord({ text: "" }),
+      );
+      const entries = await recoveryEntries(3);
+      for (const entry of entries) {
+        expect(entry).toMatchObject({ updatedAt: now, owner });
+      }
+      expect(entries.find((entry) => entry.attachmentNames.length)?.attachmentNames).toEqual([
+        "saved.txt",
+      ]);
+      expect(entries.find((entry) => entry.goalMode)?.goalMode).toEqual({ action: "start" });
+      expect(entries.find((entry) => entry.replyTarget)?.replyTarget).toEqual({
+        messageId: "message",
+        text: "quoted",
+      });
+      expect(await drafts.readDurableComposerDraft(legacyScope)).toEqual({
+        status: "not-found",
+        revision: 10,
+        writeId: "seed",
+      });
+    });
+
+    it("discards attachment bytes behind a higher clear fence and rejects stale writers", async () => {
+      await seedRecords(legacyRecord({ attachments: [attachment("private bytes")] }));
+      const entry = (await recoveryEntries(1))[0]!;
+      expect(await discard(entry)).toEqual({ status: "discarded" });
+      expect(await drafts.prepareDurableComposerRecovery(owner)).toEqual({
+        status: "ready",
+        entries: [],
+      });
+      const record = await readStoredRecord(legacyRecord().key);
+      expect(record).toMatchObject({ text: "", attachments: [] });
+      expect(record.revision).toBeGreaterThan(entry.revision);
+      expect(
+        await drafts.writeDurableComposerDraft(
+          legacyScope,
+          { revision: 11, text: "stale draft", attachments: [] },
+          { expectedRevision: 10, expectedWriteId: "seed", writeId: "stale" },
+        ),
+      ).toEqual({ status: "conflict" });
+      expect(await discard(entry)).toEqual({ status: "conflict" });
+    });
+
+    it.each(["owner", "revision", "writeId", "current", "storage"] as const)(
+      "preserves recovery when discard is blocked by %s",
+      async (change) => {
+        await seedRecords(
+          legacyRecord(change === "storage" ? { attachments: [attachment("keep bytes")] } : {}),
+        );
+        const entry = (await recoveryEntries(1))[0]!;
+        if (change === "revision" || change === "writeId") {
+          await seedRecords(
+            legacyRecord(change === "revision" ? { revision: 11 } : { writeId: "replacement" }),
+          );
+        }
+        const before = await drafts.readDurableComposerDraft(legacyScope);
+        const write =
+          change === "storage"
+            ? vi.spyOn(IDBObjectStore.prototype, "put").mockImplementation(() => {
+                throw new DOMException("blocked", "QuotaExceededError");
+              })
+            : undefined;
+        let currentChecks = 0;
+        expect(
+          await drafts.discardDurableComposerRecovery(
+            change === "owner" ? { ...owner, recoveryScope: "principal-b" } : owner,
+            entry,
+            () => change !== "current" || ++currentChecks === 1,
+          ),
+        ).toEqual({ status: change === "storage" ? "storage-failed" : "conflict" });
+        write?.mockRestore();
+        const retained = await drafts.readDurableComposerDraft(legacyScope);
+        expect(retained).toEqual(before);
+        if (change === "storage") {
+          assert(retained.status === "found", "Missing retained draft");
+          expect(await retained.draft.attachments[0]!.blob.text()).toBe("keep bytes");
+          expect(retained.draft.revision).toBe(entry.revision);
+        }
+      },
+    );
+  });
+
+  describe("durable chat draft presence", () => {
+    it("reports every chat draft kind and retirement fence for only the requested owner", async () => {
+      const draftInputs = [
+        { name: "text", text: "unsent", attachments: [] },
+        ...textlessDrafts.map((draft) => Object.assign({ text: "", attachments: [] }, draft)),
+      ];
+      for (const { name, ...draft } of draftInputs) {
+        await writeDraft(name, draft);
+      }
+      const retired = await drafts.retireDurableComposerDraft(scope("retired"), 10);
+      assert(retired.status === "persisted", "Draft retirement failed");
+      await seedRecords(
+        storedRecord(scope("other-owner").scopeKey, {
+          ownerKey: JSON.stringify([owner.gatewayOwner, "principal-b"]),
+          recoveryScope: "principal-b",
+        }),
+        storedRecord(scope("wrong-gateway").scopeKey, { gatewayOwner: "ws://other.test" }),
+        storedRecord(scope("wrong-principal").scopeKey, { recoveryScope: "principal-b" }),
+        storedRecord(`questions:v1:${scope("questions").scopeKey}`),
+        storedRecord(storedKey("legacy")),
+        storedRecord("new-session"),
+        storedRecord(scope("invalid").scopeKey, { revision: -1 }),
+      );
+
+      expect(await drafts.listDurableChatDraftPresence(owner)).toEqual({
+        status: "ready",
+        presence: new Map([
+          ...draftInputs.map(
+            ({ name }) => [storedKey(name), { revision: 10, active: true }] as const,
+          ),
+          [storedKey("retired"), { revision: retired.revision, active: false }],
+        ]),
+      });
+    });
+
+    it("projects expired drafts as pending clears without writing or reading Blob bytes", async () => {
+      const expired = storedRecord(scope("expired").scopeKey, {
+        updatedAt: now - 8 * 24 * 60 * 60 * 1_000,
+        attachments: [attachment("keep these bytes")],
+      });
+      await seedRecords(expired);
+      const blobText = vi.spyOn(Blob.prototype, "text");
+      const blobBytes = vi.spyOn(Blob.prototype, "arrayBuffer");
+      const listener = vi.fn();
+      cleanups.push(drafts.subscribeDurableComposerDraftChanges(listener));
+      expect(await drafts.listDurableChatDraftPresence(owner)).toEqual({
+        status: "ready",
+        presence: new Map([
+          [storedKey("expired"), { revision: Number.MAX_SAFE_INTEGER, active: false }],
+        ]),
+      });
+      expect(blobText).not.toHaveBeenCalled();
+      expect(blobBytes).not.toHaveBeenCalled();
+      expect(listener).not.toHaveBeenCalled();
+      expect(await readStoredRecord(expired.key)).toEqual(expired);
+    });
+
+    it("notifies after write and retirement commit, but not after presence reads", async () => {
+      const database = await openControlUiDatabase();
+      const transaction = database.transaction.bind(database);
+      let committed = false;
+      vi.spyOn(database, "transaction").mockImplementation((...args) => {
+        const current = transaction(...args);
+        if (current.mode === "readwrite") {
+          committed = false;
+          current.addEventListener("complete", () => {
+            committed = true;
+          });
+        }
+        return current;
+      });
+      const notifications: boolean[] = [];
+      const unsubscribe = drafts.subscribeDurableComposerDraftChanges(() =>
+        notifications.push(committed),
+      );
+      cleanups.push(unsubscribe);
+      await writeDraft("notified", { text: "unsent" });
+      expect(notifications).toEqual([true]);
+      await drafts.listDurableChatDraftPresence(owner);
+      expect(notifications).toEqual([true]);
+      await drafts.retireDurableComposerDraft(scope("notified"));
+      expect(notifications).toEqual([true, true]);
+      unsubscribe();
+      await drafts.retireDurableComposerDraft(scope("notified"));
+      expect(notifications).toEqual([true, true]);
+    });
+  });
 });

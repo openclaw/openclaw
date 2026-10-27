@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import {
   resolvePreferredOpenClawTmpDir,
   tempWorkspace,
@@ -18,14 +19,23 @@ export function createOpenShellTestWorkspace(label: string): Promise<TempWorkspa
 }
 
 export async function expectPathMissing(targetPath: string): Promise<void> {
-  let error: unknown;
-  try {
-    await fs.stat(targetPath);
-  } catch (caught) {
-    error = caught;
+  const result = fs.stat(targetPath);
+  await expect(result).rejects.toBeInstanceOf(Error);
+  await expect(result).rejects.toMatchObject({ code: "ENOENT" });
+}
+
+export async function writeFiles(root: string, files: Record<string, string>) {
+  for (const [name, contents] of Object.entries(files)) {
+    const file = path.join(root, name);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, contents);
   }
-  expect(error).toBeInstanceOf(Error);
-  expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+}
+
+export async function expectFiles(root: string, files: Record<string, string>) {
+  for (const [name, contents] of Object.entries(files)) {
+    await expect(fs.readFile(path.join(root, name), "utf8")).resolves.toBe(contents);
+  }
 }
 
 export function createMirrorBackendMock() {
@@ -58,5 +68,5 @@ export async function createMirrorFsBridgeFixture(workspaceDir: string) {
     },
   });
   const { OpenShellFsBridge } = await import("./fs-bridge.js");
-  return { bridge: new OpenShellFsBridge(sandbox, backend) };
+  return { backend, bridge: new OpenShellFsBridge(sandbox, backend) };
 }

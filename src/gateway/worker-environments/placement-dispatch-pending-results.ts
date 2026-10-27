@@ -28,6 +28,7 @@ import { boundedWorkerError } from "./worker-error.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
+  adoptReclaimedWorkspaceHistory,
   createWorkspaceResultJournal,
   finalizeWorkspaceResultConflicts,
   resolvePriorWorkspaceResultConflict,
@@ -379,7 +380,7 @@ export async function recoverPendingWorkspaceResults(
                 "beforeComplete" | "complete" | "afterComplete"
               > = { beforeComplete: destroyResultEnvironment, complete: completeResult },
             ) => {
-              const finalized = await finalizeWorkspaceResultConflicts({
+              const conflictRetained = await finalizeWorkspaceResultConflicts({
                 assertCurrent: recovery.assertCurrent,
                 placements,
                 turnClaim,
@@ -389,13 +390,21 @@ export async function recoverPendingWorkspaceResults(
                 report: recovery.reportConflict,
               });
               await deps.publishAcceptedWorkspace?.(turnClaim);
+              // Recovery may drain an ordinary turn; only a reclaim owns commit adoption.
+              if (reclaimResult) {
+                await adoptReclaimedWorkspaceHistory({
+                  ...recovery,
+                  workspace,
+                  stagedResultRef: result.stagedResultRef,
+                });
+              }
               await settleStagedWorkspaceResult({
                 assertCurrent: recovery.assertCurrent,
                 placements,
                 turnClaim,
                 workspace,
                 stagedResultRef: result.stagedResultRef,
-                conflictRetained: finalized.conflictRetained,
+                conflictRetained,
                 ...completion,
               });
             };

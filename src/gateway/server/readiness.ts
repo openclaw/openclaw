@@ -7,7 +7,6 @@ import {
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
   type ChannelHealthPolicy,
-  type ChannelHealthEvaluation,
 } from "../channel-health-policy.js";
 import type { ChannelManager } from "../server-channels.js";
 import type { GatewayPluginReloadStatus } from "../server-plugin-reload-status.types.js";
@@ -15,12 +14,14 @@ import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
 type ReadinessResult = {
   ready: boolean;
+  coreReady: boolean;
   failing: string[];
   suppressed?: string[];
   uptimeMs: number;
   eventLoop?: GatewayEventLoopHealth;
   pluginReload?: GatewayPluginReloadStatus;
   agentDatabases?: readonly AgentDatabaseAdmissionRefusal[];
+  agentRecovery?: readonly string[];
   stateDatabase?: { reason: string };
 };
 
@@ -73,7 +74,7 @@ export function createStartupChecker(
 
 function shouldIgnoreReadinessFailure(
   accountSnapshot: ChannelAccountSnapshot,
-  health: ChannelHealthEvaluation,
+  health: ReturnType<typeof evaluateChannelHealth>,
 ): boolean {
   if (health.reason === "unmanaged" || health.reason === "stale-socket") {
     return true;
@@ -101,6 +102,9 @@ export function createReadinessChecker(
     getStateDatabaseFailure?: () => Error | undefined;
     getAgentDatabaseAdmissionRefusals?: () => readonly AgentDatabaseAdmissionRefusal[];
     getPluginReloadStatus?: () => GatewayPluginReloadStatus | undefined;
+    isChatSendAvailable?: () => boolean;
+    getPendingAgentInputRecovery?: () => readonly string[];
+    isRequiredAgent?: (agentId: string) => boolean;
     shouldSkipChannelReadiness?: () => boolean;
   },
 ): ReadinessChecker {
@@ -111,24 +115,26 @@ export function createReadinessChecker(
 
   const readReadiness = (
     agentDatabases: readonly AgentDatabaseAdmissionRefusal[] | undefined,
+    pendingRecovery: readonly string[],
   ): ReadinessResult => {
     const startup = getStartup();
     const uptimeMs = startup.uptimeMs;
     const now = startedAt + uptimeMs;
     if (startup.status === "starting") {
-      return { ready: false, failing: [startup.pendingReason], uptimeMs };
+      return { ready: false, coreReady: false, failing: [startup.pendingReason], uptimeMs };
     }
     if (startup.status === "draining") {
-      return { ready: false, failing: ["gateway-draining"], uptimeMs };
+      return { ready: false, coreReady: false, failing: ["gateway-draining"], uptimeMs };
     }
     if (!readChildRuntimeViability().available) {
-      return { ready: false, failing: ["child-runtime"], uptimeMs };
+      return { ready: false, coreReady: false, failing: ["child-runtime"], uptimeMs };
     }
     const stateDatabaseFailure = deps.getStateDatabaseFailure?.();
     if (stateDatabaseFailure) {
       cachedState = null;
       return {
         ready: false,
+        coreReady: false,
         failing: ["state-database"],
         stateDatabase: { reason: stateDatabaseFailure.message },
         uptimeMs,
@@ -138,6 +144,7 @@ export function createReadinessChecker(
       cachedState = null;
       return {
         ready: false,
+        coreReady: false,
         failing: agentDatabases.map(({ agentId }) => `agent-database:${agentId}`),
         uptimeMs,
       };
@@ -145,7 +152,23 @@ export function createReadinessChecker(
     const pluginReload = deps.getPluginReloadStatus?.();
     if (pluginReload) {
       cachedState = null;
-      return { ready: false, failing: ["plugin-reload"], pluginReload, uptimeMs };
+      return { ready: false, coreReady: false, failing: ["plugin-reload"], pluginReload, uptimeMs };
+    }
+    if (deps.isChatSendAvailable?.() === false) {
+      cachedState = null;
+      return { ready: false, coreReady: false, failing: ["chat-recovery"], uptimeMs };
+    }
+    const requiredRecovery = pendingRecovery.filter(
+      (agentId) => deps.isRequiredAgent?.(agentId) ?? true,
+    );
+    if (requiredRecovery.length) {
+      cachedState = null;
+      return {
+        ready: false,
+        coreReady: false,
+        failing: requiredRecovery.map((agentId) => `chat-recovery:${agentId}`),
+        uptimeMs,
+      };
     }
     if (
       cachedState &&
@@ -155,7 +178,7 @@ export function createReadinessChecker(
       return { ...cachedState, uptimeMs };
     }
     if (deps.shouldSkipChannelReadiness?.()) {
-      return { ready: true, failing: [], uptimeMs };
+      return { ready: true, coreReady: true, failing: [], uptimeMs };
     }
 
     const snapshot = channelManager.getRuntimeSnapshot();
@@ -196,6 +219,7 @@ export function createReadinessChecker(
     cachedAt = now;
     cachedState = {
       ready: failing.length === 0,
+      coreReady: true,
       failing,
       ...(suppressed.length > 0 ? { suppressed } : {}),
     };
@@ -203,12 +227,14 @@ export function createReadinessChecker(
   };
   return () => {
     const agentDatabases = deps.getAgentDatabaseAdmissionRefusals?.();
-    const result = readReadiness(agentDatabases);
+    const agentRecovery = deps.getPendingAgentInputRecovery?.();
+    const result = readReadiness(agentDatabases, agentRecovery ?? []);
     const getEventLoopHealth = deps.getEventLoopHealth;
     const eventLoop = getEventLoopHealth?.();
     return {
       ...result,
       ...(agentDatabases?.length ? { agentDatabases } : {}),
+      ...(agentRecovery?.length ? { agentRecovery } : {}),
       ...(eventLoop ? { eventLoop } : {}),
     };
   };

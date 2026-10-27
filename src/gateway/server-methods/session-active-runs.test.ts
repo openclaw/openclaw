@@ -26,6 +26,7 @@ import {
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import * as gatewayScope from "../../plugins/runtime/gateway-request-scope.js";
 import {
   createReplyOperation as createControllerOperation,
   getSessionControllerOperation,
@@ -207,6 +208,32 @@ function resolveState(
     ...options,
   });
 }
+
+it("checks each source's Gateway scope once while preparing a page projector", () => {
+  rpcSourceTesting.clear();
+  const runs = Array.from({ length: 34 }, (_, index) => {
+    const run = makeRun(`page-scope-${index}`);
+    registerChatRun(run.sessionKey, run.sessionId, run.runId);
+    return run;
+  });
+  const projector = (() => {
+    using scopeReads = vi.spyOn(gatewayScope, "getGatewayContextResolver");
+    const project = createVisibleActiveSessionRunProjector();
+    expect(scopeReads).toHaveBeenCalledTimes(runs.length);
+    return project;
+  })();
+  for (const run of runs) {
+    expect(
+      projector({
+        storePath,
+        requestedKey: run.sessionKey,
+        canonicalKey: run.sessionKey,
+        sessionId: run.sessionId,
+        agentId: "main",
+      }),
+    ).toEqual({ active: true, runIds: [run.runId], status: "queued" });
+  }
+});
 
 it("projects an accepted source before its exact controller claim starts", async () => {
   const { sessionKey, sessionId, runId } = makeRun("queued");
@@ -489,7 +516,6 @@ it("projects native lifecycle snapshots and admits the next backend after produc
       buildGatewaySessionSnapshot({
         sessionRow: { key: sessionKey, sessionId, kind: "direct", updatedAt: 1, status: "done" },
         activeRunState: state(),
-        includeSession: true,
       }),
     ).toMatchObject({ status, hasActiveRun, session: { status, hasActiveRun } });
   const operation = run.reply();
@@ -527,7 +553,6 @@ it("preserves an independent running worker over a queued native snapshot", asyn
     buildGatewaySessionSnapshot({
       sessionRow: { key: sessionKey, sessionId, kind: "direct", updatedAt: 1, status: "done" },
       activeRunState: resolveState(sessionKey, { sessionId }),
-      includeSession: true,
     });
   registerAgentRunContext("worker-overlap-run", {
     projectSessionActive: true,
@@ -780,6 +805,14 @@ it.each(["store", "Gateway"] as const)(
       bindGatewayContextResolver(source.input.claim!.operation!, resolver);
     }
     expect(resolveState(sessionKey, { sessionId })).toEqual({ active: false, runIds: [] });
+    expect(
+      createVisibleActiveSessionRunProjector()({
+        storePath,
+        requestedKey: sessionKey,
+        canonicalKey: sessionKey,
+        sessionId,
+      }),
+    ).toEqual({ active: false, runIds: [] });
     expect(hasRegisteredChatRunForSessionKey({ storePath, sessionKey, agentId: "main" })).toBe(
       false,
     );
@@ -854,7 +887,6 @@ it("preserves the completed foreground row while hidden embedded maintenance rem
         runtimeMs: 273_418,
       },
       activeRunState: state(),
-      includeSession: true,
     });
   let settled = false;
   const cleanup = waitForSessionRunEnd(sessionId, null).then((ended) => {

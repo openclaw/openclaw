@@ -110,7 +110,9 @@ struct ExecApprovalPromptLayoutTests {
             isARepeat: false,
             keyCode: 53))
         if !panel.performKeyEquivalent(with: escape) {
-            panel.sendEvent(escape)
+            // The SwiftPM runner has no app event loop or stable key window.
+            // Exercise AppKit's Escape binding on the owned panel after checking shortcuts.
+            panel.interpretKeyEvents([escape])
         }
         #expect(response == .cancel)
         #expect(presenter._testPendingAlerts.isEmpty)

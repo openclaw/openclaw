@@ -325,42 +325,6 @@ function isMoonshotLiveTest(file: string) {
   return file.startsWith("extensions/moonshot/");
 }
 
-// The frozen 2026.9.8, 2026.9.9 and 2026.9.33 candidates retain three intentionally skipped single-case
-// live files. The trusted tooling checkout owns shard selection, so omit those
-// candidate files here rather than weakening the per-file passing-assertion guard.
-const RELEASE_2026_9_8_AND_9_WAIVED_LIVE_FILES = new Set([
-  "src/gateway/gateway-progress-refresh.live.test.ts",
-  "src/agents/embedded-agent-runner.responses-output-limit.live.test.ts",
-  "test/gateway-subagent-restart.live.test.ts",
-]);
-const RELEASE_WAIVED_LIVE_FILES = new Map<string, ReadonlySet<string>>([
-  ["2026.9.8", RELEASE_2026_9_8_AND_9_WAIVED_LIVE_FILES],
-  ["2026.9.9", RELEASE_2026_9_8_AND_9_WAIVED_LIVE_FILES],
-  // Extended-stable 2026.9.33 is cut from the 2026.9.9 line with the same skips.
-  ["2026.9.33", RELEASE_2026_9_8_AND_9_WAIVED_LIVE_FILES],
-]);
-
-export function withoutReleaseWaivedLiveFiles(
-  files: string[],
-  candidateVersion: string | undefined,
-) {
-  const waived = candidateVersion ? RELEASE_WAIVED_LIVE_FILES.get(candidateVersion) : undefined;
-  return waived ? files.filter((file) => !waived.has(file)) : files;
-}
-
-function readCandidateVersion(repoRoot = process.cwd()) {
-  try {
-    const manifest: unknown = JSON.parse(
-      fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"),
-    );
-    return isUnknownRecord(manifest) && typeof manifest.version === "string"
-      ? manifest.version
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 /**
  * Selects the live test files belonging to one shard name.
  */
@@ -496,7 +460,7 @@ export function resolveLiveShardPreparation(files: string[]): LiveShardPreparati
   if (
     files.some(isSourceGatewayLiveTest) ||
     files.some((file) => file.startsWith("test/e2e/qa-lab/runtime/")) ||
-    files.includes("src/infra/heartbeat-runner.live.test.ts") ||
+    files.includes("src/infra/session-event-wake.live.test.ts") ||
     files.includes("src/agents/tools/image-tool.providers.live.test.ts") ||
     files.includes("extensions/openai/openai.live.test.ts")
   ) {
@@ -826,7 +790,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
 
   let files;
   try {
-    files = withoutReleaseWaivedLiveFiles(selectLiveShardFiles(shard), readCandidateVersion());
+    files = selectLiveShardFiles(shard);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     usage();

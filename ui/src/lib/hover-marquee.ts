@@ -1,10 +1,154 @@
 import { createEffect, onCleanup } from "solid-js";
 import { cancelLayout, scheduleLayout } from "./layout-frame.ts";
 import { listen } from "./reactive/listener.ts";
+import { observeIntersection, observeResize } from "./reactive/observers.ts";
 
 const MARQUEE_SPEED_PX_PER_SEC = 40;
 const MARQUEE_HOVER_DELAY_MS = 500;
 const MARQUEE_LOOP_TRAVEL_FRACTION = 0.4;
+
+type MarqueeEnvironment = {
+  motion?: MediaQueryList;
+  stopMotion?: () => void;
+  notify: () => void;
+  targets: Map<Node, Set<MarqueeInvalidation>>;
+  observe: (node: Node) => void;
+  retireTargets: () => void;
+  dispose: () => void;
+};
+type MarqueeInvalidation = {
+  notify: () => void;
+  subtree: boolean;
+  attributes: readonly string[];
+};
+const environments = new WeakMap<Document, MarqueeEnvironment>();
+
+function observeEnvironment(
+  label: HTMLElement,
+  host: HTMLElement,
+  schedule: () => void,
+  animate: boolean,
+) {
+  const document = label.ownerDocument;
+  let environment = environments.get(document);
+  if (!environment) {
+    const targets = new Map<Node, Set<MarqueeInvalidation>>();
+    const notifyAll = () => {
+      for (const entry of targets.get(document.documentElement) ?? []) {
+        entry.notify();
+      }
+    };
+    const deliver = (records: MutationRecord[]) => {
+      const pending = new Set<() => void>();
+      for (const record of records) {
+        // A document direction change affects every label. Other mutations
+        // invalidate only their registered label/host, not unrelated rows.
+        let node: Node | null = record.target;
+        while (node) {
+          if (node === document.documentElement && record.target !== node) {
+            break;
+          }
+          for (const entry of targets.get(node) ?? []) {
+            if (
+              (entry.subtree || record.target === node) &&
+              (record.type === "attributes"
+                ? entry.attributes.includes(record.attributeName!)
+                : entry.subtree)
+            ) {
+              pending.add(entry.notify);
+            }
+          }
+          node = node.parentNode;
+        }
+      }
+      pending.forEach((callback) => callback());
+    };
+    const observer = new MutationObserver(deliver);
+    const observe = (node: Node) => {
+      const entries = [...(targets.get(node) ?? [])];
+      const subtree = entries.some((entry) => entry.subtree);
+      observer.observe(node, {
+        childList: subtree,
+        characterData: subtree,
+        subtree,
+        attributes: true,
+        attributeFilter: [...new Set(entries.flatMap((entry) => entry.attributes))],
+      });
+    };
+    let retirementQueued = false;
+    const stopVisibility = listen(document, "visibilitychange", notifyAll);
+    environment = {
+      notify: notifyAll,
+      targets,
+      observe,
+      retireTargets() {
+        if (retirementQueued) {
+          return;
+        }
+        retirementQueued = true;
+        queueMicrotask(() => {
+          retirementQueued = false;
+          if (!targets.size) {
+            return;
+          }
+          // MutationObserver has no unobserve. Retire removed targets once per
+          // commit, preserving queued records for labels that remain mounted.
+          deliver(observer.takeRecords());
+          observer.disconnect();
+          targets.forEach((_entries, node) => observe(node));
+        });
+      },
+      dispose() {
+        observer.disconnect();
+        this.stopMotion?.();
+        stopVisibility();
+        environments.delete(document);
+      },
+    };
+    environments.set(document, environment);
+  }
+  if (animate && !environment.motion) {
+    environment.motion = matchMedia("(prefers-reduced-motion: reduce)");
+    environment.stopMotion = listen(environment.motion, "change", environment.notify);
+  }
+  const registrations = [
+    { node: label, subtree: true, attributes: ["dir"] },
+    { node: host, subtree: false, attributes: ["dir", "aria-expanded"] },
+    { node: document.documentElement, subtree: false, attributes: ["dir"] },
+  ].map(({ node, subtree, attributes }) => ({
+    node,
+    entry: { notify: schedule, subtree, attributes },
+  }));
+  for (const { node, entry } of registrations) {
+    let callbacks = environment.targets.get(node);
+    if (!callbacks) {
+      callbacks = new Set();
+      environment.targets.set(node, callbacks);
+    }
+    callbacks.add(entry);
+    // Every label shares the same document-direction observation policy.
+    if (node !== document.documentElement || callbacks.size === 1) {
+      environment.observe(node);
+    }
+  }
+  return {
+    motion: environment.motion,
+    dispose: () => {
+      for (const { node, entry } of registrations) {
+        const callbacks = environment.targets.get(node);
+        callbacks?.delete(entry);
+        if (callbacks?.size === 0) {
+          environment.targets.delete(node);
+        }
+      }
+      if (environment.targets.size === 0) {
+        environment.dispose();
+      } else {
+        environment.retireTargets();
+      }
+    },
+  };
+}
 
 export type MarqueeOptions = {
   delay?: number;
@@ -14,6 +158,8 @@ export type MarqueeOptions = {
   host?: () => HTMLElement | undefined;
   /** Measure overflow and retain its end fade, without starting a scroll timer. */
   stationary?: boolean;
+  /** Without an interaction host, retain a measured fade without scrolling. */
+  stationaryWithoutHost?: boolean;
 };
 
 /** Geometry and animation stay in one ref-owned DOM island, outside reactive state. */
@@ -22,9 +168,10 @@ export function createHoverMarquee(input: () => MarqueeOptions & { className: st
   let label: HTMLElement;
   let text: HTMLElement;
   let host: HTMLElement | undefined;
-  let observer: ResizeObserver | undefined;
-  let contentObserver: MutationObserver | undefined;
-  let visibilityObserver: IntersectionObserver | undefined;
+  let stationaryHost = false;
+  let stopResize: (() => void) | undefined;
+  let stopEnvironment: (() => void) | undefined;
+  let stopVisibility: (() => void) | undefined;
   let visible = false;
   let motion: MediaQueryList | undefined;
   let timer: number | undefined;
@@ -36,6 +183,11 @@ export function createHoverMarquee(input: () => MarqueeOptions & { className: st
 
   const schedule = () => {
     if (!disposed) {
+      if (stopEnvironment && label.ownerDocument.visibilityState === "hidden") {
+        stop();
+        cancelLayout(layoutOwner);
+        return;
+      }
       scheduleLayout(layoutOwner, measure);
     }
   };
@@ -44,6 +196,46 @@ export function createHoverMarquee(input: () => MarqueeOptions & { className: st
     timer = undefined;
     readyToScroll = false;
     label?.classList.remove("hover-marquee--scrolling");
+  };
+  const active = () =>
+    host &&
+    (host.matches(":hover, :focus-visible") ||
+      (host.contains(label.ownerDocument.activeElement) &&
+        label.ownerDocument.activeElement?.matches(":focus-visible")) ||
+      // Touch menus keep revealing their trigger while focus moves into the portal.
+      (options.loop && host.getAttribute("aria-expanded") === "true"));
+  const start = () => {
+    if (timer === undefined && !label.classList.contains("hover-marquee--scrolling")) {
+      timer = window.setTimeout(() => {
+        timer = undefined;
+        readyToScroll = true;
+        schedule();
+      }, options.delay ?? MARQUEE_HOVER_DELAY_MS);
+    }
+  };
+  const enter = () => {
+    // Resize/content observers own the resting fade; brief navigation needs no geometry.
+    if (
+      !options.stationary &&
+      !stationaryHost &&
+      visible &&
+      !motion?.matches &&
+      label.classList.contains("hover-marquee--overflowing")
+    ) {
+      start();
+    }
+  };
+  const leave = (event: Event) => {
+    if (
+      event instanceof FocusEvent &&
+      event.relatedTarget instanceof Node &&
+      host?.contains(event.relatedTarget)
+    ) {
+      return;
+    }
+    if (!active()) {
+      stop();
+    }
   };
   const clearOverflow = () => {
     label.classList.toggle("hover-marquee--overflowing", false);
@@ -56,16 +248,15 @@ export function createHoverMarquee(input: () => MarqueeOptions & { className: st
     if (disposed || !label?.isConnected) {
       return undefined;
     }
-    if ((!host || options.loop) && !visibilityObserver) {
+    if ((!host || options.loop) && !stopVisibility) {
       // Defer geometry and resize/content observers until first visibility.
       // Looping names keep this observer to stop when a drawer moves offscreen.
-      visibilityObserver = new IntersectionObserver((entries) => {
+      stopVisibility = observeIntersection([label], (entries) => {
         for (const entry of entries) {
           visible = entry.isIntersecting;
         }
         schedule();
       });
-      visibilityObserver.observe(label);
     }
     if (!host && !visible) {
       return undefined;
@@ -76,39 +267,34 @@ export function createHoverMarquee(input: () => MarqueeOptions & { className: st
         : (label.closest<HTMLElement>(
             ".session-row-host, .sidebar-recent-sessions__head, .sidebar-identity-card, .sidebar-agent-card__main, .sidebar-workspace-header__main",
           ) ?? undefined);
+      if (!host && options.stationaryWithoutHost) {
+        host = label;
+        stationaryHost = true;
+      }
       if (!host) {
         return undefined;
       }
-      for (const event of ["pointerenter", "pointerleave", "focusin", "focusout"]) {
-        stopListeners.push(listen(host, event, schedule));
+      if (!stationaryHost) {
+        for (const event of ["pointerenter", "focusin"]) {
+          stopListeners.push(listen(host, event, enter));
+        }
+        for (const event of ["pointerleave", "focusout"]) {
+          stopListeners.push(listen(host, event, leave));
+        }
       }
-      motion = matchMedia("(prefers-reduced-motion: reduce)");
-      stopListeners.push(listen(motion, "change", schedule));
       // Transforms do not resize text, so scrolling cannot invalidate its measurement.
-      observer = new ResizeObserver(schedule);
-      observer.observe(label);
-      observer.observe(text);
-      contentObserver = new MutationObserver(schedule);
-      contentObserver.observe(label, {
-        childList: true,
-        characterData: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ["dir"],
-      });
-      contentObserver.observe(host, {
-        attributes: true,
-        attributeFilter: ["aria-expanded", "dir"],
-      });
-      contentObserver.observe(label.ownerDocument.documentElement, {
-        attributes: true,
-        attributeFilter: ["dir"],
-      });
+      stopResize = observeResize([label, text], schedule);
+      const environment = observeEnvironment(label, host, schedule, !stationaryHost);
+      motion = environment.motion;
+      stopEnvironment = environment.dispose;
     }
-    if (!options.loop && visibilityObserver) {
-      visibilityObserver.disconnect();
-      visibilityObserver = undefined;
+    if (!options.loop && stopVisibility) {
+      stopVisibility();
+      stopVisibility = undefined;
       visible = true;
+    }
+    if (label.ownerDocument.visibilityState === "hidden") {
+      return stop;
     }
     const width = label.clientWidth;
     if (width <= 0) {
@@ -121,13 +307,7 @@ export function createHoverMarquee(input: () => MarqueeOptions & { className: st
     if (!clipped) {
       return clearOverflow;
     }
-    const active =
-      host.matches(":hover, :focus-visible") ||
-      (host.contains(label.ownerDocument.activeElement) &&
-        label.ownerDocument.activeElement?.matches(":focus-visible")) ||
-      // Touch menus keep revealing their trigger while focus moves into the portal.
-      (options.loop && host.getAttribute("aria-expanded") === "true");
-    if (options.stationary || !active || !visible || motion?.matches) {
+    if (options.stationary || stationaryHost || !active() || !visible || motion?.matches) {
       return () => {
         label.classList.toggle("hover-marquee--overflowing", clipped);
         stop();
@@ -156,12 +336,8 @@ export function createHoverMarquee(input: () => MarqueeOptions & { className: st
       if (readyToScroll) {
         readyToScroll = false;
         label.classList.add("hover-marquee--scrolling");
-      } else if (timer === undefined && !scrolling) {
-        timer = window.setTimeout(() => {
-          timer = undefined;
-          readyToScroll = true;
-          schedule();
-        }, options.delay ?? MARQUEE_HOVER_DELAY_MS);
+      } else {
+        start();
       }
     };
   };
@@ -174,7 +350,8 @@ export function createHoverMarquee(input: () => MarqueeOptions & { className: st
       next.delay !== options.delay ||
       next.speed !== options.speed ||
       next.loop !== options.loop ||
-      next.stationary !== options.stationary
+      next.stationary !== options.stationary ||
+      next.stationaryWithoutHost !== options.stationaryWithoutHost
     ) {
       schedule();
     }
@@ -184,9 +361,9 @@ export function createHoverMarquee(input: () => MarqueeOptions & { className: st
     disposed = true;
     cancelLayout(layoutOwner);
     stop();
-    observer?.disconnect();
-    contentObserver?.disconnect();
-    visibilityObserver?.disconnect();
+    stopResize?.();
+    stopEnvironment?.();
+    stopVisibility?.();
     stopListeners.forEach((release) => release());
   });
   return {

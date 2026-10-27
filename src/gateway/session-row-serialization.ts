@@ -7,11 +7,6 @@ export function sessionRowEncodingBytes(row: SessionRow): number {
   return (encodings.get(row)?.length ?? 0) * 2;
 }
 
-/** Publish an immutable presentation with the bytes prepared by its owner. */
-export function registerSessionRowEncoding(row: SessionRow, encoded: string): void {
-  encodings.set(row, encoded);
-}
-
 /** Only the immutable presentation is encoded; recipient-specific wrappers stay private. */
 export function serializeSessionRow(row: SessionRow): string {
   let encoded = encodings.get(row);

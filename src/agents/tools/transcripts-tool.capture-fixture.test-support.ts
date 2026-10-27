@@ -1,15 +1,12 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createTranscriptsAutoStartService } from "../../transcripts/auto-start.js";
 import type { TranscriptsRuntimeContext } from "../../transcripts/capture.js";
-import type {
-  TranscriptSourceProvider,
-  TranscriptStartRequest,
-} from "../../transcripts/provider-types.js";
+import type { TranscriptSourceProvider } from "../../transcripts/provider-types.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
 
@@ -17,26 +14,13 @@ export type CaptureStart = NonNullable<TranscriptSourceProvider["start"]>;
 export type CaptureStop = NonNullable<TranscriptSourceProvider["stop"]>;
 export type AutoStarts = NonNullable<NonNullable<OpenClawConfig["transcripts"]>["autoStart"]>;
 
-export function captureGate() {
-  const entered = createDeferred();
-  const release = createDeferred();
-  return {
-    entered: entered.promise,
-    release: release.resolve,
-    wait: async () => {
-      entered.resolve();
-      await release.promise;
-    },
-  };
-}
-
 export function captureFixture(
   state: { stateDir: string; store?: TranscriptsStore },
   providerOverrides: Partial<TranscriptSourceProvider> = {},
   context: Omit<Partial<TranscriptsRuntimeContext>, "stateDir" | "logger"> = {},
 ) {
   const { stateDir } = state;
-  const requests: TranscriptStartRequest[] = [];
+  const requests: Parameters<CaptureStart>[0][] = [];
   const logger = { warn: vi.fn<(message: string) => void>() };
   const newStore = () =>
     new TranscriptsStore(path.join(stateDir, "transcripts"), {
@@ -77,20 +61,6 @@ export function captureFixture(
   const instance = tool();
   const execute = (params: Record<string, unknown>, signal?: AbortSignal) =>
     instance.execute("capture-fixture", params, signal);
-  const action = (operation: string, sessionId = "notes") =>
-    execute({ action: operation, sessionId });
-  const session = async (id = "notes") => {
-    const value = await store.readSession(id);
-    if (!value) {
-      throw new Error("missing capture");
-    }
-    return value;
-  };
-  const service = (autoStart: AutoStarts, config: OpenClawConfig = {}) =>
-    createTranscriptsAutoStartService({
-      ...ctx,
-      config: { ...config, transcripts: { autoStart } },
-    });
   return {
     provider,
     requests,
@@ -100,11 +70,15 @@ export function captureFixture(
     newStore,
     tool,
     execute,
-    action,
-    session,
+    action: (action: string, sessionId = "notes") => execute({ action, sessionId }),
+    session: async (id = "notes") => expectDefined(await store.readSession(id), "missing capture"),
     successfulStart,
     successfulStop,
-    service,
+    service: (autoStart: AutoStarts, config: OpenClawConfig = {}) =>
+      createTranscriptsAutoStartService({
+        ...ctx,
+        config: { ...config, transcripts: { autoStart } },
+      }),
     status: (active: unknown) =>
       expect(execute({ action: "status" })).resolves.toMatchObject({ details: { active } }),
     scope: <T>(run: () => T) => withPluginRuntimeRegistryScope(registry, run),

@@ -1,8 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { attachModelProviderRequestTransport } from "../agents/provider-request-config.js";
+import type { ProviderStreamOptions } from "../llm/types.js";
 import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -31,9 +31,9 @@ const {
   fetchMock,
   resolveModelAsyncMock,
   unwrapSecretSentinelsForProviderEgressMock,
+  registerProviderStreamForModelMock,
 } = imageRuntimeMocks;
 
-const requireRecord = createRequireRecord("record", "expected-label-capitalized");
 const {
   describeImageWithModelCore,
   describeImagesWithModelCore,
@@ -57,6 +57,40 @@ function mockOpenAi() {
 function openAiCompletion(text: string) {
   return imageCompletion("openai-responses", openai.provider, openai.model, text);
 }
+const opencode = {
+  provider: "opencode-go",
+  model: "gemini-3-flash",
+  baseUrl: "https://opencode.ai/zen/go/v1",
+};
+const sessionHeader = "x-opencode-session";
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const opencodeCompletion = () =>
+  imageCompletion("openai-completions", opencode.provider, opencode.model, "vision ok");
+function stubProviderStream(result = vi.fn(async () => opencodeCompletion())) {
+  const stream = vi.fn((_model: unknown, _context: unknown, _options: ProviderStreamOptions) => ({
+    result,
+  }));
+  registerProviderStreamForModelMock.mockReturnValue(stream);
+  return {
+    stream,
+    options: (index: number) => {
+      const options = expectDefined(
+        stream.mock.calls.at(index),
+        `provider stream call ${index}`,
+      )[2];
+      return { sessionId: options.sessionId, header: options.headers?.[sessionHeader] };
+    },
+  };
+}
+function requestOpencode() {
+  mockImageModel({
+    provider: opencode.provider,
+    id: opencode.model,
+    api: "openai-completions",
+    baseUrl: opencode.baseUrl,
+  });
+  return describeImageWithModelCore(request(opencode));
+}
 function mockUnknownMinimax() {
   resolveModelAsyncMock.mockResolvedValue({
     authStorage: preparedAuthStorage,
@@ -77,6 +111,131 @@ async function describeCn(providers: Providers, workspaceDir?: string) {
 
 describe("describeImageWithModelCore", () => {
   installImageRuntimeTestHooks({ apiKey: "test-api-key" });
+
+  it("surfaces provider errors from image-model responses", async () => {
+    mockOpenAi();
+    completeMock.mockResolvedValue({
+      ...openAiCompletion(""),
+      stopReason: "error",
+      errorMessage: "boom",
+    });
+    await expect(describeImageWithModelCore(request())).rejects.toThrow(/boom/i);
+    expect(completeMock).toHaveBeenCalledOnce();
+  });
+
+  it("returns trimmed text from image-model responses", async () => {
+    const ref = { provider: "anthropic", model: "claude-opus-4-6" };
+    mockImageModel({ provider: ref.provider, id: ref.model, api: "anthropic-messages" });
+    completeMock.mockResolvedValue(
+      imageCompletion("anthropic-messages", ref.provider, ref.model, "  hello  "),
+    );
+    await expect(describeImageWithModelCore(request(ref))).resolves.toEqual({
+      text: "hello",
+      model: ref.model,
+    });
+  });
+
+  it.each([
+    ["reasoning_content", "reasoning_content", true, 0],
+    ["Responses JSON", JSON.stringify({ id: "rs_123", type: "reasoning" }), true, 0],
+    ["Responses object", { id: "rs_456", type: "reasoning.encrypted" }, true, 0],
+    [
+      "oversized Responses JSON",
+      JSON.stringify({
+        id: "rs_123",
+        summary: [{ text: "x".repeat(2_100) }],
+        type: "reasoning",
+      }),
+      true,
+      0,
+    ],
+    ["signature after bounded block scan", "reasoning_content", false, 50],
+  ] as const)(
+    "retries image reasoning-only responses: %s",
+    async (_name, signature, retry, precedingBlocks) => {
+      mockOpenAi();
+      const completion = openAiCompletion("retry ok");
+      completeMock
+        .mockResolvedValueOnce({
+          ...completion,
+          content: [
+            ...Array.from({ length: precedingBlocks }, () => ({
+              type: "thinking",
+              thinking: "untagged",
+            })),
+            {
+              type: "thinking",
+              thinking: "  <think>private</think> maybe a cat  ",
+              thinkingSignature: signature,
+            },
+          ],
+        })
+        .mockResolvedValueOnce(completion);
+      const result = describeImageWithModelCore(request());
+      if (retry) {
+        await expect(result).resolves.toEqual({ text: "retry ok", model: openai.model });
+      } else {
+        await expect(result).rejects.toThrow(/returned no text/i);
+      }
+      expect(completeMock).toHaveBeenCalledTimes(retry ? 2 : 1);
+    },
+  );
+
+  it.each([
+    { modelMaxTokens: undefined, requested: undefined, expected: 4096 },
+    { modelMaxTokens: 1024.5, requested: 2048, expected: 1024.5 },
+    { modelMaxTokens: Number.NaN, requested: -0, expected: -0 },
+    { modelMaxTokens: 0, requested: 0.5, expected: 0.5 },
+  ])(
+    "preserves image completion token caps %#",
+    async ({ modelMaxTokens, requested, expected }) => {
+      mockImageModel({
+        provider: openai.provider,
+        id: openai.model,
+        api: "openai-responses",
+        maxTokens: modelMaxTokens,
+      });
+      completeMock.mockResolvedValue(openAiCompletion("ok"));
+      await describeImageWithModelCore(request(openai, { maxTokens: requested }));
+      expect(completeMock).toHaveBeenCalledOnce();
+      const options = expectDefined(completeMock.mock.calls[0], "image cap completion")[2];
+      expect(options.maxTokens).toBe(expected);
+    },
+  );
+
+  it("uses a fresh routing identity for each image request", async () => {
+    const { options } = stubProviderStream();
+    await requestOpencode();
+    await requestOpencode();
+    const first = options(0);
+    const second = options(1);
+    const expected = { sessionId: undefined, header: expect.stringMatching(uuidPattern) };
+    expect([first, second]).toEqual([expected, expected]);
+    expect(first.header).not.toBe(second.header);
+  });
+
+  it("reuses one routing identity across the reasoning-only retry", async () => {
+    const { stream, options } = stubProviderStream(
+      vi
+        .fn()
+        .mockResolvedValueOnce({
+          ...opencodeCompletion(),
+          content: [
+            {
+              type: "thinking",
+              thinking: "examining the image",
+              thinkingSignature: "reasoning_content",
+            },
+          ],
+        })
+        .mockResolvedValueOnce(opencodeCompletion()),
+    );
+    await requestOpencode();
+    expect(stream).toHaveBeenCalledTimes(2);
+    const first = options(0).header;
+    expect(first).toMatch(uuidPattern);
+    expect(options(1).header).toBe(first);
+  });
 
   it("does not start another MiniMax request after caller cancellation", async () => {
     const controller = new AbortController();
@@ -117,11 +276,7 @@ describe("describeImageWithModelCore", () => {
 
     await describeImageWithModelCore(request(minimax));
 
-    const guardedOptions = requireRecord(
-      expectDefined(imageTestFetchWithSsrFGuardMock.mock.calls[0], "guarded fetch call 0")[0],
-      "guarded fetch options",
-    );
-    expect(guardedOptions.dispatcherPolicy).toEqual({
+    expect(imageTestFetchWithSsrFGuardMock.mock.calls[0]?.[0]?.dispatcherPolicy).toEqual({
       mode: "explicit-proxy",
       proxyUrl: "https://proxy.example.com",
     });
@@ -142,10 +297,8 @@ describe("describeImageWithModelCore", () => {
       sentinelValue,
       "MiniMax VLM request",
     );
-    const [, fetchOptionsValue] = expectDefined(fetchMock.mock.calls[0], "fetch call 0");
-    const fetchOptions = requireRecord(fetchOptionsValue, "fetch options");
-    expect(new Headers(fetchOptions.headers as HeadersInit).get("Authorization")).toBe(
-      ["Bearer", "test-token"].join(" "),
+    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
+      "Bearer test-token",
     );
   });
 
@@ -181,8 +334,7 @@ describe("describeImageWithModelCore", () => {
     expect(result).toEqual({ text: "an orange tabby cat", model: bedrock.model });
     expect(requireApiKeyMock).not.toHaveBeenCalled();
     expect(setRuntimeApiKeyMock).not.toHaveBeenCalled();
-    const completeCall = expectDefined(completeMock.mock.calls[0], "complete call 0");
-    expect(requireRecord(completeCall[2], "stream options").apiKey).toBe("");
+    expect(completeMock.mock.calls[0]?.[2]).toMatchObject({ apiKey: "" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -225,22 +377,6 @@ describe("describeImageWithModelCore", () => {
 
 describe("image runtime cancellation and retries", () => {
   installImageRuntimeTestHooks();
-
-  it("reports the resolved model input when an image model is text-only", async () => {
-    const ref = { provider: "lmstudio", model: "text-only" };
-    mockImageModel({
-      provider: ref.provider,
-      id: ref.model,
-      api: "openai-completions",
-      input: ["text"],
-      baseUrl: "http://127.0.0.1:1234",
-    });
-
-    await expect(describeImageWithModelCore(request(ref))).rejects.toThrow(
-      "Model does not support images: lmstudio/text-only (resolved lmstudio/text-only input: text)",
-    );
-    expect(completeMock).not.toHaveBeenCalled();
-  });
 
   it.each([
     { asyncTransform: false, replace: true },

@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -39,47 +38,22 @@ import { observeSessionMaintenanceCompletion } from "./session-accessor.sqlite-m
 import * as maintenanceKick from "./session-accessor.sqlite-maintenance-kick.js";
 import { registerSessionMaintenancePreparationTests } from "./session-accessor.sqlite-maintenance-preparation.test-support.js";
 import { registerSessionMaintenanceProtectionTests } from "./session-accessor.sqlite-maintenance-protection.test-support.js";
-import { observeSessionMaintenancePlanningWorker } from "./session-accessor.sqlite-maintenance.test-support.js";
+import {
+  maintenanceFixture,
+  maintenancePolicy,
+  observeSessionMaintenancePlanningWorker,
+} from "./session-accessor.sqlite-maintenance.test-support.js";
 import * as reclamationRun from "./session-accessor.sqlite-reclamation-run.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
-import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
 afterEach(() => vi.restoreAllMocks());
-
-function maintenanceFixture(state: OpenClawTestState) {
-  const storePath = path.join(state.sessionsDir(), "sessions.json");
-  const scope = (sessionKey: string) => ({ sessionKey, storePath });
-  const seed = (
-    sessionKey: string,
-    sessionId: string,
-    updatedAt = Date.now(),
-    fields: Partial<Parameters<typeof replaceSessionEntrySync>[1]> = {},
-  ) => {
-    const target = scope(sessionKey);
-    replaceSessionEntrySync(target, { sessionId, updatedAt, ...fields });
-    return target;
-  };
-  return { state, storePath, scope, seed, databaseOptions: { agentId: "main", env: state.env } };
-}
 
 function withMaintenanceFixture(
   run: (fixture: ReturnType<typeof maintenanceFixture>) => Promise<void>,
 ) {
   return withOpenClawTestState({ scenario: "minimal" }, (state) => run(maintenanceFixture(state)));
-}
-
-function maintenancePolicy(
-  pruneAfter = "1s",
-  overrides: Parameters<typeof resolveMaintenanceConfigFromInput>[0] = {},
-) {
-  return resolveMaintenanceConfigFromInput({
-    mode: "enforce",
-    maxEntries: 100,
-    pruneAfter,
-    ...overrides,
-  });
 }
 
 function observeMaintenance(
@@ -132,6 +106,8 @@ it.for(["cold", "warm-cap", "removal"] as const)(
       }
       const planningPhases: string[] = [];
       const workerThreadIds: number[] = [];
+      const writeOutcomes: { kind: "committed" | "not-committed"; admitted: boolean }[] = [];
+      let writeAdmitted = false;
       let foregroundProgressed = false;
       observeSessionMaintenancePlanningWorker({
         async afterPrepare() {
@@ -149,8 +125,12 @@ it.for(["cold", "warm-cap", "removal"] as const)(
           }
         },
         beforeExecute: () => planningPhases.push("planning"),
+        beforeAdmission: (request) => {
+          writeAdmitted ||= request.stage === "transaction";
+        },
         afterExecute: (result) => {
           workerThreadIds.push(result.workerThreadId);
+          writeOutcomes.push({ kind: result.kind, admitted: writeAdmitted });
         },
       });
       const completed = observeMaintenance();
@@ -189,8 +169,11 @@ it.for(["cold", "warm-cap", "removal"] as const)(
       if (!remove) {
         expect(parentSql).toEqual([]);
       }
-      expect(planningPhases).toEqual(["prepared", "planning"]);
+      expect(planningPhases).toEqual(remove ? ["prepared", "planning"] : ["prepared"]);
       expect(workerThreadIds[0]).toBeGreaterThan(0);
+      expect(writeOutcomes).toEqual([
+        { kind: remove ? "committed" : "not-committed", admitted: remove },
+      ]);
       const expectedLabel = scenario === "warm-cap" ? "foreground progressed" : "updated";
       expect(loadSessionEntry(active)?.label).toBe(expectedLabel);
       if (scenario === "warm-cap") {
@@ -386,8 +369,8 @@ it("rolls back archive metadata when a run registers at planning commit", async 
 
 it.each([
   { mutation: "backdate", boundary: "before-authorization" },
-  { mutation: "restore", boundary: "after-settlement" },
-  { mutation: "backdate", boundary: "missing-after-settlement" },
+  { mutation: "restore", boundary: "after-result" },
+  { mutation: "backdate", boundary: "cold-after-result" },
 ] as const)(
   "keeps $mutation authority at $boundary across real Worker planning",
   async ({ mutation, boundary }) => {
@@ -402,7 +385,7 @@ it.each([
         mutation === "restore" ? 1 : Date.now(),
         mutation === "restore" ? { archivedAt: 2, archiveReason: "age-retention" } : {},
       );
-      const warm = boundary !== "missing-after-settlement";
+      const warm = boundary !== "cold-after-result";
       let warmWorkerThreadId: number | undefined;
       if (warm) {
         const reclaim = reclamationRun.runSqliteSessionReclamation;
@@ -427,20 +410,15 @@ it.each([
       };
       const workerThreadIds: number[] = [];
       observeSessionMaintenancePlanningWorker({
-        beforeExecute() {
+        afterPrepare() {
           if (boundary === "before-authorization" && !changed) {
             mutate();
           }
         },
-        async afterExecute(result, native) {
+        afterExecute(result) {
           workerThreadIds.push(result.workerThreadId);
-          if (boundary !== "before-authorization" && result.kind === "committed" && !changed) {
-            expect(native.admission?.committed).toMatchObject({
-              facts: { kind: "session-entry-replacements" },
-            });
-            expect(native.admission?.settlement).toMatchObject({ kind: "completed" });
-            expect(await native.retained?.settled).toEqual({ kind: "completed" });
-            // Native COMMIT has completed; parent result adoption has not run yet.
+          if (boundary !== "before-authorization" && result.kind === "not-committed" && !changed) {
+            // Empty planning has finished; parent age-fact adoption has not run yet.
             mutate();
           }
         },
@@ -510,7 +488,7 @@ it("retains a managed backdate during synchronous maintenance publication reentr
 });
 
 it("publishes exact archived keys without worktrees after Worker planning", async () => {
-  await withMaintenanceFixture(async ({ state, storePath, seed, databaseOptions }) => {
+  await withMaintenanceFixture(async ({ seed, databaseOptions, plan }) => {
     const active = seed("agent:main:keyed-active", "active");
     const stale = seed("agent:main:keyed-stale", "stale", 1);
     const database = openOpenClawAgentDatabase(databaseOptions);
@@ -520,18 +498,7 @@ it("publishes exact archived keys without worktrees after Worker planning", asyn
     try {
       const result = await reclamationRun.runSqliteSessionReclamation({
         diagnostics,
-        plan: {
-          kind: "maintenance-plan",
-          databaseOptions: reclamation.resolveSessionReclamationDatabaseOptions(databaseOptions),
-          materializedPlans: [],
-          input: {
-            activeSessionKey: active.sessionKey,
-            archiveDirectory: state.sessionsDir(),
-            maintenance: maintenancePolicy(),
-            preservation: { providerKeys: [], workIdentities: [], lifecycleIdentities: [] },
-            storePath,
-          },
-        },
+        plan: plan(active.sessionKey, maintenancePolicy()),
       });
       expect(diagnostics).toMatchObject({ workerThreadId: expect.any(Number) });
       expect(result).toMatchObject({

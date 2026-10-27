@@ -87,9 +87,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   const sourceReplyDeliveryModeOrigin = sourceReplyDeliveryRuntime.origin;
   const preserveProgressCallbackStartOrder = turn.opts?.preserveProgressCallbackStartOrder === true;
   const runLane =
-    turn.isHeartbeat ||
-    turn.followupRun.run.scheduledAutomation ||
-    turn.followupRun.run.internalEventExecution
+    turn.followupRun.run.scheduledAutomation || turn.followupRun.run.internalEventExecution
       ? CommandLane.CronNested
       : CommandLane.Main;
   let queuedUserMessagePersistedAcrossFallback = false;
@@ -104,11 +102,9 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
     offAnnounced: false,
     resetAnnounced: false,
   };
-  const bootstrapContextRunKind = turn.opts?.isHeartbeat
-    ? ("heartbeat" as const)
-    : turn.followupRun.run.scheduledAutomation
-      ? ("cron" as const)
-      : ("default" as const);
+  const bootstrapContextRunKind = turn.followupRun.run.scheduledAutomation
+    ? ("cron" as const)
+    : ("default" as const);
 
   params.timing.logMilestoneIfSlow({
     runId: params.runId,
@@ -117,6 +113,13 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
     milestone: "before_model_fallback",
   });
   const selection = resolveModelFallbackOptions(params.effectiveRun, params.runtimeConfig);
+  // A scheduled run resolves candidates on the runtime its account was captured for.
+  const runtimeSessionEntry = () => {
+    const entry = params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry();
+    return entry && params.scheduledInference
+      ? params.scheduledInference.runtimeSessionEntry(entry)
+      : entry;
+  };
   const resolveCandidateRuntime = (
     provider: string,
     model: string,
@@ -180,7 +183,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         resolveRuntimeOverride: (provider) =>
           resolveSessionRuntimeOverrideForProvider({
             provider,
-            entry: params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry(),
+            entry: runtimeSessionEntry(),
             cfg: params.runtimeConfig,
           }),
         resolveContextEngineHost: (provider, model, runtimeOverride) => {
@@ -270,10 +273,14 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           modelId: model,
           agentId: turn.followupRun.run.agentId,
           sessionKey: turn.followupRun.run.runtimePolicySessionKey ?? turn.sessionKey,
-          sessionEntry: params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry(),
+          sessionEntry: runtimeSessionEntry(),
           agentRuntime: runOptions.agentHarnessRuntimeOverride,
         });
-        params.scheduledInference?.assertCandidate(provider, runtime.useCliExecution);
+        params.scheduledInference?.assertCandidate(
+          provider,
+          runtime.useCliExecution,
+          candidateAgentRuntime,
+        );
         assertCronRuntimeAuthorityCandidate({
           authority: candidateRun.scheduledAutomation?.job.runtimeAuthority,
           candidateRuntime: candidateAgentRuntime,

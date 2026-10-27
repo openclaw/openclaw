@@ -1,7 +1,10 @@
 import { withAgentRosterFactsBatch } from "../../agents/agent-scope-config.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { getPreparedRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-profiles.js";
-import { getRuntimeAuthProfileStoreMetadataRevision } from "../../agents/auth-profiles/runtime-snapshots.js";
+import {
+  getRuntimeAuthProfileStoreCatalogRevision,
+  getRuntimeAuthProfileStoreMetadataRevision,
+} from "../../agents/auth-profiles/runtime-snapshots.js";
 import {
   withPreparedModelRuntimeReadBatch,
   getPublishedPreparedModelCatalogOwnerSnapshot,
@@ -17,6 +20,7 @@ import type { ChatMetadataProjectionFacts } from "./chat-metadata-session-projec
 
 type PreparedAgentFacts = ChatMetadataProjectionFacts & {
   authStoreRevision: string;
+  authCatalogRevision: string;
   catalogRefreshFailed: boolean;
   skillsVersion: number;
 };
@@ -89,6 +93,7 @@ export function captureGenerationFacts(config: OpenClawConfig): PreparedGenerati
                 },
               authModes: fullCatalogAuth?.authModes ?? owner.authModes,
               authStoreRevision: `${getRuntimeAuthProfileStoreMetadataRevision(owner.agentDir)}:${getRuntimeAuthProfileStoreMetadataRevision(owner.inheritedAuthDir)}`,
+              authCatalogRevision: `${getRuntimeAuthProfileStoreCatalogRevision(owner.agentDir)}:${getRuntimeAuthProfileStoreCatalogRevision(owner.inheritedAuthDir)}`,
               modelCatalog: catalog,
               // Failure is visible metadata; in-flight discovery does not invalidate usable rows.
               catalogRefreshFailed: catalog.refreshFailed === true,
@@ -109,7 +114,7 @@ export function captureGenerationFacts(config: OpenClawConfig): PreparedGenerati
 export function generationFactsMatch(
   left: PreparedGenerationFacts,
   right: PreparedGenerationFacts,
-  scope: "metadata" | "catalog" | "auth" | "commands" = "metadata",
+  scope: "metadata" | "catalog" | "catalog-notification" | "auth" | "commands" = "metadata",
 ): boolean {
   if (
     left.configKey !== right.configKey ||
@@ -127,7 +132,9 @@ export function generationFactsMatch(
           candidate.owner.workspaceDir === agent.owner.workspaceDir
         : // Config stamping replaces the reader object without replacing its generation.
           candidate.owner.isCurrent === agent.owner.isCurrent &&
-          candidate.authStoreRevision === agent.authStoreRevision &&
+          (scope === "catalog-notification"
+            ? candidate.authCatalogRevision === agent.authCatalogRevision
+            : candidate.authStoreRevision === agent.authStoreRevision) &&
           // Full catalogs carry their own paired auth generation.
           candidate.modelCatalog === agent.modelCatalog &&
           (scope === "auth" || candidate.catalogRefreshFailed === agent.catalogRefreshFailed) &&

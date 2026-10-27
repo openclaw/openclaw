@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import {
   loadSessionEntry,
@@ -7,8 +7,6 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { createOperatorRecoveryFixture } from "../../../gateway/operator-run-recovery.test-support.js";
 import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
-import { bindSessionRowProjection } from "../../../gateway/session-row-projection-access.js";
-import { createSessionRowProjection } from "../../../gateway/session-row-projection.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { peekSystemEventEntries } from "../../../infra/system-events.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
@@ -19,22 +17,28 @@ import { normalizeAcceptedSessionSpawnResult } from "../../accepted-session-spaw
 import {
   readAdmittedRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
-  resolvePreparedRunAdmission,
 } from "../../admitted-run-context.js";
+import { runEmbeddedAgent as runActualEmbeddedAgent } from "../../embedded-agent-runner/run.js";
+import { makeAttemptResult } from "../../embedded-agent-runner/run.overflow-compaction.fixture.js";
+import * as embeddedAttempts from "../../embedded-agent-runner/run/attempt.js";
 import { commitMainSessionRecovery } from "../../main-session-recovery/main-session-recovery-store.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../tools/gateway-caller-context.js";
+import { createSessionsCreateTool } from "../../tools/sessions-create-tool.js";
 import { createSessionsSendTool } from "../../tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
 import { resolveSubagentSessionStatus } from "../registry/subagent-session-metrics.js";
 import {
-  recordSpawnBoundaryFinal,
-  type NativePluginSpawnTestOptions,
-} from "./subagent-spawn.production-boundary.test-support.js";
+  admitEmbeddedRun,
+  materializeSessionProjection,
+  recordFinal,
+} from "./subagent-spawn.boundary-run.test-support.js";
+import { visibleResult } from "./subagent-spawn.fixtures.test-support.js";
+import type { NativePluginSpawnTestOptions } from "./subagent-spawn.production-boundary.test-support.js";
 
 export function registerRecoverySpawnCases(
   options: NativePluginSpawnTestOptions & { stateDir: () => string },
@@ -48,9 +52,9 @@ export function registerRecoverySpawnCases(
     settleRootWork,
   } = options;
   it.for([
-    { outcome: "complete", child: "spawned" },
     { outcome: "stop", child: "spawned" },
     { outcome: "complete", child: "resumed" },
+    { outcome: "retry", child: "spawned" },
   ] as const)(
     "lets a recovered requester finish before its $child child: $outcome",
     async ({ outcome, child }, { signal: testSignal }) => {
@@ -122,13 +126,7 @@ export function registerRecoverySpawnCases(
             spawnDepth: 1,
           },
         );
-        const projection = await createSessionRowProjection({ cfg: bound.cfg, modelCatalog: [] });
-        onTestFinished(async () => {
-          projection.dispose();
-          await projection.ensureMaterialized();
-        });
-        bindSessionRowProjection(context, () => projection);
-        await projection.ensureMaterialized();
+        await materializeSessionProjection(bound, context);
       }
       const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
         // Stop may retire the registry row after publishing its terminal outcome.
@@ -142,12 +140,7 @@ export function registerRecoverySpawnCases(
       });
       const failures: unknown[] = [];
       runEmbeddedAgent.mockImplementation(async (params) => {
-        const admitted = await resolvePreparedRunAdmission({
-          runId: params.runId,
-          runtimeKind: "embedded",
-          admittedRunContext: params.admittedRunContext,
-          preparedRunAdmission: params.preparedRunAdmission,
-        });
+        const admitted = await admitEmbeddedRun(params);
         await params.onExecutionStarted?.();
         if (params.sessionKey === fixture.target.sessionKey) {
           const caller = createAdmittedGatewayToolCallerIdentity({
@@ -193,9 +186,52 @@ export function registerRecoverySpawnCases(
             childRunId = accepted.runId;
             childSessionKey = accepted.childSessionKey;
           }
-          await childStarted.promise;
+          await withinTest(childStarted.promise, testSignal);
         } else {
           childRunId = params.runId;
+          if (outcome === "retry") {
+            const attempt = vi
+              .spyOn(embeddedAttempts, "runEmbeddedAttempt")
+              .mockRejectedValue(new Error("Unexpected extra embedded attempt"));
+            attempt.mockImplementationOnce(async () => {
+              expect(createSessionsCreateTool()).not.toBeNull();
+              childStarted.resolve();
+              await finishChild.promise;
+              return makeAttemptResult({
+                sessionIdUsed: params.sessionId,
+                promptError: Object.assign(new Error("Degenerate tool call arguments"), {
+                  code: "degenerate_output",
+                }),
+                promptErrorSource: "prompt",
+                assistantTexts: [],
+              });
+            });
+            attempt.mockImplementationOnce(async () => {
+              expect(createSessionsCreateTool()).not.toBeNull();
+              await recordFinal(bound, params, "Recovered task complete.");
+              return makeAttemptResult({
+                sessionIdUsed: params.sessionId,
+                assistantTexts: ["Recovered task complete."],
+              });
+            });
+            try {
+              const result = await runActualEmbeddedAgent(params);
+              expect(attempt).toHaveBeenCalledTimes(2);
+              expect(result.payloads).toEqual(
+                expect.arrayContaining([
+                  expect.objectContaining({ text: "Recovered task complete." }),
+                ]),
+              );
+              childFinished.resolve();
+              return result;
+            } catch (error) {
+              childStarted.reject(error);
+              childFinished.reject(error);
+              throw error;
+            } finally {
+              attempt.mockRestore();
+            }
+          }
           if (child === "resumed") {
             expect(params.prompt).toContain("Your previous turn was interrupted");
             expect(params.lane).toBe(`nested:${childSessionKey}`);
@@ -219,22 +255,11 @@ export function registerRecoverySpawnCases(
             signal.removeEventListener("abort", onAbort);
           }
         }
-        await recordSpawnBoundaryFinal({
-          storePath: bound.storePath,
-          sessionKey: expectDefined(params.sessionKey, "admitted session"),
-          runId: params.runId,
-          text: "Recovered task complete.",
-        });
+        await recordFinal(bound, params, "Recovered task complete.");
         if (params.sessionKey !== fixture.target.sessionKey) {
           childFinished.resolve();
         }
-        return {
-          payloads: [{ text: "Recovered task complete." }],
-          meta: {
-            durationMs: 1,
-            terminalReply: { disposition: "visible", text: "Recovered task complete." },
-          },
-        };
+        return visibleResult("Recovered task complete.");
       });
       try {
         await expect(

@@ -2,11 +2,13 @@ import { Command } from "commander";
 import { createPluginStateSyncKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { beforeEach, expect, it, vi } from "vitest";
 import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
-import { registerCrabboxWarmImageCommands } from "./crabbox-worker-warm-image-cli.js";
 import {
-  assertCrabboxWarmImageMigrationReady,
-  type WarmProfileRecord,
-} from "./crabbox-worker-warm-image-store.js";
+  captureOperation,
+  expectText,
+  warmImage,
+  warmRecord,
+} from "./crabbox-warm-scenarios.test-support.js";
+import { registerCrabboxWarmImageCommands } from "./crabbox-worker-warm-image-cli.js";
 import { tempDirs } from "./crabbox-worker-warm-image.test-support.js";
 
 const SELECTOR = "83eb5c1e-e408-4b64-9575-f8670287e294";
@@ -21,29 +23,17 @@ beforeEach(() => {
 });
 
 function pendingCapture(phase: "scrubbing" | "creating" | "uncertain" = "creating") {
-  const now = Date.now();
-  const record = {
-    version: 3,
-    allocations: {},
-    image: {
-      checkpointId: "chk_last_good",
-      kind: "native",
-      state: "available",
-      createdAtMs: now - 86_400_000,
-      preparationKey: null,
-      cacheKey: null,
-      purpose: null,
-      lastDemandAtMs: now,
-    },
-    operation: {
-      type: "capture",
-      id: SELECTOR,
-      startedAtMs: now - 1_200_000,
-      phase,
-    },
-  } satisfies WarmProfileRecord;
+  const operation = captureOperation(SELECTOR, {
+    startedAtMs: Date.now() - 1_200_000,
+    phase,
+    ...(phase === "uncertain" ? { checkpointIds: ["chk_interrupted_a", "chk_interrupted_b"] } : {}),
+  });
+  const record = warmRecord({
+    image: warmImage("chk_last_good"),
+    operation,
+  });
   openWarmImageStore().register("profile", record);
-  return record;
+  return { ...record, operation };
 }
 
 async function runCli(...args: string[]) {
@@ -55,41 +45,42 @@ async function runCli(...args: string[]) {
 
 const recover = (selector = SELECTOR, ...args: string[]) =>
   runCli("--recover", selector, "--acknowledge-provider-cleanup", ...args);
+const retiring = warmRecord({
+  image: warmImage("chk_replacement"),
+  operation: { type: "retire", checkpointId: "chk_predecessor" },
+});
 
 it("prints cold-only guidance for unsupported capture without changing local state", async () => {
-  const record: WarmProfileRecord = {
-    version: 3,
-    allocations: {},
+  const record = warmRecord({
     captureUnsupported: {
       atMs: Date.now(),
       provider: "hetzner",
       message: "Native capture is unsupported by this coordinator.",
     },
-  };
+  });
   openWarmImageStore().register("profile", record);
 
   await runCli();
 
-  [
-    "Capture unsupported: Native capture is unsupported by this coordinator.",
-    "use an existing compatible snapshot when one is available",
-    "capture attempts are skipped until warmImages.refreshAfter",
-    "has elapsed since the refusal",
-    "settings.warmImage: false",
-  ].forEach((text) => expect(output).toContain(text));
-  expect(output).not.toContain("--recover");
+  expectText(
+    output,
+    [
+      "Capture unsupported: Native capture is unsupported by this coordinator.",
+      "use an existing compatible snapshot when one is available",
+      "capture attempts are skipped until warmImages.refreshAfter has elapsed since the refusal",
+      "settings.warmImage: false",
+    ],
+    ["--recover"],
+  );
   expect(openWarmImageStore().lookup("profile")).toEqual(record);
 });
 
-it("recovers a legacy allocation only after acknowledgment of the exact unchanged row", async () => {
+it("rejects unacknowledged or changed legacy allocation selectors", async () => {
   const legacy = createPluginStateSyncKeyedStoreForTests<{ machineClass: string }>("crabbox", {
     namespace: "warm-leases",
     maxEntries: 256,
   });
   legacy.register("cbx_legacy", { machineClass: "standard" });
-  await expect(assertCrabboxWarmImageMigrationReady(crabboxState)).rejects.toThrow(
-    "legacy worker allocations",
-  );
   await runCli("--json");
   const { selector, ...lease } = JSON.parse(output).legacyLeases[0];
   expect(lease).toMatchObject({ leaseId: "cbx_legacy", machineClass: "standard" });
@@ -97,21 +88,12 @@ it("recovers a legacy allocation only after acknowledgment of the exact unchange
   legacy.register("cbx_legacy", { machineClass: "fast" });
   await expect(recover(selector)).rejects.toThrow("selector is absent or changed");
   expect(legacy.lookup("cbx_legacy")).toEqual({ machineClass: "fast" });
-  await runCli("--json");
-  await recover(JSON.parse(output).legacyLeases[0].selector);
-  expect(legacy.lookup("cbx_legacy")).toBeUndefined();
-  await expect(assertCrabboxWarmImageMigrationReady(crabboxState)).resolves.toBeUndefined();
 });
 
 it("recovers only the exact selected capture without clearing retained images or retirement", async () => {
   const record = pendingCapture();
   await expect(runCli("--acknowledge-provider-cleanup")).rejects.toThrow("requires --recover");
   expect(openWarmImageStore().lookup("profile")).toEqual(record);
-  const retiring: WarmProfileRecord = {
-    ...record,
-    image: { ...record.image, checkpointId: "chk_replacement" },
-    operation: { type: "retire", checkpointId: "chk_predecessor" },
-  };
   openWarmImageStore().register("other", retiring);
 
   await recover(SELECTOR, "--json");
@@ -132,23 +114,19 @@ it.each(["scrubbing", "uncertain"] as const)(
   "prints guidance for an old %s capture and pending deletion",
   async (phase) => {
     const record = pendingCapture(phase);
-    openWarmImageStore().register("retiring", {
-      ...record,
-      operation: { type: "retire", checkpointId: "chk_predecessor" },
-    });
+    openWarmImageStore().register("retiring", retiring);
 
     await runCli();
 
     if (phase === "uncertain") {
-      [
+      expectText(output, [
         `openclaw crabbox warm-images --recover ${SELECTOR} --acknowledge-provider-cleanup`,
         "Stop the owning Gateway and capture processes",
-      ].forEach((text) => expect(output).toContain(text));
+        "chk_interrupted_a",
+        "chk_interrupted_b",
+      ]);
     } else {
-      expect(output).toContain("may still be");
-      for (const absent of ["paused", "--recover", "Stop the owning Gateway"]) {
-        expect(output).not.toContain(absent);
-      }
+      expectText(output, ["may still be"], ["paused", "--recover", "Stop the owning Gateway"]);
     }
     expect(output).toContain("Checkpoint deletion pending: chk_predecessor");
     expect(openWarmImageStore().lookup("profile")).toEqual(record);

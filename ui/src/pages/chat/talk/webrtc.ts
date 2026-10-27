@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../../src/talk/describe-view-tool.js";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { RealtimeTalkMediaStreamMeter } from "./audio.ts";
 import { RealtimeTalkCameraOwner } from "./camera-owner.ts";
 import {
@@ -105,13 +106,13 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         play(!event.track.muted);
         // iOS can deliver the remote track muted until media starts flowing.
         // Retrying on unmute gives Safari a second chance to attach the live stream.
-        event.track.addEventListener("unmute", () => play(true), {
+        listen(event.track, "unmute", () => play(true), {
           once: true,
           ...listenerOptions,
         });
       }
     };
-    peer.addEventListener("track", onTrack, listenerOptions);
+    listen(peer, "track", onTrack, listenerOptions);
     const media = this.input.adopt((detail) => this.failConnection(detail));
     if (this.ctx.callbacks.onInputLevel) {
       this.inputMeter = new RealtimeTalkMediaStreamMeter(this.ctx.callbacks.onInputLevel);
@@ -131,7 +132,8 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       return this.cancelledStart();
     }
     this.channel = channel;
-    channel.addEventListener(
+    listen(
+      channel,
       "open",
       () => {
         this.ctx.callbacks.onStatus?.("listening");
@@ -141,11 +143,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       },
       listenerOptions,
     );
-    channel.addEventListener(
-      "message",
-      (event) => this.handleRealtimeEvent(event.data),
-      listenerOptions,
-    );
+    listen(channel, "message", (event) => this.handleRealtimeEvent(event.data), listenerOptions);
     const onConnectionStateChange = () => {
       if (this.closed) {
         return;
@@ -154,7 +152,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         this.failConnection("Realtime connection closed");
       }
     };
-    peer.addEventListener("connectionstatechange", onConnectionStateChange, listenerOptions);
+    listen(peer, "connectionstatechange", onConnectionStateChange, listenerOptions);
 
     try {
       const offer = await peer.createOffer();
@@ -215,32 +213,28 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         this.ctx.callbacks.onTalkEvent?.({ type: "session.closed" });
       }
     } finally {
-      this.releaseResources();
+      this.starting = false;
+      this.controlAbortController.abort();
+      this.input.stop();
+      this.offerExchange.abort();
+      this.channel?.close();
+      this.channel = null;
+      this.peer?.close();
+      this.peer = null;
+      this.camera.release();
+      this.inputMeter?.stop();
+      this.inputMeter = null;
+      this.audio?.remove();
+      this.audio = null;
+      for (const controller of this.consultAbortControllers) {
+        controller.abort();
+      }
+      this.consultAbortControllers.clear();
+      this.completedToolCallIds.clear();
+      this.responseOutcomes.reset();
+      this.responseState = "idle";
+      this.responseCreatePending = false;
     }
-  }
-
-  private releaseResources(): void {
-    this.starting = false;
-    this.controlAbortController.abort();
-    this.input.stop();
-    this.offerExchange.abort();
-    this.channel?.close();
-    this.channel = null;
-    this.peer?.close();
-    this.peer = null;
-    this.camera.release();
-    this.inputMeter?.stop();
-    this.inputMeter = null;
-    this.audio?.remove();
-    this.audio = null;
-    for (const controller of this.consultAbortControllers) {
-      controller.abort();
-    }
-    this.consultAbortControllers.clear();
-    this.completedToolCallIds.clear();
-    this.responseOutcomes.reset();
-    this.responseState = "idle";
-    this.responseCreatePending = false;
   }
 
   private failConnection(detail: string): void {
@@ -336,8 +330,28 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
             void steerRealtimeTalkActiveConsult({
               ctx: this.ctx,
               text: event.transcript,
-              onControlResult: (result) => this.interruptSuppressedControlResponse(result),
-              speakControlResult: (message) => this.sendControlSpeechMessage(message),
+              onControlResult: (result) => {
+                if (
+                  this.responseState === "active" &&
+                  shouldInterruptRealtimeTalkControlResponse(result)
+                ) {
+                  this.send({ type: "response.cancel" });
+                }
+              },
+              speakControlResult: (message) => {
+                if (this.responseState === "active") {
+                  this.send({ type: "response.cancel" });
+                }
+                this.send({
+                  type: "conversation.item.create",
+                  item: {
+                    type: "message",
+                    role: "user",
+                    content: [{ type: "input_text", text: message }],
+                  },
+                });
+                this.requestResponseCreate();
+              },
             });
           }
         }
@@ -557,27 +571,6 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       },
     });
     this.requestResponseCreate();
-  }
-
-  private sendControlSpeechMessage(message: string): void {
-    if (this.responseState === "active") {
-      this.send({ type: "response.cancel" });
-    }
-    this.send({
-      type: "conversation.item.create",
-      item: {
-        type: "message",
-        role: "user",
-        content: [{ type: "input_text", text: message }],
-      },
-    });
-    this.requestResponseCreate();
-  }
-
-  private interruptSuppressedControlResponse(result: unknown): void {
-    if (this.responseState === "active" && shouldInterruptRealtimeTalkControlResponse(result)) {
-      this.send({ type: "response.cancel" });
-    }
   }
 
   private requestResponseCreate(): void {

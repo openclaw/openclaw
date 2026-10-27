@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   validateQaEvidenceSummaryJson,
+  type QaEvidenceSummaryJson,
   type QaSeedScenarioWithSource,
 } from "../../../../extensions/qa-lab/test-api.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
@@ -10,8 +11,6 @@ import {
   parseTuiPtyProducerOptions,
   runTuiPtyEvidenceProducer,
   validateTuiPtyScenario,
-  verifyTuiPtyVitestReport,
-  type TuiPtyCase,
 } from "./tui-pty-evidence-producer.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/tui/tui-pty-evidence-producer.ts";
@@ -22,22 +21,14 @@ const COVERAGE_ID = "tui.message-composition";
 const TEST_SUITE = "TUI PTY harness";
 const TEST_TITLE = "drives the real TUI terminal loop";
 const TEST_NAME = `${TEST_SUITE} > ${TEST_TITLE}`;
+const CASE = { coverageId: COVERAGE_ID, testFile: HARNESS_FILE, testNamePattern: `^${TEST_NAME}$` };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
 
-function makeScenario({
-  cases = [makeCase()],
-  primary = [],
-  executionKind = "script",
-  executionPath = SOURCE_PATH,
-  ...config
-}: {
-  cases?: unknown[];
-  primary?: string[];
-  executionKind?: "script" | "vitest";
-  executionPath?: string;
-  requireBuiltCli?: unknown;
-} = {}): QaSeedScenarioWithSource {
+function makeScenario(
+  config: Record<string, unknown> = {},
+  overrides: Partial<QaSeedScenarioWithSource> = {},
+): QaSeedScenarioWithSource {
   return {
     id: "tui-pty-evidence-producer-contract",
     title: "TUI PTY producer test",
@@ -45,26 +36,18 @@ function makeScenario({
     objective: "Prove the TUI PTY evidence producer contract.",
     successCriteria: ["The configured PTY assertion passes."],
     sourcePath: "qa/scenarios/ui/tui-pty-producer-test.yaml",
-    coverage: { primary, secondary: [COVERAGE_ID] },
+    coverage: { primary: [], secondary: [COVERAGE_ID] },
     execution: {
-      kind: executionKind,
-      path: executionPath,
-      config: { tuiPtyCases: cases, ...config },
+      kind: "script",
+      path: SOURCE_PATH,
+      config: { tuiPtyCases: [CASE], ...config },
     },
+    ...overrides,
   };
 }
 
 function caseOverride(overrides: Record<string, unknown>) {
-  return { cases: [{ ...makeCase(), ...overrides }] };
-}
-
-function makeCase(overrides: Partial<TuiPtyCase> = {}): TuiPtyCase {
-  return {
-    coverageId: COVERAGE_ID,
-    testFile: HARNESS_FILE,
-    testNamePattern: `^${TEST_NAME}$`,
-    ...overrides,
-  };
+  return { tuiPtyCases: [{ ...CASE, ...overrides }] };
 }
 
 async function writeFiles(repoRoot: string, files: string[]) {
@@ -75,50 +58,38 @@ async function writeFiles(repoRoot: string, files: string[]) {
   }
 }
 
-function makeReport(testFile = HARNESS_FILE, title = TEST_TITLE) {
+async function writeReport(testFile = HARNESS_FILE, title = TEST_TITLE) {
   const assertion = { ancestorTitles: [TEST_SUITE], status: "passed", title };
-  return {
+  const report = {
     numFailedTests: 0,
     numPassedTests: 1,
     success: true,
     testResults: [{ name: testFile, assertionResults: [assertion] }],
   };
-}
-
-async function writeReport(command: { args: string[] }, testFile = HARNESS_FILE) {
-  const reportPath =
-    command.args
-      .find((arg) => arg.startsWith("--outputFile.json="))
-      ?.slice("--outputFile.json=".length) ?? "";
-  await fs.writeFile(reportPath, `${JSON.stringify(makeReport(testFile))}\n`, "utf8");
+  const reportPath = artifactPath("vitest-report.json");
+  await fs.writeFile(reportPath, JSON.stringify(report));
   return reportPath;
 }
 
-async function makeProducer(built = false) {
+let repoRoot: string;
+const artifactPath = (name: string) => path.join(repoRoot, ".artifacts", name);
+const readArtifact = (name: string) => fs.readFile(artifactPath(name), "utf8");
+beforeEach(async () => {
+  repoRoot = tempDirs.make("openclaw-tui-pty-producer-");
+  await writeFiles(repoRoot, [HARNESS_FILE, LOCAL_FILE, RESET_FILE]);
+});
+function run(built: boolean, dependencies: Parameters<typeof runTuiPtyEvidenceProducer>[1]) {
   const scenario = makeScenario({
     requireBuiltCli: built,
-    cases: [makeCase({ testFile: built ? LOCAL_FILE : HARNESS_FILE })],
+    ...caseOverride({ testFile: built ? LOCAL_FILE : HARNESS_FILE }),
   });
-  const repoRoot = tempDirs.make("openclaw-tui-pty-producer-");
-  await writeFiles(repoRoot, [HARNESS_FILE, LOCAL_FILE, RESET_FILE]);
-  const artifactBase = path.join(repoRoot, ".artifacts");
-  return {
-    repoRoot,
-    artifactBase,
-    readArtifact: async (name: string): Promise<unknown> =>
-      JSON.parse(await fs.readFile(path.join(artifactBase, name), "utf8")),
-    run: (dependencies: Parameters<typeof runTuiPtyEvidenceProducer>[1]) =>
-      runTuiPtyEvidenceProducer(
-        { artifactBase, repoRoot, scenarioId: scenario.id },
-        { loadScenario: () => scenario, ...dependencies },
-      ),
-  };
+  return runTuiPtyEvidenceProducer(
+    { artifactBase: artifactPath(""), repoRoot, scenarioId: scenario.id },
+    { loadScenario: () => scenario, ...dependencies },
+  );
 }
 
-function expectFailure(
-  evidence: Awaited<ReturnType<typeof runTuiPtyEvidenceProducer>>,
-  reason: string,
-) {
+function expectFailure(evidence: QaEvidenceSummaryJson, reason: string) {
   expect(evidence.entries[0]?.result).toMatchObject({
     status: "fail",
     failure: { reason: expect.stringContaining(reason) },
@@ -134,62 +105,45 @@ it("accepts only the two required CLI arguments exactly once", () => {
     scenarioId: "scenario-id",
   });
   invalid([], "--artifact-base is required");
-  invalid(
-    ["--artifact-base", "out", "--extra", "value"],
-    "unsupported TUI PTY evidence producer argument",
-  );
-  invalid(
-    ["--artifact-base", "one", "--artifact-base", "two", "--scenario-id", "id"],
-    "--artifact-base was provided more than once",
-  );
+  invalid(["--artifact-base", "out", "--extra", "value"], "unsupported");
+  invalid(["--artifact-base", "one", "--artifact-base", "two"], "provided more than once");
 });
 
-it.each<[Parameters<typeof makeScenario>[0], string]>([
+it.each<[Record<string, unknown>, string, Partial<QaSeedScenarioWithSource>?]>([
   [caseOverride({ testFile: "../outside.test.ts" }), "testFile is not allowlisted"],
   [caseOverride({ testFile: "src/tui/other.e2e.test.ts" }), "testFile is not allowlisted"],
   [caseOverride({ extra: true }), "contains unsupported key extra"],
   [caseOverride({ testNamePattern: "[" }), "testNamePattern is invalid"],
   [caseOverride({ coverageId: "tui.output-safety" }), "coverage ID not owned by scenario"],
+  [{}, "without TUI PTY cases", { coverage: { primary: [COVERAGE_ID, "tui.output-safety"] } }],
+  [{ tuiPtyCases: [CASE, CASE] }, "duplicate TUI PTY case"],
+  [{}, "execution.kind=script", { execution: { kind: "vitest", path: SOURCE_PATH } }],
+  [{}, "must execute", { execution: { kind: "script", path: "test/other.ts" } }],
+  [{ requireBuiltCli: null }, "must be a boolean"],
   [
-    { primary: [COVERAGE_ID, "tui.output-safety"] },
-    "primary coverage IDs without TUI PTY cases: tui.output-safety",
+    { requireBuiltCli: true, tuiPtyCases: [{ ...CASE, testFile: LOCAL_FILE }, CASE] },
+    "every testFile to be exactly",
   ],
-  [{ cases: [makeCase(), makeCase()] }, "duplicate TUI PTY case"],
-  [{ executionKind: "vitest" }, "execution.kind=script"],
-  [{ executionPath: "test/other.ts" }, `must execute ${SOURCE_PATH}`],
-  [{ requireBuiltCli: "built" }, "execution.config.requireBuiltCli must be a boolean"],
-  [{ requireBuiltCli: null }, "execution.config.requireBuiltCli must be a boolean"],
-  [{ requireBuiltCli: true }, `every testFile to be exactly ${LOCAL_FILE}`],
-  [
-    { requireBuiltCli: true, cases: [makeCase({ testFile: LOCAL_FILE }), makeCase()] },
-    `every testFile to be exactly ${LOCAL_FILE}`,
-  ],
-])("rejects scenario %j: %s", (params, message) => {
-  expect(() => validateTuiPtyScenario(makeScenario(params))).toThrow(message);
-});
-
-it("rejects wrong-file and unmatched-pattern reports", async () => {
-  const { repoRoot } = await makeProducer();
-  const verify = (report: ReturnType<typeof makeReport>) =>
-    verifyTuiPtyVitestReport({ cases: [makeCase()], repoRoot, report });
-  await expect(verify(makeReport(RESET_FILE))).rejects.toThrow(
-    `no result for configured test file ${HARNESS_FILE}`,
-  );
-  await expect(verify(makeReport(HARNESS_FILE, "another assertion"))).rejects.toThrow(
-    "no passed assertion",
-  );
+])("rejects scenario %j: %s", (config, message, overrides) => {
+  expect(() => validateTuiPtyScenario(makeScenario(config, overrides))).toThrow(message);
 });
 
 it.each([
   ["missing", "did not write vitest-report.json"],
   ["stale", "report is stale"],
+  ["wrong-file", "no result for configured test file"],
+  ["unmatched", "no passed assertion"],
 ])("fails for a %s report", async (kind, reason) => {
-  const producer = await makeProducer();
-  const evidence = await producer.run({
+  const evidence = await run(false, {
     now: () => 10_000,
-    runCommand: async (command) => {
-      if (kind === "stale") {
-        await fs.utimes(await writeReport(command), new Date(0), new Date(0));
+    runCommand: async () => {
+      if (kind !== "missing") {
+        const file = kind === "wrong-file" ? RESET_FILE : HARNESS_FILE;
+        const title = kind === "unmatched" ? "another assertion" : TEST_TITLE;
+        const report = await writeReport(file, title);
+        if (kind === "stale") {
+          await fs.utimes(report, new Date(0), new Date(0));
+        }
       }
       return { exitCode: 0, signal: null };
     },
@@ -197,80 +151,56 @@ it.each([
   expectFailure(evidence, reason);
 });
 
-it.each(["openclaw.mjs", "dist"])(
-  "fails built preflight without %s before spawning",
-  async (missing) => {
-    const producer = await makeProducer(true);
-    await writeFiles(producer.repoRoot, ["openclaw.mjs", "dist/entry.js"]);
-    await fs.rm(path.join(producer.repoRoot, missing), { recursive: true });
-    const runCommand = vi.fn(async () => ({ exitCode: 0, signal: null }));
-    const evidence = await producer.run({ runCommand });
+it.each(["openclaw.mjs", "dist"])("rejects missing built artifact %s", async (missing) => {
+  await writeFiles(repoRoot, ["openclaw.mjs", "dist/entry.js"]);
+  await fs.rm(path.join(repoRoot, missing), { recursive: true });
+  const runCommand = vi.fn(async () => ({ exitCode: 0, signal: null }));
+  const evidence = await run(true, { runCommand });
 
-    expect(runCommand).not.toHaveBeenCalled();
-    expect(evidence.entries[0]?.execution?.artifacts).toMatchObject([
-      { kind: "log", path: "tui-pty-evidence-producer.log" },
-      { kind: "proof-matrix", path: "proof-matrix.json" },
-    ]);
-    expectFailure(
-      evidence,
-      "cliMode=built requires readable openclaw.mjs and at least one readable dist/entry.js or dist/entry.mjs",
-    );
-  },
-);
+  expect(runCommand).not.toHaveBeenCalled();
+  expect(evidence.entries[0]?.execution?.artifacts).toMatchObject([
+    { kind: "log", path: "tui-pty-evidence-producer.log" },
+    { kind: "proof-matrix", path: "proof-matrix.json" },
+  ]);
+  expectFailure(evidence, "cliMode=built requires readable");
+});
 
-it.each([null, "entry.js", "entry.mjs"] as const)(
-  "writes sanitized evidence (%s)",
-  async (entry) => {
-    vi.stubEnv("OPENCLAW_TUI_PTY_INCLUDE_LOCAL", "inherited");
-    vi.stubEnv("OPENCLAW_TUI_PTY_USE_BUILT_CLI", "inherited");
-    vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH", "/shared/vitest-cache");
-    const built = entry !== null;
-    const testFile = built ? LOCAL_FILE : HARNESS_FILE;
-    const { repoRoot, artifactBase, run, readArtifact } = await makeProducer(built);
-    if (entry) {
-      await writeFiles(repoRoot, ["openclaw.mjs", `dist/${entry}`]);
-    }
-    const evidence = await run({
-      runCommand: async (command) => {
-        expect(command.args).toEqual(
-          expect.arrayContaining([
-            "scripts/run-vitest.mjs",
-            "run",
-            "--config",
-            "test/vitest/vitest.tui-pty.config.ts",
-            testFile,
-            "--reporter=json",
-            `--outputFile.json=${path.join(artifactBase, "vitest-report.json")}`,
-          ]),
-        );
-        expect([
-          command.env.OPENCLAW_BEHAVIOR_EVIDENCE,
-          command.env.OPENCLAW_TUI_PTY_INCLUDE_LOCAL,
-          command.env.OPENCLAW_TUI_PTY_USE_BUILT_CLI,
-          command.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH,
-        ]).toEqual([
-          "1",
-          built ? "1" : undefined,
-          built ? "1" : undefined,
-          path.join(artifactBase, "vitest-fs-module-cache"),
-        ]);
-        await writeReport(command, built ? testFile : path.join(repoRoot, testFile));
-        return { exitCode: 0, signal: null };
-      },
-    });
-    expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
-    expect(evidence.entries[0]).toMatchObject({
-      coverage: [{ id: COVERAGE_ID, role: "secondary" }],
-      result: { status: "pass" },
-    });
-    expect(await readArtifact("proof-matrix.json")).toMatchObject({
-      cliMode: built ? "built" : "source",
-      cases: [{ coverageId: COVERAGE_ID, matchedAssertions: [TEST_NAME] }],
-    });
-    const reportText = await fs.readFile(path.join(artifactBase, "vitest-report.json"), "utf8");
-    expect(reportText).toContain(`"name": "${testFile}"`);
-    expect(reportText).not.toContain(repoRoot);
-    await fs.access(path.join(artifactBase, "latest-run.json"));
-    await fs.access(path.join(artifactBase, "qa-evidence.json"));
-  },
-);
+it.each([null, "entry.js", "entry.mjs"] as const)("sanitizes evidence (%s)", async (entry) => {
+  vi.stubEnv("OPENCLAW_TUI_PTY_INCLUDE_LOCAL", "inherited");
+  vi.stubEnv("OPENCLAW_TUI_PTY_USE_BUILT_CLI", "inherited");
+  vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH", "/shared/vitest-cache");
+  const built = entry !== null;
+  const testFile = built ? LOCAL_FILE : HARNESS_FILE;
+  if (entry) {
+    await writeFiles(repoRoot, ["openclaw.mjs", `dist/${entry}`]);
+  }
+  const evidence = await run(built, {
+    runCommand: async (command) => {
+      expect(command.args).toContain(testFile);
+      expect(command.args).toContain(`--outputFile.json=${artifactPath("vitest-report.json")}`);
+      const expectedEnv = {
+        OPENCLAW_BEHAVIOR_EVIDENCE: "1",
+        OPENCLAW_TUI_PTY_INCLUDE_LOCAL: built ? "1" : undefined,
+        OPENCLAW_TUI_PTY_USE_BUILT_CLI: built ? "1" : undefined,
+        OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: artifactPath("vitest-fs-module-cache"),
+      };
+      const actualEnv = Object.keys(expectedEnv).map((key) => command.env[key]);
+      expect(actualEnv).toEqual(Object.values(expectedEnv));
+      await writeReport(built ? testFile : path.join(repoRoot, testFile));
+      return { exitCode: 0, signal: null };
+    },
+  });
+  expect(validateQaEvidenceSummaryJson(evidence).entries[0]).toMatchObject({
+    coverage: [{ id: COVERAGE_ID, role: "secondary" }],
+    result: { status: "pass" },
+  });
+  expect(JSON.parse(await readArtifact("proof-matrix.json"))).toMatchObject({
+    cliMode: built ? "built" : "source",
+    cases: [{ coverageId: COVERAGE_ID, matchedAssertions: [TEST_NAME] }],
+  });
+  const reportText = await readArtifact("vitest-report.json");
+  expect(reportText).toContain(`"name": "${testFile}"`);
+  expect(reportText).not.toContain(repoRoot);
+  await fs.access(artifactPath("latest-run.json"));
+  await fs.access(artifactPath("qa-evidence.json"));
+});

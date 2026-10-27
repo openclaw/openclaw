@@ -12,8 +12,7 @@ import {
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import "../test-helpers/app-sidebar-tool-activity-cases.ts";
 
-// Mirrors the protocol throttle; asserting through timers keeps the
-// constant unexported (production-only export policy).
+// Assert the protocol throttle through timers without a production-only export.
 const SIDEBAR_NARRATION_THROTTLE_MS = 2_000;
 const runKey = "agent:main:run";
 
@@ -55,10 +54,27 @@ const chatSnapshot = (text: string, fields: Record<string, unknown> = {}) =>
 
 const digest = (text: string) => runEvent("session.narration", { text });
 
-function messageSource(subscribe = (key: string) => Promise.resolve({ key, agentId: null })) {
+function sourceWith<
+  T extends NonNullable<SidebarNarrationSyncInput["source"]>["subscribeMessages"],
+>(subscribeMessages: T) {
   return {
-    subscribeMessages: vi.fn(subscribe),
-    unsubscribeMessages: vi.fn(() => Promise.resolve()),
+    subscribeMessages,
+    unsubscribeMessages: vi
+      .fn<SessionCapability["unsubscribeMessages"]>()
+      .mockResolvedValue(undefined),
+  };
+}
+function messageSource(subscribe = (key: string) => Promise.resolve({ key, agentId: null })) {
+  return sourceWith(vi.fn(subscribe));
+}
+function coordinatedSource(
+  request: ConstructorParameters<typeof GatewaySessionMessageSubscriptionCoordinator>[0]["request"],
+) {
+  const coordinator = new GatewaySessionMessageSubscriptionCoordinator({ request });
+  return {
+    coordinator,
+    subscribeMessages: vi.fn(coordinator.acquire.bind(coordinator)),
+    unsubscribeMessages: vi.fn(coordinator.release.bind(coordinator)),
   };
 }
 function startNarration(
@@ -77,7 +93,13 @@ function startNarration(
   };
   const narration = createSidebarNarration();
   narration.sync(input);
-  return { narration, input, emit: narration.handleEvent };
+  return {
+    narration,
+    input,
+    emit: narration.handleEvent,
+    line: (expected: string | undefined, key = runKey) =>
+      expect(narration.read().lines.get(key)).toBe(expected),
+  };
 }
 const narrationFixture = () => startNarration(messageSource());
 
@@ -155,15 +177,8 @@ describe("createSidebarNarration", () => {
       }
       return { key: params.key };
     });
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator({ request });
-    const source = {
-      subscribeMessages: vi.fn<SessionCapability["subscribeMessages"]>((key, options) =>
-        coordinator.acquire(key, options),
-      ),
-      unsubscribeMessages: vi.fn<SessionCapability["unsubscribeMessages"]>((handle) =>
-        coordinator.release(handle),
-      ),
-    };
+    const source = coordinatedSource(request);
+    const { coordinator } = source;
     const selectedPane = await coordinator.acquire("agent:main:open");
     const outbox = await coordinator.acquire("agent:main:background-0");
     const { narration, input, emit } = startNarration(source, {
@@ -229,15 +244,9 @@ describe("createSidebarNarration", () => {
       const visibility = browserVisibility();
       const first = createDeferred<{ key: string; agentId: null }>();
       const second = createDeferred<{ key: string; agentId: null }>();
-      const source = {
-        subscribeMessages: vi
-          .fn()
-          .mockReturnValueOnce(first.promise)
-          .mockReturnValueOnce(second.promise),
-        unsubscribeMessages: vi.fn<SessionCapability["unsubscribeMessages"]>(() =>
-          Promise.resolve(),
-        ),
-      };
+      const source = sourceWith(
+        vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise),
+      );
       const { narration, input } = startNarration(source);
       if (boundary === "visibility") {
         visibility("hidden");
@@ -249,10 +258,7 @@ describe("createSidebarNarration", () => {
         narration.sync({
           ...input,
           rows: [],
-          source: {
-            subscribeMessages: vi.fn(),
-            unsubscribeMessages: vi.fn(() => Promise.resolve()),
-          },
+          source: sourceWith(vi.fn()),
         });
       }
       const current = { key: runKey, agentId: null };
@@ -312,7 +318,7 @@ describe("createSidebarNarration", () => {
   });
 
   it("renders paced digests immediately and keeps the final line after queued tool activity", async () => {
-    const { narration, emit } = narrationFixture();
+    const { narration, emit, line } = narrationFixture();
     const tool = () =>
       runEvent("session.tool", {
         stream: "tool",
@@ -321,29 +327,24 @@ describe("createSidebarNarration", () => {
 
     emit(tool());
     emit(digest("**Reading** source."));
-    expect(narration.read().lines.get(runKey)).toBe("Reading source.");
+    line("Reading source.");
     await vi.advanceTimersByTimeAsync(SIDEBAR_NARRATION_THROTTLE_MS);
     emit(digest("Earlier.\n\nChecks are **passing**."));
-    expect(narration.read().lines.get(runKey)).toBe("Checks are passing.");
+    line("Checks are passing.");
 
     emit(tool());
     await vi.advanceTimersByTimeAsync(100);
     emit(digest("Final result."));
-    emit(
-      runEvent("chat", {
-        state: "final",
-        message: assistant("Final result."),
-      }),
-    );
-    expect(narration.read().lines.get(runKey)).toBe("Final result.");
+    emit(chatFrame({ state: "final", message: assistant("Final result.") }));
+    line("Final result.");
     expect(vi.getTimerCount()).toBe(0);
     await vi.advanceTimersByTimeAsync(SIDEBAR_NARRATION_THROTTLE_MS);
-    expect(narration.read().lines.get(runKey)).toBe("Final result.");
+    line("Final result.");
     narration.disconnect();
   });
 
   it("scopes digest replacements and retracts hidden content across run boundaries", () => {
-    const { narration, emit } = narrationFixture();
+    const { narration, emit, line } = narrationFixture();
 
     emit(digest("Visible progress."));
     emit(
@@ -354,7 +355,7 @@ describe("createSidebarNarration", () => {
       }),
     );
     emit(gatewayEvent("session.narration", { sessionKey: runKey, text: "No run identity." }));
-    expect(narration.read().lines.get(runKey)).toBe("Visible progress.");
+    line("Visible progress.");
 
     for (const text of ["", "HEARTBEAT_OK"]) {
       emit(digest("Visible draft."));
@@ -363,8 +364,7 @@ describe("createSidebarNarration", () => {
     }
     emit(digest("Previous run result."));
     emit(
-      gatewayEvent("agent", {
-        sessionKey: runKey,
+      runEvent("agent", {
         runId: "run-2",
         stream: "lifecycle",
         data: { phase: "start" },
@@ -372,23 +372,22 @@ describe("createSidebarNarration", () => {
     );
     expect(narration.read().lines.has(runKey)).toBe(false);
     emit(
-      gatewayEvent("session.narration", {
-        sessionKey: runKey,
+      runEvent("session.narration", {
         runId: "run-2",
         text: "New run progress.",
       }),
     );
-    expect(narration.read().lines.get(runKey)).toBe("New run progress.");
+    line("New run progress.");
     narration.disconnect();
   });
 
   it.each(["final", "aborted", "error"])(
     "settles queued full-owner narration immediately on %s",
     (state) => {
-      const { narration, emit } = narrationFixture();
+      const { narration, emit, line } = narrationFixture();
       emit(chatDelta("Initial work."));
       emit(chatDelta("Last visible result."));
-      expect(narration.read().lines.get(runKey)).toBe("Initial work.");
+      line("Initial work.");
 
       emit(
         runEvent("chat", {
@@ -396,21 +395,19 @@ describe("createSidebarNarration", () => {
           ...(state === "final" ? { message: assistant("Final corrected result.") } : {}),
         }),
       );
-      expect(narration.read().lines.get(runKey)).toBe(
-        state === "final" ? "Final corrected result." : "Last visible result.",
-      );
+      line(state === "final" ? "Final corrected result." : "Last visible result.");
       expect(vi.getTimerCount()).toBe(0);
       narration.disconnect();
     },
   );
 
   it("hands subtitle ownership only to a run-identified digest", async () => {
-    const { narration, emit } = narrationFixture();
+    const { narration, emit, line } = narrationFixture();
 
     emit(chatDelta("Reading source"));
     emit(toolEvent("read"));
     expect(narration.read().tools.get(runKey)?.name).toBe("read");
-    expect(narration.read().lines.get(runKey)).toBe("Reading source");
+    line("Reading source");
 
     emit(
       gatewayEvent("session.observer", {
@@ -425,7 +422,7 @@ describe("createSidebarNarration", () => {
     await vi.advanceTimersByTimeAsync(SIDEBAR_NARRATION_THROTTLE_MS);
     emit(toolEvent("list"));
     expect(narration.read().tools.get(runKey)?.name).toBe("list");
-    expect(narration.read().lines.get(runKey)).toBe("Reading source");
+    line("Reading source");
 
     emit(observer("Reviewing source"));
     expect(narration.read().lines.has(runKey)).toBe(false);
@@ -443,16 +440,15 @@ describe("createSidebarNarration", () => {
     emit(toolEvent("test", { runId: "run-2" }));
     expect(narration.read().observerDigests.has(runKey)).toBe(false);
     expect(narration.read().tools.get(runKey)?.name).toBe("test");
-    expect(narration.read().lines.get(runKey)).toBeUndefined();
+    line(undefined);
   });
 
   it("rebinds an active global session when the selected agent changes", async () => {
     const subscribeMessages = vi.fn((key: string, options?: { agentId?: string | null }) =>
       Promise.resolve({ key, agentId: options?.agentId ?? null }),
     );
-    const unsubscribeMessages = vi.fn(() => Promise.resolve());
-    const source = { subscribeMessages, unsubscribeMessages };
-    const { narration, input, emit } = startNarration(source, {
+    const source = sourceWith(subscribeMessages);
+    const { narration, input, emit, line } = startNarration(source, {
       rows: [runningRow("global")],
     });
     await Promise.resolve();
@@ -465,12 +461,12 @@ describe("createSidebarNarration", () => {
         message: assistant("Old agent work."),
       }),
     );
-    expect(narration.read().lines.get("global")).toBe("Old agent work.");
+    line("Old agent work.", "global");
 
     narration.sync({ ...input, agentId: "research" });
     await Promise.resolve();
 
-    expect(unsubscribeMessages).toHaveBeenCalledWith({ key: "global", agentId: "main" });
+    expect(source.unsubscribeMessages).toHaveBeenCalledWith({ key: "global", agentId: "main" });
     expect(subscribeMessages).toHaveBeenLastCalledWith("global", {
       agentId: "research",
       mode: "narration",
@@ -487,6 +483,14 @@ describe("createSidebarNarration", () => {
   const internal = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
   const internalEnd = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
   const preamble = `Preamble ${"x".repeat(20_000)}`;
+  const privateBlock = `${internal}\nprivate runtime text`;
+  const longBlock = `Visible setup.\n${internal}\n${"private runtime detail ".repeat(1_000)}`;
+  const nestedBlock =
+    `Visible setup.\n${internal}\n${"private outer runtime detail ".repeat(1_000)}\n` +
+    `${internal}\n${"private nested runtime detail ".repeat(1_000)}\n${internalEnd}`;
+  const normalized =
+    `Visible work is complete.\n<think>private reasoning</think>\n${internal}\n` +
+    `private runtime details\n${internalEnd}\n[[audio_as_voice]]\nREPLY_SKIP`;
   it.each([
     scenario("last prose paragraph", [
       chatDelta(
@@ -512,22 +516,11 @@ describe("createSidebarNarration", () => {
     ]),
     scenario(
       "overlapping agent and chat deltas",
-      [chatDelta("Reading"), undefined],
-      [
-        runEvent("agent", {
-          stream: "assistant",
-          data: { delta: " files" },
-        }),
-        undefined,
-      ],
+      [chatDelta("Reading")],
+      [runEvent("agent", { stream: "assistant", data: { delta: " files" } })],
       [chatDelta(undefined, " files"), "Reading files", true],
     ),
-    scenario("snapshot display normalization", [
-      chatDelta(
-        `Visible work is complete.\n<think>private reasoning</think>\n${internal}\nprivate runtime details\n${internalEnd}\n[[audio_as_voice]]\nREPLY_SKIP`,
-      ),
-      "REPLY_SKIP",
-    ]),
+    scenario("snapshot display normalization", [chatDelta(normalized), "REPLY_SKIP"]),
     scenario("trailing heartbeat token", [
       chatDelta(`${"Visible progress continues. ".repeat(16)}Final visible status. HEARTBEAT_OK`),
       (line: string) => {
@@ -537,10 +530,7 @@ describe("createSidebarNarration", () => {
     ]),
     scenario(
       "truncated internal block",
-      [
-        chatDelta(`Visible setup.\n${internal}\n${"private runtime detail ".repeat(1_000)}`),
-        "Visible setup.",
-      ],
+      [chatDelta(longBlock), "Visible setup."],
       [chatDelta(undefined, `\n${internalEnd}\nFinal bounded line.`), "Final bounded line.", true],
     ),
     scenario(
@@ -550,27 +540,19 @@ describe("createSidebarNarration", () => {
     ),
     scenario(
       "replacement resets internal streaming state",
-      [
-        chatDelta(`${internal}\nprivate runtime text`, `${internal}\nprivate runtime text`),
-        undefined,
-      ],
-      [chatDelta(undefined, "Replacement", true), undefined],
+      [chatDelta(privateBlock, privateBlock)],
+      [chatDelta(undefined, "Replacement", true)],
       [chatDelta(undefined, " now."), "Replacement now.", true],
     ),
     scenario(
       "nested internal block outlives the raw buffer",
-      [
-        chatDelta(
-          `Visible setup.\n${internal}\n${"private outer runtime detail ".repeat(1_000)}\n${internal}\n${"private nested runtime detail ".repeat(1_000)}\n${internalEnd}`,
-        ),
-        "Visible setup.",
-      ],
+      [chatDelta(nestedBlock), "Visible setup."],
       [chatDelta(undefined, "\nStill private after the nested block."), "Visible setup.", true],
       [chatDelta(undefined, `\n${internalEnd}\nFinal public line.`), "Final public line.", true],
     ),
     scenario(
       "corrected replacement",
-      [chatDelta("Draft answer."), undefined],
+      [chatDelta("Draft answer.")],
       [chatDelta("Corrected answer.", "Corrected answer.", true), "Corrected answer.", true],
     ),
     scenario(
@@ -590,12 +572,12 @@ describe("createSidebarNarration", () => {
     scenario(
       "suppressed replacement retracts shown text",
       [chatDelta("Draft that gets withdrawn."), "Draft that gets withdrawn.", true],
-      [chatDelta("HEARTBEAT_OK", "HEARTBEAT_OK", true), undefined],
+      [chatDelta("HEARTBEAT_OK", "HEARTBEAT_OK", true)],
       [chatDelta("", "", true), false, true],
     ),
     scenario(
       "new run discards accumulated deltas",
-      [chatSnapshot("Unfinished old work", { state: "delta", runId: "first" }), undefined],
+      [chatSnapshot("Unfinished old work", { state: "delta", runId: "first" })],
       [chatSnapshot("New run work.", { state: "delta", runId: "second" }), "New run work."],
     ),
     scenario(

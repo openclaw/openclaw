@@ -1,18 +1,15 @@
 import { Show } from "solid-js";
 import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
 
-export type CustomPluginUiDisabledContext = Pick<
-  ApplicationContext<"labs">,
-  "basePath" | "navigate"
-> & {
-  readonly plugins: Pick<ApplicationContext["plugins"], "errors">;
-};
-
 export function CustomPluginUiDisabled(props: {
-  context: CustomPluginUiDisabledContext | undefined;
+  context:
+    | (Pick<ApplicationContext<"labs">, "basePath" | "navigate"> & {
+        readonly plugins: Pick<ApplicationContext["plugins"], "errors">;
+      })
+    | undefined;
   pluginId: string;
 }) {
   return (
@@ -34,12 +31,7 @@ export function CustomPluginUiDisabled(props: {
           <a
             class="btn btn--sm"
             href={pathForRoute("labs", context().basePath)}
-            onClick={(event) => {
-              if (shouldHandleNavigationClick(event)) {
-                event.preventDefault();
-                context().navigate("labs");
-              }
-            }}
+            onClick={(event) => handleNavigationClick(event, () => context().navigate("labs"))}
           >
             {t("pluginUi.openLabs")}
           </a>

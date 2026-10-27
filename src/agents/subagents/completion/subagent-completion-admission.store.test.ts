@@ -330,6 +330,9 @@ describe("native subagent completion worker admission", () => {
         let result: Awaited<ReturnType<typeof admitCorrelatedSubagentSessionDelivery>>;
         {
           using _ = guardHostSql();
+          using clone = vi.spyOn(globalThis, "structuredClone");
+          const beforeAdmission = expectDefined(subagentRuns.get(runId), "completion owner");
+          const beforeDelivery = { ...beforeAdmission.delivery };
           const parser = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
             if (text.includes(input.expected.childSessionKey)) {
               parsedRecords.push(text);
@@ -348,7 +351,9 @@ describe("native subagent completion worker admission", () => {
               },
             });
             expect(crossed).toBe(true);
+            expect(beforeAdmission.delivery).toEqual(beforeDelivery);
             await successor;
+            expect.soft(clone.mock.calls.some(([value]) => value === beforeAdmission)).toBe(false);
             expect(parsedRecords).toEqual([]);
           } finally {
             parser.mockRestore();
@@ -378,7 +383,12 @@ describe("native subagent completion worker admission", () => {
           {
             using _ = guardHostSql();
             await markSessionDeliverySettlement(queued, "recovered", context);
+            using clone = vi.spyOn(globalThis, "structuredClone");
+            const beforeSettlement = expectDefined(subagentRuns.get(runId), "completion owner");
+            const beforeDelivery = { ...beforeSettlement.delivery };
             await settleCorrelatedSubagentDelivery(queued, "recovered", context);
+            expect(beforeSettlement.delivery).toEqual(beforeDelivery);
+            expect.soft(clone.mock.calls.some(([value]) => value === beforeSettlement)).toBe(false);
           }
           expect(owner()?.delivery).toMatchObject({
             status: "delivered",

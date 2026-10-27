@@ -79,20 +79,6 @@ function renderSlackUserMentions(
   });
 }
 
-function filterInheritedParentFiles(params: {
-  files: SlackFile[] | undefined;
-  isThreadReply: boolean;
-  threadStarter: SlackThreadStarter | null;
-}): SlackFile[] | undefined {
-  const { files, isThreadReply, threadStarter } = params;
-  if (!isThreadReply || !files?.length || !threadStarter?.files?.length) {
-    return files;
-  }
-  const starterFileIds = new Set(threadStarter.files.map((file) => file.id));
-  const filtered = files.filter((file) => !file.id || !starterFileIds.has(file.id));
-  return filtered.length > 0 ? filtered : undefined;
-}
-
 export async function resolveSlackMessageContent(params: {
   message: SlackMessageEvent;
   isThreadReply: boolean;
@@ -102,15 +88,15 @@ export async function resolveSlackMessageContent(params: {
   client?: SlackWebClient;
   mediaMaxBytes: number;
   resolveUserName?: (userId: string) => Promise<{ name?: string }>;
-  abortSignal?: AbortSignal;
-  assertCurrent?: () => void;
   preloadedMedia?: ReadonlyMap<SlackFile, SlackMediaResult>;
 }): Promise<SlackResolvedMessageContent | null> {
-  const ownFiles = filterInheritedParentFiles({
-    files: params.message.files,
-    isThreadReply: params.isThreadReply,
-    threadStarter: params.threadStarter,
-  });
+  let ownFiles = params.message.files;
+  const { isThreadReply, threadStarter } = params;
+  if (isThreadReply && ownFiles?.length && threadStarter?.files?.length) {
+    const starterFileIds = new Set(threadStarter.files.map((file) => file.id));
+    const filtered = ownFiles.filter((file) => !file.id || !starterFileIds.has(file.id));
+    ownFiles = filtered.length > 0 ? filtered : undefined;
+  }
 
   const attachmentContent =
     ownFiles?.length || params.message.attachments?.length
@@ -121,8 +107,6 @@ export async function resolveSlackMessageContent(params: {
             client: params.client,
             token: params.botToken,
             maxBytes: params.mediaMaxBytes,
-            abortSignal: params.abortSignal,
-            assertCurrent: params.assertCurrent,
             preloadedMedia: params.preloadedMedia,
           }),
         )

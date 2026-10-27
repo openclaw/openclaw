@@ -1,33 +1,27 @@
 import { describe, expect, it } from "vitest";
+import { createFeishuTestEvent } from "./bot.test-support.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 
 type Message = FeishuMessageEvent["message"];
-function event(message: Partial<Message> = {}, sender = "ou-user"): FeishuMessageEvent {
-  return {
-    sender: { sender_id: { open_id: sender } },
-    message: {
-      message_id: "om_first",
-      chat_id: "oc-dm",
-      chat_type: "p2p",
-      message_type: "text",
-      content: JSON.stringify({ text: "hello" }),
-      create_time: "1710000000000",
-      ...message,
-    },
-  };
-}
 const key = (message: Partial<Message> = {}, sender?: string) =>
-  resolveFeishuMessageDedupeKey(event(message, sender));
-const richPost = (content: object, message: Partial<Message> = {}) => ({
+  resolveFeishuMessageDedupeKey(
+    createFeishuTestEvent({
+      messageId: "om_first",
+      senderOpenId: sender ?? "ou-user",
+      message: { create_time: "1710000000000", ...message },
+    }),
+  );
+const richPost = (elements: object[], message: Partial<Message> = {}, files?: object[]) => ({
   message_type: "post",
-  content: JSON.stringify({ title: "", ...content }),
+  content: JSON.stringify({ title: "", content: [elements], files }),
   ...message,
 });
-const post = {
-  message_type: "post",
-  content: JSON.stringify({ title: "", content: [[{ tag: "text", text: "hello" }]] }),
-};
+const post = richPost([{ tag: "text", text: "hello" }]);
+const image = (image_key: string) => ({ tag: "img", image_key });
+const media = (file_key: string) => ({ tag: "media", file_key });
+const files = [{ file_key: "file_report", file_name: "report.csv", is_folder: false }];
+const mediaKey = (...parts: string[]) => JSON.stringify(["om_first", ...parts]);
 
 describe("resolveFeishuMessageDedupeKey", () => {
   it.each([
@@ -59,84 +53,53 @@ describe("resolveFeishuMessageDedupeKey", () => {
   });
 
   it.each([true, false])("isolates post topics with root_id present=%s", (withRoot) => {
-    const topic = {
+    const topic = (id: string, message_id = "om_first") => ({
       ...post,
+      message_id,
       chat_id: "oc-topic-group",
       chat_type: "topic_group" as const,
-      root_id: withRoot ? "om_root_a" : undefined,
-      thread_id: "omt_a",
-    };
-    const first = key(topic);
-    const other = key({
-      ...topic,
-      message_id: "om_other",
-      root_id: withRoot ? "om_root_b" : undefined,
-      thread_id: "omt_b",
+      root_id: withRoot ? `om_root_${id}` : undefined,
+      thread_id: `omt_${id}`,
     });
+    const first = key(topic("a"));
+    const other = key(topic("b", "om_other"));
     expect(first).toBeDefined();
     expect(other).toBeDefined();
     expect(first).not.toBe("om_first");
     expect(other).not.toBe("om_other");
     expect(other).not.toBe(first);
-    expect(key({ ...topic, message_id: "om_retry" })).toBe(first);
+    expect(key(topic("a", "om_retry"))).toBe(first);
   });
 
   it.each([
     [
       "image media keys",
       { message_type: "image", content: '{"image_key":"img_123"}' },
-      JSON.stringify(["om_first", "image_key:img_123"]),
+      mediaKey("image_key:img_123"),
     ],
     [
-      "grouped rich-post keys with duplicates and invalid-key filtering",
-      richPost({
-        content: [
-          [
-            { tag: "media", file_key: "file_first" },
-            { tag: "img", image_key: "shared" },
-            { tag: "img", image_key: "shared" },
-            { tag: "img", image_key: "invalid/key" },
-            { tag: "media", file_key: "shared" },
-            { tag: "media", file_key: "shared" },
-            { tag: "media", file_key: "file_last" },
-          ],
+      "grouped inline keys preserve duplicates, filter invalid keys and ignore topic and files[]",
+      richPost(
+        [
+          media("file_first"),
+          image("shared"),
+          image("shared"),
+          image("invalid/key"),
+          media("shared"),
+          media("shared"),
+          media("file_last"),
         ],
-      }),
-      JSON.stringify([
-        "om_first",
+        { chat_type: "topic_group", root_id: "om_root", thread_id: "omt_topic" },
+        files,
+      ),
+      mediaKey(
         "image_key:shared",
         "image_key:shared",
         "file_key:file_first",
         "file_key:shared",
         "file_key:shared",
         "file_key:file_last",
-      ]),
-    ],
-    [
-      "shipped captioned-post identity with files[]",
-      richPost(
-        {
-          content: [[{ tag: "text", text: "这是账本" }]],
-          files: [{ file_key: "file_report", file_name: "report.csv", is_folder: false }],
-        },
-        { create_time: undefined },
       ),
-      "om_first",
-    ],
-    [
-      "inline-media identity despite topic fields and top-level files[]",
-      richPost(
-        {
-          content: [[{ tag: "img", image_key: "img_inline" }]],
-          files: [{ file_key: "file_extra", file_name: "extra.csv", is_folder: false }],
-        },
-        {
-          chat_type: "topic_group",
-          root_id: "om_root",
-          thread_id: "omt_topic",
-        },
-      ),
-      JSON.stringify(["om_first", "image_key:img_inline"]),
     ],
   ] as const)("preserves %s", (_name, message, expected) => {
     expect(key(message)).toBe(expected);

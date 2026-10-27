@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { getRuntimeConfig } from "../config/io.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { createPendingPromiseTracker } from "../shared/pending-promises.js";
 import { resolveSessionEventAgentScope } from "./session-request-agent.js";
 import {
   type SessionRowPreparationOptions,
@@ -27,14 +28,7 @@ function createPublicationOwner(projection: SessionRowProjection) {
   let reset: ReturnType<typeof setImmediate> | undefined;
   let wake: ReturnType<typeof setImmediate> | undefined;
   const waiting = new Set<() => void>();
-  function track<T>(work: Promise<T>): Promise<T> {
-    pending.add(work);
-    void work.then(
-      () => pending.delete(work),
-      () => pending.delete(work),
-    );
-    return work;
-  }
+  const track = createPendingPromiseTracker(pending);
   function wakeNext() {
     wake ??= setImmediate(() => {
       wake = undefined;

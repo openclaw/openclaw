@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
+import { createSessionGoalFixture } from "./session-goal.test-support.js";
 
 type SnapshotParams = Parameters<typeof buildGatewaySessionSnapshot>[0];
 type SessionRow = NonNullable<SnapshotParams["sessionRow"]>;
@@ -19,26 +20,42 @@ function wire(value: unknown): unknown {
   return JSON.parse(JSON.stringify(value));
 }
 
-it.each([
-  ["titlePending", true, false, true],
-  ["lastAssistantMessage", { text: "Previous answer", timestamp: 100 }, null, true],
-  ["autoLabel", "Device", null, false],
-  ["displayName", "Device", null, false],
-  ["contextBudgetStatus", contextBudgetStatusFixture(), null, false],
-  ["deviceFolder", { deviceId: "paired-device", path: "/home/example/project" }, null, false],
-] as const)(
-  "publishes and clears %s in subscribed snapshots",
-  (field, value, cleared, includeSession) => {
-    const previous = snapshot({ [field]: value }, { includeSession });
-    expect(previous).toHaveProperty(field, value);
-    if (includeSession) {
-      expect(previous).toHaveProperty(`session.${field}`, value);
+it.each([false, true])(
+  "keeps the ordered wire envelope separate from its row (lifecycle=%s)",
+  (lifecycle) => {
+    const sessionRow = Object.freeze({ ...row, model: "synthetic", hasActiveSubagentRun: false });
+    const result = buildGatewaySessionSnapshot({ sessionRow, lifecycle });
+    expect(Object.keys(result)[0]).toBe("session");
+    expect(Object.keys(result).slice(-2)).toEqual(["subagentRunState", "hasActiveSubagentRun"]);
+    expect(result.session).not.toBe(sessionRow);
+    expect(result.session).not.toHaveProperty("session");
+    expect(wire(result)).toMatchObject({
+      session: { key: row.key, updatedAt: 1, hasActiveSubagentRun: false },
+      hasActiveSubagentRun: false,
+    });
+    expect(sessionRow.model).toBe("synthetic");
+    if (lifecycle) {
+      expect(result).not.toHaveProperty("model");
+      expect(result.session).not.toHaveProperty("model");
     }
-    const expected = { [field]: cleared };
-    const current = { ...previous, ...snapshot({}, { includeSession }) };
-    expect(current).toMatchObject(includeSession ? { ...expected, session: expected } : expected);
   },
 );
+
+it.each([
+  ["titlePending", true, false],
+  ["lastAssistantMessage", { text: "Previous answer", timestamp: 100 }, null],
+  ["autoLabel", "Device", null],
+  ["displayName", "Device", null],
+  ["contextBudgetStatus", contextBudgetStatusFixture(), null],
+  ["deviceFolder", { deviceId: "paired-device", path: "/home/example/project" }, null],
+] as const)("publishes and clears %s in subscribed snapshots", (field, value, cleared) => {
+  const previous = snapshot({ [field]: value });
+  expect(previous).toHaveProperty(field, value);
+  expect(previous).toHaveProperty(`session.${field}`, value);
+  const expected = { [field]: cleared };
+  const current = { ...previous, ...snapshot() };
+  expect(current).toMatchObject({ ...expected, session: expected });
+});
 
 it("projects the prepared permission boundary only for an explicit mode", () => {
   const ordinary = snapshot({ sessionRoot: "/workspace/private", updatedAt: 3 });
@@ -51,16 +68,13 @@ it("projects the prepared permission boundary only for an explicit mode", () => 
 
 it("serializes merge tombstones without flattening row-only execution fields", () => {
   const serialized = wire(
-    snapshot(
-      {
-        updatedAt: 5,
-        traceLevel: "full",
-        worktree: { id: "wt-1", branch: "feature", repoRoot: "/private/repo" },
-        execNode: "private-node",
-        execCwd: "/private/cwd",
-      },
-      { includeSession: true },
-    ),
+    snapshot({
+      updatedAt: 5,
+      traceLevel: "full",
+      worktree: { id: "wt-1", branch: "feature", repoRoot: "/private/repo" },
+      execNode: "private-node",
+      execCwd: "/private/cwd",
+    }),
   );
   const tombstones = {
     agentStatus: null,
@@ -88,29 +102,19 @@ it("scopes the global goal to its resolved agent", () => {
     key: "global",
     kind: "global" as const,
     updatedAt: 6,
-    goal: {
-      schemaVersion: 1 as const,
-      id: "goal-1",
-      objective: "Scoped objective",
-      status: "active" as const,
-      createdAt: 1,
-      updatedAt: 2,
-      tokenStart: 0,
-      tokensUsed: 3,
-      continuationTurns: 0,
-    },
+    goal: createSessionGoalFixture("goal-1", "Scoped objective", { updatedAt: 2, tokensUsed: 3 }),
   };
-  const unscoped = buildGatewaySessionSnapshot({ sessionRow, includeSession: true });
+  const unscoped = buildGatewaySessionSnapshot({ sessionRow });
   expect(unscoped).not.toHaveProperty("goal");
   expect(unscoped).not.toHaveProperty("session.goal");
-  expectBoth(buildGatewaySessionSnapshot({ sessionRow, agentId: "main", includeSession: true }), {
+  expectBoth(buildGatewaySessionSnapshot({ sessionRow, agentId: "main" }), {
     goal: sessionRow.goal,
   });
 });
 
 it("preserves active run id ownership across omitted, liveness, and exact states", () => {
   const build = (activeRunState?: { active: boolean; runIds?: string[] }) =>
-    wire(snapshot({ kind: "global", updatedAt: 7 }, { includeSession: true, activeRunState }));
+    wire(snapshot({ kind: "global", updatedAt: 7 }, { activeRunState }));
   const omitted = build();
   for (const field of [
     "hasActiveRun",
@@ -149,7 +153,6 @@ it.each([false, true])(
         },
         {
           lifecycle: true,
-          includeSession: true,
           activeRunState: active ? { active: true, runIds: ["next-run"] } : undefined,
           event: {
             runId: "next-run",
@@ -203,7 +206,6 @@ it.each([
         startedAt: 100,
       },
       {
-        includeSession: true,
         lifecycle: true,
         lifecycleRunId: "terminal-run",
         activeRunState: { active: true, status: "queued" },

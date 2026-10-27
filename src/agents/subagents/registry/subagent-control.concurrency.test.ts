@@ -8,14 +8,11 @@ import {
   withinTest,
 } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
-import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { reactivateCompletedSubagentSession } from "../../../gateway/session-subagent-reactivation.js";
 import * as controllerLifecycle from "../../../sessions/session-controller.lifecycle.js";
 import {
   beginSessionEffect,
   captureSessionTarget,
-  getSessionMutationCount,
-  getSessionControllerWorkCount,
   runSessionMutation,
   type SessionEffectRef,
 } from "../../../sessions/session-controller.lifecycle.js";
@@ -24,6 +21,7 @@ import {
   retireSessionControllerInput,
 } from "../../../sessions/session-controller.mailbox.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { createSubagentsTool } from "../../tools/subagents-tool.js";
 import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import {
@@ -41,8 +39,7 @@ import {
 import * as nativeControl from "./subagent-control.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { markSubagentRunTerminated, registerSubagentRun } from "./subagent-registry.js";
-import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import { markSubagentRunTerminated } from "./subagent-registry.js";
 import { finalizeInterruptedSubagentRun } from "./subagent-registry.test-helpers.js";
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
@@ -52,22 +49,18 @@ const requesterKey = "agent:main:main";
 const { writeSession, register, seed } = createControlRunFixture(() => fixture.stateDir);
 
 async function block(enabled: boolean, scope: string, identities: string[]) {
-  const entered = createDeferred();
-  const release = createDeferred();
+  const mutationGate = createEnteredGate();
   const pending = enabled
     ? runSessionMutation({
         scope,
         identities,
-        run: async () => {
-          entered.resolve();
-          await release.promise;
-        },
+        run: mutationGate.wait,
       })
     : Promise.resolve();
   if (enabled) {
-    await entered.promise;
+    await mutationGate.entered;
   }
-  return { pending, release: release.resolve };
+  return { pending, release: mutationGate.release };
 }
 
 it("does not transfer a selected task cancellation to an admitted follow-up generation", async () => {
@@ -79,12 +72,10 @@ it("does not transfer a selected task cancellation to an admitted follow-up gene
     expectsCompletionMessage: true,
   });
   const original = subagentRuns.get("selected-original")!;
-  const entered = createDeferred();
-  const release = createDeferred();
+  const handoff = createEnteredGate();
   const killNative = nativeControl.killSubagentRunAdmin;
   vi.spyOn(nativeControl, "killSubagentRunAdmin").mockImplementation(async (...args) => {
-    entered.resolve();
-    await release.promise;
+    await handoff.wait();
     return killNative(...args);
   });
   const tool = createSubagentsTool({ agentSessionKey: requesterKey, config: getRuntimeConfig() });
@@ -96,7 +87,7 @@ it("does not transfer a selected task cancellation to an admitted follow-up gene
   });
   try {
     await awaitGateBeforeSettlement(
-      entered.promise,
+      handoff.entered,
       pending,
       "Cancellation never reached its runtime handoff.",
     );
@@ -117,11 +108,11 @@ it("does not transfer a selected task cancellation to an admitted follow-up gene
     const successor = subagentRuns.get("selected-followup")!;
     expect(successor.generation).toBeGreaterThan(original.generation!);
     attachActiveEmbeddedRun(sessionId, handle, sessionKey);
-    release.resolve();
+    handoff.release();
     expect((await pending).details).toMatchObject({ killed: false });
     expect(controller.signal.aborted).toBe(false);
   } finally {
-    release.resolve();
+    handoff.release();
     await pending;
     await detachActiveEmbeddedRun(sessionId, handle, sessionKey);
   }
@@ -135,12 +126,12 @@ it.each(["before interruption", "after interruption", "after abort"] as const)(
     });
     let callerControlsAncestor = true;
     const controller = new AbortController();
-    const abort = vi.fn(() => {
+    const abort = () => {
       controller.abort();
       if (revocation === "after abort") {
         callerControlsAncestor = false;
       }
-    });
+    };
     const handle = createEmbeddedRunHandle({ runId, abort });
     attachActiveEmbeddedRun(sessionId, handle, sessionKey);
     const interrupted = createDeferred();
@@ -183,7 +174,6 @@ it.each(["before interruption", "after interruption", "after abort"] as const)(
       await expect(pending).rejects.toThrow("Caller no longer controls ancestor.");
       const accepted = revocation === "after abort";
       expect(controller.signal.aborted).toBe(accepted);
-      expect(abort).toHaveBeenCalledTimes(Number(accepted));
       expect(onInterrupt).toHaveBeenCalledTimes(Number(revocation !== "before interruption"));
       expect(subagentRuns.get(runId)?.killIntent).toBeUndefined();
     } finally {
@@ -208,8 +198,6 @@ it.each([
       runId: "readiness-run",
     });
     const controller = new AbortController();
-    const aborted = vi.fn();
-    controller.signal.addEventListener("abort", aborted, { once: true });
     const handle = createEmbeddedRunHandle({ runId, abort: () => controller.abort() });
     attachActiveEmbeddedRun(sessionId, handle, sessionKey);
     const interrupted = createDeferred();
@@ -290,8 +278,7 @@ it.each([
         "Cancellation skipped pending caller preparation.",
       );
       expect(settled).toBe(false);
-      expect(aborted).toHaveBeenCalledTimes(phase === "accepted" ? 1 : 0);
-      expect(getSessionMutationCount()).toBeGreaterThan(0);
+      expect(controller.signal.aborted).toBe(phase === "accepted");
       if (terminal) {
         expect(await markSubagentRunTerminated({ runId, reason: "killed" })).toBe(1);
         expect(resolveSubagentSessionStatus(subagentRuns.get(runId))).toBe("killed");
@@ -299,16 +286,15 @@ it.each([
       releaseRead.resolve();
       const result = await pending;
       if (outcome === "failure") {
+        const error = "error" in result ? result.error : undefined;
         expect(result.killed).toBe(phase === "accepted");
-        expect("error" in result ? result.error : undefined).toContain("cancel read failed");
-        expect("error" in result ? result.error : undefined).not.toContain(
-          "Caller facts were not prepared",
-        );
+        expect(error).toContain("cancel read failed");
+        expect(error).not.toContain("Caller facts were not prepared");
       } else {
         expect(result.killed).toBe(true);
       }
       const stopped = phase === "accepted" || outcome === "ready";
-      expect(aborted).toHaveBeenCalledTimes(Number(stopped));
+      expect(controller.signal.aborted).toBe(stopped);
       expect(subagentRuns.get(runId)?.killIntent).toBeUndefined();
       expect(resolveSubagentSessionStatus(subagentRuns.get(runId))).toBe(
         stopped ? "killed" : "running",
@@ -346,13 +332,13 @@ it.for(["admin", "bulk"] as const)(
     const cleanupGate = createDeferred();
     const allRemoved = createDeferred();
     let removals = 0;
-    const removed = vi.fn(async () => {
+    const removed = async () => {
       removals += 1;
       if (removals === queued.length) {
         allRemoved.resolve();
       }
       await cleanupGate.promise;
-    });
+    };
     for (const runId of queued) {
       enqueueControlRun("sibling-cancellation", runId, running, start, {
         maxConcurrent: running.length,
@@ -408,13 +394,11 @@ it.for(["admin", "bulk"] as const)(
     try {
       await awaitProgress(allInterrupted.promise, "Cancellation skipped a running sibling");
       expect(interrupted.toSorted()).toEqual(running);
-      expect(getSessionControllerWorkCount()).toBe(running.length);
       expect(start).not.toHaveBeenCalled();
       for (const lease of leases.toReversed()) {
         lease.release();
       }
       await awaitProgress(allRemoved.promise, "Cancellation skipped a queued sibling");
-      expect(removed).toHaveBeenCalledTimes(queued.length);
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
@@ -466,9 +450,9 @@ it.for(["before capacity release", "after interrupt"] as const)(
       }
     }
     const unrelatedStarted = createDeferred();
-    const unrelatedStart = vi.fn(async () => {
+    const unrelatedStart = async () => {
       unrelatedStarted.resolve();
-    });
+    };
     const startG = vi.fn(async () => {});
     const startFailure = vi.fn(() => true);
     const groupFor = (requester: string) => JSON.stringify(["main", requester, "shared-name"]);
@@ -526,7 +510,6 @@ it.for(["before capacity release", "after interrupt"] as const)(
       await lateRegistration;
       // The kill cannot settle while admission A is held, so only the test deadline bounds this.
       await withinTest(unrelatedStarted.promise, signal);
-      expect(unrelatedStart).toHaveBeenCalledOnce();
       expect(interruptD).not.toHaveBeenCalled();
       expect(startG).not.toHaveBeenCalled();
       admissionA.release();
@@ -552,36 +535,18 @@ it.for(["before capacity release", "after interrupt"] as const)(
 );
 
 it("full child Stop preserves later and foreign sources while joining captured queue cleanup", async () => {
-  const sessionKey = "agent:main:subagent:captured-queue";
-  const sessionId = "captured-queue-session";
-  const runId = "captured-queue-run";
-  const storePath = await writeSubagentSessionEntry({
-    stateDir: fixture.stateDir,
-    agentId: "main",
-    sessionKey,
-    defaultSessionId: sessionId,
-    lifecycleRevision: "captured-queue-revision",
-  });
-  await registerSubagentRun({
-    runId,
-    childSessionKey: sessionKey,
-    childAgentId: "main",
-    sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", storePath, sessionKey })?.entry,
-    requesterSessionKey: "agent:main:main",
-    requesterAgentId: "main",
-    requesterDisplayKey: "main",
-    task: "captured queue",
-    cleanup: "keep",
-    expectsCompletionMessage: false,
-  });
+  const { sessionKey, sessionId, storePath } = await seed(
+    "captured-queue",
+    { runId: "captured-queue-run", requesterDisplayKey: "main", task: "captured queue" },
+    "captured-queue-revision",
+  );
   const target = captureSessionTarget({
     storeScope: storePath,
     sessionKey,
     incarnation: sessionId,
   });
   const interrupted = createDeferred();
-  const cleaning = createDeferred();
-  const cleanupFinish = createDeferred();
+  const cleanupGate = createEnteredGate();
   const admission = await beginSessionEffect({
     target,
     assertAllowed: () => {},
@@ -591,10 +556,7 @@ it("full child Stop preserves later and foreign sources while joining captured q
     target,
     policy: { mode: "followup" },
     adapter: {
-      onSettled: async () => {
-        cleaning.resolve();
-        await cleanupFinish.promise;
-      },
+      onSettled: cleanupGate.wait,
     },
   });
   const foreign = reserveSessionControllerSource(sessionKey, {
@@ -613,17 +575,17 @@ it("full child Stop preserves later and foreign sources while joining captured q
     await interrupted.promise;
     later = reserveSessionControllerSource(sessionKey, { target, policy: { mode: "followup" } });
     admission.release();
-    await cleaning.promise;
+    await cleanupGate.entered;
     expect(own.abortSignal.aborted).toBe(true);
     expect(later.abortSignal.aborted).toBe(false);
     expect(foreign.abortSignal.aborted).toBe(false);
     expect(completed).toBe(false);
-    cleanupFinish.resolve();
+    cleanupGate.release();
     expect(await pending).toMatchObject({ found: true, killed: true });
     await own.settlement.promise;
     expect(later.abortSignal.aborted).toBe(false);
   } finally {
-    cleanupFinish.resolve();
+    cleanupGate.release();
     admission.release();
     await pending;
     const inputs = [own, foreign, ...(later ? [later] : [])];

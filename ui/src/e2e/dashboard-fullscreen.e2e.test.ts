@@ -1,10 +1,11 @@
 import type { Server as HttpServer } from "node:http";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import { SANDBOX_HOST_PATH } from "../../../src/agents/sandbox-host.js";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -86,7 +87,8 @@ const scrollTop = (page: Locator) => page.evaluate((element) => element.scrollTo
 const scrollRemaining = (board: Locator) =>
   board.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop);
 async function expectWidgetReady(board: Locator, frame: Locator) {
-  await expect.poll(() => frame.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
+  await expect.poll(() => frame.getAttribute("inert")).toBeNull();
+  expect(await frame.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
   expect(await board.getByRole("status", { name: "Loading…", exact: true }).count()).toBe(0);
 }
 
@@ -316,10 +318,7 @@ suite.define(() => {
               },
             ],
           };
-          let releaseDocument!: () => void;
-          const documentGate = new Promise<void>((resolve) => {
-            releaseDocument = resolve;
-          });
+          const { promise: documentGate, resolve: releaseDocument } = createDeferred();
           await page.route(widgetUrl, async (route) => {
             await documentGate;
             await route.fulfill({
@@ -347,14 +346,13 @@ suite.define(() => {
               )
               .toBe(true);
             await page.screenshot({ path: `${suite.artifactDir}/dashboard-loading.png` });
-            expect(await frame.evaluate((element) => getComputedStyle(element).opacity)).toBe("0");
+            expect(await frame.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
             expect(await frame.getAttribute("inert")).toBe("");
             await board.getByRole("status", { name: "Loading…", exact: true }).waitFor();
           } finally {
             releaseDocument();
           }
           await expectWidgetReady(board, frame);
-          expect(await frame.getAttribute("inert")).toBeNull();
           await page.screenshot({ path: `${suite.artifactDir}/dashboard-ready.png` });
           await expect
             .poll(() => board.evaluate((element) => element.scrollHeight > element.clientHeight))

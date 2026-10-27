@@ -1,13 +1,11 @@
 import http from "node:http";
-import type { AddressInfo } from "node:net";
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { generateIdentity, seal, signReceipt } from "../protocol/index.js";
 import { runReefChannelLifecycle } from "./channel-lifecycle.js";
 import { reefPlugin } from "./channel.js";
@@ -27,7 +25,7 @@ import {
   createStateTestDirectory,
   cleanupStateTestDirectory,
 } from "./state.test-support.js";
-import { ReefInboxConnection, ReefTransportClient } from "./transport.js";
+import { ReefInboxConnection, ReefRelayError, ReefTransportClient } from "./transport.js";
 import { openReefTrustStore } from "./trust-store.js";
 import type { InboxEntry } from "./types.js";
 
@@ -50,19 +48,23 @@ const ingress = (id: string, text: string, replyTo?: string) =>
     autonomy: "bounded",
   });
 
-function stateRuntime(stateDir: string) {
-  const runtime = createRuntime(stateDir);
-  const env = { OPENCLAW_STATE_DIR: stateDir };
-  runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
-    createPluginStateKeyedStoreForTests<T>("reef", { ...options, env });
-  return runtime;
+function observeSettlement(task: Promise<unknown>) {
+  let settled = false;
+  const outcome = task.then(
+    () => {
+      settled = true;
+    },
+    (error: unknown) => {
+      settled = true;
+      return error;
+    },
+  );
+  return { outcome, isSettled: () => settled };
 }
 
 describe("Reef inbound dispatch content", () => {
   it("keeps provenance model-visible without storing it in the transcript body", () => {
-    const content = ingress("message-1", "hello from Clanky");
-
-    expect(content).toEqual({
+    expect(ingress("message-1", "hello from Clanky")).toEqual({
       rawBody: "hello from Clanky",
       extraContext: {
         ChannelPromptContext: [provenance],
@@ -124,11 +126,11 @@ it("keeps contextual Reef replies on the inbound message thread", () => {
 
 describe("Reef conversation directory", () => {
   let stateDir = "";
-  let runtime: ReturnType<typeof stateRuntime>;
+  let runtime: ReturnType<typeof createRuntime>;
 
   beforeEach(async () => {
     stateDir = createStateTestDirectory();
-    runtime = stateRuntime(stateDir);
+    runtime = createRuntime(stateDir);
     setReefRuntime(runtime);
     await openReefTrustStore(runtime, resolveReefConfig(directoryConfig)).set(
       "molty",
@@ -139,10 +141,9 @@ describe("Reef conversation directory", () => {
   afterEach(() => cleanupStateTestDirectory(stateDir));
 
   it("exposes locally trusted peers as routable directory entries", async () => {
-    const cfg = directoryConfig;
     await expect(
       reefPlugin.directory?.listPeers?.({
-        cfg,
+        cfg: directoryConfig,
         accountId: "default",
         query: "@molty",
         limit: 10,
@@ -158,37 +159,31 @@ describe("Reef conversation directory", () => {
       throw new Error("channel trust policies must not open native storage");
     };
     const trust = openReefTrustStore(runtime, account.config);
-    const readPolicies = async () => ({
-      allowFrom: await reefPlugin.config.resolveAllowFromAsync!({ cfg }),
-      description: await reefPlugin.config.describeAccountAsync!(account, cfg),
-      dmPolicy: await reefPlugin.security!.resolveDmPolicyAsync!({ cfg, account }),
-    });
-
-    await expect(readPolicies()).resolves.toMatchObject({
-      allowFrom: ["molty"],
-      description: { extra: { friendCount: 1 } },
-      dmPolicy: { policy: "pairing", allowFrom: ["molty"] },
-    });
+    const expectPolicies = async (allowFrom: string[]) => {
+      expect(await reefPlugin.config.resolveAllowFromAsync!({ cfg })).toEqual(allowFrom);
+      expect(await reefPlugin.config.describeAccountAsync!(account, cfg)).toMatchObject({
+        extra: { friendCount: allowFrom.length },
+      });
+      expect(await reefPlugin.security!.resolveDmPolicyAsync!({ cfg, account })).toMatchObject({
+        policy: "pairing",
+        allowFrom,
+      });
+    };
+    await expectPolicies(["molty"]);
     await trust.remove("molty");
-    await expect(readPolicies()).resolves.toMatchObject({
-      allowFrom: [],
-      description: { extra: { friendCount: 0 } },
-      dmPolicy: { policy: "pairing", allowFrom: [] },
-    });
+    await expectPolicies([]);
   });
 });
 
 it("preserves the Reef channel-authored lifecycle in account snapshots", async () => {
   const cfg = directoryConfig;
-  const account = reefPlugin.config.resolveAccount(cfg);
-
-  const snapshot = await reefPlugin.status?.buildAccountSnapshot?.({
-    account,
-    cfg,
-    runtime: { accountId: "default", lifecycle: "recovering" },
-  });
-
-  expect(snapshot).toMatchObject({ lifecycle: "recovering" });
+  expect(
+    await reefPlugin.status?.buildAccountSnapshot?.({
+      account: reefPlugin.config.resolveAccount(cfg),
+      cfg,
+      runtime: { accountId: "default", lifecycle: "recovering" },
+    }),
+  ).toMatchObject({ lifecycle: "recovering" });
 });
 
 describe("Reef gateway account ownership", () => {
@@ -228,7 +223,7 @@ describe("Reef gateway account ownership", () => {
     activeReefSlot.clearRuntime();
     stateDir = createStateTestDirectory();
     vi.stubEnv("REEF_TEST_GUARD_KEY", "test-only-credential");
-    const runtime = stateRuntime(stateDir);
+    const runtime = createRuntime(stateDir);
     runtime.state.resolveStateDir = () => stateDir;
     await generateAndStoreKeys(runtime);
     await finalizeReefIdentityBinding(
@@ -317,6 +312,14 @@ describe("Reef gateway account ownership", () => {
     return inboxConnections[0]!.poll();
   }
 
+  async function trustedAccount() {
+    await startAccount().ready;
+    const { flow } = getActiveReef();
+    const peer = generateIdentity();
+    await flow.options.trust.set("molty", peerTrust(peer));
+    return { flow, peer, trust: flow.options.trust };
+  }
+
   function pauseFriendLookup(active: ReturnType<typeof getActiveReef>) {
     const paused = createDeferred<void>();
     const list = vi.fn(async () => {
@@ -337,10 +340,7 @@ describe("Reef gateway account ownership", () => {
   it.each([false, true])(
     "rejects inbound trust revocation after delivered lookup before dispatch (revoked=%s)",
     async (revoked) => {
-      await startAccount().ready;
-      const { flow } = getActiveReef();
-      const peer = generateIdentity();
-      await flow.options.trust.set("molty", peerTrust(peer));
+      const { flow, peer } = await trustedAccount();
       vi.spyOn(flow.options.guard, "classify").mockResolvedValue({
         ...allow,
         model: cfg.channels.reef.guard.pinnedModel,
@@ -383,11 +383,7 @@ describe("Reef gateway account ownership", () => {
   it.each([false, true])(
     "rechecks rejection trust at the host handoff after reservation (revoked=%s)",
     async (revoked) => {
-      await startAccount().ready;
-      const { flow } = getActiveReef();
-      const peer = generateIdentity();
-      const trust = flow.options.trust;
-      await trust.set("molty", peerTrust(peer));
+      const { peer, trust } = await trustedAccount();
       const id = "01JZ0000000000000000000171";
       const bodyHash = "a".repeat(64);
       await trust.operationState.deliveries.register(
@@ -448,10 +444,7 @@ describe("Reef gateway account ownership", () => {
     const listFriends = vi.spyOn(active.friends, "list").mockResolvedValue([]);
     const reconcileFriends = vi.spyOn(active.friends, "reconcile");
     const listReviews = vi.spyOn(active.reviews, "list");
-    let settled = false;
-    void account.account.then(() => {
-      settled = true;
-    });
+    const settlement = observeSettlement(account.account);
 
     account.abort.abort();
 
@@ -462,7 +455,7 @@ describe("Reef gateway account ownership", () => {
     await expect(reefPlugin.pairing?.notifyApproval?.({ cfg, id: "molty" })).rejects.toThrow(
       "Reef channel is not running",
     );
-    expect(settled).toBe(false);
+    expect(settlement.isSettled()).toBe(false);
     expect(send).not.toHaveBeenCalled();
     expect(listFriends).not.toHaveBeenCalled();
     expect(reconcileFriends).not.toHaveBeenCalled();
@@ -471,7 +464,7 @@ describe("Reef gateway account ownership", () => {
     inboxDrains[0]!.resolve();
     await account.account;
 
-    expect(settled).toBe(true);
+    expect(settlement.isSettled()).toBe(true);
     await expectStopped("settled account");
     expect(send).not.toHaveBeenCalled();
     expect(listFriends).not.toHaveBeenCalled();
@@ -593,24 +586,22 @@ describe("Reef channel lifecycle", () => {
 
   function hangingInbox() {
     const started = createDeferred<void>();
-    const seen: AbortSignal[] = [];
+    const finish = createDeferred<void>();
     let settled = false;
-    const startInbox = (signal: AbortSignal) => {
-      seen.push(signal);
+    const startInbox = vi.fn((signal: AbortSignal) => {
       started.resolve();
-      return new Promise<void>((resolve) => {
-        const done = () => {
-          settled = true;
-          resolve();
-        };
-        if (signal.aborted) {
-          done();
-          return;
-        }
+      const done = () => {
+        settled = true;
+        finish.resolve();
+      };
+      if (signal.aborted) {
+        done();
+      } else {
         signal.addEventListener("abort", done, { once: true });
-      });
-    };
-    return { startInbox, seen, started: started.promise, isSettled: () => settled };
+      }
+      return finish.promise;
+    });
+    return { startInbox, started: started.promise, isSettled: () => settled };
   }
 
   it.each(["startup", "periodic"] as const)(
@@ -621,31 +612,30 @@ describe("Reef channel lifecycle", () => {
       }
       let reconciles = 0;
       // Capture startup failures before periodic reconciliation can run.
-      let reconcilesAtActivation = -1;
-      let errorsAtActivation = -1;
+      let atActivation: number[] = [];
       const lifecycle = run({
         reconcile: async () => {
           reconciles += 1;
-          if (phase === "startup" || reconciles > 1) {
+          if (phase === "startup") {
+            throw new ReefRelayError(429, "rate_limited");
+          }
+          if (reconciles > 1) {
             throw new Error("rate_limited");
           }
         },
-        shouldContinueAfterStartupReconcileError: phase === "startup" ? () => true : undefined,
         onReady: async () => {
-          reconcilesAtActivation = reconciles;
-          errorsAtActivation = errors.length;
+          atActivation = [reconciles, errors.length];
         },
-        reconcileIntervalMs: 5,
       });
       await inbox.started;
       if (phase === "startup") {
         // Retrying startup must not amplify relay rate limiting via account restarts.
-        expect([reconcilesAtActivation, errorsAtActivation]).toEqual([1, 1]);
+        expect(atActivation).toEqual([1, 1]);
       } else {
-        await vi.advanceTimersByTimeAsync(10);
+        await vi.advanceTimersByTimeAsync(60_000);
         expect([reconciles, errors.length]).toEqual([3, 2]);
       }
-      expect(inbox.seen).toHaveLength(1);
+      expect(inbox.startInbox).toHaveBeenCalledOnce();
       expect(inbox.isSettled()).toBe(false);
       parent.beginClose();
       await lifecycle;
@@ -666,7 +656,6 @@ describe("Reef channel lifecycle", () => {
       onReady: async () => {
         order.push("ready");
       },
-      reconcileIntervalMs: 5_000,
     });
     await inbox.started;
     expect(order).toEqual(["reconcile", "ready", "inbox"]);
@@ -693,7 +682,7 @@ describe("Reef channel lifecycle", () => {
       if (phase !== "activation") {
         expect(onReady).not.toHaveBeenCalled();
       }
-      expect(inbox.seen).toHaveLength(0);
+      expect(inbox.startInbox).not.toHaveBeenCalled();
     },
   );
 
@@ -711,14 +700,10 @@ describe("Reef channel lifecycle", () => {
       }
       requestStarted.resolve();
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
+    const port = await listenOnLoopback(server);
 
-    const relayUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     const transport = new ReefTransportClient(
-      relayUrl,
+      `http://127.0.0.1:${port}`,
       "alice",
       reefKeys(),
       fetch,
@@ -732,8 +717,7 @@ describe("Reef channel lifecycle", () => {
     );
     const lifecycle = run({
       reconcile: async (signal) => {
-        await friends.reconcile(signal);
-        await friends.surfacePairingCandidates(async () => {}, signal);
+        await friends.reconcile(signal, async () => {});
       },
     });
 
@@ -744,7 +728,7 @@ describe("Reef channel lifecycle", () => {
       await lifecycle;
 
       expect(performance.now() - abortedAt).toBeLessThan(500);
-      expect(inbox.seen).toHaveLength(0);
+      expect(inbox.startInbox).not.toHaveBeenCalled();
     } finally {
       parent.beginClose();
       server.closeAllConnections();
@@ -771,41 +755,31 @@ describe("Reef channel lifecycle", () => {
       startInbox: failedInbox.run,
       reconcile,
       onReconcileError: vi.fn(),
-      reconcileIntervalMs: 5,
     });
-    let settled = false;
-    const outcome = lifecycle.then(
-      () => {
-        settled = true;
-      },
-      (failure: unknown) => {
-        settled = true;
-        return failure;
-      },
-    );
+    const settlement = observeSettlement(lifecycle);
     try {
       await failedInbox.started;
-      await vi.advanceTimersByTimeAsync(5);
+      await vi.advanceTimersByTimeAsync(30_000);
       expect(reconcile).toHaveBeenCalledTimes(2);
       failedInbox.finish.reject(error);
       await vi.advanceTimersByTimeAsync(0);
       expect(reconciliationSignal?.aborted).toBe(true);
-      expect(settled).toBe(false);
+      expect(settlement.isSettled()).toBe(false);
 
       inspection.resolve();
-      expect(await outcome).toBe(error);
+      expect(await settlement.outcome).toBe(error);
       await vi.advanceTimersByTimeAsync(30_000);
       expect(reconcile).toHaveBeenCalledTimes(2);
     } finally {
       parent.beginClose();
       failedInbox.finish.resolve();
       inspection.resolve();
-      await outcome;
+      await settlement.outcome;
     }
   });
   it("settles immediately when the parent signal is already aborted", async () => {
     parent.beginClose();
-    await run({ reconcileIntervalMs: 5 });
-    expect(inbox.seen).toHaveLength(0);
+    await run({});
+    expect(inbox.startInbox).not.toHaveBeenCalled();
   });
 });

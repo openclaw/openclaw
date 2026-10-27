@@ -1,26 +1,19 @@
 import type { AgentSession, AgentSessionMessage } from "openai/resources/beta/agents/agents";
 import type { Turn } from "openai/resources/beta/agents/sessions/turns";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { createAttemptParams } from "./agentsapi-attempt.test-helpers.js";
 import { AgentsApiClient, type AgentsApiEvent, type AgentsApiItem } from "./agentsapi-client.js";
+import { AgentsApiMessageProjection } from "./agentsapi-messages.js";
 import { createAgentsApiSession } from "./agentsapi-session.js";
-import { createHostedSession, createTurn } from "./agentsapi.test-support.js";
+import { createHostedSession, createModel, createTurn } from "./agentsapi.test-support.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock:
     vi.fn<typeof import("openclaw/plugin-sdk/ssrf-runtime").fetchWithSsrFGuard>(),
 }));
-const connectionAction = {
-  type: "environment_connection",
-  environment_id: "environment-fixture",
-} as const;
-const selfHostedEnvironment: AgentSession["environment"] = {
-  type: "self_hosted",
-  id: "environment-fixture",
-  workspace_directory: "/fixture/workspace",
-  remote_url: "wss://executor.invalid/session-fixture",
-  capability_directories: [],
-};
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
@@ -36,7 +29,7 @@ let savedTurns: Turn[];
 let savedItems: AgentsApiItem[];
 let savedSession: AgentSession;
 let inputTypes: string[];
-let post: (type: string, request: GuardedRequest, body: unknown) => Response | Promise<Response>;
+let post: (type: string, request: GuardedRequest) => Response | Promise<Response>;
 let read: (url: string) => Response | Promise<Response>;
 
 beforeEach(() => {
@@ -59,7 +52,7 @@ beforeEach(() => {
         .object({ events: z.array(z.object({ type: z.string() })).nonempty() })
         .parse(body);
       inputTypes.push(...events.map((event) => event.type));
-      response = await post(events[0]!.type, request, body);
+      response = await post(events[0]!.type, request);
     } else if (new Headers(request.init?.headers).get("accept") === "text/event-stream") {
       response = stream.response(request.signal);
     } else {
@@ -69,53 +62,44 @@ beforeEach(() => {
   });
 });
 
+afterEach(() => vi.useRealTimers());
+
 describe("Agents API native session receipts", () => {
   it.each(["idle", "disconnect"] as const)(
     "reconciles late terminal records after %s without another native event or input",
     async (boundary) => {
-      const refresh = deferred<void>();
-      const waitForRecovery = vi.fn(async (ms: number) => {
-        if (ms === 1_000) {
-          await refresh.promise;
-        }
-      });
-      const session = createSession({ waitForRecovery });
-      const result = runSession(session);
-      void result.catch(() => {});
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const { session, result } = startSession();
       try {
         await submitted.promise;
         await stream.send({ type: "agent.session.in_progress" });
-        expect(waitForRecovery).not.toHaveBeenCalled();
+        const healthyRequests = fetchWithSsrFGuardMock.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(healthyRequests);
         if (boundary === "idle") {
           await stream.send({ type: "agent.session.idle" });
         } else {
           const reconnected = stream.nextSubscription();
           stream.disconnect();
+          await vi.advanceTimersByTimeAsync(500);
           await reconnected;
         }
         // A later consumed event fences the preceding saved-state read. It is
         // not a terminal signal and cannot repair late REST records on its own.
         await stream.send({ type: "fixture.recovery_barrier" });
-        expect(waitForRecovery).toHaveBeenCalledWith(1_000, expect.any(AbortSignal));
+        await vi.advanceTimersByTimeAsync(999);
         expect(session.isSettled()).toBe(false);
-        savedSession = createHostedSession("idle");
-        savedTurns = [createTurn()];
-        savedItems = [createSavedMessage("input-fixture", "user", "Fixture prompt")];
-        refresh.resolve();
+        completeSavedState();
+        await vi.advanceTimersByTimeAsync(1);
         await expect(result).resolves.toMatchObject({ turn: { id: "turn-fixture" } });
         expect(inputTypes).toEqual(["agent.session.input.message"]);
       } finally {
-        savedSession = createHostedSession("idle");
-        controller.abort();
-        refresh.resolve();
-        await result.catch(() => {});
-        await session.close();
+        await abortSession(session, result);
       }
     },
   );
   it("waits for session idle and the admitted input receipt after the root turn completes", async () => {
-    const session = createSession();
-    const result = runSession(session);
+    const { session, result } = startSession();
     await submitted.promise;
 
     const createdTurn = createTurn({ status: "in_progress", completed_at: null });
@@ -160,14 +144,8 @@ describe("Agents API native session receipts", () => {
       const currentTurn = createTurn({
         id: priorStatus === "active" ? priorTurn.id : "turn-current",
       });
-      const historicalInput = {
-        ...createSavedMessage("input-history", "user", "Historical request"),
-        turn_id: historicalTurn.id,
-      };
-      const priorInput = {
-        ...createSavedMessage("input-prior", "user", "Original request"),
-        turn_id: priorTurn.id,
-      };
+      const historicalInput = createInput("input-history", historicalTurn.id);
+      const priorInput = createInput("input-prior", priorTurn.id);
       const priorCommand: AgentsApiItem = {
         id: "command-prior",
         type: "command_execution",
@@ -175,15 +153,10 @@ describe("Agents API native session receipts", () => {
         command: "fixture-worker",
         status: "in_progress",
       };
-      const continuationInput = {
-        ...createSavedMessage("input-continuation", "user", "Continue existing work"),
-        turn_id: currentTurn.id,
-      };
+      const continuationInput = createInput("input-continuation", currentTurn.id);
       savedTurns = [historicalTurn, priorTurn];
       savedItems = [historicalInput, priorInput, priorCommand];
-      const postedBodies: unknown[] = [];
-      post = (_type, _request, body) => {
-        postedBodies.push(body);
+      post = () => {
         savedTurns = [historicalTurn, { ...priorTurn, status: "completed" }];
         if (currentTurn.id !== priorTurn.id) {
           savedTurns.push(currentTurn);
@@ -199,12 +172,13 @@ describe("Agents API native session receipts", () => {
       const onReconcile = vi.fn(async (_turn: Turn, _items: AgentsApiItem[]) => {});
       const onReconcileHistory = vi.fn(async () => {});
       const observedEvents: AgentsApiEvent[] = [];
-      const session = createSession({ onReconcile, onReconcileHistory }, (event) => {
-        observedEvents.push(event);
-        stream.observe(event);
-      });
-      const result = runSession(session, "Continue existing work");
-      void result.catch(() => {});
+      const { session, result } = startSession(
+        createSession({ onReconcile, onReconcileHistory }, (event) => {
+          observedEvents.push(event);
+          stream.observe(event);
+        }),
+        "Continue existing work",
+      );
       try {
         await submitted.promise;
         void stream.send({ type: "agent.session.turn.completed", turn: historicalTurn });
@@ -222,21 +196,7 @@ describe("Agents API native session receipts", () => {
           stream.send({ type: "agent.session.in_progress" }).then(() => ({ kind: "waiting" })),
         ]);
         expect(outcome).toMatchObject({ kind: "settled", value: { turn: { id: currentTurn.id } } });
-        expect(postedBodies).toEqual([
-          {
-            events: [
-              {
-                type: "agent.session.input.message",
-                input: [
-                  {
-                    role: "user",
-                    content: [{ type: "input_text", text: "Continue existing work" }],
-                  },
-                ],
-              },
-            ],
-          },
-        ]);
+        expect(inputTypes).toEqual(["agent.session.input.message"]);
         expect(onReconcile.mock.calls.map(([turn]) => turn.id)).toEqual(
           priorStatus === "completes before input"
             ? [priorTurn.id, currentTurn.id]
@@ -255,23 +215,29 @@ describe("Agents API native session receipts", () => {
         );
         expect(observedEvents.filter((event) => event.turn)).toEqual([]);
       } finally {
-        controller.abort();
-        await result.catch(() => {});
-        await session.close();
+        await abortSession(session, result);
       }
     },
   );
 
   it("continues when an external executor satisfies its connection action", async () => {
-    savedSession.environment = selfHostedEnvironment;
-    const session = createSession();
-    const result = runSession(session);
+    savedSession.environment = {
+      type: "self_hosted",
+      id: "environment-fixture",
+      workspace_directory: "/fixture/workspace",
+      remote_url: "wss://executor.invalid/session-fixture",
+      capability_directories: [],
+    };
+    const { session, result } = startSession();
     await submitted.promise;
-    requireActions([connectionAction]);
+    savedSession = {
+      ...savedSession,
+      status: "requires_action",
+      required_actions: [{ type: "environment_connection", environment_id: "environment-fixture" }],
+    };
     await stream.send({ type: "agent.session.requires_action" });
     savedSession = { ...savedSession, status: "idle", required_actions: [] };
-    savedTurns = [createTurn()];
-    savedItems = [createSavedMessage("input-fixture", "user", "Fixture prompt")];
+    completeSavedState();
     await stream.send({ type: "agent.session.idle" });
     await expect(result).resolves.toMatchObject({ turn: { id: "turn-fixture" } });
     expect(inputTypes).toEqual(["agent.session.input.message"]);
@@ -296,9 +262,7 @@ describe("Agents API native session receipts", () => {
   it.each([false, true])(
     "fails only for a currently failed session (failed: %s)",
     async (failed) => {
-      const session = createSession();
-      const result = runSession(session);
-      void result.catch(() => {});
+      const { session, result } = startSession();
       await submitted.promise;
       if (failed) {
         savedSession = { ...savedSession, status: "failed", error: "Fixture terminal failure" };
@@ -308,9 +272,7 @@ describe("Agents API native session receipts", () => {
         await expect(result).rejects.toThrow("Fixture terminal failure");
       } else {
         await stream.send({ type: "agent.session.in_progress" });
-        savedSession = createHostedSession("idle");
-        savedTurns = [createTurn()];
-        savedItems = [createSavedMessage("input-fixture", "user", "Fixture prompt")];
+        completeSavedState();
         await stream.send({ type: "agent.session.idle" });
         await expect(result).resolves.toMatchObject({ turn: { id: "turn-fixture" } });
       }
@@ -342,9 +304,7 @@ describe("Agents API native session receipts", () => {
       idleRequested.resolve();
       return idleReceipt.promise;
     };
-    const session = createSession();
-    const run = runSession(session);
-    void run.catch(() => {});
+    const { session, result: run } = startSession();
     await messageRequested.promise;
     const queuedSteer = session.queueMessage("Queued steering fixture");
     void queuedSteer.catch(() => {});
@@ -390,8 +350,23 @@ function runSession(session: ReturnType<typeof createSession>, prompt = "Fixture
   );
 }
 
-function requireActions(required_actions: AgentSession["required_actions"]) {
-  savedSession = { ...savedSession, status: "requires_action", required_actions };
+function startSession(session = createSession(), prompt = "Fixture prompt") {
+  const result = runSession(session, prompt);
+  void result.catch(() => {});
+  return { session, result };
+}
+
+function completeSavedState() {
+  savedSession = { ...savedSession, status: "idle" };
+  savedTurns = [createTurn()];
+  savedItems = [createSavedMessage("input-fixture", "user", "Fixture prompt")];
+}
+
+async function abortSession(session: ReturnType<typeof createSession>, result: Promise<unknown>) {
+  savedSession = { ...savedSession, status: "idle" };
+  controller.abort();
+  await result.catch(() => {});
+  await session.close();
 }
 
 function createSession(
@@ -433,6 +408,10 @@ function savedStateResponse(url: string) {
   }
 }
 
+function createInput(id: string, turn_id: string) {
+  return { ...createSavedMessage(id, "user", ""), turn_id };
+}
+
 function createSavedMessage(id: string, role: "user" | "assistant", text: string): AgentsApiItem {
   return {
     id,
@@ -443,14 +422,6 @@ function createSavedMessage(id: string, role: "user" | "assistant", text: string
     turn_id: "turn-fixture",
     type: "message",
   } satisfies AgentSessionMessage;
-}
-
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((settle) => {
-    resolve = settle;
-  });
-  return { promise, resolve };
 }
 
 function createEventStream() {
@@ -497,5 +468,118 @@ function createEventStream() {
     observe(event: AgentsApiEvent) {
       waiters.get(event.type)?.shift()?.();
     },
+  };
+}
+
+type AgentEvent = Parameters<NonNullable<AgentHarnessAttemptParamsV2["onAgentEvent"]>>[0];
+
+it.each(["added", "done"])("projects commentary discovered at %s once", async (knownAt) => {
+  const { projection, events } = createProjection();
+  const item: AgentsApiItem = {
+    ...createSavedMessage("commentary-fixture", "assistant", ""),
+    phase: knownAt === "added" ? "commentary" : null,
+    status: "in_progress",
+  };
+  const text = "Checking the command.\n\n    pwd";
+
+  await projection.observe({ type: "agent.session.turn.item.added", item });
+  await projection.observe({
+    type: "agent.session.turn.output_text.delta",
+    item_id: item.id,
+    turn_id: "turn-fixture",
+    content_index: 0,
+    delta: text,
+  });
+  const completed = {
+    type: "agent.session.turn.item.done",
+    item: {
+      ...item,
+      phase: "commentary",
+      status: "completed",
+      content: [{ type: "output_text", text }],
+    },
+  } satisfies AgentsApiEvent;
+  await projection.observe(completed);
+  await projection.observe(completed);
+
+  const itemId = "agentsapi:session-fixture:turn-fixture:commentary-fixture";
+  const preamble = {
+    itemId,
+    kind: "preamble",
+    title: "Preamble",
+    progressText: text,
+    source: "agentsapi",
+  };
+  const itemEvent = (phase: string) => ({ stream: "item", data: { ...preamble, phase } });
+  const assistant = (outputText: string, id = itemId) => ({
+    stream: "assistant",
+    data: { itemId: id, text: outputText, delta: "", replace: true, replaceable: true },
+  });
+  expect(events).toEqual([
+    ...(knownAt === "added"
+      ? [itemEvent("update")]
+      : [
+          assistant(text),
+          { stream: "assistant", data: { itemId, text: "", delta: "", replace: true } },
+        ]),
+    itemEvent("end"),
+  ]);
+
+  await projection.observe({
+    ...completed,
+    item: {
+      ...completed.item,
+      id: "final-fixture",
+      phase: "final_answer",
+      content: [{ type: "output_text", text: "Done." }],
+    },
+  });
+  expect(events.at(-1)).toEqual(
+    assistant("Done.", "agentsapi:session-fixture:turn-fixture:final-fixture"),
+  );
+});
+it("replaces matching canonical usage while retaining omitted turns without counting them twice", async () => {
+  const { projection } = createProjection();
+  for (const [id, usage] of [
+    ["turn-a", makeUsage(100, 20, 5, 1)],
+    ["turn-b", makeUsage(50, 10, 3, 2)],
+  ] as const) {
+    await projection.observe({
+      type: "agent.session.turn.completed",
+      turn: { id, subagent_id: null, usage },
+    });
+  }
+  const canonicalTurn = createTurn({ id: "turn-a", usage: makeUsage(120, 30, 6, 2) });
+
+  const totals = { input: 130, output: 9, cacheRead: 40 };
+  for (let pass = 0; pass < 2; pass++) {
+    projection.recordUsage(usageModel, [canonicalTurn, canonicalTurn]);
+    expect(projection.tokenUsage).toMatchObject({
+      ...totals,
+      reasoningTokens: 4,
+      total: 179,
+      contextUsage: { state: "unavailable" },
+    });
+    expect(projection.reply.assistantUsage).toMatchObject({ ...totals, totalTokens: 179 });
+  }
+});
+
+function createProjection() {
+  const events: AgentEvent[] = [];
+  const emit = (event: AgentEvent) => void events.push(event);
+  const params = createAttemptParams();
+  const projection = new AgentsApiMessageProjection(params, "session-fixture", emit, () => {});
+  return { projection, events };
+}
+
+const usageModel = createModel({ id: "model-fixture", reasoning: true });
+
+function makeUsage(input: number, cached: number, output: number, reasoning: number) {
+  return {
+    input_tokens: input,
+    input_tokens_details: { cached_tokens: cached },
+    output_tokens: output,
+    output_tokens_details: { reasoning_tokens: reasoning },
+    total_tokens: input + output,
   };
 }

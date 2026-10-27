@@ -1,65 +1,33 @@
-import type { ProgressCard, SessionRunStatus } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
 import { children, createMemo, For, onSettled, Show } from "solid-js";
 import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequestSnapshot,
 } from "../../../../../src/gateway/control-ui-contract.js";
-import type { SessionGoal } from "../../../api/types.ts";
 import { observeScrollState } from "../../../components/scroll-state-observer.ts";
 import { progressCardPresentation } from "../../../components/session-progress-card.ts";
 import { BrandIcon, Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
-import type { ChatGoalRecovery } from "../../../lib/chat/chat-types.ts";
+import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
+import { observeIntersection } from "../../../lib/reactive/observers.ts";
 import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
-import type { SessionProgressCardRefreshState } from "../../../lib/session-progress-cards.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-owner.ts";
-import type { ChatSubagentActivity } from "../chat-subagent-wait.ts";
+import type { ChatActivityPillsProps } from "./chat-activity-pills-types.ts";
+import { hasVisibleChatActivityPills } from "./chat-activity-pills-visibility.ts";
 import { chatPullRequestId } from "./chat-pull-requests.ts";
 import "./chat-activity-pills.css";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 registerEnglishCatalog(registerChatGoalsEnglish);
 registerEnglishCatalog(registerGitHubEnglish);
 
-type OpenActivity = (source: HTMLButtonElement) => void;
-
-/** Mount only in the native mobile presentation branch, not a narrow desktop pane. */
-export type ChatActivityPillsProps = {
-  presented: boolean;
-  approvalPending: boolean;
-  subagents?: { activities: readonly ChatSubagentActivity[]; onOpen: OpenActivity };
-  goal?: {
-    value: SessionGoal;
-    /** Confirmed direct execution, never queued/submitted/accepted Resume alone. */
-    executionConfirmed: boolean;
-    recovery?: ChatGoalRecovery;
-    /** Only an explicit user hide; completion, idle and approval do not set this. */
-    hidden?: boolean;
-    onOpen: OpenActivity;
-  };
-  progress?: {
-    card: ProgressCard;
-    showInChat: boolean;
-    sessionStatus?: SessionRunStatus;
-    startedAt?: number;
-    endedAt?: number;
-    hasActiveRun: boolean;
-    refresh?: SessionProgressCardRefreshState;
-    onOpen: OpenActivity;
-  };
-  pullRequests?: {
-    /** Native visible collection, already ordered and filtered by its owner. */
-    items: readonly ControlUiSessionPullRequest[];
-    status: ControlUiSessionPullRequestSnapshot["status"];
-    onOpen: (pullRequest: ControlUiSessionPullRequest, source: HTMLButtonElement) => void;
-  };
-  /** Supply only an eligible branch offer or retained publication owned by this session. */
-  publication?: { view: GitHubPublicationView; onOpen: OpenActivity };
-};
+type OpenActivity = NonNullable<ChatActivityPillsProps["subagents"]>["onOpen"];
 
 type Tone = "normal" | "muted" | "ok" | "warn" | "danger" | "purple";
 type Glyph = IconName | "goal" | "bot" | "filledStop" | "spinner" | "github";
@@ -402,13 +370,11 @@ function ActivityPill(props: {
           badge: props.view.badge.label,
         })
       : props.view.label);
-  onSettled(() => {
-    const observer = new IntersectionObserver(([entry]) =>
+  onSettled(() =>
+    observeIntersection([button], ([entry]) =>
       button.toggleAttribute("data-out-of-view", !entry?.isIntersecting),
-    );
-    observer.observe(button);
-    return () => observer.disconnect();
-  });
+    ),
+  );
   return (
     <button
       ref={[
@@ -495,10 +461,16 @@ export function ChatActivityPills(props: ChatActivityPillsProps) {
   let strip!: HTMLDivElement;
   let row!: HTMLDivElement;
   const buttons = new Set<HTMLButtonElement>();
+  let resize: ResizeObserver | undefined;
+  let scheduleLayout: (() => void) | undefined;
   const registerButton = (button: HTMLButtonElement) => {
     buttons.add(button);
+    resize?.observe(button);
+    scheduleLayout?.();
     return () => {
       buttons.delete(button);
+      resize?.unobserve(button);
+      scheduleLayout?.();
     };
   };
   const working = createMemo(
@@ -507,32 +479,30 @@ export function ChatActivityPills(props: ChatActivityPillsProps) {
         (agent) => agent.status === "running" || agent.status === "waiting",
       ) ?? [],
   );
-  const hasGoal = () => Boolean(props.goal && !props.goal.hidden);
-  const hasOther = () =>
-    !props.approvalPending &&
-    Boolean(
-      working().length ||
-      props.progress?.showInChat ||
-      props.pullRequests?.items.length ||
-      props.publication,
-    );
+  const hasGoal = () => Boolean(props.goal);
   onSettled(() => {
     const scroll = observeScrollState(
       strip,
       (state) => {
         strip.toggleAttribute("data-fade-left", !state.atStart);
         strip.toggleAttribute("data-fade-right", !state.atEnd);
+        props.onLayout?.({ strip, pills: buttons });
       },
       true,
     );
-    const resize = new ResizeObserver(scroll.schedule);
+    scheduleLayout = scroll.schedule;
+    resize = new ResizeObserver(scroll.schedule);
     resize.observe(row);
+    buttons.forEach((button) => resize?.observe(button));
     const visibility = () => strip.toggleAttribute("data-document-hidden", document.hidden);
     const stopVisibility = listen(document, "visibilitychange", visibility);
     visibility();
     return () => {
       scroll.disconnect();
-      resize.disconnect();
+      resize?.disconnect();
+      resize = undefined;
+      scheduleLayout = undefined;
+      props.onLayout?.({ strip, pills: buttons }, true);
       stopVisibility();
     };
   });
@@ -586,7 +556,7 @@ export function ChatActivityPills(props: ChatActivityPillsProps) {
         strip = element;
       }}
       class="chat-activity-pills"
-      hidden={!hasGoal() && !hasOther()}
+      hidden={!hasVisibleChatActivityPills(props)}
       data-presented={props.presented ? "true" : "false"}
       role="group"
       aria-label={t("chat.activityPills.label")}
@@ -616,6 +586,7 @@ export function ChatActivityPills(props: ChatActivityPillsProps) {
                     <span
                       class="activity-pill__avatar"
                       style={{
+                        "--subagent-avatar-hue": fnv1aUtf16(agent().key) % 360,
                         "--avatar-bg": avatarColors(agent().key)[0],
                         "--avatar-ink": avatarColors(agent().key)[1],
                         "--wave-delay": `${index() * 120}ms`,
@@ -643,7 +614,7 @@ export function ChatActivityPills(props: ChatActivityPillsProps) {
             onOpen={(source) => props.goal!.onOpen(source)}
           />
         </Show>
-        <Show when={!props.approvalPending && props.progress?.showInChat}>
+        <Show when={!props.approvalPending && props.progress}>
           <ActivityPill
             registerButton={registerButton}
             family="progress"

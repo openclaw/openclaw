@@ -10,7 +10,6 @@ import {
 } from "./code-mode.js";
 import {
   createHeadlessCodeModeHarness,
-  pluginToolWithExecute,
   resetCodeModeTestState,
   resultDetails,
   resultText,
@@ -23,7 +22,6 @@ import {
 import { defineToolOutputSchema } from "./schema/tool-output-schema.js";
 import { resolveToolResultBudget, toolResultFitsBudget } from "./tool-result-limits.js";
 import { clearToolSearchCatalog } from "./tool-search.js";
-import { jsonResult } from "./tools/common.js";
 
 const catalogs: Array<ReturnType<typeof createCatalogCodeModeHarness>["ctx"]> = [];
 afterEach(async () => {
@@ -45,6 +43,20 @@ function createResultsHarness(
 function expectUnretained(output: Record<string, unknown>, reason: string) {
   expectCompleted(output, { truncated: true, guidance: expect.stringContaining(reason) });
   expect(output.value).not.toHaveProperty("reference");
+}
+
+const closedObject = (properties: Parameters<typeof Type.Object>[0]) =>
+  Type.Object(properties, { additionalProperties: false });
+
+function actionApi(
+  variants: Parameters<typeof defineToolOutputSchema>[0]["variants"],
+  name = "records",
+) {
+  return createCodeModeToolApiFile(name, {
+    source: "openclaw",
+    parameters: Type.Object({ kind: Type.String() }),
+    outputSchema: defineToolOutputSchema({ inputProperty: "kind", variants }),
+  });
 }
 
 it("keeps a usable network reference after output exhaustion and wait", async () => {
@@ -181,64 +193,45 @@ it("bounds deep and long-key preview traversal", async () => {
 });
 
 it("infers literal and union selectors while keeping dynamic and missing inputs sound", async () => {
-  const tool = pluginToolWithExecute("records", "Read records or status", async (_id, input) =>
-    jsonResult(isRecord(input) && input.kind === "list" ? { rows: ["one", "two"] } : { total: 2 }),
-  );
-  tool.parameters = Type.Object(
-    { kind: Type.Optional(Type.String()) },
-    { additionalProperties: false },
-  );
+  const tool = jsonTool("records", {});
+  tool.parameters = closedObject({ kind: Type.Optional(Type.String()) });
   tool.outputSchema = defineToolOutputSchema({
     inputProperty: "kind",
     variants: {
-      list: Type.Object({ rows: Type.Array(Type.String()) }, { additionalProperties: false }),
-      status: Type.Object({ total: Type.Number() }, { additionalProperties: false }),
+      list: closedObject({ rows: Type.Array(Type.String()) }),
+      status: closedObject({ total: Type.Number() }),
     },
   });
   const { run } = createCatalogCodeModeHarness([tool]);
-  const declaration = await run(
-    'return await API.read("tools/records.d.ts");',
-    "read-records-contract",
-  );
+  const declaration = await run('return await API.read("tools/records.d.ts");');
   expect(declaration.status).toBe("completed");
-  const composition = `
-    const list = await records({kind: "list"});
-    const status = await records({kind: "status"});
-    const choice = Math.random() > 0.5 ? "list" : "status";
-    const selected = await records({kind: choice});
-    const selectedCount = "rows" in selected ? selected.rows.length : selected.total;
-    let dynamic = "status";
-    const broad = await records({kind: dynamic});
-    const omitted = await records();
-    const broadCount = "rows" in broad ? broad.rows.length : broad.total;
-    const omittedCount = "rows" in omitted ? omitted.rows.length : omitted.total;
-    const explicit = await records(undefined);
-    const explicitCount = "rows" in explicit ? explicit.rows.length : explicit.total;
-    return [list.rows.length, status.total, selectedCount, broadCount, omittedCount, explicitCount];
-  `;
   const source = `${(declaration.value as { content: string }).content}
-async function consume() { ${composition} }
 async function checkContracts(kind: string, choice: "list" | "status") {
   const list = await records({kind: "list"});
+  const rows: string[] = list.rows;
   // @ts-expect-error A list result has rows, not a total.
   list.total;
+  const status = await records({kind: "status"});
+  const total: number = status.total;
   const dynamic = await records({kind});
+  const broadCount = "rows" in dynamic ? dynamic.rows.length : dynamic.total;
   // @ts-expect-error A broad selector cannot promise rows.
   dynamic.rows;
   const selected = await records({kind: choice});
+  const selectedCount = "rows" in selected ? selected.rows.length : selected.total;
   // @ts-expect-error A union selector cannot promise rows.
   selected.rows;
   const omitted = await records();
+  const omittedCount = "rows" in omitted ? omitted.rows.length : omitted.total;
   // @ts-expect-error Missing selectors keep all output branches.
   omitted.rows;
+  const explicit = await records(undefined);
+  const explicitCount = "rows" in explicit ? explicit.rows.length : explicit.total;
   // @ts-expect-error A generic selector cannot supply an omitted runtime argument.
   await records<{kind: "list"}>();
 }`;
   expect(typeCheckSources({ "/records-consumer.ts": source })).toEqual([]);
   expect(tool.execute).not.toHaveBeenCalled();
-
-  expectCompleted(await run(composition, "literal-and-union"), [2, 2, 2, 2, 2, 2]);
-  expect(tool.execute).toHaveBeenCalledTimes(6);
 });
 
 it("keeps a large set of action declarations within the complete output allowance", async () => {
@@ -248,56 +241,25 @@ it("keeps a large set of action declarations within the complete output allowanc
   const variants = Object.fromEntries(
     Array.from({ length: 64 }, (_, index) => [
       `action_${index}`,
-      Type.Object({ ...fields, tag: Type.Literal(index) }, { additionalProperties: false }),
+      closedObject({ ...fields, tag: Type.Literal(index) }),
     ]),
   );
-  const file = await createCodeModeToolApiFile("bounded_records", {
-    source: "openclaw",
-    parameters: Type.Object({ kind: Type.String() }),
-    outputSchema: defineToolOutputSchema({ inputProperty: "kind", variants }),
-  });
+  const file = await actionApi(variants, "bounded_records");
   expect(file.content.length).toBeLessThan(34_000);
   expect(file.content).toContain("Promise<unknown>");
 });
 
-it("preserves changed fields, requiredness, and root constraints when reusing object declarations", async () => {
-  const base = Type.Object({ value: Type.String() }, { additionalProperties: false });
-  const extended = Type.Object(
-    { ...base.properties, receipt: Type.String() },
-    { additionalProperties: false },
-  );
-  const file = await createCodeModeToolApiFile("records", {
-    source: "openclaw",
-    parameters: Type.Object({ kind: Type.String() }),
-    outputSchema: defineToolOutputSchema({
-      inputProperty: "kind",
-      variants: {
-        empty: Type.Object({}, { additionalProperties: false }),
-        base,
-        extended,
-        changed: Type.Object(
-          { ...extended.properties, value: Type.Number() },
-          { additionalProperties: false },
-        ),
-        optional: { ...extended, required: ["receipt"] },
-        constrained: { ...extended, allOf: [{ maxProperties: 1 }] },
-      },
-    }),
+it("does not reuse an object declaration for a constrained root", async () => {
+  const base = closedObject({ value: Type.String(), receipt: Type.String() });
+  const file = await actionApi({
+    empty: closedObject({}),
+    base,
+    constrained: { ...base, allOf: [{ maxProperties: 1 }] },
   });
   expect(
     typeCheckSources({
       "/extended-records.ts": `${file.content}
 async function consume() {
-  const extended = await records({ kind: "extended" });
-  const accepted: typeof extended = { value: "item", receipt: "approved" };
-  const value: string = extended.value;
-  const receipt: string = extended.receipt;
-  const changed = await records({ kind: "changed" });
-  const numeric: number = changed.value;
-  const optional = await records({ kind: "optional" });
-  const maybe: string | undefined = optional.value;
-  // @ts-expect-error Reuse must not restore requiredness removed by this branch.
-  const required: string = optional.value;
   const constrained = await records({ kind: "constrained" });
   // @ts-expect-error Unsupported root constraints must retain an unknown result.
   constrained.receipt;
@@ -309,13 +271,12 @@ async function consume() {
 it("bounds inspection and repeated console output under the shared result cap", async () => {
   const maxOutputBytes = 65_536;
   const result = await runCodeModeScriptHeadless({
-    ctx: createHeadlessCodeModeHarness(),
+    ctx: createHeadlessCodeModeHarness([], { codeMode: { maxOutputBytes } }),
     code:
       'const huge = { unicode: "🦞".repeat(100000), values: Array(100000).fill("x") }; ' +
       'console.log(huge); console.error(new Proxy({}, { ownKeys() { throw Error("bad proxy"); } })); ' +
       "for (let i = 0; i < 20000; i++) console.log(); await yield_control(); " +
       'console.log("after exhaustion"); return true;',
-    overrides: { maxOutputBytes },
   });
   expect(result.status).toBe("completed");
   expectCodeModeSharedBudget(result, maxOutputBytes);

@@ -5,12 +5,14 @@ import { getStateDatabaseSchemaLease } from "../infra/gateway-state-owner.js";
 import { resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
+import { hasVerifiedLiveSqliteOwner } from "../infra/sqlite-live-owner.js";
 import { retainSnapshotTempDirectory } from "../infra/sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocationFromOwnedDatabase } from "../infra/sqlite-readonly-location.js";
 import type {
   AsyncPreparedSqliteReadOnlyLocation,
   RetainedSqliteSnapshotPreparation,
 } from "../infra/sqlite-readonly-location.types.js";
+import { runSqliteReadOnlyOperation } from "../infra/sqlite-readonly-worker.js";
 import {
   prepareSqliteReadOnlyLocationAwaited,
   startSqliteReadOnlyLocationAsync,
@@ -271,6 +273,49 @@ export function startOpenClawStateReadOperation(
       const sourceIdentity = { key: context.admission.identity.key };
       const validation = selectedTransport.startValidateFresh(context, authority);
       await validation;
+      if (
+        command.type === "plugins.metadata.read" &&
+        !context.existingSchemaPath &&
+        !context.maintenanceScope &&
+        !getStateDatabaseSchemaLease(pathname) &&
+        hasVerifiedLiveSqliteOwner(pathname)
+      ) {
+        // Read the two metadata rows in the child's pinned transaction instead of
+        // copying unrelated state. Offline and retained snapshots keep their owner.
+        authority.assertCurrent();
+        const inspected = await runSqliteReadOnlyOperation(
+          pathname,
+          { type: "pluginMetadata.readLive", input: command.input },
+          {
+            source: "canonical",
+            expectedIdentity: context.admission.identity.key,
+            env: context.environment,
+            signal,
+          },
+        );
+        authority.assertCurrent();
+        if (inspected) {
+          const result = inspected.value;
+          if (!result.ok) {
+            const { retainOpenClawStateWorkerErrorPayload, hydrateOpenClawStateWorkerError } =
+              await import("./openclaw-state-worker-error.js");
+            const error = new Error("Live plugin metadata inspection failed");
+            retainOpenClawStateWorkerErrorPayload(error, result.error);
+            return consume({
+              error: hydrateOpenClawStateWorkerError(error, { includeOrdinary: true }),
+              sourceAdmitted: result.sourceAdmitted,
+            });
+          }
+          return consume({
+            value: {
+              ok: true,
+              type: command.type,
+              sourceAdmitted: true,
+              rows: result.rows,
+            },
+          });
+        }
+      }
       if (selection.snapshotPreparation === "awaited") {
         prepared = await prepareSqliteReadOnlyLocationAwaited(pathname, {
           signal,

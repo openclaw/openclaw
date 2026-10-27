@@ -4,8 +4,7 @@ import type { HelperActionResult } from "./helper-results.js";
 import type { FaceTimeHelperPeer } from "./helper-rpc.js";
 import type { FaceTimeHelperSupervisorStatus } from "./helper-supervisor.js";
 import type { FaceTimeDialMode, PendingFaceTimeDial } from "./outbound-call.js";
-import type { FaceTimeTalkDriver } from "./talk-driver.js";
-import type { FaceTimeTalkEventSummary } from "./talk-events-summary.js";
+import type { startFaceTimeTalkDriver } from "./talk-driver.js";
 
 type FaceTimeCarrierMode = "ringing" | "muted" | "active" | "closing" | "closed";
 
@@ -33,7 +32,6 @@ export class ActiveFaceTimeCall {
   carrierCallUUID: string;
   readonly carrierPeers = new Map<number, FaceTimeHelperPeer>();
   readonly senderId: string;
-  readonly senderIsOwner: true = true;
   handle?: string;
   callStatus?: number;
   isSendingAudio?: boolean;
@@ -60,7 +58,7 @@ export class ActiveFaceTimeCall {
   lastHelperAction?: HelperActionResult;
   lastRoutingError?: string;
   audioRouting?: Promise<void>;
-  talk?: FaceTimeTalkDriver;
+  talk?: Awaited<ReturnType<typeof startFaceTimeTalkDriver>>;
   talkStarting?: Promise<void>;
   talkActivation?: Promise<void>;
   carrierHangupPending?: boolean;
@@ -86,10 +84,6 @@ export class ActiveFaceTimeCall {
     if (params.peer) {
       this.carrierPeers.set(params.peer.processId, params.peer);
     }
-  }
-
-  captureGeneration(): number {
-    return this.generation;
   }
 
   assertCurrent(generation: number, allowClosing = false): void {
@@ -298,7 +292,16 @@ export type FaceTimeRuntimeStatus = {
     lastHelperAction?: HelperActionResult;
     lastRoutingError?: string;
     carrierHangupPending?: boolean;
-    recentTalkEvents?: FaceTimeTalkEventSummary[];
+    recentTalkEvents?: Array<{
+      type: string;
+      turnId?: string;
+      callId?: string;
+      final?: boolean;
+      byteLength?: number;
+      name?: string;
+      text?: string;
+      message?: string;
+    }>;
   }>;
 };
 

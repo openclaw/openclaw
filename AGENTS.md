@@ -24,6 +24,7 @@ Update instructions at owner; no competing rules here.
 ## Working agreement
 
 - Follow through on actionable requests, including "can you", within authorized scope; plan or progress report = checkpoint, not completion. Preserve unaffected work across corrections and side questions.
+- After a restart, reconcile prior effects and resume already-authorized work under current authority; do not ask for the same approval again solely because the process restarted.
 - Resolve routine, reversible choices with reasonable assumptions; ask only about consequential decisions context cannot resolve. Continue independent authorized work meanwhile. Silence never authorizes gated action.
 - Skill causes pause, permission request, unfinished work, or scope change: link exact `SKILL.md`, quote instruction, explain application (requirement vs interpretation), check prior authorization before asking again.
 - Inspect `git status -sb` before editing or GitHub work. Preserve unrelated work, branches, processes, user-managed checkouts; serialize shared Git mutations; isolate work when needed. Never switch checkout another agent or test run uses.
@@ -41,6 +42,7 @@ Update instructions at owner; no competing rules here.
 - Behavior proven + required gates green: finish/land. No optional proof polish, checkbox demos, or speculative scope growth.
 - Check mergeability first; don't rebase or merge `main` just because it advanced. Integrate for conflicts, a named failing gate, or material base risk, then rerun affected checks. Prior-head CI stays prior-head evidence ([landing](.agents/skills/openclaw-pr-maintainer/references/landing.md)).
 - Time pressure never waives gates. Report concrete blockers.
+- Don't mix shell dialects (for example, zsh `${name:r}` in bash).
 - CLI: `pnpm openclaw ...` or `pnpm dev`, never `node --import tsx src/index.ts`. Never reconcile a shared/worktree install other jobs use. Dependency, vendoring, format, typecheck gotchas: [scripts guide](scripts/AGENTS.md#execution-gotchas).
 
 ## One owner, complete cutover

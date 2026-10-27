@@ -6,6 +6,7 @@ import type { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import type { FailoverReason } from "../../agents/failover/signal.js";
 import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { AutomationResult } from "../../infra/agent-run-registry.types.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
@@ -43,6 +44,7 @@ export type AgentTurnCompaction = {
 type AbortedAgentTurn = {
   kind: "aborted";
   reason: "user" | "restart" | "superseded";
+  sessionWriter?: CompactionAccountingTarget;
   compaction?: AgentTurnCompaction;
 };
 
@@ -52,13 +54,16 @@ export type AgentTurnInternalResult =
   | SettledAgentTurn
   | {
       kind: "final";
+      sessionWriter?: CompactionAccountingTarget;
       payload: ReplyPayload;
       resolved?: { provider: string; model: string };
       postCompactionModelFailure?: true;
     };
 
-type SettledAgentTurnBase = {
+export type SettledAgentTurn = {
   kind: "settled";
+  /** Captured before terminal event settlement consumes the invocation. */
+  automation?: { result?: AutomationResult; includeReasoning: boolean };
   /** The runtime's claimed writer, independent of whether it compacted. */
   sessionWriter?: CompactionAccountingTarget;
   maintenanceAuthProfile?: CompletedAgentAuthSelection;
@@ -72,21 +77,18 @@ type SettledAgentTurnBase = {
   hasDirectlySentBlockReply?: true;
   /** Delivery receipts for direct tool-flush payloads, including retry custody. */
   directBlockDeliveries?: DirectBlockDelivery[];
-};
-
-export type SettledAgentTurn = SettledAgentTurnBase &
-  (
-    | {
-        status: "ok";
-        terminalFailurePayload?: never;
-        postCompactionModelFailure?: never;
-      }
-    | {
-        status: "failed";
-        terminalFailurePayload?: ReplyPayload;
-        postCompactionModelFailure?: true;
-      }
-  );
+} & (
+  | {
+      status: "ok";
+      terminalFailurePayload?: never;
+      postCompactionModelFailure?: never;
+    }
+  | {
+      status: "failed";
+      terminalFailurePayload?: ReplyPayload;
+      postCompactionModelFailure?: true;
+    }
+);
 
 /** Closed result shared by foreground and queued agent-turn callers. */
 export type AgentTurnExecutionResult = {
@@ -96,6 +98,7 @@ export type AgentTurnExecutionResult = {
     | AbortedAgentTurn
     | {
         kind: "rejected";
+        sessionWriter?: CompactionAccountingTarget;
         compaction?: AgentTurnCompaction;
         payload: ReplyPayload;
         resolved?: { provider: string; model: string };
@@ -133,7 +136,6 @@ export type AgentTurnParams = ReplyAgentTurnContext & {
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
   pendingToolTasks: Set<Promise<void>>;
-  isHeartbeat: boolean;
   getActiveSessionEntry: () => SessionEntry | undefined;
   activeSessionStore?: Record<string, SessionEntry>;
   replyMediaContext?: ReplyMediaContext;

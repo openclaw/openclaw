@@ -1,16 +1,17 @@
 import { createRouter } from "@openclaw/uirouter";
 import { flush } from "solid-js";
 import { onTestFinished, vi } from "vitest";
+import { registerListener } from "../../../../src/shared/listeners.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import {
+  createApplicationGateway,
+  createApplicationGatewaySnapshot,
+} from "../../test-helpers/application-context-fixtures.ts";
 import { createChatPageSessions } from "./chat-page-sessions.test-support.ts";
-import type { ChatSplitLayout } from "./split-layout-types.ts";
-import { insertPane } from "./split-layout.ts";
-import "./chat-page.ts";
-
-export { createChatPageSessions } from "./chat-page-sessions.test-support.ts";
+import { insertPane, singlePaneLayout } from "./split-layout.ts";
+import "./chat-page.tsx";
 
 export function createChatPageNavigationContext() {
   const router = createRouter({ routes: [] });
@@ -71,36 +72,18 @@ export function setViewerPresenceContext(page: HTMLElementTagNameMap["openclaw-c
       },
     },
   };
-  const snapshotListeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
-  (navigation.context as unknown as { gateway: ApplicationContext["gateway"] }).gateway = {
-    snapshot: {
+  const { gateway } = createApplicationGateway(
+    createApplicationGatewaySnapshot({
       client,
       phase: "connected",
-      offlineStable: false,
       hello,
-      canvasPluginSurfaceUrl: null,
       assistantAgentId: "main",
       sessionKey: "agent:main:main",
-      lastError: null,
-      lastErrorCode: null,
-    },
-    connection: { gatewayUrl: "ws://example.test", token: "", bootstrapToken: "", password: "" },
-    connectionRevision: 0,
-    eventLog: [],
-    eventLogRevision: 0,
-    loadSelfProfile: async () => null,
-    connect: vi.fn(),
-    defer: () => false,
-    setSessionKey: vi.fn(),
-    start: vi.fn(),
-    stop: vi.fn(),
-    subscribe: (listener) => {
-      snapshotListeners.add(listener);
-      return () => snapshotListeners.delete(listener);
-    },
-    subscribeEventLog: () => () => {},
-    subscribeEvents: () => () => {},
-  };
+    }),
+  );
+  Object.assign(navigation.context, {
+    gateway: Object.assign(gateway, { setSessionKey: vi.fn() }),
+  });
   Object.assign(navigation.context, {
     sessions: createChatPageSessions(navigation.context.gateway),
   });
@@ -117,28 +100,18 @@ export function createSessionTitleSource() {
       ...createChatPageSessions(),
       state,
       presentation: state,
-      subscribe(listener: () => void) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
+      subscribe: (listener: () => void) => registerListener(listeners, listener),
     },
     listeners,
     publish(key: string, displayName: string) {
       state.result = { sessions: [{ key, displayName }] };
-      for (const listener of listeners) {
-        listener();
-      }
+      listeners.forEach((listener) => listener());
     },
   };
 }
 
-export function createSplitLayout(sessionKey: string): ChatSplitLayout {
-  const singlePane: ChatSplitLayout = {
-    columns: [{ id: "c1", panes: [{ id: "p1", sessionKey }], paneWeights: [1] }],
-    columnWeights: [1],
-    activePaneId: "p1",
-  };
-  return insertPane(singlePane, "p1", sessionKey, "right");
+export function createSplitLayout(sessionKey: string) {
+  return insertPane(singlePaneLayout("c1", "p1", sessionKey), "p1", sessionKey, "right");
 }
 
 export function stubMatchMedia(matches: boolean) {
@@ -165,4 +138,13 @@ export async function settleChatPage(
   flush();
   await Promise.resolve();
   flush();
+}
+
+export async function showSession(
+  page: HTMLElementTagNameMap["openclaw-chat-page"],
+  sessionKey: string,
+): Promise<void> {
+  page.data = { sessionKey };
+  await settleChatPage(page);
+  await settleChatPage(page);
 }

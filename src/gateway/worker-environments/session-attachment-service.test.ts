@@ -4,6 +4,7 @@ import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import { createEnteredGate as barrier } from "../../agents/entered-gate.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import {
   ensureSessionEntrySync,
@@ -23,7 +24,9 @@ import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-cli
 import { makeGatewayClient } from "../server-request-context.test-support.js";
 import * as support from "./service.test-support.js";
 
-support.setupWorkerEnvironmentServiceSuite();
+support.setupWorkerEnvironmentServiceSuite((config, root) => {
+  config.session = { store: path.join(root, "sessions.json") };
+});
 const state = support.testState;
 const identity = {
   sessionId: "conversation-one",
@@ -47,18 +50,6 @@ const create = (
 ) =>
   service.createSessionAttachment({ ...request, ...overrides }, authorize, undefined, onReserved);
 const stop = () => service.destroySessionAttachment({ sessionId: identity.sessionId }, authorize);
-function barrier() {
-  const entered = createDeferredCore();
-  const released = createDeferredCore();
-  return {
-    entered: entered.promise,
-    release: released.resolve,
-    wait: async () => {
-      entered.resolve();
-      await released.promise;
-    },
-  };
-}
 const outcome = <T>(operation: Promise<T>) =>
   operation.then(
     (value) => ({ value }),
@@ -134,7 +125,6 @@ function expectReply(
 
 beforeEach(() => {
   provision = vi.fn(async () => ({ leaseId: "lease-1", ssh: support.SSH_ENDPOINT }));
-  state.config.session = { store: path.join(state.root, "sessions.json") };
   ensureSessionEntrySync(scope(), { sessionId: identity.sessionId, updatedAt: 1 });
   makeService();
 });
@@ -591,6 +581,39 @@ it("parks after one hour and resumes only on explicit stop", async () => {
   destroy.mockResolvedValue(undefined);
   await stop();
   expect(destroy).toHaveBeenCalledTimes(2);
+  expect(service.get(attachment.environmentId)).toMatchObject({ state: "destroyed" });
+  expect(service.get(attachment.environmentId)?.error).toBeUndefined();
+});
+
+it("keeps the cleanup deadline across restart while allowing recovery and explicit stop", async () => {
+  const failure =
+    "Crabbox stop failed with exit code 4: lease_id_conflict: fixed Machine0 lease lease-1 has an unresolved create attempt";
+  const destroy = vi.fn().mockRejectedValue(new Error(failure));
+  const warn = vi.fn<(message: string) => void>();
+  makeService({ id: "crabbox", destroy }, { logger: { warn } });
+  support.getDevelopmentProfile().provider = "crabbox";
+  const { attachment } = await create();
+  await expect(stop()).rejects.toThrow(failure);
+  state.nowMs += 3_600_000;
+  await service.reconcileSessionAttachments();
+  expect(service.get(attachment.environmentId)?.error).toContain("cleanup parked");
+
+  await support.reopenWorkerEnvironmentStore();
+  makeService({ id: "crabbox", destroy }, { logger: { warn } });
+  for (let sweep = 0; sweep < 3; sweep += 1) {
+    await service.reconcileSessionAttachments();
+    state.nowMs += 300_000;
+  }
+  expect(destroy).toHaveBeenCalledTimes(2);
+  expect(service.get(attachment.environmentId)).toMatchObject({
+    state: "destroying",
+    leaseId: "lease-1",
+    error: expect.stringContaining("cleanup parked"),
+  });
+  expect(service.get(attachment.environmentId)?.error).toContain(failure);
+
+  destroy.mockResolvedValue(undefined);
+  await stop();
   expect(service.get(attachment.environmentId)).toMatchObject({ state: "destroyed" });
   expect(service.get(attachment.environmentId)?.error).toBeUndefined();
 });

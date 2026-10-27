@@ -3,8 +3,6 @@ import { expect, expectTypeOf, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { PLUGIN_COMMAND_DISPATCH } from "../plugins/plugin-command-dispatch-contract.js";
 import type { PluginRuntimeChannel } from "../plugins/runtime/types-channel.js";
-import type * as ReplyChunking from "./reply-chunking.js";
-import type * as ReplyRuntime from "./reply-runtime.js";
 import {
   createReplyDispatcher,
   dispatchInboundMessage,
@@ -13,50 +11,41 @@ import {
   type PreparedAgentRunStart,
 } from "./reply-runtime.js";
 
-type ProgressResult = boolean | void;
-type ProgressReturn = Promise<ProgressResult> | ProgressResult;
 type AsyncVisibility = (() => Promise<boolean>) | undefined;
 type PublicReplyKey =
+  | "assertChannelAuthority"
   | "internalEventExecution"
   | "onReplyOperationAdmitted"
   | "onReplyOperationOwned";
 type Present<T> = Exclude<T, undefined>;
-type ProgressCallback = Options[
+type ProgressKey =
   | "onToolResult"
   | "onToolStart"
   | "onItemEvent"
   | "onPlanUpdate"
   | "onApprovalEvent"
   | "onCommandOutput"
-  | "onPatchSummary"];
-type ProgressBoundaryCallback = Options[
+  | "onPatchSummary"
+  | "onPartialReply"
+  | "onReasoningStream"
   | "onReasoningEnd"
   | "onAssistantMessageStart"
   | "onBlockReplyQueued"
   | "onCompactionStart"
-  | "onCompactionEnd"];
+  | "onCompactionEnd";
 
-it("exposes only the exact helper from reply-runtime", () => {
-  type ChunkingExports = keyof typeof ReplyChunking;
-  type RuntimeExports = keyof typeof ReplyRuntime;
-  expectTypeOf<"SILENT_REPLY_TOKEN">().not.toExtend<ChunkingExports>();
-  expectTypeOf<"SILENT_REPLY_TOKEN">().toExtend<RuntimeExports>();
-  expectTypeOf<"isSilentReplyText">().not.toExtend<ChunkingExports>();
-  expectTypeOf<"isSilentReplyPayloadText">().not.toExtend<ChunkingExports>();
-  expectTypeOf<"isSilentReplyPayloadText">().not.toExtend<RuntimeExports>();
+it("accepts optional text in the public silent-reply helper", () => {
   expectTypeOf(isSilentReplyText).parameters.toEqualTypeOf<[text?: string]>();
 });
 it("retains released lifecycle callback arguments and synchronous completion acknowledgment", () => {
   type Deferral = Present<Present<Options["turnAdoptionLifecycle"]>["onDeferred"]>;
-  expectTypeOf<Parameters<Deferral>>().toEqualTypeOf<[]>();
-  expectTypeOf<ReturnType<Deferral>>().toEqualTypeOf<boolean | void>();
+  expectTypeOf<Deferral>().toEqualTypeOf<() => boolean | void>();
   type AgentRunStart = NonNullable<Options["onAgentRunStart"]>;
   type LegacyAgentRunStart = (
     runId: string,
     executionIdentityToken?: Parameters<AgentRunStart>[1],
     options?: Parameters<AgentRunStart>[2],
   ) => unknown;
-
   expectTypeOf<[string]>().toExtend<Parameters<AgentRunStart>>();
   expectTypeOf<Parameters<LegacyAgentRunStart>>().toExtend<Parameters<AgentRunStart>>();
   expectTypeOf<LegacyAgentRunStart>().toExtend<AgentRunStart>();
@@ -93,10 +82,10 @@ it("still accepts the deprecated suppressToolErrorWarnings option as a no-op", (
 });
 
 it("exports acceptance-aware progress callback results", () => {
-  expectTypeOf<Present<ProgressCallback>>().returns.toEqualTypeOf<ProgressReturn>();
-  expectTypeOf<Present<Options["onPartialReply"]>>().returns.toEqualTypeOf<ProgressReturn>();
-  expectTypeOf<Present<Options["onReasoningStream"]>>().returns.toEqualTypeOf<ProgressReturn>();
-  expectTypeOf<Present<ProgressBoundaryCallback>>().returns.toEqualTypeOf<ProgressReturn>();
+  type Results = { [K in ProgressKey]: ReturnType<Present<Options[K]>> };
+  expectTypeOf<Results>().toEqualTypeOf<
+    Record<ProgressKey, boolean | void | Promise<boolean | void>>
+  >();
 });
 
 it("exports the snapshotted commentary delivery gate", () => {
@@ -122,7 +111,7 @@ it("keeps internal event authority out of the public reply option types", () => 
 it("rejects plugin-supplied event custody while retaining public reply options", async () => {
   const callback = vi.fn();
   const options = {
-    isHeartbeat: true,
+    disableTools: true,
     onReplyStart: callback,
     internalEventExecution: { assertCurrent: callback, onStarted: callback },
     onReplyOperationAdmitted: callback,
@@ -145,7 +134,7 @@ it("rejects plugin-supplied event custody while retaining public reply options",
       expect(replyOptions).not.toHaveProperty("onReplyOperationAdmitted");
       expect(replyOptions).not.toHaveProperty("onReplyOperationOwned");
       expect(replyOptions).toMatchObject({
-        isHeartbeat: true,
+        disableTools: true,
         onReplyStart: callback,
         [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" },
       });
@@ -159,17 +148,15 @@ it("rejects plugin-supplied event custody while retaining public reply options",
   expect(options.onReplyOperationOwned).toBe(callback);
 });
 
-it("preserves deprecated admission counters beside settled receipt outcomes", async () => {
+it("preserves deprecated admission counters after delivery settles", async () => {
   const firstDelivery = createDeferred();
   const dispatcher = createReplyDispatcher({
     beforeDeliver: async (payload) => (payload.text === "cancel" ? null : payload),
     deliver: async (payload) => {
       if (payload.text === "delivered") {
-        await firstDelivery.promise;
+        return firstDelivery.promise;
       }
-      if (payload.text === "fail") {
-        throw new Error("transport failed after send started");
-      }
+      throw new Error("transport failed after send started");
     },
   });
 
@@ -184,7 +171,6 @@ it("preserves deprecated admission counters beside settled receipt outcomes", as
   firstDelivery.resolve();
   dispatcher.markComplete();
   const receipt = await dispatcher.waitForIdle();
-
   expect(receipt).toMatchObject({
     anyVisibleDelivered: true,
     counts: {

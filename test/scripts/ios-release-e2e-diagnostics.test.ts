@@ -39,6 +39,7 @@ CodeSign (2 tasks) | 0.12 seconds
 });
 
 test("projects only numeric worker and lane totals", () => {
+  const dynamic = { laneCount: 2, activeCount: 1, queuedCount: 3, queuedLaneCount: 1 };
   expect(
     summarizeGatewayLanes({
       workerCount: 5,
@@ -48,13 +49,7 @@ test("projects only numeric worker and lane totals", () => {
         { lane: "secret-token", activeCount: 1, queuedCount: 2, maxConcurrent: 3, draining: true },
         { activeCount: 4, queuedCount: 5, maxConcurrent: 6, draining: false },
       ],
-      dynamic: {
-        laneCount: 2,
-        activeCount: 1,
-        queuedCount: 3,
-        queuedLaneCount: 1,
-        token: "secret-token",
-      },
+      dynamic: { ...dynamic, token: "secret-token" },
     }),
   ).toEqual({
     outcome: "captured",
@@ -65,7 +60,7 @@ test("projects only numeric worker and lane totals", () => {
     queuedCount: 7,
     maxConcurrent: 9,
     drainingLaneCount: 1,
-    dynamic: { laneCount: 2, activeCount: 1, queuedCount: 3, queuedLaneCount: 1 },
+    dynamic,
   });
   expect(summarizeGatewayLanes(undefined)).toEqual({ outcome: "unavailable" });
 });
@@ -114,16 +109,13 @@ Binary Images: secret-token`,
     );
   });
   const result = await collectGatewayProcessDiagnostics(123, { sample: true });
-  expect(result.process).toEqual({
-    outcome: "captured",
-    cpuPercent: 12.3,
-    rssBytes: 2097152,
-    state: "S",
-  });
-  expect(result.sample).toEqual({
-    outcome: "captured",
-    frameCount: 7,
-    frameCounts: { sqlite: 1, filesystem: 1, locks: 1, poll: 1, v8: 1, node: 1, other: 1 },
+  expect({ process: result.process, sample: result.sample }).toEqual({
+    process: { outcome: "captured", cpuPercent: 12.3, rssBytes: 2097152, state: "S" },
+    sample: {
+      outcome: "captured",
+      frameCount: 7,
+      frameCounts: { sqlite: 1, filesystem: 1, locks: 1, poll: 1, v8: 1, node: 1, other: 1 },
+    },
   });
   expect(result.host.totalMemoryBytes).toBeGreaterThan(0);
   expect(JSON.stringify(result)).not.toMatch(/secret-token|\/private\//u);

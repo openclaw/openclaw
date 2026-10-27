@@ -2,7 +2,7 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
-import type { Page } from "playwright";
+import type { Page, Response } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewayClient } from "../../../src/gateway/client.ts";
 import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
@@ -150,7 +150,7 @@ suite.define(() => {
     const requests: Array<{ id: string; params: Record<string, unknown> }> = [];
     const replies = new Map<string, Record<string, unknown>>();
     const stages: unknown[] = [];
-    const assets: Array<Promise<{ path: string; sha256: string }>> = [];
+    const assets: Array<{ path: string; sha256: string }> = [];
     const acquisitions = () => providerTraffic.filter((entry) => entry.path === "/api/tags").length;
     const publish = async (agentId = "main") => {
       acquisitionDiagnostics.trigger("publication");
@@ -178,6 +178,16 @@ suite.define(() => {
     }
     const url = new URL("/settings/model-providers", browserUrl);
     url.hash = new URL(browserUrl).hash;
+    const collectAsset = async (response: Response) => {
+      const asset = new URL(response.url());
+      if (asset.origin === url.origin && /\/assets\/.*\.(?:js|css)$/u.test(asset.pathname)) {
+        const body = await response.body();
+        assets.push({
+          path: asset.pathname,
+          sha256: createHash("sha256").update(body).digest("hex"),
+        });
+      }
+    };
     try {
       // The provider counter spans both owners; settle each before measuring page-owned requests.
       for (const agentId of ["main", "reviewer"]) {
@@ -190,17 +200,7 @@ suite.define(() => {
         { serviceWorkers: "block", locale: "en-US", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
           acquisitionDiagnostics.observe(page);
-          page.on("response", (response) => {
-            const asset = new URL(response.url());
-            if (asset.origin === url.origin && /\/assets\/.*\.(?:js|css)$/u.test(asset.pathname)) {
-              assets.push(
-                response.body().then((body) => ({
-                  path: asset.pathname,
-                  sha256: createHash("sha256").update(body).digest("hex"),
-                })),
-              );
-            }
-          });
+          page.on("response", collectAsset);
           page.on("websocket", (socket) => {
             socket.on("framesent", ({ payload }) => {
               const frame = requireRecord(JSON.parse(payload.toString()));
@@ -357,6 +357,9 @@ suite.define(() => {
 
           // A new page starts its own request lifetime and keeps the published rows on failure.
           acquisitionDiagnostics.trigger("reconnect");
+          // Chromium releases the old document's response bodies on navigation.
+          await page.removeAllListeners("response", { behavior: "wait" });
+          page.on("response", collectAsset);
           await page.reload();
           await waitForControlUiGatewayReady(page);
           await trigger.waitFor({ state: "visible" });
@@ -366,8 +369,12 @@ suite.define(() => {
           const failed = await catalogRefresh(() =>
             settings.getByRole("button", { name: "Refresh", exact: true }).click(),
           );
+          const providerStatus = settings.locator(
+            '[data-provider-id="ollama"] .model-providers__head',
+          );
+          await expect.poll(() => providerStatus.textContent()).toContain("Models unavailable");
           const retry = settings
-            .locator(".model-providers__catalog-progress")
+            .locator('.model-providers__catalog-progress[role="alert"]')
             .getByRole("button", { name: "Retry", exact: true });
           await retry.waitFor({ state: "visible" });
           expect(await settings.textContent()).not.toContain("Open Models to try again.");
@@ -383,7 +390,7 @@ suite.define(() => {
           });
           expect(await pickerValue(primary)).toBe("fixture/anchor");
           stages.push({ stage: "failed-refresh", acquisitions: acquisitions() });
-          await retry.scrollIntoViewIfNeeded();
+          await providerStatus.scrollIntoViewIfNeeded();
           await capture("settings-refresh-failed.png");
 
           providerMode = "ready";
@@ -391,6 +398,7 @@ suite.define(() => {
           acquisitionDiagnostics.trigger("retry");
           await catalogRefresh(() => retry.click());
           await retry.waitFor({ state: "hidden" });
+          await expect.poll(() => providerStatus.textContent()).not.toContain("Models unavailable");
           await open();
           await primary
             .locator('[role="option"][data-value="ollama/recovered-fixture:latest"]')
@@ -399,6 +407,9 @@ suite.define(() => {
           expect(await pickerValue(primary)).toBe("fixture/anchor");
           stages.push({ stage: "retry", acquisitions: acquisitions() });
           await capture("settings-retry.png");
+        },
+        async ({ page }) => {
+          await page.removeAllListeners("response", { behavior: "wait" });
         },
       );
     } catch (error) {
@@ -417,7 +428,7 @@ suite.define(() => {
             frames,
             stages,
             providerTraffic,
-            assets: await Promise.all(assets),
+            assets,
           },
           null,
           2,

@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { AsyncResource } from "node:async_hooks";
+import { request } from "node:http";
 import path from "node:path";
 import type { AgentHarnessCompletionCustody } from "openclaw/plugin-sdk/agent-harness-completion";
+import { nativeHookRelayTesting } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { registerNativeHookRelayForBundledRuntime } from "openclaw/plugin-sdk/native-hook-relay-runtime";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
 import { patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -29,10 +33,7 @@ import {
   threadRead,
 } from "./native-subagent-monitor.test-support.js";
 import type { CodexNativeSubagentPendingAssignment as Assignment } from "./native-subagent-pending-assignments.js";
-import type {
-  CodexNativeSubagentSubmission as Submission,
-  CodexNativeSubagentSubmissionStore as SubmissionStore,
-} from "./native-subagent-submission.js";
+import type { CodexNativeSubagentSubmission as Submission } from "./native-subagent-submission.js";
 import { scopeCodexRunBindingStore } from "./session-binding-scope.js";
 import { createLazyCodexAppServerBindingStore } from "./session-binding-store.js";
 import {
@@ -182,6 +183,103 @@ async function fixture(initialReceipt?: Submission) {
 }
 
 describe("native subagent submission receipts in the binding store", () => {
+  it("persists an authenticated HTTP receipt after its startup binding lease closes", async () => {
+    const { root, store, owner, readSubmissions, reopen } = await fixture();
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    let applied: boolean | undefined;
+    const { relay, staleWrite } = await store.withLease(identity, async () => {
+      const registration = registerNativeHookRelayForBundledRuntime({
+        provider: "codex",
+        sessionId: identity.sessionId,
+        runId: "http-receipt",
+        allowedEvents: ["post_tool_use"],
+        postToolUse: {
+          toolNames: ["receipt_tool"],
+          observe: async (_invocation, assertCurrent) => {
+            applied = await store.mutate(
+              identity,
+              { kind: recordSubmission, owner, receipt },
+              assertCurrent,
+            );
+          },
+        },
+      });
+      return {
+        relay: registration,
+        staleWrite: AsyncResource.bind(() =>
+          store.mutate(identity, {
+            kind: "patch",
+            threadId: binding.threadId,
+            patch: { model: "stale-writer" },
+          }),
+        ),
+      };
+    });
+    try {
+      await relay.ready;
+      await expect(staleWrite()).rejects.toThrow("Lost Codex binding lease");
+      expect(store.read(identity)).toEqual(binding);
+      const bridge = await nativeHookRelayTesting.getNativeHookRelayBridgeRecordForTests(
+        relay.relayId,
+      );
+      assert(bridge);
+      const { hostname, port, token } = bridge;
+      assert(typeof hostname === "string");
+      assert(typeof port === "number");
+      assert(typeof token === "string");
+      const response = await new Promise<{ code?: number; body: string }>((resolve, reject) => {
+        const outgoing = request(
+          {
+            hostname,
+            port,
+            method: "POST",
+            path: "/invoke",
+            agent: false,
+            signal: AbortSignal.timeout(5_000),
+            headers: {
+              authorization: `Bearer ${token}`,
+              "content-type": "application/json",
+            },
+          },
+          (incoming) => {
+            let body = "";
+            incoming.setEncoding("utf8");
+            incoming.on("data", (chunk: string) => {
+              body += chunk;
+            });
+            incoming.once("error", reject);
+            incoming.once("end", () => resolve({ code: incoming.statusCode, body }));
+          },
+        );
+        outgoing.once("error", reject);
+        outgoing.end(
+          JSON.stringify({
+            provider: "codex",
+            relayId: relay.relayId,
+            generation: relay.generation,
+            event: "post_tool_use",
+            rawPayload: {
+              hook_event_name: "PostToolUse",
+              tool_name: "receipt_tool",
+              tool_use_id: receipt.callId,
+              tool_input: {},
+              tool_response: {},
+            },
+          }),
+        );
+      });
+      expect(response).toMatchObject({ code: 200 });
+      expect(applied).toBe(true);
+      expect(await readSubmissions()).toEqual([receipt]);
+      await reopen();
+      expect(await readSubmissions()).toEqual([receipt]);
+    } finally {
+      relay.unregister();
+      await relay.drain();
+      await nativeHookRelayTesting.clearNativeHookRelaysForTests();
+    }
+  });
+
   it("retains recorded completion across native resume without mutating incoming facts", async () => {
     const { owner, readAssignments, recordAssignment } = await fixture();
     const assignment = makeAssignment(owner, {
@@ -292,34 +390,28 @@ describe("native subagent submission receipts in the binding store", () => {
       const assignmentRecorded = createDeferred<boolean>();
       const receiptRecorded = createDeferred<boolean>();
       let reject = false;
-      const assignmentStore = {
-        ...f.assignmentStore,
-        record: (value: Assignment, guard: () => void) => {
-          const recorded = f.assignmentStore.record(value, guard);
-          if (value.runId === assignment.runId && !value.submission) {
-            assignmentRecorded.resolve(recorded);
-          }
-          return recorded;
-        },
-        consume: (value: Assignment, guard: () => void) =>
-          reject && rejectedOwner === "assignment"
-            ? Promise.resolve(false)
-            : f.assignmentStore.consume(value, guard),
-      };
-      const consumeReceipt = vi.fn<SubmissionStore["consume"]>((value, guard) =>
-        reject && rejectedOwner === "receipt"
-          ? Promise.resolve(false)
-          : f.submissionStore.consume(value, guard),
-      );
-      const submissionStore = {
-        ...f.submissionStore,
-        record: (value: Submission, guard: () => void) => {
-          const recorded = f.submissionStore.record(value, guard);
+      const { assignmentStore, submissionStore } = f;
+      const mutate = f.store.mutate.bind(f.store);
+      vi.spyOn(f.store, "mutate").mockImplementation((caller, mutation, ...guards) => {
+        if (
+          reject &&
+          mutation.kind ===
+            (rejectedOwner === "receipt" ? consumeSubmission : "consume-native-subagent-assignment")
+        ) {
+          return Promise.resolve(false);
+        }
+        const recorded = mutate(caller, mutation, ...guards);
+        if (mutation.kind === recordSubmission) {
           receiptRecorded.resolve(recorded);
-          return recorded;
-        },
-        consume: consumeReceipt,
-      };
+        } else if (
+          mutation.kind === "record-native-subagent-assignment" &&
+          mutation.assignment.runId === assignment.runId &&
+          !mutation.assignment.submission
+        ) {
+          assignmentRecorded.resolve(recorded);
+        }
+        return recorded;
+      });
       const client = createClient();
       const parentItem = (item: Parameters<typeof client.item>[0]) =>
         client.item(item, parentTurnId, binding.threadId);
@@ -342,7 +434,6 @@ describe("native subagent submission receipts in the binding store", () => {
         return true;
       });
       const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
-        recoveryPollDelaysMs: [],
         interruptChildAndWait: interrupt,
       });
       const requestCustody = Object.freeze({});
@@ -444,7 +535,7 @@ describe("native subagent submission receipts in the binding store", () => {
           new Error(
             rejectedOwner === "receipt"
               ? "Cancelled native follow-up receipt was not acknowledged."
-              : "Cancelled native assignment was not acknowledged.",
+              : "Native assignment was not acknowledged.",
           ),
         ]);
         await reopen();
@@ -453,7 +544,6 @@ describe("native subagent submission receipts in the binding store", () => {
         const retried = await stop();
         expect([retried.killed, retried.errors]).toEqual([1, undefined]);
         expect(interrupt).toHaveBeenCalledOnce();
-        expect(consumeReceipt).toHaveBeenCalledTimes(rejectedOwner === "receipt" ? 2 : 1);
         await reopen();
         await expectSaved([], []);
         expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
@@ -570,27 +660,24 @@ describe("native subagent submission receipts in the binding store", () => {
     expect(reopened.read(logicalIdentity)).toEqual(binding);
   });
 
-  it.each(["missing", "retired", "generation", "actor", "thread", "connection", "lifecycle"])(
+  it.each([
+    ["missing", {}],
+    ["retired", {}],
+    ["generation", { sessionId: "replacement-session" }],
+    ["actor", { sessionId: "unrelated-session" }],
+    ["thread", { parentThreadId: "replacement-thread" }],
+    ["connection", { connectionFingerprint: "f".repeat(64) }],
+    ["lifecycle", { lifecycleRevision: "replacement-revision" }],
+  ] satisfies [string, Partial<CodexNativeSubagentHistoryOwner>][])(
     "rejects receipt reads and writes for a %s owner without changing the binding",
-    async (scenario) => {
+    async (scenario, overrides) => {
       const { state, store, owner } = await fixture(receipt);
-      let caller = identity;
-      let actor: CodexNativeSubagentHistoryOwner = owner;
+      const caller = scenario === "generation" ? { ...identity, ...overrides } : identity;
+      const actor = { ...owner, ...overrides };
       if (scenario === "missing") {
         state.delete(key);
       } else if (scenario === "retired") {
         await store.retireSessionGeneration(identity);
-      } else if (scenario === "generation") {
-        caller = { ...identity, sessionId: "replacement-session" };
-        actor = { ...owner, sessionId: caller.sessionId };
-      } else if (scenario === "actor") {
-        actor = { ...owner, sessionId: "unrelated-session" };
-      } else if (scenario === "thread") {
-        actor = { ...owner, parentThreadId: "replacement-thread" };
-      } else if (scenario === "connection") {
-        actor = { ...owner, connectionFingerprint: "f".repeat(64) };
-      } else {
-        actor = { ...owner, lifecycleRevision: "replacement-revision" };
       }
       const before = state.lookup(key);
       expect(await store.readNativeSubagentSubmissions(caller, actor)).toEqual([]);

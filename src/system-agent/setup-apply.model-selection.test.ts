@@ -31,6 +31,9 @@ describe("projectSetupInferenceConfig", () => {
     apiKey,
     models: [],
   });
+  const providers = (
+    entries: NonNullable<OpenClawConfig["models"]>["providers"],
+  ): OpenClawConfig => ({ models: { providers: entries } });
 
   it.each<CredentialCase>([
     ["core no-auth marker", apiKeyCredential("custom-local", "custom-studio"), "custom-local"],
@@ -49,31 +52,23 @@ describe("projectSetupInferenceConfig", () => {
     "preserves credential semantics for %s",
     (_name, credential, expectedApiKey, providerApiKey) => {
       const provider = credential.provider;
-      const prepared: OpenClawConfig = {
-        models: {
-          providers: {
-            [provider.toUpperCase()]: providerConfig(8003, "stale-prepared-alias"),
-            [provider]: providerConfig(
-              8000,
-              providerApiKey ??
-                (credential.type === "token"
-                  ? credential.token
-                  : (credential.key ?? credential.keyRef)),
-            ),
-          },
-        },
-      };
+      const prepared = providers({
+        [provider.toUpperCase()]: providerConfig(8003, "stale-prepared-alias"),
+        [provider]: providerConfig(
+          8000,
+          providerApiKey ??
+            (credential.type === "token"
+              ? credential.token
+              : (credential.key ?? credential.keyRef)),
+        ),
+      });
 
       const projected = projectSetupInferenceConfig({
-        base: {
-          models: {
-            providers: {
-              [provider.toUpperCase()]: providerConfig(8001, "old-alias-key"),
-              [provider]: providerConfig(8002, "old-canonical-key"),
-              sibling: { baseUrl: "http://127.0.0.1:9000/v1", models: [] },
-            },
-          },
-        },
+        base: providers({
+          [provider.toUpperCase()]: providerConfig(8001, "old-alias-key"),
+          [provider]: providerConfig(8002, "old-canonical-key"),
+          sibling: { baseUrl: "http://127.0.0.1:9000/v1", models: [] },
+        }),
         prepared,
         modelRef: `${provider}/local-model`,
         agentId: "main",
@@ -90,6 +85,27 @@ describe("projectSetupInferenceConfig", () => {
 });
 
 describe("applySystemAgentModelSelection", () => {
+  it("keeps provider-added first-run model metadata unrestricted", async () => {
+    const previousConfig: OpenClawConfig = { gateway: { mode: "local" } };
+    const cfg = await applySystemAgentModelSelection({
+      config: {
+        ...previousConfig,
+        agents: { defaults: { models: { "openai/gpt-6-astra": { alias: "GPT" } } } },
+      },
+      previousConfig,
+      model: "openai/gpt-6-astra",
+      agentRuntimeId: "openclaw",
+      runtimeInDefaults: true,
+    });
+    const allowed = buildAllowedModelSet({ cfg, catalog: [], defaultProvider: "openai" });
+    expect(allowed.allows({ provider: "openai", model: "gpt-5.4-mini" })).toBe(true);
+    expect(cfg.agents?.defaults?.modelPolicy).toBeUndefined();
+    expect(cfg.agents?.defaults?.models?.["openai/gpt-6-astra"]).toEqual({
+      alias: "GPT",
+      agentRuntime: { id: "openclaw" },
+    });
+  });
+
   it("adds a utility without changing other bindings", async () => {
     const config: OpenClawConfig = {
       agents: {
@@ -175,14 +191,24 @@ describe("applySystemAgentModelSelection", () => {
   );
 
   it("keeps a newly approved model allowed when migrating a first-run legacy model map", async () => {
+    const previousConfig: OpenClawConfig = {
+      agents: { defaults: { models: { "fixture/old": {} } } },
+    };
     const cfg = await select(
-      { agents: { defaults: { models: { "fixture/old": {} } } } },
-      { model: "fixture/new", agentRuntimeId: "openclaw", runtimeInDefaults: true },
+      {
+        agents: {
+          defaults: {
+            models: { "fixture/old": {}, "fixture/unapproved": { alias: "Provider default" } },
+          },
+        },
+      },
+      { previousConfig, model: "fixture/new", agentRuntimeId: "openclaw", runtimeInDefaults: true },
     );
     const allowed = buildAllowedModelSet({ cfg, catalog: [], defaultProvider: "fixture" });
     expect(allowed.allows({ provider: "fixture", model: "new" })).toBe(true);
     expect(allowed.allows({ provider: "fixture", model: "old" })).toBe(true);
     expect(allowed.allows({ provider: "fixture", model: "unapproved" })).toBe(false);
+    expect(previousConfig.agents?.defaults?.models).toEqual({ "fixture/old": {} });
   });
 
   it("rejects an unrepresentable explicit agent instead of updating main", async () => {

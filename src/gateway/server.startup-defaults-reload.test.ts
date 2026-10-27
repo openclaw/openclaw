@@ -7,20 +7,14 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { startGatewayServerCore } from "./server-start.js";
+import { captureGatewayKernel } from "./server.capture-kernel.test-support.js";
+import { createPluginEnabledGatewayTestEnv } from "./test-helpers.env.js";
 
 it("preserves computed defaults from cold startup through a live config reload", async () => {
   const token = "provider-defaults-startup-token";
   const state = await createOpenClawTestState({
     label: "provider-defaults-reload",
-    env: {
-      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-    },
+    env: createPluginEnabledGatewayTestEnv(),
   });
   const sourceConfig: OpenClawConfig = {
     agents: {
@@ -52,13 +46,17 @@ it("preserves computed defaults from cold startup through a live config reload",
         },
       },
     });
-    server = await startGatewayServerCore(await getFreePort(), {
-      bind: "loopback",
-      auth: { mode: "token", token },
-      controlUiEnabled: false,
+    const kernel = await captureGatewayKernel(async () => {
+      server = await startGatewayServerCore(await getFreePort(), {
+        bind: "loopback",
+        auth: { mode: "token", token },
+        controlUiEnabled: false,
+      });
     });
-    await server.startupSettled;
+    await server!.startupSettled;
     const initialConfig = getRuntimeConfig();
+    expect(initialConfig).not.toBe(kernel.cfgAtStart);
+    expect(kernel.gatewayRequestContext.getCommittedRuntimeConfig?.()).toBe(initialConfig);
     expect(initialConfig.plugins?.entries?.anthropic?.enabled).toBe(true);
     expect(resolveEffectiveCompactionMode(initialConfig)).toBe("safeguard");
     expect(initialConfig.models?.providers?.anthropic?.models).toEqual([]);

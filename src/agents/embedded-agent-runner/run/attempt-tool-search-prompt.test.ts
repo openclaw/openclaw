@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
-import { buildBootstrapBudgetState } from "../../bootstrap-budget.js";
+import { toToolDefinitions } from "../../agent-tool-definition-adapter.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../../harness/tool-surface-bridge.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
@@ -8,6 +8,7 @@ import { createToolSearchTools } from "../../tool-search.js";
 import { runEmbeddedAttemptPromptPhase } from "./attempt-prompt-phase.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
+import { createEmptyPromptBootstrap } from "./attempt-system-prompt.test-support.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const { createFixture, createPromptAssemblyResult, mocks } = await vi.hoisted(
@@ -79,14 +80,7 @@ async function promptFixture(codeMode = false, mode: "tools" | "directory" = "to
   const prepared = await prepareEmbeddedAttemptSystemPrompt({
     activeContextEngine: undefined,
     attempt,
-    bootstrap: {
-      ...buildBootstrapBudgetState({ files: [] }),
-      bootstrapMode: "full",
-      contextFiles: [],
-      bootstrapInjectionStats: [],
-      shouldRecordCompletedBootstrapTurn: false,
-      workspaceNotes: [],
-    },
+    bootstrap: createEmptyPromptBootstrap(),
     setup: createAttemptSetupFixture({
       effectiveCwd: "/workspace",
       effectiveWorkspace: "/workspace",
@@ -145,9 +139,11 @@ it.each([
     fixture.input.prepared.systemPrompt = prepared;
     fixture.input.prepared.toolCatalog.toolSearchRunPlan.capabilityToolNames = capabilityToolNames;
     let activeToolNames = surface.tools.map((tool) => tool.name);
+    const definitions = toToolDefinitions(surface.tools);
     fixture.input.prepared.promptToolPolicy = createPromptBuildToolPolicy({
       session: {
         getActiveToolNames: () => activeToolNames,
+        getToolDefinition: (name) => definitions.find((tool) => tool.name === name),
         setActiveToolsByName: (names) => {
           activeToolNames = names;
         },

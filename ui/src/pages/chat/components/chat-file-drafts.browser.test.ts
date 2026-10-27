@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { canReloadControlUiDocument } from "../../../app/document-reload-guard.ts";
-import "../../../lib/toast-host.ts";
+import "../../../lib/toast-host.tsx";
 import {
   retryStaleChunkReloadWhenReachable,
   scheduleStaleChunkReload,

@@ -190,7 +190,7 @@ it("settles asynchronous storage close after startup before service stop finishe
     releaseClose.resolve();
     await stopping;
   }
-  await expect(store.lastFrame()).rejects.toThrow();
+  await expect(store.countUnbatchedActiveFrames()).rejects.toThrow();
 });
 
 it("closes storage when startup recovery fails without publishing a running service", async () => {

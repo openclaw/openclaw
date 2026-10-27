@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { For, Show, createMemo } from "solid-js";
-import { currentThemeBranding, subscribeThemeBranding } from "../../app/theme-branding.ts";
 import type { ControlUiBuildInfo } from "../../build-info.ts";
 import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
 import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-identity.ts";
@@ -14,17 +13,20 @@ import {
 import { SettingsPage, SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import "../../components/tooltip.ts";
 import { ThemeBrandIcon } from "../../components/theme-brand-icon.tsx";
+import { registerAboutEnglish } from "../../i18n/locales/en-about.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
-import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
+import { COMMUNITY_DISCORD_URL, OFFICIAL_SUPPORT_URL } from "../../lib/product-links.ts";
 import {
   formatDateMs,
   formatDateTimeMs,
   formatRelativeTimestamp,
 } from "../../lib/reactive/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { themeBrandingProjection } from "../../lib/reactive/theme-branding.ts";
 import "../../styles/about.css";
 import "../../styles/settings.css";
+
+registerAboutEnglish();
 
 export type AboutCommitCopyState = "idle" | "copying" | "copied" | "error";
 type AboutProps = {
@@ -37,12 +39,18 @@ type AboutProps = {
 };
 
 const SHORT_COMMIT_LENGTH = 12;
-// Docs-first where a docs page exists; GitHub/Discord match the native About screens.
+// Keep official support distinct from self-service docs and social links.
 type AboutLink = { href: string; labelKey: string } & (
   | { kind: "icon"; name: IconName }
   | { kind: "brand"; name: BrandIconName }
 );
 const ABOUT_LINKS: readonly AboutLink[] = [
+  {
+    href: OFFICIAL_SUPPORT_URL,
+    kind: "icon",
+    name: "messageSquare",
+    labelKey: "aboutPage.linkSupport",
+  },
   { href: "https://openclaw.ai", kind: "icon", name: "globe", labelKey: "aboutPage.linkWebsite" },
   { href: "https://docs.openclaw.ai", kind: "icon", name: "book", labelKey: "aboutPage.linkDocs" },
   {
@@ -130,11 +138,7 @@ function Commit(props: AboutProps) {
 }
 
 export function AboutView(props: AboutProps) {
-  const branding = projectSource(undefined, {
-    read: currentThemeBranding,
-    subscribe: (_source, notify) => subscribeThemeBranding(notify),
-    equality: Object.is,
-  });
+  const branding = themeBrandingProjection;
   const palette =
     LOBSTER_PET_PALETTES.find((entry) => entry.id === "crimson") ??
     expectDefined(LOBSTER_PET_PALETTES[0], "about lobster palette");

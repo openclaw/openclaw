@@ -57,6 +57,8 @@ The node host reconnects after transient transport loss. A worker child has a bo
 
 If a journal-terminal worker has released its turn claim but teardown stalls, stuck-session recovery records the turn failure after a 30-second cleanup grace, on the next diagnostic cycle. Live workers and turns that still hold their claims are unaffected. On Gateway restart, orphan workspace cleanup for failed placements runs in the background after readiness; ownership fencing and pending workspace-result recovery still run before readiness.
 
+The first orphan-cleanup sweep discovers all startup workspaces. Later minute sweeps retry up to eight unresolved workspaces in rotation, so unavailable workspaces do not cause a full rescan every minute. Once a workspace becomes available, discovery retries reach it within one sweep per eight remaining unresolved workspaces; busy sessions can defer cleanup further.
+
 See [Nodes](/nodes) for pairing, capacity, isolation, and offline behavior, and [Connect](/cli/connect) for the CLI.
 
 ## Cloud workers: rented machines through Crabbox

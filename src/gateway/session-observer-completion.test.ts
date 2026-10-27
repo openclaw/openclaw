@@ -10,17 +10,20 @@ import { createSessionObserverCompletion } from "./session-observer-completion.j
 import type { defaultCompleteModel } from "./session-observer-model.js";
 import { observerState } from "./session-observer-state.test-support.js";
 import {
-  createHarness,
+  advanceAndFlush as advance,
+  expectBroadcast,
+  useObserverSuite,
+} from "./session-observer-suite.test-support.js";
+import {
   event,
-  flushObserver,
   modelMessage,
   preparedModel,
-  resetSessionObserverEventSequence,
   startAndAddToolNotes,
 } from "./session-observer.test-utils.js";
 
+const { createHarness } = useObserverSuite();
+
 beforeEach(() => {
-  vi.useFakeTimers();
   setGatewayPluginMetadataSnapshot(
     createPluginMetadataSnapshotFixture({
       plugins: [
@@ -36,8 +39,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.useRealTimers();
-  resetSessionObserverEventSequence();
   resetSecretRedactionRegistryForTest();
   setCurrentPluginMetadataSnapshot(undefined);
 });
@@ -45,7 +46,6 @@ afterEach(() => {
 it.each(["exact tool cap", "invalid schema", "manifest alias"])(
   "warns once when %s failures disable observation, and retries on the next run",
   async (failure) => {
-    vi.setSystemTime(0);
     const notices: AgentEventPayload[] = [];
     const unsubscribe = onAgentEvent((evt) => {
       if (evt.stream === "notice") {
@@ -86,27 +86,27 @@ it.each(["exact tool cap", "invalid schema", "manifest alias"])(
     );
     try {
       await startAndAddToolNotes(harness.observer);
-      await vi.advanceTimersByTimeAsync(24_000);
+      await advance(24_000);
       expect(notices).toMatchObject([
         {
           runId: "run-1",
           sessionKey: "agent:main:session-1",
           data: {
             phase: "warning",
-            message: expect.stringContaining("openai/gpt-test"),
+            message: expect.stringMatching(
+              /openai\/gpt-test.*choose a capable utility model.*utilityModel\.fallbacks/u,
+            ),
           },
         },
       ]);
-      expect(notices[0]?.data.message).toContain("choose a capable utility model");
-      expect(notices[0]?.data.message).toContain("utilityModel.fallbacks");
-      expect(notices[0]?.data.message).not.toContain("private-profile");
-      expect(notices[0]?.data.message).not.toContain("private-utility-alias");
-      expect(notices[0]?.data.message).not.toContain("private-manifest-alias");
+      expect(notices[0]?.data.message).not.toMatch(
+        /private-profile|private-utility-alias|private-manifest-alias/u,
+      );
       const callsAtDisable = prepareModel.mock.calls.length + completeModel.mock.calls.length;
       await harness.observer.handleEventAsync(
         event({ stream: "tool", data: { phase: "start", name: "read", args: { path: "more" } } }),
       );
-      await vi.advanceTimersByTimeAsync(60_000);
+      await advance(60_000);
       expect(prepareModel.mock.calls.length + completeModel.mock.calls.length).toBe(callsAtDisable);
       expect(notices).toHaveLength(1);
 
@@ -115,13 +115,8 @@ it.each(["exact tool cap", "invalid schema", "manifest alias"])(
         modelMessage({ headline: "Working", health: "on-track" }),
       );
       await startAndAddToolNotes(harness.observer, { runId: "run-2" });
-      await vi.advanceTimersByTimeAsync(12_000);
-      expect(harness.broadcastToConnIds).toHaveBeenCalledWith(
-        "session.observer",
-        expect.objectContaining({ runId: "run-2", headline: "Working" }),
-        expect.any(Set),
-        expect.anything(),
-      );
+      await advance(12_000);
+      expectBroadcast(harness, { runId: "run-2", headline: "Working" });
       expect(notices).toHaveLength(1);
     } finally {
       unsubscribe();
@@ -132,11 +127,6 @@ it.each(["exact tool cap", "invalid schema", "manifest alias"])(
 );
 
 function completionAfter(delay?: number) {
-  const reply = modelMessage({
-    headline: "Reviewing the implementation",
-    assessment: "The work is progressing steadily.",
-    health: "on-track",
-  });
   return vi.fn(
     (params: { abortSignal?: AbortSignal }) =>
       new Promise<ReturnType<typeof modelMessage>>((resolve, reject) => {
@@ -144,7 +134,10 @@ function completionAfter(delay?: number) {
           once: true,
         });
         if (delay !== undefined) {
-          setTimeout(() => resolve(reply), delay);
+          setTimeout(
+            () => resolve(modelMessage({ headline: "Working", health: "on-track" })),
+            delay,
+          );
         }
       }),
   );
@@ -185,43 +178,32 @@ it("reports a redacted, collapsed, bounded prefix of the last of two rejected re
 });
 
 it("publishes a digest from a utility model that answers after 15s", async () => {
-  vi.setSystemTime(0);
-  // CLI-backed utility models (for example claude-cli Haiku) take 9-16s per call.
   const completeModel = completionAfter(15_000);
   const harness = createHarness({ completeModel });
   await startAndAddToolNotes(harness.observer);
 
-  await vi.advanceTimersByTimeAsync(12_000);
+  await advance(12_000);
   expect(completeModel).toHaveBeenCalledOnce();
-  await vi.advanceTimersByTimeAsync(15_000);
-  await flushObserver();
+  await advance(15_000);
 
   expect(completeModel.mock.calls[0]?.[0].abortSignal?.aborted).toBe(false);
-  expect(harness.broadcastToConnIds).toHaveBeenCalledWith(
-    "session.observer",
-    expect.objectContaining({ headline: "Reviewing the implementation", health: "on-track" }),
-    expect.any(Set),
-    expect.anything(),
-  );
-  await harness.observer.disposeAsync();
+  expectBroadcast(harness, { headline: "Working", health: "on-track" });
 });
 
 it("aborts stuck completions at the cap and disables the run after two failures", async () => {
-  vi.setSystemTime(0);
   const completeModel = completionAfter();
   const signal = (index: number) => completeModel.mock.calls[index]?.[0].abortSignal;
   const harness = createHarness({ completeModel });
   await startAndAddToolNotes(harness.observer);
-  await vi.advanceTimersByTimeAsync(12_000);
-  await vi.advanceTimersByTimeAsync(29_999);
+  await advance(12_000);
+  await advance(29_999);
   expect(signal(0)?.aborted).toBe(false);
-  await vi.advanceTimersByTimeAsync(1);
+  await advance(1);
   expect(signal(0)?.aborted).toBe(true);
   expect(completeModel).toHaveBeenCalledTimes(2);
-  await vi.advanceTimersByTimeAsync(30_000);
+  await advance(30_000);
   expect(signal(1)?.aborted).toBe(true);
-  await vi.advanceTimersByTimeAsync(60_000);
+  await advance(60_000);
   expect(completeModel).toHaveBeenCalledTimes(2);
   expect(harness.broadcastToConnIds).not.toHaveBeenCalled();
-  await harness.observer.disposeAsync();
 });

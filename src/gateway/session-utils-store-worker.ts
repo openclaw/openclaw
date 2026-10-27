@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { ok } from "@openclaw/normalization-core/result";
 import { listAgentIds } from "../agents/agent-scope.js";
 import { listSubagentSessionListRunsForControllers } from "../agents/subagents/registry/subagent-registry-read.js";
 import { readResolvedSessionEntriesInWorker } from "../config/sessions/session-accessor.entry.js";
@@ -37,7 +36,10 @@ import {
   resolveNativeGatewaySessionStoreTargetWithStore,
   type GatewaySessionStoreLookupParams,
 } from "./session-utils-store-lookup.js";
-import type { GatewaySessionStoreRead } from "./session-utils-store-read.js";
+import {
+  createGatewaySessionStore,
+  type GatewaySessionStoreRead,
+} from "./session-utils-store-read.js";
 import {
   findCanonicalStoreMatch,
   omitInternalSessionEffectsEntries,
@@ -257,11 +259,7 @@ async function prepareGatewaySessionStoreReadInWorker(
                   continuation,
                 );
                 assertSourceCurrent();
-                read.result = ok(
-                  Object.fromEntries(
-                    result.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
-                  ),
-                );
+                read.result = createGatewaySessionStore(result.entries);
                 read.readSource = { agentId: database.agentId, path: database.path };
                 read.capturedReadSource = result.source;
                 return readNext(index + 1);
@@ -285,11 +283,7 @@ async function prepareGatewaySessionStoreReadInWorker(
             assertCurrent();
             for (const [index, read] of pending.entries()) {
               const preparedRead = loaded[index]!;
-              read.result = ok(
-                Object.fromEntries(
-                  preparedRead.result.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
-                ),
-              );
+              read.result = createGatewaySessionStore(preparedRead.result.entries);
               read.readSource = {
                 agentId: preparedRead.database.agentId,
                 path: preparedRead.database.path,
@@ -386,9 +380,7 @@ async function prepareGatewaySessionStoreReadInWorker(
         ) {
           throw new Error("Prepared session lookup source changed");
         }
-        read.result = ok(
-          Object.fromEntries(current.entries.map(({ sessionKey, entry }) => [sessionKey, entry])),
-        );
+        read.result = createGatewaySessionStore(current.entries);
         read.readSource = current.source;
         read.capturedReadSource = current.capturedReadSource;
       }
@@ -464,7 +456,6 @@ export async function loadGatewaySessionEntryReadOnlyInWorker(
 /** Retain the original lookup domain for a later synchronous admission predicate. */
 export async function prepareGatewaySessionEntryReadOnlyInWorker(
   params: Parameters<typeof loadGatewaySessionEntryReadOnlyInWorker>[0],
-  onSelected?: (target: GatewaySessionStoreTargetWithStore) => void,
 ): Promise<{
   loaded: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>;
   readPlan?: GatewaySessionEntryReadPlan;
@@ -476,7 +467,6 @@ export async function prepareGatewaySessionEntryReadOnlyInWorker(
       projection: params.projection ?? "full",
     },
     true,
-    onSelected,
   );
   params.assertActive?.();
   const select = (current: GatewaySessionStoreTargetWithStore) => {

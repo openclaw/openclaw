@@ -3,22 +3,18 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import type { ReplyLine } from "./chat-reply-attribution.ts";
-import { ReplyConnector, type ReplyConnectorElements } from "./chat-reply-connector.ts";
-
-type ReplyLineActions = {
-  onOpenReply?: (id: string) => void;
-  replyNavigationId?: string | null;
-};
-
-type ReplyLineProps = {
-  line: ReplyLine;
-  actions: ReplyLineActions;
-  inline?: boolean;
-  elements?: ReplyConnectorElements;
-};
+import { ReplyConnector, type ReplyConnectorElements } from "./chat-reply-connector.tsx";
 
 /** Inline lines live inside the bubble; other lines sit beside its avatar. */
-export function ReplyLineView(props: ReplyLineProps) {
+export function ReplyLineView(props: {
+  line: ReplyLine;
+  actions: {
+    onOpenReply?: (id: string) => void;
+    replyNavigationId?: string | null;
+  };
+  inline?: boolean;
+  elements?: ReplyConnectorElements;
+}) {
   const named = () => props.line.state === "named";
   const name = () => props.line.name ?? "";
   const loading = () =>

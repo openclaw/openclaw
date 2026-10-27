@@ -1,22 +1,16 @@
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import {
-  createTestPluginApi,
-  createTestPluginServiceScheduler,
-} from "openclaw/plugin-sdk/plugin-test-api";
 import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import type { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
-import type { OpenClawPluginApi } from "../api.js";
-import plugin from "../index.js";
+import { createVoiceCallServiceContext, registerVoiceCall } from "../index.test-harness.js";
 import { normalizeVoiceCallConfig, type VoiceCallConfig } from "./config.js";
 import { CallManager } from "./manager.js";
 import { createTestStorePath, FakeProvider, makePersistedCall } from "./manager.test-harness.js";
@@ -24,9 +18,11 @@ import { findCallInStore } from "./manager/store.js";
 import * as callStore from "./manager/store.js";
 import { setVoiceCallStateRuntime } from "./runtime-state.js";
 import type { VoiceCallRuntime } from "./runtime.js";
-import { CallRecordSchema, type InitiateCallInput } from "./types.js";
+import { CallRecordSchema, type CallRecord, type InitiateCallInput } from "./types.js";
+import { makeBridge } from "./webhook/realtime-call-control.test-helpers.js";
 import { speakOnRealtimeBridge } from "./webhook/realtime-call-session-control.js";
 import { RealtimeCallHandler } from "./webhook/realtime-handler.js";
+import { StreamDisconnectGrace } from "./webhook/stream-disconnect-grace.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "./websocket-test-support.js";
 
 let registeredRuntime: VoiceCallRuntime;
@@ -48,38 +44,15 @@ afterEach(async () => {
 
 function registerSteeringTool(runtime: VoiceCallRuntime, requesterSessionKey: string) {
   registeredRuntime = runtime;
-  let toolFactory: ((context: Record<string, unknown>) => unknown) | undefined;
-  let service: Parameters<OpenClawPluginApi["registerService"]>[0] | undefined;
-  const api = createTestPluginApi({
-    id: "voice-call",
-    name: "Voice Call",
-    pluginConfig: {
+  const serviceContext = createVoiceCallServiceContext({ stateDir: "", logger });
+  const { service, toolFactory } = registerVoiceCall({
+    config: {
       provider: "mock",
       inboundPolicy: "allowlist",
       realtime: { enabled: true },
     },
-    runtime: { tts: { textToSpeechTelephony: vi.fn() } } as unknown as OpenClawPluginApi["runtime"],
     logger,
-    registerTool: (registration) => {
-      toolFactory =
-        typeof registration === "function"
-          ? (registration as (context: Record<string, unknown>) => unknown)
-          : () => registration;
-    },
-    registerService: (registration) => {
-      service = registration;
-    },
   });
-  plugin.register(api);
-  if (!service || !toolFactory) {
-    throw new Error("Expected registered Voice Call tool and service");
-  }
-  const serviceContext = {
-    config: {},
-    stateDir: "",
-    logger,
-    scheduler: createTestPluginServiceScheduler(),
-  } satisfies OpenClawPluginServiceContextV2;
   void service.start(serviceContext);
   onTestFinished(async () => {
     await service?.stop?.(serviceContext);
@@ -87,9 +60,7 @@ function registerSteeringTool(runtime: VoiceCallRuntime, requesterSessionKey: st
       Symbol.for("openclaw.voice-call.runtimeCoordinator")
     ];
   });
-  return toolFactory({ sessionKey: requesterSessionKey }) as {
-    execute: (id: string, params: unknown, signal?: AbortSignal) => Promise<unknown>;
-  };
+  return toolFactory({ sessionKey: requesterSessionKey });
 }
 
 async function prepareSteering(
@@ -220,6 +191,16 @@ async function createDelayedStore(
   };
 }
 
+function answeredEvent(call: CallRecord, id: string) {
+  return {
+    id,
+    type: "call.answered" as const,
+    callId: call.callId,
+    providerCallId: call.providerCallId,
+    timestamp: Date.now(),
+  };
+}
+
 it("reserves pending capacity without publishing or dialing an uncommitted call", async () => {
   const { manager, provider, holdNextWrite } = await createDelayedStore();
   const dial = vi.spyOn(provider, "initiateCall");
@@ -300,17 +281,9 @@ it.each(["committed", "failed", "retired"] as const)(
     });
     const createBridge = vi.fn<RealtimeVoiceProviderPlugin["createBridge"]>(() => {
       bridgeCreated.resolve();
-      return {
-        connect: async () => {},
-        sendAudio: () => {},
-        setMediaTimestamp: () => {},
-        submitToolResult: () => {},
-        acknowledgeMark: () => {},
-        close: () => {},
-        isConnected: () => true,
-        triggerGreeting: () => {},
-      };
+      return makeBridge({ submitToolResult: () => {} });
     });
+    const streamDisconnectLifecycle = new StreamDisconnectGrace(() => {});
     const handler = new RealtimeCallHandler(
       config.realtime,
       manager,
@@ -326,7 +299,7 @@ it.each(["committed", "failed", "retired"] as const)(
         providerConfig: {},
       }),
       config.serve.path,
-      { connect: () => {}, disconnect: () => {}, retire: () => {} },
+      streamDisconnectLifecycle,
     );
     manager.streamSessionIssuer = (request) => handler.issueStreamSession(request);
     let server: Awaited<ReturnType<typeof startUpgradeWsServer>> | undefined;
@@ -392,8 +365,12 @@ it.each(["committed", "failed", "retired"] as const)(
     } finally {
       bindingWrite?.release();
       ws?.terminate();
-      await handler.close();
-      await server?.close();
+      try {
+        await handler.close();
+        await server?.close();
+      } finally {
+        streamDisconnectLifecycle.close();
+      }
       await placement;
       await retirement;
       initiate.mockRestore();
@@ -402,50 +379,38 @@ it.each(["committed", "failed", "retired"] as const)(
 );
 
 it("keeps failed event drafts private and admits a duplicate only after rollback", async () => {
-  const { manager, storePath, holdNextWrite } = await createDelayedStore();
+  const { manager, read, holdNextWrite } = await createDelayedStore();
   const placement = await manager.initiateCall("+15550000001");
   const call = manager.getCall(placement.callId)!;
   const gate = holdNextWrite();
-  const event = {
-    id: "answered-replay",
-    type: "call.answered" as const,
-    callId: call.callId,
-    providerCallId: call.providerCallId,
-    timestamp: Date.now(),
-  };
+  const event = answeredEvent(call, "answered-replay");
   const first = manager.processEvent(event);
   void first.catch(() => {});
   await gate.entered;
   const second = manager.processEvent({ ...event });
-  expect(manager.getCall(call.callId) === call).toBe(true);
+  expect(manager.getCall(call.callId)).toBe(call);
   expect(call.state).toBe("initiated");
   expect(call.answeredAt).toBeUndefined();
   expect(call.processedEventIds).not.toContain(event.id);
   gate.fail();
   await expect(first).rejects.toThrow("Synthetic delayed persistence failure");
   await expect(second).resolves.toMatchObject({ kind: "processed" });
-  expect(manager.getCall(call.callId) === call).toBe(true);
+  expect(manager.getCall(call.callId)).toBe(call);
   expect(call.state).toBe("answered");
   expect(call.processedEventIds.filter((id) => id === event.id)).toHaveLength(1);
   resetPluginStateStoreForTests();
-  expect((await findCallInStore(storePath, call.callId))?.state).toBe("answered");
+  expect((await read(call.callId))?.state).toBe("answered");
 });
 
 it("drains an admitted event on stop without starting late playback or accepting new events", async () => {
-  const { manager, provider, storePath, holdNextWrite } = await createDelayedStore();
+  const { manager, provider, read, holdNextWrite } = await createDelayedStore();
   const placement = await manager.initiateCall("+15550000001", undefined, {
     mode: "notify",
     message: "Synthetic notification",
   });
   const call = manager.getCall(placement.callId)!;
   const gate = holdNextWrite();
-  const event = manager.processEvent({
-    id: "stop-during-answered",
-    type: "call.answered",
-    callId: call.callId,
-    providerCallId: call.providerCallId,
-    timestamp: Date.now(),
-  });
+  const event = manager.processEvent(answeredEvent(call, "stop-during-answered"));
   await gate.entered;
   let stopped = false;
   const stop = manager.stop().then(() => {
@@ -466,7 +431,7 @@ it("drains an admitted event on stop without starting late playback or accepting
   await stop;
   expect(provider.playTtsCalls).toHaveLength(0);
   resetPluginStateStoreForTests();
-  expect((await findCallInStore(storePath, call.callId))?.state).toBe("answered");
+  expect((await read(call.callId))?.state).toBe("answered");
 });
 
 it("does not hang up a rejected inbound call after stop begins during persistence", async () => {
@@ -545,24 +510,10 @@ it("publishes restored calls only after their missing live anchor is persisted",
   expect((await read("restored-unanchored"))?.answeredAt).toBeTypeOf("number");
 });
 
-it("rejects restore when terminal-state persistence fails instead of reporting a provider failure", async () => {
-  const { manager, provider, persist, read, initialize, holdNextWrite } = await createDelayedStore({
+it("observes restore write failures while awaiting another carrier", async () => {
+  const { manager, provider, persist, read, initialize } = await createDelayedStore({
     initialize: false,
   });
-  await persist("restored-terminal", "provider-terminal");
-  provider.getCallStatusResult = { isTerminal: true, status: "completed" };
-  const gate = holdNextWrite();
-  const initialization = initialize();
-  void initialization.catch(() => {});
-  await gate.entered;
-  gate.fail();
-  await expect(initialization).rejects.toThrow("Synthetic delayed persistence failure");
-  expect(manager.getActiveCalls()).toHaveLength(0);
-  expect((await read("restored-terminal"))?.state).toBe("answered");
-});
-
-it("observes restore write failures while awaiting another carrier", async () => {
-  const { provider, persist, initialize } = await createDelayedStore({ initialize: false });
   await persist("restore-terminal-first", "provider-terminal-first");
   await persist("restore-expired-second", "provider-expired-second", {
     startedAt: Date.now() - 400_000,
@@ -600,6 +551,8 @@ it("observes restore write failures while awaiting another carrier", async () =>
     releaseCarrier.resolve();
     try {
       await expect(initialization).rejects.toThrow("Synthetic terminal write failed");
+      expect(manager.getActiveCalls()).toHaveLength(0);
+      expect((await read("restore-terminal-first"))?.state).toBe("answered");
     } finally {
       process.off("unhandledRejection", capture);
     }

@@ -1,3 +1,4 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { isRecord } from "../../utils.js";
@@ -16,6 +17,8 @@ const CRON_FLAT_PAYLOAD_KEYS = [
   "timeoutSeconds",
   "toolBudget",
   "lightContext",
+  "includeReasoning",
+  "skipIfScratchEmpty",
   "allowUnsafeExternalContent",
 ] as const;
 const CRON_FLAT_SCHEDULE_KEYS = [
@@ -47,6 +50,8 @@ const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "owner",
   "schedule",
   "pacing",
+  "activeHours",
+  "idleOnly",
   "trigger",
   "sessionTarget",
   "wakeMode",
@@ -68,10 +73,13 @@ const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
 // Only object-valued CronJobSchema fields accept dotted paths; scalar names
 // such as "nightly.report" must not become nested objects.
 const CRON_NESTABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
+  "activeHours",
   "delivery",
   "failureAlert",
   "owner",
   "pacing",
+  "activeHours",
+  "idleOnly",
   "payload",
   "schedule",
   "trigger",
@@ -265,6 +273,8 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
         isNonEmptyString(payload.thinking) ||
         (typeof payload.timeoutSeconds === "number" && isNonEmptyString(payload.text)) ||
         typeof payload.lightContext === "boolean" ||
+        typeof payload.includeReasoning === "boolean" ||
+        typeof payload.skipIfScratchEmpty === "boolean" ||
         typeof payload.allowUnsafeExternalContent === "boolean" ||
         (payload.fallbacks !== undefined && isStringArrayOrNull(payload.fallbacks));
       if (hasAgentTurnSignal) {
@@ -446,10 +456,30 @@ function hasCronCreateSignal(value: Record<string, unknown>): boolean {
   );
 }
 
+export function prepareCronToolArguments(args: unknown): unknown {
+  if (
+    !isRecord(args) ||
+    (args.action !== "add" && args.action !== "update") ||
+    args.job === undefined ||
+    isRecord(args.job)
+  ) {
+    return args;
+  }
+  const parsedJob = typeof args.job === "string" ? safeParseJsonRecord(args.job) : undefined;
+  if (parsedJob) {
+    return { ...args, job: parsedJob };
+  }
+  const prepared = { ...args };
+  readCronToolJob(prepared, args.action);
+  // Execution must still recognize a recovered update and reject empty patches.
+  prepared.job = undefined;
+  return prepared;
+}
+
 export function readCronToolJob(params: Record<string, unknown>, action: "add" | "update") {
   let recovered = false;
   // Models sometimes flatten job fields beside action; create requires a schedule/payload signal.
-  if (!params.job || (isRecord(params.job) && Object.keys(params.job).length === 0)) {
+  if (!isRecord(params.job) || Object.keys(params.job).length === 0) {
     const synthetic = recoverCronObjectFromFlatParams(params);
     if (synthetic.found && (action === "update" || hasCronCreateSignal(synthetic.value))) {
       params.job = synthetic.value;
@@ -457,7 +487,7 @@ export function readCronToolJob(params: Record<string, unknown>, action: "add" |
     }
   }
   if (!isRecord(params.job)) {
-    throw new Error("job required");
+    throw new Error("job required: provide an object or usable flat job fields");
   }
   return {
     job: canonicalizeCronToolObject(params.job),

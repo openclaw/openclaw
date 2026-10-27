@@ -603,6 +603,10 @@ it.each([
   { env: { HTTPS_PROXY: proxyUrl }, supported: true },
   { env: { HTTPS_PROXY: " " + proxyUrl + " " }, supported: false },
   { env: { HTTPS_PROXY: proxyUrl, REQUEST_METHOD: "GET" }, supported: false },
+  { env: { ...bothProxies, NO_PROXY: "127.0.0.1,example.com" }, supported: false },
+  { env: { ...bothProxies, NO_PROXY: "127.0.0.1,10.0.0.0/8" }, supported: false },
+  { env: { ...bothProxies, NO_PROXY: "127.0.0.1,127.0.0.0/16" }, supported: false },
+  { env: { ...bothProxies, NO_PROXY: "127.0.0.1,*.localhost" }, supported: false },
 ])("qualifies native/relay proxies (%j)", async ({ env, supported }) => {
   for (const [key, value] of Object.entries(env)) {
     vi.stubEnv(key, value);

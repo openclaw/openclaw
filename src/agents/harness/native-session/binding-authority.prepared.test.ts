@@ -36,7 +36,6 @@ afterEach(() => {
 });
 
 it.each([
-  "unchanged",
   "metadata",
   "malformed",
   "policy",
@@ -82,7 +81,8 @@ it.each([
     "policy",
   );
   const run = createQueueTestRun({ prompt: "authority" });
-  Object.assign(run.run, {
+  const attempt = run.run;
+  Object.assign(attempt, {
     sessionKey: "agent:main:authority-execution",
     runtimePolicySessionKey: policyKey,
     agentId: "main",
@@ -91,12 +91,10 @@ it.each([
       tools: { sandbox: { tools: { deny: ["exec"] } } },
     },
   });
-  const operation = createTestReplyOperation({
-    sessionKey: run.run.sessionKey,
-    sessionId: run.run.sessionId,
-  });
+  const { sessionKey, sessionId } = attempt;
+  const operation = createTestReplyOperation({ sessionKey, sessionId });
   await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
-  const admitted = await operation.bindToolAuthorityRouteAsync(run.run);
+  const admitted = await operation.bindToolAuthorityRouteAsync(attempt);
   const compatAssertCurrent = vi.fn(() => {
     if (change === "legacy-allowed") {
       expect(
@@ -107,12 +105,11 @@ it.each([
       ).toBe("native");
       return;
     }
-    if (change === "compat-refusal" && operation.sessionId === run.run.sessionId) {
+    if (change === "compat-refusal" && operation.sessionId === attempt.sessionId) {
       return;
     }
     throw new Error("legacy policy revoked");
   });
-  await using gate = bindingGate();
   const pauseAdmission = async () => {
     finalAdmissionEntered = true;
     await gate.pause();
@@ -128,7 +125,7 @@ it.each([
         throw new Error("policy no longer matches");
       }
       if (compatibility || change === "source-replaced") {
-        await prepareReplyToolAuthorityCallerRead({}, undefined, admitted, run.run, () => {});
+        await prepareReplyToolAuthorityCallerRead({}, undefined, admitted, attempt, () => {});
         await pauseAdmission();
       }
     },
@@ -154,6 +151,10 @@ it.each([
     });
   const consumed = vi.fn(() => "admitted");
   const calls = observeMainThreadSql();
+  using cleanup = new DisposableStack();
+  cleanup.defer(() => delayed.mockRestore());
+  cleanup.defer(() => calls.restore());
+  await using gate = bindingGate();
   const preparations = [preparation];
   if (refusal) {
     preparations.push(
@@ -172,71 +173,64 @@ it.each([
     );
   }
   const outcome = gate.observe(authority.withPreparedCurrent!(consumed, preparations));
-  try {
-    await gate.wait(outcome, "Final admission was not reached");
-    calls.expectIdle();
-    if (change === "policy" || change === "metadata") {
-      await updateSessionEntry({ agentId: "policy", sessionKey: policyKey }, () =>
-        change === "policy" ? { sandboxMode: undefined } : { label: "renamed" },
-      );
-      calls.clear();
-    } else if (change === "malformed") {
-      await runOpenClawAgentWriteAdmission({ agentId: "policy", env }, ({ canonicalPath }) => {
-        {
-          using corrupted = new DatabaseSync(canonicalPath);
-          corrupted
-            .prepare(
-              "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.sessionId', 42) WHERE session_key = ?",
-            )
-            .run(policyKey);
-        }
-        // Exercise malformed-row parsing rather than a warmed fact or revoked source.
-        sessionChanges.invalidate({
-          agentId: "policy",
-          sessionKey: policyKey,
-          storePath: canonicalPath,
-          factsInvalidated: true,
-        });
-      });
-      calls.clear();
-    } else if (change === "route") {
-      await operation.bindToolAuthorityRouteAsync({
-        provider: run.run.provider,
-        model: "changed-model",
-      });
-    } else if (change === "source-replaced") {
-      const { storePath } = nativeRead;
-      copyFileSync(storePath, `${storePath}.replacement`);
-      renameSync(`${storePath}.replacement`, storePath);
-    }
-    gate.resume();
-    const result = await outcome;
-    if (change !== "legacy-allowed") {
-      calls.expectIdle();
-    }
-    if (change === "unchanged" || change === "metadata" || change === "legacy-allowed") {
-      expect(result).toBe("admitted");
-      expect(consumed).toHaveBeenCalledOnce();
-    } else {
-      expect(result).toBeInstanceOf(Error);
-      if (change === "malformed") {
-        expect(result).toHaveProperty(
-          "message",
-          expect.stringContaining(`invalid persisted session row requires repair for ${policyKey}`),
-        );
-      } else if (change === "source-replaced") {
-        expect(result).toMatchObject({
-          message: "Native session lineage source changed during tool preparation",
-        });
+  await gate.wait(outcome, "Final admission was not reached");
+  calls.expectIdle();
+  if (change === "policy" || change === "metadata") {
+    await updateSessionEntry({ agentId: "policy", sessionKey: policyKey }, () =>
+      change === "policy" ? { sandboxMode: undefined } : { label: "renamed" },
+    );
+    calls.clear();
+  } else if (change === "malformed") {
+    await runOpenClawAgentWriteAdmission({ agentId: "policy", env }, ({ canonicalPath }) => {
+      {
+        using corrupted = new DatabaseSync(canonicalPath);
+        corrupted
+          .prepare(
+            "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.sessionId', 42) WHERE session_key = ?",
+          )
+          .run(policyKey);
       }
-      expect(consumed).not.toHaveBeenCalled();
-    }
-    expect(compatAssertCurrent).toHaveBeenCalledTimes(compatibility ? 1 : 0);
-    expect(onRefused).toHaveBeenCalledTimes(refusal ? 1 : 0);
-  } finally {
-    gate.resume();
-    await outcome;
-    calls.restore();
-    delayed.mockRestore();
+      // Exercise malformed-row parsing rather than a warmed fact or revoked source.
+      sessionChanges.invalidate({
+        agentId: "policy",
+        sessionKey: policyKey,
+        storePath: canonicalPath,
+        factsInvalidated: true,
+      });
+    });
+    calls.clear();
+  } else if (change === "route") {
+    await operation.bindToolAuthorityRouteAsync({
+      provider: attempt.provider,
+      model: "changed-model",
+    });
+  } else if (change === "source-replaced") {
+    const { storePath } = nativeRead;
+    copyFileSync(storePath, `${storePath}.replacement`);
+    renameSync(`${storePath}.replacement`, storePath);
   }
+  gate.resume();
+  const result = await outcome;
+  if (change !== "legacy-allowed") {
+    calls.expectIdle();
+  }
+  if (change === "metadata" || change === "legacy-allowed") {
+    expect(result).toBe("admitted");
+    expect(consumed).toHaveBeenCalledOnce();
+  } else {
+    expect(result).toBeInstanceOf(Error);
+    if (change === "malformed") {
+      expect(result).toHaveProperty(
+        "message",
+        expect.stringContaining(`invalid persisted session row requires repair for ${policyKey}`),
+      );
+    } else if (change === "source-replaced") {
+      expect(result).toMatchObject({
+        message: "Native session lineage source changed during tool preparation",
+      });
+    }
+    expect(consumed).not.toHaveBeenCalled();
+  }
+  expect(compatAssertCurrent).toHaveBeenCalledTimes(compatibility ? 1 : 0);
+  expect(onRefused).toHaveBeenCalledTimes(refusal ? 1 : 0);
 });

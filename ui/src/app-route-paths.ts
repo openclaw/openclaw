@@ -49,8 +49,7 @@ const APP_ROUTE_DEFINITIONS = {
   meetings: { path: "/meetings" },
   apps: { path: "/apps" },
   portals: { path: "/portals" },
-  "agents-home": { path: "/agents" },
-  claws: { path: "/agents/claws" },
+  claws: { path: "/claws" },
   agents: { path: "/settings/agents" },
   channels: { path: "/settings/channels", aliases: ["/channels"] },
   connection: { path: "/settings/connection" },
@@ -472,6 +471,7 @@ const DYNAMIC_ROUTE_MATCHERS = [
   ["activity", activityPersonFromPath],
   ["workboard", workboardBoardIdFromPath],
   ["memory", memoryTabFromPath],
+  ["plugins", pluginCatalogIdFromPath],
   ["plugins", isLegacyPluginsDiscoveryPath],
   ["plugin-settings", pluginSettingsIdFromPath],
 ] as const;

@@ -287,7 +287,6 @@ async function resolveOAuthToken(params: {
 export async function resolveProviderAuths(params: {
   signal?: AbortSignal;
   providers: UsageProviderId[];
-  auth?: ProviderAuth[];
   getStore?: () => AuthStore | Promise<AuthStore>;
   store?: AuthStore;
   agentDir?: string;
@@ -296,9 +295,6 @@ export async function resolveProviderAuths(params: {
   onError?: (provider: UsageProviderId, error: unknown) => void;
 }): Promise<ProviderAuth[]> {
   params.signal?.throwIfAborted();
-  if (params.auth) {
-    return params.auth;
-  }
 
   const stateBase = {
     signal: params.signal,

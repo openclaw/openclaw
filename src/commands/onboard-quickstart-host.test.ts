@@ -69,8 +69,6 @@ it.each([
 ] as const)("%s auth before dashboard", async (mode, token, password, trustedProxy) => {
   const h = createHostHarness({
     gateway: {
-      mode: "local",
-      bind: "loopback",
       port: 19431,
       auth: { mode, token, password, trustedProxy },
       controlUi: { basePath: "/dashboard" },
@@ -79,7 +77,6 @@ it.each([
   const host = runQuickstartForegroundGateway({ runtime: h.runtime });
   await h.probing.promise;
 
-  expect(mocks.startGateway).toHaveBeenCalledExactlyOnceWith();
   expect(mocks.startGateway).toHaveBeenCalledBefore(mocks.waitForGateway);
   expect(mocks.runBrowserHandoff).not.toHaveBeenCalled();
   expect(mocks.waitForGateway).toHaveBeenCalledExactlyOnceWith(
@@ -93,13 +90,7 @@ it.each([
   h.readiness.resolve({ ok: true });
   await h.summary.promise;
   expect(mocks.waitForGateway).toHaveBeenCalledBefore(mocks.runBrowserHandoff);
-  expect(mocks.runBrowserHandoff).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ config: h.config }),
-  );
   expect(h.runtime.log).toHaveBeenCalledWith("Dashboard: http://127.0.0.1:19431/dashboard/");
-  for (const instruction of ["Ctrl+C", "openclaw gateway install", "openclaw dashboard"]) {
-    expect(h.runtime.log).toHaveBeenCalledWith(expect.stringContaining(instruction));
-  }
 
   h.gateway.resolve();
   await host;

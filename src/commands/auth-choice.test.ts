@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import {
   createAuthTestLifecycle,
   createExitThrowingRuntime,
-  createWizardPrompter,
+  createWizardPrompter as createPrompter,
   setupAuthTestEnv,
 } from "../../test/helpers/auth-wizard.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
@@ -71,15 +71,15 @@ vi.mock("./auth-choice.apply.api-providers.js", () => {
   };
 });
 
-vi.mock("../agents/agent-scope.js", () => ({
+vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
   resolveDefaultAgentId: () => "main",
   resolveAgentDir: (configForTest: unknown, agentId: string) =>
     `${process.env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-state"}/agents/${agentId}/agent`,
   resolveAgentWorkspaceDir: (configForTest: unknown, agentId: string) =>
     `/tmp/openclaw-workspaces/${agentId}`,
   // Required by src/agents/model-runtime-policy.ts, which is transitively
-  // imported through provider-auth-choice -> copilot-runtime-plugin-install ->
-  // copilot-routing -> model-runtime-policy.
+  // imported through provider-auth-choice -> runtime-plugin-install.
   resolveSessionAgentIds: () => ({ defaultAgentId: "main", sessionAgentId: "main" }),
   listAgentEntries: () => [],
 }));
@@ -326,9 +326,6 @@ describe("applyAuthChoice", () => {
     const agentDir = path.join(stateDir, "agent");
     process.env.OPENCLAW_STATE_DIR = stateDir;
     process.env.OPENCLAW_AGENT_DIR = agentDir;
-  }
-  function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
-    return createWizardPrompter(overrides, { defaultSelect: "" });
   }
   function createSelectFirstOption(): WizardPrompter["select"] {
     return vi.fn(async (params) => params.options[0]?.value as never);

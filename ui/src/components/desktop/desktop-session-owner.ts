@@ -8,8 +8,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import { resolveChatPaneDesktopTarget } from "../../pages/chat/chat-pane-placement.ts";
-import { loadDesktopEnvironments } from "./desktop-source.ts";
+import { loadDesktopEnvironments, resolveChatPaneDesktopTarget } from "./desktop-source.ts";
 
 type DesktopSessionContext = {
   isConnected: boolean;

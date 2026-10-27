@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createParitySessionFixture } from "./runtime-parity-session.test-helper.js";
+import { createParitySessionFixture } from "./runtime-parity-session.test-support.js";
 import { captureRuntimeParityCell } from "./runtime-parity.js";
 
 const seedSession = createParitySessionFixture();

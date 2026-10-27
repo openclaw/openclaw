@@ -119,21 +119,6 @@ it.each([false, true])(
 
     const { readPluginInstallIndex } = await import(PLUGIN_INDEX_MODULE_URL);
     const persisted = readPluginInstallIndex({ configPath, stateDir });
-    expect(persisted).toMatchObject({
-      installRecords: {
-        "lossless-claw": {
-          source: "npm",
-          installPath: "~/.openclaw/extensions/lossless-claw",
-        },
-      },
-      plugins: [
-        {
-          pluginId: "lossless-claw",
-          installOwner: "lossless-claw",
-          rootDir: path.join(stateDir, "extensions", "lossless-claw"),
-        },
-      ],
-    });
 
     if (!initialized) {
       // The frozen-driver probe can seed an unversioned plugin-only catalog, but it

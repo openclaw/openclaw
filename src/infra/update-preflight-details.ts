@@ -48,7 +48,7 @@ export const UPDATE_PREFLIGHT_DETAILS = {
   "handoff-timeout":
     "The update helper did not acknowledge the handoff before its deadline. Run openclaw update status and openclaw gateway status --deep before retrying.",
   "handoff-helper-exited":
-    "The update helper exited before acknowledging the handoff. Run openclaw doctor, then retry openclaw update from an external terminal to inspect its startup failure.",
+    "The update helper exited before acknowledging the handoff. Check the helper startup diagnostics in this update report, correct the reported problem, then retry the update. The Gateway kept serving.",
   "handoff-preparation-failed":
     "The update handoff could not be prepared. Run openclaw triage or retry openclaw update from an external terminal to diagnose the recorded failure.",
   "npm-EACCES":
@@ -105,6 +105,23 @@ export const UPDATE_HANDOFF_BEFORE_TRANSFER_DETAIL =
 
 export function updatePreflightDetailMessage(code: string): string | undefined {
   return Object.entries(UPDATE_PREFLIGHT_DETAILS).find(([key]) => key === code)?.[1];
+}
+
+export function updateRepairRefusalNextAction(
+  code: string | null | undefined,
+  formatCommand: (command: string) => string = (command) => command,
+): string | undefined {
+  switch (code) {
+    case "inside-gateway-process-tree":
+    case "inside-gateway-service":
+    case "service-membership-unverified":
+    case "service-ancestry-unverified":
+      return `Run \`${formatCommand("openclaw update repair")}\` from a terminal outside the Gateway process tree. Do not run this repair through the Gateway's exec tool.`;
+    case "inside-triage-process-tree":
+      return `Run \`${formatCommand("openclaw update repair")}\` from a terminal outside automatic triage and the Gateway process tree. Do not stop the Gateway from its fixing subtree.`;
+    default:
+      return undefined;
+  }
 }
 
 export function createUpdatePreflightFailure(

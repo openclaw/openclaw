@@ -1,9 +1,14 @@
 import { createMemo, createProjection, createUniqueId, For, onSettled, Show } from "solid-js";
 import type { SessionBranch } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
+import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
 import "./chat-session-versions-mobile.css";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export type ChatSessionVersionsMobileProps = {
   /** Connection/agent/session identity. Change it when the authoritative branch scope changes. */
@@ -57,10 +62,8 @@ export function ChatSessionVersionsMobile(props: ChatSessionVersionsMobileProps)
           {props.branchSwitchDisabledReason}
         </p>
       </Show>
-      <Show when={props.query.status === "loading"}>
-        <p class="chat-session-versions-mobile__note" role="status">
-          {t("common.loading")}
-        </p>
+      <Show when={props.query.status === "loading" && props.branches.length === 0}>
+        <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
       </Show>
       <Show when={error()}>
         <div class="chat-session-versions-mobile__note" role="alert">
@@ -73,11 +76,12 @@ export function ChatSessionVersionsMobile(props: ChatSessionVersionsMobileProps)
         </div>
       </Show>
       <Show when={empty()}>
-        <div class="chat-session-versions-mobile__empty" role="status">
-          <Icon name="history" />
-          <strong>{t("chat.sessionHeader.versionsEmptyTitle")}</strong>
-          <p>{t("chat.sessionHeader.versionsEmptyDescription")}</p>
-        </div>
+        <PanelEmptyState
+          presentation="mobile"
+          icon={<Icon name="history" />}
+          heading={t("chat.sessionHeader.versionsEmptyTitle")}
+          description={t("chat.sessionHeader.versionsEmptyDescription")}
+        />
       </Show>
       <Show when={props.branches.length > 0}>
         <ol

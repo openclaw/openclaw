@@ -214,10 +214,7 @@ it("restores the destination board's saved people filter when boards change whil
   const page = sessionsPage();
   const boardB = { ...page.board, id: "sessions-b", name: "Sessions B" };
   const previous = expectDefined(page.request.getMockImplementation(), "request");
-  let releaseIdentity = () => {};
-  const identityGate = new Promise<void>((resolve) => {
-    releaseIdentity = resolve;
-  });
+  const { promise: identityGate, resolve: releaseIdentity } = createDeferred();
   page.request.mockImplementation(async (method, params) => {
     if (method === "gateway.identity.get" || method === "users.self") {
       await identityGate;

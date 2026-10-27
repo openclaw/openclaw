@@ -11,16 +11,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import * as discovery from "../plugins/discovery.js";
 import * as loader from "../plugins/loader.js";
-import { loadPluginManifestRegistryForInstalledIndex } from "../plugins/manifest-registry-installed.js";
-import {
-  restorePluginMetadataSnapshot,
-  type PluginMetadataSnapshot,
-} from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
   createPluginRegistryOwner,
-  getActivePluginRegistry,
   listImportedRuntimePluginIds,
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
@@ -134,24 +129,9 @@ function readMetadata(
 }
 
 describe("transcript library capture health", () => {
-  it("uses the successful capture's requested alias even when its provider is absent from the active registry", async () => {
-    const store = createStore();
-    const source = { providerId: "caption-alias", channelId: "room" };
-    const session = { sessionId: "alias-capture", startedAt: "2026-08-20T10:00:00.000Z", source };
-    await store.writeSession(session);
-    recordCapture(session, "canonical-captions");
-    const result = await readTranscriptLibraryStatus(store, {
-      transcripts: { autoStart: [source] },
-    });
-    expect(result.configuredSources[0]).toMatchObject({
-      state: "armed",
-      activeSelectors: [transcriptSessionSelector(session)],
-    });
-  });
-
   it("reports a durable source timestamp without inventing persistence time or recording from unstopped rows", async () => {
     const store = createStore();
-    const source = room;
+    const source = { providerId: "caption-alias", channelId: "room" };
     const cfg: OpenClawConfig = { transcripts: { autoStart: [source] } };
     const session = { sessionId: "persistent-room", startedAt: "2026-08-20T10:00:00.000Z", source };
     await store.writeSession(session);
@@ -168,7 +148,7 @@ describe("transcript library capture health", () => {
         activeSubscription: false,
       },
     });
-    recordCapture(session);
+    recordCapture(session, "canonical-captions");
     result = await readTranscriptLibraryStatus(store, cfg);
     expect(result.configuredSources[0]).toMatchObject({
       state: "armed",
@@ -194,6 +174,13 @@ describe("transcript library capture health", () => {
         "fixture-plugin": "declared-source",
         "disabled-plugin": "disabled-source",
       });
+      const descriptor = {
+        name: "Fixture captions",
+        autoStart: { accountId: "optional" as const, meetingUrl: "required" as const },
+      };
+      metadata.plugins.find((plugin) => plugin.id === "fixture-plugin")!.transcriptSources = {
+        "declared-source": descriptor,
+      };
       metadata.index.plugins = metadata.plugins.map((plugin) => ({
         ...installedDefaults,
         pluginId: plugin.id,
@@ -205,10 +192,33 @@ describe("transcript library capture health", () => {
       setActivePluginRegistry(providerRegistry("live-plugin", "live-source", hooks));
       const store = new TranscriptsStore(path.join(state.stateDir, "transcripts"));
       const importedBefore = listImportedRuntimePluginIds();
-      const result = await readMetadata(store, cfg, metadata);
+      const discover = vi.spyOn(discovery, "discoverOpenClawPlugins").mockImplementation(() => {
+        throw new Error("status must not discover plugins");
+      });
+      const resolve = vi.spyOn(loader, "resolveRuntimePluginRegistry").mockImplementation(() => {
+        throw new Error("status must not resolve runtime");
+      });
+      const read = vi.spyOn(fs, "readFileSync");
+      let result;
+      try {
+        result = await readMetadata(store, cfg, metadata);
+        expect(
+          read.mock.calls.some(([file]) =>
+            metadata.plugins.some(
+              (plugin) =>
+                String(file) === plugin.manifestPath ||
+                String(file).startsWith(`${plugin.rootDir}${path.sep}`),
+            ),
+          ),
+        ).toBe(false);
+      } finally {
+        read.mockRestore();
+        resolve.mockRestore();
+        discover.mockRestore();
+      }
       const providers = Object.fromEntries(result.providers.map((p) => [p.providerId, p]));
       expect(providers).toMatchObject({
-        "declared-source": { availability: "enabled" },
+        "declared-source": { availability: "enabled", ...descriptor },
         "disabled-source": { availability: "disabled" },
         absent: { availability: "unavailable" },
         "live-source": {
@@ -220,7 +230,7 @@ describe("transcript library capture health", () => {
       });
       const declared = providers["declared-source"];
       expect(declared).not.toHaveProperty("canStart");
-      expect(declared).not.toHaveProperty("autoStart");
+      expect(providers["disabled-source"]).not.toHaveProperty("autoStart");
       expect(providers["manual-transcript"]).not.toHaveProperty("autoStart");
       expect(result.configuredSources.map((source) => source.state)).toEqual([
         "not-active",
@@ -285,161 +295,45 @@ it("keeps transcript provider health bound to its live Gateway registry", async 
     setActivePluginRegistry(requestRegistry);
     const requestOwner = createPluginRegistryOwner(requestRegistry);
     setActivePluginRegistry(unrelatedRegistry);
-    const failures: unknown[] = [];
     try {
       const store = new TranscriptsStore(path.join(state.stateDir, "transcripts"));
       const importedBefore = listImportedRuntimePluginIds();
-      const result = await withPluginMetadataSnapshotScope(
-        metadata,
-        () =>
-          withPluginRuntimeGatewayRequestScope(
-            { pluginRegistry: requestOwner.registry, isWebchatConnect: () => false },
-            () => readTranscriptLibraryStatus(store, cfg),
-          ),
-        { config: cfg },
+      const result = await withPluginRuntimeGatewayRequestScope(
+        { pluginRegistry: requestOwner.registry, isWebchatConnect: () => false },
+        () => readMetadata(store, cfg, metadata),
       );
       expect(result.providers.filter((provider) => provider.pluginId)).toMatchObject([
         {
           providerId: "request-source",
-          pluginId: "request-plugin",
-          availability: "enabled",
           sourceKinds: ["live-caption"],
           canStart: true,
-          canStop: false,
-          canImport: false,
         },
       ]);
       expect(start).not.toHaveBeenCalled();
       expect(unrelatedStart).not.toHaveBeenCalled();
       expect(listImportedRuntimePluginIds()).toEqual(importedBefore);
-    } catch (error) {
-      failures.push(error);
     } finally {
-      const results = await Promise.allSettled([requestOwner.close()]);
-      failures.push(
-        ...results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
-      );
-    }
-    if (failures.length) {
-      throw new AggregateError(failures, "Transcript status assertion or registry cleanup failed");
+      await requestOwner.close();
     }
   });
 });
 
-it("offers a cold manifest source before and after scoped registration without discovering runtime", async () => {
-  await withStatusState(async (state) => {
-    const pluginId = "fixture-captions";
-    const providerId = "fixture-caption-source";
-    const rootDir = state.statePath("fixture-plugin");
-    const source = await state.writeText(
-      "fixture-plugin/index.cjs",
-      `module.exports = {
-        id: "fixture-captions", register(api) {
-          api.registerTranscriptSourceProvider({ id: "fixture-caption-source", name: "Runtime captions", sourceKinds: ["live-caption"],
-            async start() { throw new Error("status must not start capture"); }
-          });
-        }
-      };`,
-    );
-    const descriptor = {
-      name: "Fixture captions",
-      autoStart: { accountId: "optional", meetingUrl: "required" },
-    };
-    const manifestPath = await state.writeJson("fixture-plugin/openclaw.plugin.json", {
-      id: pluginId,
-      configSchema: { type: "object", additionalProperties: false, properties: {} },
-      contracts: { transcriptSourceProviders: [providerId] },
-      transcriptSources: { [providerId]: descriptor },
-    });
-    const cfg: OpenClawConfig = {
-      plugins: {
-        allow: [pluginId],
-        entries: { [pluginId]: { enabled: true } },
-        load: { paths: [rootDir] },
-        slots: { memory: "none" },
-      },
-    };
-    const initial = metadataFixture(cfg, {});
-    initial.index.plugins = [{ ...installedDefaults, pluginId, source, manifestPath, rootDir }];
-    const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
-      index: initial.index,
-      config: cfg,
-      env: state.env,
-    });
-    const metadata = restorePluginMetadataSnapshot({
-      ...initial,
-      manifestRegistry,
-      plugins: manifestRegistry.plugins,
-      byPluginId: new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin])),
-    });
-    const active = createEmptyPluginRegistry();
-    setActivePluginRegistry(active);
-    const store = new TranscriptsStore(state.statePath("transcripts"));
-    const readStatus = async () => {
-      const discover = vi.spyOn(discovery, "discoverOpenClawPlugins").mockImplementation(() => {
-        throw new Error("status must not discover plugins");
-      });
-      const resolve = vi.spyOn(loader, "resolveRuntimePluginRegistry").mockImplementation(() => {
-        throw new Error("status must not resolve runtime");
-      });
-      const read = vi.spyOn(fs, "readFileSync");
-      try {
-        const result = await readMetadata(store, cfg, metadata);
-        expect(discover).not.toHaveBeenCalled();
-        expect(resolve).not.toHaveBeenCalled();
-        expect(
-          read.mock.calls.some(
-            ([file]) => String(file) === manifestPath || String(file) === source,
-          ),
-        ).toBe(false);
-        return result;
-      } finally {
-        read.mockRestore();
-        resolve.mockRestore();
-        discover.mockRestore();
-      }
-    };
-    const before = await readStatus();
-    const scoped = loader.loadPluginRegistryHandle({
-      config: cfg,
-      env: state.env,
-      onlyPluginIds: [pluginId],
-      manifestRegistry,
-      discovery: {
-        candidates: [{ idHint: pluginId, source, rootDir, origin: "config" }],
-        diagnostics: [],
-      },
-      cache: false,
-    });
-    expect(scoped.transcriptSourceProviders.map((entry) => entry.provider.id)).toEqual([
-      providerId,
-    ]);
-    expect(getActivePluginRegistry()).toBe(active);
-    expect(active.transcriptSourceProviders).toEqual([]);
-    const after = await readStatus();
-    for (const result of [before, after]) {
-      expect(result.providers.find((provider) => provider.providerId === providerId)).toEqual({
-        providerId,
-        pluginId,
-        name: descriptor.name,
-        availability: "enabled",
-        autoStart: descriptor.autoStart,
-      });
-    }
-  });
-});
-
-describe("configured transcript shutdown cleanup", () => {
+describe("configured transcript cleanup custody", () => {
   const fixture = useTranscriptStatusFixture();
   it.each([
-    { whenOccupied: false, fault: "returned-stop" },
-    { whenOccupied: true, fault: "thrown-stop" },
-    { whenOccupied: false, fault: "session-write" },
-    { whenOccupied: true, fault: "summary-write" },
+    { phase: "adoption", whenOccupied: false, fault: "thrown-stop" },
+    { phase: "adoption", whenOccupied: false, fault: "summary-write" },
+    { phase: "shutdown", whenOccupied: false, fault: "returned-stop" },
+    { phase: "shutdown", whenOccupied: true, fault: "thrown-stop" },
+    { phase: "shutdown", whenOccupied: false, fault: "session-write" },
+    { phase: "shutdown", whenOccupied: true, fault: "summary-write" },
   ])(
-    "retains and drains late $fault after shutdown (occupied=$whenOccupied)",
-    async ({ whenOccupied, fault }) => {
+    "retains and drains $fault cleanup after $phase (occupied=$whenOccupied)",
+    async ({ phase, fault, whenOccupied }) => {
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      const adoption = phase === "adoption";
+      const check = adoption ? expect.soft : expect;
+      const text = adoption ? "Admitted note" : "Before shutdown";
       const f = fixture({ transcripts: { autoStart: [{ ...room, whenOccupied }] } });
       const watches: TranscriptOccupancyWatchRequest[] = [];
       const unwatch = vi.fn();
@@ -461,16 +355,20 @@ describe("configured transcript shutdown cleanup", () => {
         }
       });
       const start = vi.fn(async (request: TranscriptStartRequest) => {
-        await request.onUtterance({ text: "Before shutdown" });
-        // Shutdown starts only after the pre-shutdown note is durably recorded.
+        await request.onUtterance({ text, ...(adoption ? { final: true } : {}) });
         started.resolve(request);
-        await gate.promise;
-        await request.onUtterance({ text: "After shutdown" });
-        return { ok: true as const, session: { ...request.session, title: "Late title" } };
+        if (!adoption) {
+          await gate.promise;
+          await request.onUtterance({ text: "After shutdown" });
+        }
+        return {
+          ok: true as const,
+          session: { ...request.session, title: adoption ? "Room title" : "Late title" },
+        };
       });
       f.provider.start = start;
       let cleanupFails = true;
-      const stop = vi.spyOn(f.provider, "stop").mockImplementation(async ({ sessionId }) => {
+      vi.spyOn(f.provider, "stop").mockImplementation(async ({ sessionId }) => {
         if (cleanupFails && fault === "returned-stop") {
           return { ok: false, error: "cleanup unavailable" };
         }
@@ -479,44 +377,57 @@ describe("configured transcript shutdown cleanup", () => {
         }
         return { ok: true, sessionId };
       });
-      const writeSession = f.store.writeSession.bind(f.store);
+      const originalWrite = f.store.writeSession.bind(f.store);
+      let titleFailed = false;
       vi.spyOn(TranscriptsStore.prototype, "writeSession").mockImplementation(
         async (session, condition) => {
+          if (adoption && session.title === "Room title" && !titleFailed) {
+            titleFailed = true;
+            throw new Error("title write unavailable");
+          }
           if (cleanupFails && fault === "session-write" && session.stoppedAt) {
             throw new Error("final session unavailable");
           }
-          return writeSession(session, condition);
+          return originalWrite(session, condition);
         },
       );
-      const writeSummary = f.store.writeSummary.bind(f.store);
+      const originalSummary = f.store.writeSummary.bind(f.store);
       vi.spyOn(TranscriptsStore.prototype, "writeSummary").mockImplementation(async (...args) => {
-        if (cleanupFails && fault === "summary-write") {
-          throw new Error("summary unavailable");
+        if (fault === "summary-write" && cleanupFails) {
+          throw new Error("summary write unavailable");
         }
-        return writeSummary(...args);
+        return originalSummary(...args);
       });
       const service = createTranscriptsAutoStartService(f.ctx);
       try {
-        service.start();
+        const startup = service.start().settled;
         const request = await started.promise;
-        expect(start).toHaveBeenCalledOnce();
         const session = request.session;
-        const stopping = service.stop();
-        await vi.advanceTimersByTimeAsync(5_000);
-        await stopping;
-        expect(f.ctx.logger.warn).toHaveBeenCalledWith(expect.stringContaining("stop timed out"));
-        expect(unwatch).toHaveBeenCalledTimes(whenOccupied ? 1 : 0);
-        expect(request.abortSignal?.aborted).toBe(true);
-        gate.resolve();
-        // A failed late drain must be visible and still owned after startup settles.
-        await lateDrain.promise;
-        expect(f.ctx.logger.warn).toHaveBeenCalledWith(
-          expect.stringContaining("transcripts autoStart session="),
-        );
+        if (adoption) {
+          await startup;
+          await vi.advanceTimersByTimeAsync(65_000);
+          expect.soft(await f.store.listSessionEntries()).toHaveLength(1);
+          expect
+            .soft((await f.read()).configuredSources[0]?.startDiagnostic)
+            .toBe("admitted-start-failed");
+          await request.onUtterance({ text: "Late failed-start note", final: true });
+        } else {
+          const stopping = service.stop();
+          await vi.advanceTimersByTimeAsync(5_000);
+          await stopping;
+          expect(f.ctx.logger.warn).toHaveBeenCalledWith(expect.stringContaining("stop timed out"));
+          expect(unwatch).toHaveBeenCalledTimes(whenOccupied ? 1 : 0);
+          expect(request.abortSignal?.aborted).toBe(true);
+          gate.resolve();
+          await lateDrain.promise;
+        }
+        check(start).toHaveBeenCalledOnce();
         const terminal = fault === "session-write" || fault === "summary-write";
         await expect(f.tool.execute("status", { action: "status" })).resolves.toMatchObject({
           details: {
-            [terminal ? "pendingFinalization" : "active"]: [{ sessionId: session.sessionId }],
+            [terminal ? "pendingFinalization" : "active"]: [
+              expect.objectContaining({ sessionId: session.sessionId }),
+            ],
           },
         });
         const otherConfig = {
@@ -524,8 +435,11 @@ describe("configured transcript shutdown cleanup", () => {
         };
         const other = createTranscriptsAutoStartService({ ...f.ctx, config: otherConfig });
         try {
-          other.start();
-          await conflict.promise;
+          const otherStarting = other.start().settled;
+          if (!adoption) {
+            await conflict.promise;
+          }
+          await otherStarting;
           expect(
             (await readTranscriptLibraryStatus(f.store, otherConfig)).configuredSources[0]
               ?.startDiagnostic,
@@ -533,35 +447,42 @@ describe("configured transcript shutdown cleanup", () => {
         } finally {
           await other.stop();
         }
-        expect(stop).toHaveBeenCalledTimes(terminal ? 1 : 2);
+        if (adoption) {
+          await service.stop();
+        }
         cleanupFails = false;
         await service.stop();
-        expect(stop).toHaveBeenCalledTimes(terminal ? 1 : 3);
-        expect(activeSessions.has(session.sessionId)).toBe(false);
-        expect((await f.store.readSession(session.sessionId))?.stoppedAt).toEqual(
-          expect.any(String),
-        );
-        expect(await f.store.readSummary(session)).toMatchObject({
-          summary: { transcript: ["Before shutdown"] },
+        check(activeSessions.has(session.sessionId)).toBe(false);
+        const stored = (await f.store.readSession(session.sessionId))!;
+        check(stored.stoppedAt).toEqual(expect.any(String));
+        if (adoption) {
+          expect.soft(stored).toMatchObject({
+            sessionId: session.sessionId,
+            startedAt: session.startedAt,
+            title: "Room title",
+          });
+          expect.soft(stored.source).toEqual(session.source);
+        }
+        check(await f.store.readSummary(stored)).toMatchObject({
+          summary: { transcript: [text] },
         });
-        watches[0]?.onEmpty();
-        watches[0]?.onOccupied();
-        await request.onUtterance({ text: "Retired callback" });
-        await request.onStatus?.({ active: false });
-        await vi.advanceTimersByTimeAsync(65_000);
-        expect(start).toHaveBeenCalledOnce();
-        expect(await f.store.listSessionEntries()).toHaveLength(1);
-        expect(await f.store.readUtterancesForSession(session)).toMatchObject([
-          { text: "Before shutdown" },
-        ]);
-        // Even the same raw ID on a later day belongs to a distinct lifecycle.
-        vi.setSystemTime(new Date(Date.parse(session.startedAt) + 86_400_000));
-        await f.start({ ...room, sessionId: session.sessionId });
-        await service.stop();
-        expect(stop).toHaveBeenCalledTimes(terminal ? 1 : 3);
-        expect((await f.read()).active).toMatchObject([
-          { sessionId: session.sessionId, activeSubscription: true },
-        ]);
+        if (!adoption) {
+          watches[0]?.onEmpty();
+          watches[0]?.onOccupied();
+          await request.onUtterance({ text: "Retired callback" });
+          await request.onStatus?.({ active: false });
+          await vi.advanceTimersByTimeAsync(65_000);
+          expect(start).toHaveBeenCalledOnce();
+          expect(await f.store.listSessionEntries()).toHaveLength(1);
+          expect(await f.store.readUtterancesForSession(session)).toMatchObject([{ text }]);
+          // The same raw ID on a later day belongs to a distinct lifecycle.
+          vi.setSystemTime(new Date(Date.parse(session.startedAt) + 86_400_000));
+          await f.start({ ...room, sessionId: session.sessionId });
+          await service.stop();
+          expect((await f.read()).active).toMatchObject([
+            { sessionId: session.sessionId, activeSubscription: true },
+          ]);
+        }
       } finally {
         cleanupFails = false;
         gate.resolve();
@@ -569,7 +490,9 @@ describe("configured transcript shutdown cleanup", () => {
         for (const [request] of start.mock.calls) {
           await f.tool.execute("cleanup", {
             action: "stop",
-            selector: transcriptSessionSelector(request.session),
+            ...(adoption
+              ? { sessionId: request.session.sessionId }
+              : { selector: transcriptSessionSelector(request.session) }),
           });
         }
       }

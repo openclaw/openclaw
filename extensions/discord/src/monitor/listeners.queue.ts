@@ -8,30 +8,6 @@ const DISCORD_SLOW_LISTENER_THRESHOLD_MS = 30_000;
 
 export const discordEventQueueLog = createSubsystemLogger("discord/event-queue");
 
-function logSlowDiscordListener(params: {
-  logger: DiscordListenerLogger | undefined;
-  listener: string;
-  event: string;
-  durationMs: number;
-}) {
-  if (params.durationMs < DISCORD_SLOW_LISTENER_THRESHOLD_MS) {
-    return;
-  }
-  const duration = formatDurationSeconds(params.durationMs, {
-    decimals: 1,
-    unit: "seconds",
-  });
-  const message = `Slow listener detected: ${params.listener} took ${duration} for event ${params.event}`;
-  const logger = params.logger ?? discordEventQueueLog;
-  logger.warn("Slow listener detected", {
-    listener: params.listener,
-    event: params.event,
-    durationMs: params.durationMs,
-    duration,
-    consoleMessage: message,
-  });
-}
-
 export async function runDiscordListenerWithSlowLog(params: {
   logger: DiscordListenerLogger | undefined;
   listener: string;
@@ -49,9 +25,21 @@ export async function runDiscordListenerWithSlowLog(params: {
     }
     throw err;
   } finally {
-    logSlowDiscordListener({
-      ...params,
-      durationMs: Date.now() - startedAt,
-    });
+    const { logger, listener, event } = params;
+    const durationMs = Date.now() - startedAt;
+    if (!(durationMs < DISCORD_SLOW_LISTENER_THRESHOLD_MS)) {
+      const duration = formatDurationSeconds(durationMs, {
+        decimals: 1,
+        unit: "seconds",
+      });
+      const message = `Slow listener detected: ${listener} took ${duration} for event ${event}`;
+      (logger ?? discordEventQueueLog).warn("Slow listener detected", {
+        listener,
+        event,
+        durationMs,
+        duration,
+        consoleMessage: message,
+      });
+    }
   }
 }

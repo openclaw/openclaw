@@ -5,21 +5,19 @@ import {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatQuestionsEnglish } from "../../i18n/locales/en-chat-questions.ts";
 import { redactToolDetail } from "../../lib/browser-redact.ts";
 import type { ChatQueueItem, ChatReplyTarget } from "../../lib/chat/chat-types.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
-import {
-  reconcileSessionRunTerminal,
-  scopedAgentParamsForSession,
-  type SessionCapability,
-  type SessionRunTerminal,
-} from "../../lib/sessions/index.ts";
+import type { SessionCapability, SessionRunTerminal } from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import {
   normalizeDefaultMainSessionAliasForUi,
   resolveUiSelectedSessionAgentId,
   resolveUiConversationIdentity,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
+import { reconcileSessionRunTerminal } from "../../lib/sessions/session-run-terminal.ts";
 import {
   chatAbortTargetSession,
   currentChatAbortIntent,
@@ -41,6 +39,8 @@ import {
 import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./input-history.ts";
 import type { ToolStreamHost, ToolStreamState } from "./tool-stream-contract.ts";
 import { resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
+
+registerChatQuestionsEnglish();
 
 const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 
@@ -197,38 +197,6 @@ export function adoptStartedChatRun(
   if (!adoptedStream) {
     host.chatStream = "";
     host.chatStreamStartedAt = startedAt;
-  }
-}
-
-/** The run sessions.create acknowledged for the retained first prompt. Read it
- *  before transcript hydration or admission: a cached receipt retires the prompt. */
-export function readAcknowledgedInitialRun(host: Parameters<typeof adoptStartedChatRun>[0]) {
-  const initial = host.chatSubmissions?.readInitial(
-    host.sessionKey,
-    host.client ?? null,
-    host.currentSessionId,
-  );
-  return initial?.pending
-    ? {
-        id: initial.pendingRunId,
-        startedAt: initial.message.timestamp,
-        sessionId: initial.sessionId,
-      }
-    : undefined;
-}
-
-/** Adopt it like a chat.send ACK so the working claw never waits for roster events.
- *  Hydration may bind the pane to a replacement physical session; skip that run then. */
-export function adoptAcknowledgedInitialRun(
-  host: Parameters<typeof adoptStartedChatRun>[0],
-  run: ReturnType<typeof readAcknowledgedInitialRun>,
-): void {
-  if (
-    run &&
-    !host.chatRunId &&
-    (!run.sessionId || !host.currentSessionId || run.sessionId === host.currentSessionId)
-  ) {
-    adoptStartedChatRun(host, run.id, run.startedAt);
   }
 }
 

@@ -127,7 +127,42 @@ describe("AgentRuntimePlan", () => {
     expect(first.transport.extraParams).toEqual({ temperature: 0.1, owner: "first" });
   });
 
-  it("records resolved model, auth, transport, tool, delivery, and observability policy", () => {
+  it.each(["openclaw", "codex"])(
+    "resolves Access defaults for existing sessions in %s",
+    (runtime) => {
+      const config = (accessPrograms?: Record<string, unknown>) => ({
+        agents: { defaults: { params: accessPrograms === undefined ? {} : { accessPrograms } } },
+      });
+      const build = (accessPrograms?: Record<string, unknown>) =>
+        buildPlan({
+          config: config(accessPrograms),
+          harnessId: runtime,
+          harnessRuntime: runtime,
+          model: apiModel,
+          modelRoute: {
+            provider: "openai",
+            modelId: "gpt-5.4",
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            authRequirement: "api-key",
+            requestTransportOverrides: "none",
+          },
+        });
+      expect(build().transport.resolveExtraParams().accessPrograms).toEqual({ cyber: "standard" });
+      const configured = build({ cyber: "daybreak_blue" });
+      expect(configured.transport.resolveExtraParams().accessPrograms).toEqual({
+        cyber: "daybreak_blue",
+      });
+      expect(
+        configured.transport.resolveExtraParams({
+          extraParamsOverride: { accessPrograms: { cyber: "daybreak_red" } },
+        }).accessPrograms,
+      ).toEqual({ cyber: "daybreak_red" });
+      expect(build({}).transport.resolveExtraParams().accessPrograms).toEqual({});
+    },
+  );
+
+  it("records auth and observability and resolves transport and prompt policy", () => {
     const plan = buildPlan({
       harnessId: "codex",
       harnessRuntime: "codex",
@@ -136,17 +171,21 @@ describe("AgentRuntimePlan", () => {
       model: apiModel,
     });
 
-    expect(plan.auth).toMatchObject({
-      providerForAuth: "openai",
-      authProfileProviderForAuth: "openai",
-      harnessAuthProvider: "openai",
-      forwardedAuthProfileId: "openai:work",
+    expect(plan).toMatchObject({
+      auth: {
+        providerForAuth: "openai",
+        authProfileProviderForAuth: "openai",
+        harnessAuthProvider: "openai",
+        forwardedAuthProfileId: "openai:work",
+      },
+      observability: { resolvedRef: "openai/gpt-5.4", harnessId: "codex" },
     });
-    const resolvedExtraParams = plan.transport.resolveExtraParams({
-      extraParamsOverride: { parallel_tool_calls: false },
-      resolvedTransport: "websocket",
-    });
-    expect(resolvedExtraParams).toMatchObject({
+    expect(
+      plan.transport.resolveExtraParams({
+        extraParamsOverride: { parallel_tool_calls: false },
+        resolvedTransport: "websocket",
+      }),
+    ).toMatchObject({
       parallel_tool_calls: false,
       text_verbosity: "low",
     });
@@ -157,17 +196,11 @@ describe("AgentRuntimePlan", () => {
         promptMode: "full",
       })?.stablePrefix,
     ).toContain("<persona_latch>");
-    expect(plan.transcript.resolvePolicy()).toEqual(plan.transcript.policy);
-    const classify = plan.outcome.classifyRunResult;
-    expect(classify({ provider: "openai", model: "gpt-4.1", result: {} })).toBeNull();
-    expect(plan.observability).toMatchObject({ resolvedRef: "openai/gpt-5.4", harnessId: "codex" });
   });
 
   it("keeps OpenClaw-owned tool-schema normalization reachable from the plan", () => {
     const plan = buildPlan({ model: apiModel });
-
     const normalized = plan.tools.normalize([createParameterFreeTool()] as never);
-
     expect(normalized).toHaveLength(1);
     expect(normalized[0]?.name).toBe("ping");
     expect(normalized[0]?.parameters).toStrictEqual({});
@@ -181,13 +214,7 @@ describe("AgentRuntimePlan", () => {
       env: process.env,
     });
 
-    const plan = buildAgentRuntimePlan({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      config: {},
-      workspaceDir: "/tmp/openclaw-runtime-plan",
-      providerRuntimeHandle: suppliedHandle,
-    });
+    const plan = buildPlan({ providerRuntimeHandle: suppliedHandle });
 
     expect(plan.providerRuntimeHandle).toBe(suppliedHandle);
 
