@@ -74,7 +74,9 @@ export async function refreshScope(ui: Page, replaceLocation = true) {
       root.querySelector(".knowledge-chat-handoff")?.remove();
       if (!s.expectedVault) {
         s.selectedId = "";
-        if (s.tab !== "settings") {
+        // Settings and Scribes are not store content, so they stay open; a first scribe write
+        // that creates the store must not send the operator away from the scribe they watch.
+        if (s.tab !== "settings" && s.tab !== "scribes") {
           s.tab = "recent";
         }
         s.offset = 0;
