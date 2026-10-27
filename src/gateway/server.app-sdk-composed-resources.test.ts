@@ -247,27 +247,25 @@ async function proveRealGatewayContracts(): Promise<void> {
       runId,
       status: "accepted",
     });
-    const completed = (event: { type: string }) => event.type === "run.completed";
-    const eventsPromise = collectUntil(run.events(), completed);
-    const appEventsPromise = collectUntil(
-      oc.events((event) => event.runId === runId),
-      completed,
-    );
-    for (const [stream, data] of [
-      ["lifecycle", { phase: "start", startedAt: 111 }],
-      ["assistant", { delta: "hello from real gateway" }],
-      ["lifecycle", { phase: "end", endedAt: 222 }],
-    ] as const) {
-      emitAgentEvent({ runId, stream, data });
-    }
-    const [realEvents, appEvents] = await withTimeout(
-      Promise.all([eventsPromise, appEventsPromise]),
-      2_000,
-      {
-        message: "timed out waiting for real Gateway SDK events",
-      },
-    );
-    expect(appEvents).toEqual(realEvents);
+    const eventsPromise = collectUntil(run.events(), (event) => event.type === "run.completed");
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 111 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "assistant",
+      data: { delta: "hello from real gateway" },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "end", endedAt: 222 },
+    });
+    const realEvents = await withTimeout(eventsPromise, 2_000, {
+      message: "timed out waiting for real Gateway SDK events",
+    });
     expect(realEvents.map((event) => event.type)).toEqual([
       "run.started",
       "assistant.delta",

@@ -43,14 +43,21 @@ vi.mock("../gateway/call.js", () => ({
   isGatewayCredentialsRequiredError,
 }));
 
-vi.mock("../gateway/credentials.js", () => ({ isGatewaySecretRefUnavailableError }));
-vi.mock("../cli/daemon-cli/probe.js", () => ({ probeGatewayStatus }));
+vi.mock("../gateway/credentials.js", () => ({
+  isGatewaySecretRefUnavailableError,
+}));
+
+vi.mock("../cli/daemon-cli/probe.js", () => ({
+  probeGatewayStatus,
+}));
 
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: () => ({ readCommand: readServiceCommand }),
 }));
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
+  note,
+}));
 
 import { checkGatewayHealth, probeGatewayMemoryStatus } from "./doctor-gateway-health.js";
 
