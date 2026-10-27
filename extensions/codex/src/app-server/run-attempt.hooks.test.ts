@@ -68,17 +68,14 @@ async function startSteeringAttempt(terminalReplyExpectation: Params["terminalRe
 async function runWithObservedReplyTurn(params: Params) {
   const started = createDeferred<{
     run: Attempt;
-    attachBackend: ReturnType<typeof vi.fn>;
-    detachBackend: ReturnType<typeof vi.fn>;
-    freezeAbort: ReturnType<typeof vi.fn>;
+    replyBackend: () => ReplyBackend | undefined;
   }>();
   const turnSettled = withAdmittedSessionTurnForTest(
     { sessionKey: params.sessionKey!, sessionId: params.sessionId },
     async (operation) => {
+      const attachBackend = vi.spyOn(operation, "attachBackend");
       const observed = {
-        attachBackend: vi.spyOn(operation, "attachBackend"),
-        detachBackend: vi.spyOn(operation, "detachBackend"),
-        freezeAbort: vi.spyOn(operation, "freezeAbort"),
+        replyBackend: () => attachBackend.mock.calls.at(-1)?.[0],
         run: runCodexAppServerAttempt(params),
       };
       started.resolve(observed);
@@ -86,15 +83,7 @@ async function runWithObservedReplyTurn(params: Params) {
     },
   );
   void turnSettled.catch(started.reject);
-  const observed = await started.promise;
-  return {
-    ...observed,
-    turnSettled,
-    replyBackend: () =>
-      observed.attachBackend.mock.calls.at(-1)?.[0] as
-        | Pick<ReplyBackend, "cancel" | "isAbortable" | "terminalReplyExpectation">
-        | undefined,
-  };
+  return { ...(await started.promise), turnSettled };
 }
 
 function holdAgentEnd() {
@@ -121,17 +110,13 @@ async function heldAttempt(overrides: Partial<Params> = {}) {
   const onAgentEvent = vi.fn<NonNullable<Params["onAgentEvent"]>>();
   const params = Object.assign(createTestParams(), { onAttemptAbort, onAgentEvent }, overrides);
   const harness = createStartedThreadHarness();
-  const { run, turnSettled, replyBackend, freezeAbort, detachBackend } =
-    await runWithObservedReplyTurn(params);
   return {
     ...hooks,
-    backend: { read: replyBackend, freezeAbort, detachBackend },
+    ...(await runWithObservedReplyTurn(params)),
     harness,
     params,
     onAttemptAbort,
     onAgentEvent,
-    run,
-    turnSettled,
   };
 }
 
@@ -345,47 +330,6 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     });
   });
 
-  it("freezes native terminal success locally before agent_end", async () => {
-    const { agentEnd, releaseAgentEnd, harness, run, turnSettled, backend, onAgentEvent } =
-      await heldAttempt();
-    let settled = false;
-    void run.then(() => {
-      settled = true;
-    });
-
-    await harness.waitForMethod("turn/start");
-    await harness.notify(agentMessage("msg-final-1", "Done.", { status: "completed" }));
-    await complete(harness);
-    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
-    expect(settled).toBe(false);
-
-    const replyBackend = backend.read();
-    expect(replyBackend?.isAbortable?.()).toBe(false);
-    expect(abortAgentHarnessRun("session-1")).toBe(false);
-    expect(resolveActiveEmbeddedRunSessionId("agent:main:session-1")).toBe("session-1");
-    releaseAgentEnd();
-
-    expect(readAttemptTerminal(await run)).toMatchObject({
-      aborted: false,
-      timedOut: false,
-      promptError: null,
-    });
-    expect(settled).toBe(true);
-    expect(mockCall(agentEnd, "agent_end")[0]).toMatchObject({ success: true });
-    expect(backend.freezeAbort).not.toHaveBeenCalled();
-    const terminalLifecycleEvents = onAgentEvent.mock.calls.flatMap(([event]) =>
-      event.stream === "lifecycle" && (event.data.phase === "end" || event.data.phase === "error")
-        ? [event.data]
-        : [],
-    );
-    expect(terminalLifecycleEvents).toHaveLength(1);
-    expect(terminalLifecycleEvents[0]).toMatchObject({ phase: "end" });
-    expect(terminalLifecycleEvents[0]?.aborted).toBeUndefined();
-    expect(backend.detachBackend).toHaveBeenCalledWith(replyBackend);
-    await turnSettled;
-    expect(resolveActiveEmbeddedRunSessionId("agent:main:session-1")).toBeUndefined();
-  });
-
   it.each([false, true])(
     "keeps the persisted request in agent_end (steering: %s)",
     async (steer) => {
@@ -453,44 +397,63 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     },
   );
 
-  it.each(["client close", "failed turn"])(
-    "keeps %s cancellable during agent_end",
-    async (failure) => {
-      const {
-        agentEnd,
-        releaseAgentEnd,
-        harness,
-        run,
-        turnSettled,
-        backend,
-        onAttemptAbort,
-        onAgentEvent,
-      } = await heldAttempt();
-      await run.waitForTurnAccepted();
-      if (failure === "client close") {
-        harness.close();
+  it.each(["success", "client close", "failed turn"])(
+    "preserves %s terminal authority while agent_end is pending",
+    async (outcome) => {
+      const f = await heldAttempt();
+      const settled = vi.fn();
+      void f.run.then(settled);
+      await f.run.waitForTurnAccepted();
+      if (outcome === "success") {
+        await f.harness.notify(agentMessage("msg-final-1", "Done.", { status: "completed" }));
+        await complete(f.harness);
+      } else if (outcome === "client close") {
+        f.harness.close();
       } else {
-        await harness.notify(
+        await f.harness.notify(
           turnCompleted({ id: "turn-1", status: "failed", error: { message: "codex exploded" } }),
         );
       }
-      await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
-      expect(backend.read()?.isAbortable?.()).toBe(true);
-      backend.read()?.cancel("user_abort");
-      expect(onAttemptAbort).toHaveBeenCalledTimes(1);
-      releaseAgentEnd();
-      const result = await run;
+      await vi.waitFor(() => expect(f.agentEnd).toHaveBeenCalledTimes(1), fastWait);
+      expect(settled).not.toHaveBeenCalled();
+      expect(f.replyBackend()?.isAbortable?.()).toBe(outcome !== "success");
+      if (outcome === "success") {
+        expect(abortAgentHarnessRun("session-1")).toBe(false);
+        expect(resolveActiveEmbeddedRunSessionId("agent:main:session-1")).toBe("session-1");
+      } else {
+        f.replyBackend()?.cancel("user_abort");
+        expect(f.onAttemptAbort).toHaveBeenCalledTimes(1);
+      }
+      f.releaseAgentEnd();
+      const result = await f.run;
       const promptError =
-        failure === "client close"
+        outcome === "client close"
           ? "codex app-server client closed before turn completed"
-          : "codex exploded";
+          : outcome === "failed turn"
+            ? "codex exploded"
+            : null;
       expect(readAttemptTerminal(result)).toMatchObject({
         aborted: false,
         promptError,
       });
-      expect(backend.freezeAbort).not.toHaveBeenCalled();
-      await turnSettled;
-      if (failure === "client close") {
+      await f.turnSettled;
+      if (outcome === "success") {
+        expect(readAttemptTerminal(result).timedOut).toBe(false);
+        expect(settled).toHaveBeenCalledOnce();
+        expect(mockCall(f.agentEnd, "agent_end")[0]).toMatchObject({ success: true });
+        const terminal = f.onAgentEvent.mock.calls.flatMap(([event]) =>
+          event.stream === "lifecycle" &&
+          (event.data.phase === "end" || event.data.phase === "error")
+            ? [event.data]
+            : [],
+        );
+        expect(terminal).toHaveLength(1);
+        expect(terminal[0]).toMatchObject({ phase: "end" });
+        expect(terminal[0]?.aborted).toBeUndefined();
+        expect(resolveActiveEmbeddedRunSessionId("agent:main:session-1")).toBeUndefined();
+        return;
+      }
+      if (outcome === "client close") {
         expect(result.codexAppServerFailure).toMatchObject({
           kind: "client_closed_before_turn_completed",
           replaySafe: true,
@@ -498,7 +461,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
         return;
       }
       expect(result.agentHarnessResultClassification).toBeUndefined();
-      const events = onAgentEvent.mock.calls.map(([event]) => event);
+      const events = f.onAgentEvent.mock.calls.map(([event]) => event);
       expect(
         events.find((event) => event.stream === "lifecycle" && event.data.phase === "start"),
       ).toMatchObject({ data: { startedAt: expect.any(Number) } });
@@ -512,7 +475,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
         },
       });
       expect(events.some((event) => event.stream === "assistant")).toBe(false);
-      expect(mockCall(agentEnd, "agent_end")).toMatchObject([
+      expect(mockCall(f.agentEnd, "agent_end")).toMatchObject([
         { success: false, error: "codex exploded" },
         { runId: "run-1", sessionId: "session-1" },
       ]);

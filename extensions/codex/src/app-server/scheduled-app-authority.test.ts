@@ -50,7 +50,12 @@ const creatorContext = {
   hasPreparedAccountIdentity: true,
   hasConfiguredAppServerIdentity: false,
 };
-const calendarConfig = (calendar: Record<string, unknown>) => ({ apps: { calendar } });
+const calendarConfig = (calendar: Record<string, unknown>, otherApps = {}) => ({
+  apps: { calendar, ...otherApps },
+});
+const accountLink = (approvals_reviewer: string, default_tools_approval_mode: string) => ({
+  account: { approvals_reviewer, default_tools_approval_mode },
+});
 
 function capture(
   request: (
@@ -160,20 +165,18 @@ function authority(overrides?: Record<string, unknown>) {
 }
 
 function threadConfig(unrestricted = false): CodexPluginThreadConfig {
-  const context = buildPluginAppPolicyContext(
-    {
-      calendar: appPolicy("Calendar", "ask", false),
-      newly_connected: appPolicy("New"),
-    },
-    {},
-  );
   return {
     enabled: true,
     fingerprint: "current-fingerprint",
     inputFingerprint: "current-input",
     configPatch: { apps: {} },
     provisionalAppIds: ["calendar", "newly_connected"],
-    policyContext: unrestricted ? policyContext() : context,
+    policyContext: unrestricted
+      ? policyContext()
+      : buildPluginAppPolicyContext(
+          { calendar: appPolicy("Calendar", "ask", false), newly_connected: appPolicy("New") },
+          {},
+        ),
     diagnostics: [],
   };
 }
@@ -354,50 +357,39 @@ describe("scheduled Codex app authority", () => {
     ({ current, captured }) => {
       const config = threadConfig();
       config.policyContext.apps.calendar = appPolicy("Calendar", current);
-      const intersected = intersectCodexPluginThreadConfigWithScheduledAuthority(
-        config,
-        authority({
-          apps: [capturedApp({ edit: "approve", blocked: "approve" }, true, captured)],
-        }),
-        {
-          config: {
-            apps: {
-              calendar: {
-                enabled: true,
-                links: {
-                  account: {
-                    approvals_reviewer: "auto_review",
-                    default_tools_approval_mode: "approve",
-                  },
-                },
-                tools: {
-                  edit: { approval_mode: "approve" },
-                  blocked: { enabled: false, approval_mode: "approve" },
-                },
-              },
-              newly_connected: { enabled: true },
+      const intersected = intersect(
+        calendarConfig(
+          {
+            enabled: true,
+            links: accountLink("auto_review", "approve"),
+            tools: {
+              edit: { approval_mode: "approve" },
+              blocked: { enabled: false, approval_mode: "approve" },
             },
           },
-          toolsByApp: toolsByApp("edit", "blocked"),
+          { newly_connected: { enabled: true } },
+        ),
+        {
+          thread: config,
+          stored: authority({
+            apps: [capturedApp({ edit: "approve", blocked: "approve" }, true, captured)],
+          }),
+          tools: toolsByApp("edit", "blocked"),
         },
       );
 
       expect(intersected.provisionalAppIds).toEqual(["calendar"]);
-      expect(intersected.configPatch).toMatchObject({
-        apps: {
-          calendar: {
-            approvals_reviewer: "user",
-            links: {
-              account: { approvals_reviewer: "user", default_tools_approval_mode: "auto" },
-            },
-            tools: {
-              edit: { enabled: true, approval_mode: "prompt" },
-              blocked: { enabled: false, approval_mode: "prompt" },
-            },
+      expect(intersected.configPatch?.apps).toMatchObject({
+        calendar: {
+          approvals_reviewer: "user",
+          links: accountLink("user", "auto"),
+          tools: {
+            edit: { enabled: true, approval_mode: "prompt" },
+            blocked: { enabled: false, approval_mode: "prompt" },
           },
-          newly_connected: { enabled: false },
-          _default: { enabled: false, destructive_enabled: false, open_world_enabled: false },
         },
+        newly_connected: { enabled: false },
+        _default: { enabled: false, destructive_enabled: false, open_world_enabled: false },
       });
     },
   );
@@ -441,17 +433,8 @@ describe("scheduled Codex app authority", () => {
   it.each(["stored", "current"] as const)(
     "keeps %s app caps authoritative over explicit tool enablement",
     async (owner) => {
-      const config = threadConfig();
-      if (owner === "stored") {
-        config.policyContext = policyContext();
-      }
-      const stored = authority();
-      if (owner === "stored") {
-        for (const app of stored.payload.apps) {
-          app.allowDestructiveActions = false;
-          app.allowOpenWorld = false;
-        }
-      }
+      const config = threadConfig(owner === "stored");
+      const stored = authority({ apps: [capturedApp(undefined, owner !== "stored")] });
       const currentPolicy = await readCurrentCodexScheduledAppPolicy({
         request: policyClient({
           config: calendarConfig({
