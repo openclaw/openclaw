@@ -49,7 +49,7 @@ it.each<{ name: string; change: (state: ChatPageHost) => void }>([
         {
           messages: [],
           pagination: { hasMore: false },
-          sessionId: state.currentSessionId,
+          sessionId: state.currentSessionId ?? null,
         },
       );
     },
