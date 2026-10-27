@@ -108,25 +108,64 @@ describe("resolveConfiguredSetupModelForAgent", () => {
 });
 
 describe("resolveUtilityModelRefForAgent", () => {
-  const metadataSnapshot = snapshotWithDefaults({
+  const vendorSnapshot = snapshotWithDefaults({
     openai: "gpt-5.6-luna",
     anthropic: "claude-haiku-4-5",
   });
+  const metadataSnapshot = createPluginMetadataSnapshotFixture({
+    plugins: [
+      ...vendorSnapshot.plugins,
+      {
+        id: "router",
+        modelCatalog: {
+          providers: {
+            router: {
+              defaultUtilityModels: {
+                openai: "openai/gpt-6-luna",
+                anthropic: "anthropic/claude-haiku-5-5",
+                google: "google/gemini-flash",
+              },
+              models: [{ id: "openai/gpt-6-luna" }],
+            },
+          },
+        },
+      },
+    ],
+  });
+  // The router's credential-scoped inventory: it does not grant google/gemini-flash.
+  const catalog = {
+    entries: ["openai/gpt-6.1-sol", "openai/gpt-6-luna", "anthropic/claude-haiku-5-5"].map(
+      (id) => ({ provider: "router", id, name: id }),
+    ),
+  };
   type Scenario = {
     name: string;
     cfg: OpenClawConfig;
     agentId?: string;
     primaryProvider?: string;
     primaryModelRef?: string;
+    catalog?: Parameters<typeof resolveUtilityModelRefForAgent>[0]["catalog"];
     expected?: string;
   };
   it.each<Scenario>([
     {
       name: "trimmed explicit reference",
-      cfg: { agents: { defaults: { utilityModel: " openrouter/mistralai/mistral-small " } } },
+      cfg: {
+        agents: {
+          defaults: {
+            model: "router/openai/gpt-6.1-sol",
+            utilityModel: " openrouter/mistralai/mistral-small ",
+          },
+        },
+      },
+      catalog,
       expected: "openrouter/mistralai/mistral-small",
     },
-    { name: "disabled", cfg: { agents: { defaults: { utilityModel: "   " } } } },
+    {
+      name: "disabled",
+      cfg: { agents: { defaults: { model: "router/openai/gpt-6.1-sol", utilityModel: "   " } } },
+      catalog,
+    },
     {
       name: "provider default",
       cfg: { agents: { defaults: { model: "anthropic/claude-fable-5" } } },
@@ -155,6 +194,47 @@ describe("resolveUtilityModelRefForAgent", () => {
       expected: "openai/gpt-5.6-luna@work",
     },
     { name: "no provider default", cfg: { agents: { defaults: { model: "ollama/llama-4-70b" } } } },
+    {
+      name: "router uses its declared model for the primary vendor",
+      cfg: { agents: { defaults: { model: "router/openai/gpt-6.1-sol" } } },
+      catalog,
+      expected: "router/openai/gpt-6-luna",
+    },
+    {
+      name: "router keeps the primary auth profile",
+      cfg: { agents: { defaults: { model: "router/anthropic/claude-opus-5-5@work" } } },
+      catalog,
+      expected: "router/anthropic/claude-haiku-5-5@work",
+    },
+    {
+      name: "router follows a session-specific vendor",
+      cfg: { agents: { defaults: { model: "router/openai/gpt-6.1-sol" } } },
+      primaryProvider: "router",
+      primaryModelRef: "router/anthropic/claude-opus-5-5@work",
+      catalog,
+      expected: "router/anthropic/claude-haiku-5-5@work",
+    },
+    {
+      name: "router vendor without a declaration",
+      cfg: { agents: { defaults: { model: "router/mistral/large" } } },
+      catalog,
+    },
+    {
+      name: "router declaration the credential does not offer",
+      cfg: { agents: { defaults: { model: "router/google/gemini-pro" } } },
+      catalog,
+    },
+    {
+      name: "router lists the declaration only as a decision model",
+      cfg: { agents: { defaults: { model: "router/openai/gpt-6.1-sol" } } },
+      catalog: {
+        entries: [{ provider: "router", id: "openai/gpt-6-luna", inference: { chat: false } }],
+      },
+    },
+    {
+      name: "router without a known catalog",
+      cfg: { agents: { defaults: { model: "router/openai/gpt-6.1-sol" } } },
+    },
     {
       name: "agent opt-out",
       cfg: {

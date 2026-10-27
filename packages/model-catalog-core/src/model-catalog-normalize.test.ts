@@ -35,11 +35,20 @@ it.each<[string, unknown, unknown]>([
         ...wire,
         defaultModel: " m ",
         defaultUtilityModel: " u ",
+        defaultUtilityModels: { " Vendor ": " vendor/small ", blank: " " },
         models: [{ id: "m" }, { id: "" }],
       },
       other: { models: [{ id: "x" }] },
     },
-    { openai: { ...wire, defaultModel: "m", defaultUtilityModel: "u", models: [{ id: "m" }] } },
+    {
+      openai: {
+        ...wire,
+        defaultModel: "m",
+        defaultUtilityModel: "u",
+        defaultUtilityModels: { vendor: "vendor/small" },
+        models: [{ id: "m" }],
+      },
+    },
   ],
   [
     "aliases",
