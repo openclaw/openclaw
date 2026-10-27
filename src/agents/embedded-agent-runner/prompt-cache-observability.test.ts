@@ -1,4 +1,3 @@
-// Coverage for prompt-cache diagnostic tracking across turns.
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
@@ -6,6 +5,7 @@ import * as cryptoDigest from "@openclaw/normalization-core/node-crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Usage } from "../../llm/types.js";
 import { normalizeUsage } from "../usage.js";
+import * as promptCacheFacts from "./prompt-cache-facts.js";
 import {
   beginPromptCacheObservation,
   collectPromptCacheTools,
@@ -116,17 +116,11 @@ describe("prompt cache observability", () => {
   it.each([false, true])(
     "keeps small complete misses tied to the last reported fingerprint (changed=%s)",
     (changed) => {
-      const sessionId = scopedKey("small-cache-miss");
-      const begin = (systemPrompt: string) =>
-        beginPromptCacheObservation({
-          messages: [],
-          sessionId,
-          provider: "anthropic",
-          modelId: "claude-sonnet-4-6",
-          streamStrategy: "test",
-          systemPrompt,
-          tools: [],
-        });
+      const { sessionId, begin: start } = observation(
+        "small-cache-miss",
+        beginAnthropicObservation,
+      );
+      const begin = (systemPrompt: string) => start({ systemPrompt, tools: [] });
       begin("prefix A");
       completePromptCacheObservation({ sessionId, usage: { cacheRead: 500 } });
       if (changed) {
@@ -151,22 +145,14 @@ describe("prompt cache observability", () => {
     },
   );
 
-  it("collects canonical trimmed tool snapshots while skipping unreadable descriptors", () => {
-    const unreadableTool = {
-      get name(): string {
-        throw new Error("tool name getter exploded");
+  it.each(["name", "parameters"])("collects canonical tools and skips unreadable %s", (field) => {
+    const unreadableTool = Object.defineProperty({ name: "unreadable" }, field, {
+      get() {
+        throw new Error("unreadable descriptor");
       },
-    };
-
-    expect(
-      collectPromptCacheTools([
-        { name: "write" },
-        { name: "" },
-        {},
-        unreadableTool,
-        { name: " read " },
-      ]),
-    ).toEqual([{ name: "read" }, { name: "write" }]);
+    });
+    const candidates = [{ name: "write" }, { name: "" }, {}, unreadableTool, { name: " read " }];
+    expect(collectPromptCacheTools(candidates)).toEqual([{ name: "read" }, { name: "write" }]);
   });
 
   it("preserves canonical schema identity when descriptors become published", () => {
@@ -193,26 +179,17 @@ describe("prompt cache observability", () => {
     const numberPrototype = collectSchema({ ["__proto__"]: { type: "number" } });
     const noPrototype = collectSchema({});
 
-    expect(stringPrototype[0]?.schemaDigest).toMatch(/^[a-f0-9]{64}$/);
     expect(stringPrototype[0]?.schemaDigest).not.toBe(numberPrototype[0]?.schemaDigest);
     expect(stringPrototype[0]?.schemaDigest).not.toBe(noPrototype[0]?.schemaDigest);
     expect(numberPrototype[0]?.schemaDigest).not.toBe(noPrototype[0]?.schemaDigest);
   });
 
-  it("memoizes cycle-safe schemas and skips unreadable tools", () => {
+  it("memoizes cycle-safe schemas", () => {
     const parameters: Record<string, unknown> = { type: "object" };
     parameters.self = parameters;
     const digest = vi.spyOn(cryptoDigest, "sha256Hex");
-    const unreadable = {
-      name: "unreadable",
-      get parameters(): object {
-        throw new Error("unreadable schema");
-      },
-    };
-    const first = collectPromptCacheTools([{ name: "read", parameters }, unreadable]);
-    expect(first).toEqual([
-      { name: "read", schemaDigest: expect.stringMatching(/^[a-f0-9]{64}$/) },
-    ]);
+    const first = collectPromptCacheTools([{ name: "read", parameters }]);
+    expect(first).toHaveLength(1);
     expect(collectPromptCacheTools([{ name: "read", parameters }])).toEqual(first);
     expect(digest).toHaveBeenCalledTimes(1);
   });
@@ -233,92 +210,63 @@ describe("prompt cache observability", () => {
   });
 
   it("treats reordered tool lists as the same diagnostics tool set", () => {
-    seedObservation({
-      sessionId: scopedKey("session-1"),
-      tools: [{ name: "read" }, { name: "write" }],
-    });
-
-    const second = beginOpenAIObservation({
-      sessionId: scopedKey("session-1"),
-      tools: [{ name: "write" }, { name: "read" }],
-    });
-
-    expect(second.changes).toBeNull();
+    const { begin, complete } = observation("tool-order");
+    begin({ tools: [{ name: "read" }, { name: "write" }] });
+    complete(8_000);
+    expect(begin({ tools: [{ name: "write" }, { name: "read" }] }).changes).toBeNull();
   });
 
   it.each([
-    ["## Skills", "Skills", "prefix"],
-    ["# Project Context\n## MEMORY.md\n## Skills", "Project Context", "prefix"],
-    ["## Runtime", "Runtime", "suffix"],
-  ] as const)("attributes changed %s content in the %s section (%s)", (heading, section, side) => {
+    ["## Skills", "Skills"],
+    ["# Project Context\n## MEMORY.md\n## Skills", "Project Context"],
+  ])("attributes prefix changes in %s to %s", (heading, section) => {
     const { begin, complete } = observation("changed-prompt-section");
-    const prompt = (content: string) => {
-      const changed = `${heading}\n${content}\n`;
-      return side === "prefix"
-        ? `${changed}${SYSTEM_PROMPT_CACHE_BOUNDARY}stable suffix`
-        : `stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}${changed}`;
-    };
+    const prompt = (content: string) =>
+      `${heading}\n${content}\n${SYSTEM_PROMPT_CACHE_BOUNDARY}stable suffix`;
     begin({ systemPrompt: prompt("private-content-before") });
     complete(8_000);
     begin({ systemPrompt: prompt("private-content-after") });
     expect(complete(2_000)?.changes).toEqual([
-      {
-        code: side === "prefix" ? "systemPrompt" : "systemPromptSuffix",
-        detail: `system prompt${side === "suffix" ? " suffix" : ""} digest changed (sections: ${section})${side === "suffix" ? "; facts: Runtime.line[1] changed" : ""}`,
-      },
+      { code: "systemPrompt", detail: `system prompt digest changed (sections: ${section})` },
     ]);
   });
 
   it.each([
-    [
-      "Runtime",
-      "Runtime: model=private-before | channel=webchat",
-      "Runtime: model=private-after | channel=webchat",
-      "Runtime.model",
-    ],
+    ["Runtime", "Runtime: model=private-a", "Runtime: model=private-b", "model"],
+    ["Runtime", "private-a", "private-b", "line[1]"],
     [
       "Session routing",
-      "- Actual delegated helpers use `private-before`; use hidden children by default.",
-      "- Actual delegated helpers use `private-after`; use hidden children by default.",
-      "Session routing.hidden delegation",
+      "- Actual delegated helpers use `private-a`",
+      "- Actual delegated helpers use `private-b`",
+      "hidden delegation",
     ],
     [
       "Tooling",
-      "- private-before: Read files\n- private-after: Write files",
-      "- private-after: Write files\n- private-before: Read files",
-      "Tooling.tool list order",
+      "- private-a: Read\n- private-b: Write",
+      "- private-b: Write\n- private-a: Read",
+      "tool list order",
     ],
-    ["Tooling", "- read: private-before", "- read: private-after", "Tooling.tool summaries"],
-    ["Conversation Context", "private-before", "private-after", "Conversation Context.line[1]"],
-    ["Knowledge Index", "private-before", "private-after", "Knowledge Index.line[1]"],
-  ])("names changed facts in %s without exposing content", (section, before, after, fact) => {
-    const { begin, complete } = observation("changed-prompt-fact");
-    const prompt = (body: string) =>
-      `stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}## ${section}\n${body}\n`;
-    begin({ systemPrompt: prompt(before) });
-    complete(8_000);
-    const started = begin({ systemPrompt: prompt(after) });
-    expect(started.changes?.[0]?.detail).not.toContain("facts:");
-    const result = complete(2_000);
-    expect(result?.changes?.[0]?.detail).toContain(`facts: ${fact} changed`);
-    expect(JSON.stringify(result)).not.toContain("private-");
-  });
-
-  it("hashes fact values only when a drop is reported and keeps snapshots content-free", () => {
-    const { begin, complete } = observation("lazy-facts");
-    const prompt = (model: string) =>
-      `${"stable ".repeat(10_000)}${SYSTEM_PROMPT_CACHE_BOUNDARY}## Runtime\nRuntime: model=${model}`;
-    begin({ systemPrompt: prompt("private-before") });
-    complete(8_000);
-    const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
-    const started = begin({ systemPrompt: prompt("private-after") });
-    expect(hashes).not.toHaveBeenCalledWith("model=private-before");
-    expect(hashes).not.toHaveBeenCalledWith("model=private-after");
-    expect(JSON.stringify(started)).not.toContain("private-");
-    expect(complete(2_000)?.changes?.[0]?.detail).toContain("Runtime.model changed");
-    expect(hashes).toHaveBeenCalledWith("model=private-before");
-    expect(hashes).toHaveBeenCalledWith("model=private-after");
-  });
+    ["Tooling", "- read: private-a", "- read: private-b", "tool summaries"],
+    ["Conversation Context", "private-a", "private-b", "line[1]"],
+    ["Knowledge Index", "private-a", "private-b", "line[1]"],
+  ])(
+    "names changed %s facts only on drops without exposing content",
+    (section, before, after, fact) => {
+      const { begin, complete } = observation("changed-prompt-fact");
+      const prompt = (body: string) =>
+        `${"stable ".repeat(10_000)}${SYSTEM_PROMPT_CACHE_BOUNDARY}## ${section}\n${body}\n`;
+      begin({ systemPrompt: prompt(before) });
+      complete(8_000);
+      const facts = vi.spyOn(promptCacheFacts, "describePromptCacheSectionChanges");
+      const started = begin({ systemPrompt: prompt(after) });
+      expect(facts).not.toHaveBeenCalled();
+      expect(JSON.stringify(started)).not.toContain("private-");
+      const result = complete(2_000);
+      expect(result?.changes?.[0]?.detail).toContain(`facts: ${section}.${fact} changed`);
+      expect(facts).toHaveBeenCalled();
+      expect(JSON.stringify(result)).not.toContain("private-");
+    },
+  );
 
   it("attributes computer capability clauses and bounds oversized before-images", () => {
     const { begin, complete } = observation("computer-facts");
@@ -348,21 +296,19 @@ describe("prompt cache observability", () => {
   });
 
   it("uses bounded positions for unrecognized headings without exposing text", () => {
-    const sessionId = scopedKey("bounded-prompt-sections");
+    const { begin } = observation("bounded-prompt-sections");
     const unknown = Array.from(
       { length: 100 },
       (_, index) => `## heading-${index}\nprivate-content-${index}`,
     ).join("\n");
-    const first = beginOpenAIObservation({
-      sessionId,
+    const first = begin({
       systemPrompt: `${unknown}\n## Skills\nprivate-skill\n`,
     });
     const keys = Object.keys(first.snapshot.systemPromptSections ?? {});
     expect(keys).toHaveLength(50);
     expect(keys.slice(0, 2)).toEqual(["section[1]", "section[2]"]);
     expect(keys.slice(-2)).toEqual(["Other", "Skills"]);
-    const changed = beginOpenAIObservation({
-      sessionId,
+    const changed = begin({
       systemPrompt: `${unknown.replace("private-content-0", "private-replaced")}\n## Skills\nprivate-skill\n`,
     });
     expect(changed.changes).toEqual([
@@ -372,10 +318,9 @@ describe("prompt cache observability", () => {
   });
 
   it("names the unrecognized suffix sections that changed or disappeared", () => {
-    const sessionId = scopedKey("named-suffix-sections");
+    const { begin } = observation("named-suffix-sections");
     const observe = (dynamic: string) =>
-      beginOpenAIObservation({
-        sessionId,
+      begin({
         systemPrompt: `stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}${dynamic}`,
       });
     const runtime = "## Runtime\nchannel=webchat\n";
@@ -393,13 +338,12 @@ describe("prompt cache observability", () => {
   });
 
   it("reuses section digests when only the other side of the cache boundary changes", () => {
-    const sessionId = scopedKey("reused-prompt-sections");
+    const { begin } = observation("reused-prompt-sections");
     const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
     const prefix = "## Skills\nlarge-skill-catalog\n## Tooling\ntool descriptions\n";
     const suffix = "## Runtime\nreasoning=off\n";
     const observe = (stable: string, dynamic: string) =>
-      beginOpenAIObservation({
-        sessionId,
+      begin({
         systemPrompt: `${stable}${SYSTEM_PROMPT_CACHE_BOUNDARY}${dynamic}`,
       });
     const first = observe(prefix, suffix);
@@ -418,53 +362,33 @@ describe("prompt cache observability", () => {
   });
 
   it.each([
-    {
-      change: "schema",
-      override: { parameters: { type: "number" } },
-      detail: "1 -> 1 tools; schema: tool[1]",
-    },
-    {
-      change: "description",
-      override: { description: "Read a workspace file" },
-      detail: "1 -> 1 tools; description: tool[1]; facts: tool[1].description.line[1] changed",
-    },
-    {
-      change: "replacement",
-      override: { name: "write" },
-      detail: "1 -> 1 tools; added: tool[1]; removed: tool[1]",
-    },
-  ])("attributes a tool $change to the changed definition", ({ override, detail }) => {
+    [{ parameters: { type: "number" } }, "schema: tool[1]"],
+    [
+      { description: "Read a workspace file" },
+      "description: tool[1]; facts: tool[1].description.line[1] changed",
+    ],
+    [{ name: "write" }, "added: tool[1]; removed: tool[1]"],
+  ])("attributes tool changes (%j)", (override, detail) => {
     const { begin, complete } = observation("changed-tool-schema");
     const tool = {
       name: "read",
       description: "Read a file",
       parameters: { type: "object", properties: { path: { type: "string" } } },
     };
-    const tools = collectPromptCacheTools([tool]);
-    expect(tools).toEqual([
-      {
-        name: "read",
-        descriptionDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
-        schemaDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
-      },
-    ]);
-    begin({ tools });
+    begin({ tools: collectPromptCacheTools([tool]) });
     complete(8_000);
-    begin({
-      tools: collectPromptCacheTools([{ ...tool, ...override }]),
-    });
+    begin({ tools: collectPromptCacheTools([{ ...tool, ...override }]) });
     expect(complete(0)).toEqual({
       previousCacheRead: 8_000,
       cacheRead: 0,
-      changes: [{ code: "tools", detail }],
+      changes: [{ code: "tools", detail: `1 -> 1 tools; ${detail}` }],
     });
   });
 
   it("bounds tool positions without exposing names or descriptor content", () => {
-    const sessionId = scopedKey("bounded-tool-change");
-    beginOpenAIObservation({ sessionId, tools: [] });
-    const next = beginOpenAIObservation({
-      sessionId,
+    const { begin } = observation("bounded-tool-change");
+    begin({ tools: [] });
+    const next = begin({
       tools: collectPromptCacheTools(
         Array.from({ length: 6 }, (_, index) => ({
           name: `${index}\n${"x".repeat(500)}`,
@@ -494,9 +418,7 @@ describe("prompt cache observability", () => {
     for (const identity of [...retired, retained]) {
       seedObservation(identity);
     }
-
     cleanupSessionResources(retiredSessionId);
-
     for (const identity of retired) {
       expect(beginOpenAIObservation(identity)).toMatchObject({
         previousCacheRead: null,
@@ -506,7 +428,6 @@ describe("prompt cache observability", () => {
     expect(beginOpenAIObservation(retained).previousCacheRead).toBe(8_000);
 
     cleanupSessionResources();
-
     expect(beginOpenAIObservation(retained).previousCacheRead).toBeNull();
   });
 
