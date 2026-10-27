@@ -356,8 +356,8 @@ describe("Codex app-server binding store", () => {
     );
   });
 
-  it("round-trips account and repository marketplace app policies", async () => {
-    const pluginAppPolicyContext = {
+  it.each([false, true])("round-trips app policies (repository=%s)", async (repository) => {
+    const pluginAppPolicyContext: NonNullable<ThreadBinding["pluginAppPolicyContext"]> = {
       fingerprint: "account-policy-1",
       apps: {
         "chatgpt-meetings": {
@@ -368,22 +368,25 @@ describe("Codex app-server binding store", () => {
           destructiveApprovalMode: "auto" as const,
           mcpServerNames: [],
         },
-        github: {
-          configKey: "security-review@company-tools",
-          marketplaceName: "company-tools",
-          pluginName: "security-review",
-          allowDestructiveActions: true,
-          readOnlyTools: {
-            read: { enabled: true, approval_mode: "prompt" as const },
-            write: { enabled: false },
-            stale: { enabled: false },
-          },
-          destructiveApprovalMode: "ask" as const,
-          mcpServerNames: ["github"],
-        },
       },
-      pluginAppIds: { "security-review@company-tools": ["github"] },
+      pluginAppIds: {},
     };
+    if (repository) {
+      pluginAppPolicyContext.apps.github = {
+        configKey: "security-review@company-tools",
+        marketplaceName: "company-tools",
+        pluginName: "security-review",
+        allowDestructiveActions: true,
+        readOnlyTools: {
+          read: { enabled: true, approval_mode: "prompt" as const },
+          write: { enabled: false },
+          stale: { enabled: false },
+        },
+        destructiveApprovalMode: "ask" as const,
+        mcpServerNames: ["github"],
+      };
+      pluginAppPolicyContext.pluginAppIds["security-review@company-tools"] = ["github"];
+    }
 
     const { store } = createBindingFixture();
     const identity = makeSessionIdentity("session-policy");

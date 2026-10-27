@@ -468,6 +468,7 @@ vi.mock("../../../image-generation/runtime.js", () => ({
   listRuntimeImageGenerationProviders: () => [],
 }));
 
+// mock-isolation: Workspace attempts pin synthetic models without loading the provider registry.
 vi.mock("../../model-selection.js", () => ({
   findNormalizedProviderValue,
   normalizeProviderId: normalizeMockProviderId,
