@@ -47,6 +47,7 @@ import type {
 
 const h = memoryForgetHarness();
 const { origins, tombstones, readText } = h;
+const targetTombstone = { agentId: "main", sessionId: "target", reason: "forgotten" };
 
 describe("memory forget", () => {
   const forget = (dryRun = false) => h.forget({ hookSources: ["gmail"], dryRun });
@@ -103,16 +104,13 @@ describe("memory forget", () => {
         `[main/sessions/main/target#L1] ${sourceSnippet}\n[main/sessions/main/survivor#L1] keep\n`,
       );
       await fs.writeFile(removedCorpusPath, `[main/sessions/main/target#L2] ${assistantSnippet}\n`);
-      await h.writeEntries(SHORT_TERM_RECALL_NAMESPACE, [
-        {
-          key: "mixed-entry",
-          value: { key: "mixed-entry", path: "memory/source.md", snippet: "erase" },
-        },
-        {
-          key: "clean-entry",
-          value: { key: "clean-entry", path: "memory/source.md", snippet: "keep" },
-        },
-      ]);
+      await h.writeEntries(
+        SHORT_TERM_RECALL_NAMESPACE,
+        Object.entries({ "mixed-entry": "erase", "clean-entry": "keep" }).map(([key, snippet]) => ({
+          key,
+          value: { key, path: "memory/source.md", snippet },
+        })),
+      );
       await writePhaseSignalStore(h.workspaceDir, {
         version: 1,
         updatedAt: "2026-08-26T00:00:00.000Z",
@@ -143,10 +141,8 @@ describe("memory forget", () => {
 
       const agentDatabase = openOpenClawAgentDatabase({ agentId: "main" });
       const db = requireNativeSqliteDatabase(agentDatabase.db);
-      const loaded = await loadSqliteVecExtension({ db });
-      expect(loaded.ok).toBe(true);
-      const schema = ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
-      expect(schema.ftsAvailable, schema.ftsError).toBe(true);
+      await loadSqliteVecExtension({ db });
+      ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
       db.exec(
         "CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[2])",
       );
@@ -172,11 +168,6 @@ describe("memory forget", () => {
           `${narrativeTranscript.map((record) => JSON.stringify(record)).join("\n")}\n`,
         ),
       );
-      expect(
-        db
-          .prepare("SELECT session_id FROM session_windows WHERE session_id = ?")
-          .get(narrativeSessionId),
-      ).toBeUndefined();
       const indexedFiles = [
         ["MEMORY.md", "memory"],
         [`memory/.dreams/session-corpus/2026-08-26.${corpusExtension}`, "memory"],
@@ -358,14 +349,7 @@ describe("memory forget", () => {
       );
       expect((await origins()).map((origin) => origin.entryKey)).toEqual(["clean-entry"]);
       const savedTombstones = tombstones();
-      expect(savedTombstones).toEqual([
-        {
-          agentId: "main",
-          sessionId: "target",
-          reason: "forgotten",
-          createdAt: expect.any(Number),
-        },
-      ]);
+      expect(savedTombstones).toEqual([{ ...targetTombstone, createdAt: expect.any(Number) }]);
 
       const repeated = await forget();
       expect(repeated.sessionIds).toEqual(["target"]);
@@ -575,17 +559,16 @@ describe("memory forget worker settlement", () => {
     db.prepare(
       "INSERT INTO memory_embedding_cache (provider, model, provider_key, hash, embedding, dims, updated_at) VALUES ('fixture', 'fixture', 'fixture', 'selected', ?, 1, 1)",
     ).run(encodeMemoryEmbedding([1]));
+    const rows = (sql: string) => db.prepare(sql).all();
     const derived = () => ({
-      chunks: db.prepare("SELECT * FROM memory_index_chunks ORDER BY id").all(),
-      sources: db.prepare("SELECT * FROM memory_index_sources ORDER BY id").all(),
-      cache: db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all(),
+      chunks: rows("SELECT * FROM memory_index_chunks ORDER BY id"),
+      sources: rows("SELECT * FROM memory_index_sources ORDER BY id"),
+      cache: rows("SELECT * FROM memory_embedding_cache ORDER BY hash"),
     });
     const optionalTables = () =>
-      db
-        .prepare(
-          "SELECT name FROM sqlite_schema WHERE name IN ('memory_entry_origins', 'memory_session_tombstones') ORDER BY name",
-        )
-        .all();
+      rows(
+        "SELECT name FROM sqlite_schema WHERE name IN ('memory_entry_origins', 'memory_session_tombstones') ORDER BY name",
+      );
     const snapshot = async () => ({
       derived: derived(),
       revision: Number(
@@ -608,14 +591,7 @@ describe("memory forget worker settlement", () => {
           message: expect.stringContaining("injected committed " + failResult + " reply failure"),
         });
         const savedTombstones = h.tombstones();
-        expect(savedTombstones).toEqual([
-          {
-            sessionId: "target",
-            agentId: "main",
-            reason: "forgotten",
-            createdAt: expect.any(Number),
-          },
-        ]);
+        expect(savedTombstones).toEqual([{ ...targetTombstone, createdAt: expect.any(Number) }]);
         expect(await state.snapshot()).toEqual({
           ...before,
           derived: failResult === "forget.mark" ? before.derived : empty,

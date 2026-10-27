@@ -78,6 +78,9 @@ export function isTooltipTextRedundant(content: string, trigger: Element) {
   if (!tooltipText) {
     return false;
   }
+  if (!trigger.textContent?.trim()) {
+    return false;
+  }
   const overflowTargets: Element[] = [];
   const triggerText = normalizeTooltipText(collectTooltipText(trigger, true, overflowTargets));
   // Read geometry only when text repeats; the text walk already collected its targets.

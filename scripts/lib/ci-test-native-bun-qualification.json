@@ -126,7 +126,6 @@
     "src/agents/tool-policy.plugin-only-allowlist.test.ts": "ea32b083b5e4ff29d73002dc67f135dd5bc69f216943541b1508447c36b67095",
     "src/agents/tool-replay-safety.test.ts": "1a94db4f61f86c6ff120073a1040f007edef7f0269fb485193c4e03e47354f8b",
     "src/agents/tools/assistant-phase-text.test.ts": "ed2587b690b6d1b888b927450b6c9636b02efca42f1cf4431dae858b2bd7fa15",
-    "src/agents/tools/computer-tool-guidance.test.ts": "9f5f2697494a657d0a72bf92ae0d528593a8ebe16c634bcfb0fea9754b493db7",
     "src/agents/usage.test.ts": "48edbdd1118661abc70e32757993f80acc0d118fdcd6cc44d2024748f6d0c361",
     "src/agents/utils/git.test.ts": "6373644a37457e3198f779f180cc471fff7f66196c22650bed18b6a7bb8559da",
     "src/agents/utils/syntax-highlight.test.ts": "20368970f6c90d54a490a7a1ca972ed32f1dcb8451d172d450d464d703317941",

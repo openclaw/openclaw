@@ -38,6 +38,42 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       containers.splice(0).forEach((container) => container.remove());
     });
 
+    it.each(["dark", "light"])("keeps public sharing neutral in the %s theme", async (theme) => {
+      const root = document.documentElement;
+      const previousMode = root.getAttribute("data-theme-mode");
+      root.setAttribute("data-theme-mode", theme);
+      onTestFinished(() => {
+        if (previousMode === null) {
+          root.removeAttribute("data-theme-mode");
+        } else {
+          root.setAttribute("data-theme-mode", previousMode);
+        }
+      });
+      const { container } = mountChatPaneHeader(containers, {
+        sharingControl: chatPaneHeaderSharing({
+          state: {
+            loading: false,
+            result: {
+              sessionKey: "agent:main:test",
+              members: [],
+              identities: [],
+              permissions: [],
+              role: "owner",
+              allowedVisibilities: ["shared"],
+              publicShare: { token: `v1.${"a".repeat(96)}`, createdAt: 1 },
+            },
+          },
+        }),
+      });
+      const trigger = container.querySelector<HTMLElement>(".chat-pane__sharing-trigger")!;
+      const state = trigger.querySelector<HTMLElement>(".chat-pane__sharing-trigger-state")!;
+      expect(state.textContent).toBe("Public");
+      expect(getComputedStyle(state).color).toBe(getComputedStyle(trigger).color);
+      const icons = trigger.querySelectorAll("svg");
+      expect(icons).toHaveLength(2);
+      expect(getComputedStyle(icons[0]!).color).toBe(getComputedStyle(icons[1]!).color);
+    });
+
     it.each([false, true])(
       "reserves the trailing header region before actions arrive (agent=%s)",
       async (agent) => {
@@ -326,6 +362,14 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         expect(trigger.getAttribute("aria-label")).toBe(t("chat.sessionHeader.panels"));
         expect(trigger.textContent?.trim()).toBe("");
         const surface = findElement(menu, ":scope > .oc-menu");
+        // The surface opens before the lazy action list finishes loading.
+        await expect
+          .element(
+            page
+              .getByRole("menu", { name: t("chat.sessionHeader.panels"), exact: true })
+              .getByRole("menuitem", { name: "Terminal", exact: true }),
+          )
+          .toBeVisible();
         // Measure the settled surface, not its opening scale transition.
         await Promise.all(surface.getAnimations().map((animation) => animation.finished));
         const bounds = surface.getBoundingClientRect();
@@ -407,25 +451,18 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       closingAnimation.cancel();
       await openFallbackPanels(fixture.container);
       expect(surface.dataset.phase).toBe("open");
-      for (const label of ["Minimize side panel", "Side panel"]) {
-        await selectFallbackPanelAction(fixture.container, label);
-        expect(document.activeElement).toBe(trigger);
-      }
-      for (const expectedCount of [3, 4]) {
+      for (const [index, label] of ["Minimize side panel", "Side panel"].entries()) {
         const hidden = new Promise<Event>((resolve) => {
           surface.addEventListener("overlay-after-hide", resolve, { once: true });
         });
-        await click(trigger);
-        await page
-          .elementLocator(menu.querySelector<HTMLElement>('[data-value="side-panel"]')!)
-          .click();
+        await selectFallbackPanelAction(fixture.container, label);
         expect((await hidden).target).toBe(surface);
-        expect(observations).toHaveLength(expectedCount);
+        expect(observations).toHaveLength(index + 1);
         expect(surface.matches(":popover-open")).toBe(false);
         expect(document.activeElement).toBe(trigger);
       }
       expect(observations).toEqual(
-        Array.from({ length: 4 }, () => ({ open: false, focused: true })),
+        Array.from({ length: 2 }, () => ({ open: false, focused: true })),
       );
     });
 

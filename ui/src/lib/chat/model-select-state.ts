@@ -261,15 +261,35 @@ export function prepareChatModelSelectCatalog(catalog: ModelCatalogEntry[]) {
   return { displayLookup, options: buildChatModelOptions(pickerCatalog, displayLookup) };
 }
 
+export function resolveChatModelSelectValues(
+  state: ChatModelSelectStateInput,
+  preparedOptions?: ChatModelSelectOption[],
+) {
+  let options = preparedOptions;
+  const currentOverride = resolveChatModelOverrideValue(state);
+  const defaultModel = resolveDefaultModelValue(state);
+  if (!options) {
+    const currentKey = normalizeChatModelAvailabilityKey(currentOverride);
+    const defaultKey = normalizeChatModelAvailabilityKey(defaultModel);
+    // Only these identities can change the returned values. Keep their aliases
+    // together so the existing availability and canonical-provider ordering applies.
+    const candidates = state.chatModelCatalog.filter((entry) => {
+      const key = catalogModelAvailabilityKey(entry);
+      return key === currentKey || key === defaultKey;
+    });
+    options = prepareChatModelSelectCatalog(candidates).options;
+  }
+  return {
+    currentOverride: resolveCatalogChatModelValue(currentOverride, options),
+    defaultModel: resolveCatalogChatModelValue(defaultModel, options),
+  };
+}
+
 export function resolveChatModelSelectState(
   state: ChatModelSelectStateInput,
   { displayLookup, options } = prepareChatModelSelectCatalog(state.chatModelCatalog),
 ) {
-  const currentOverride = resolveCatalogChatModelValue(
-    resolveChatModelOverrideValue(state),
-    options,
-  );
-  const defaultModel = resolveCatalogChatModelValue(resolveDefaultModelValue(state), options);
+  const { currentOverride, defaultModel } = resolveChatModelSelectValues(state, options);
   const defaultLabel = formatCatalogChatModelDisplayFromLookup(defaultModel, displayLookup);
 
   return {

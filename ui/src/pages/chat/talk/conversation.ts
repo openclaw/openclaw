@@ -1,6 +1,7 @@
 import { commonPrefixLength } from "@openclaw/normalization-core/string-normalization";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
+  RealtimeTalkConversationEntry,
   RealtimeTalkConversationRole,
   RealtimeTalkConversationState,
 } from "./conversation-state.ts";
@@ -8,6 +9,7 @@ import type { RealtimeTalkTranscript } from "./shared.ts";
 
 type RealtimeTalkTranscriptUpdate = RealtimeTalkTranscript & {
   nowMs?: number;
+  afterMessageId?: string | null;
 };
 
 const MAX_CONVERSATION_ENTRIES = 60;
@@ -20,7 +22,26 @@ export function updateRealtimeTalkConversation(
   state: RealtimeTalkConversationState,
   update: RealtimeTalkTranscriptUpdate,
 ): RealtimeTalkConversationState {
-  const next = applyRealtimeTalkTranscript(state, update);
+  const applied = applyRealtimeTalkTranscript(state, update);
+  let next = applied;
+  if (applied !== state) {
+    // Only a caption's first update records where it started in history. Delayed
+    // speech the provider orders before an existing caption shares that caption's
+    // earlier position, so a question never renders below its own answer.
+    const known = new Set(state.entries.map((entry) => entry.id));
+    const entries = applied.entries.slice();
+    let following: RealtimeTalkConversationEntry | undefined;
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index]!;
+      if (known.has(entry.id)) {
+        following = entry;
+      } else {
+        const afterMessageId = following ? following.afterMessageId : update.afterMessageId;
+        entries[index] = { ...entry, afterMessageId };
+      }
+    }
+    next = { ...applied, entries };
+  }
   if (!update.transcriptId || next === state) {
     return next;
   }
@@ -53,6 +74,7 @@ function applyRealtimeTalkTranscript(
       order: update.order,
       text: boundRealtimeConversationText(update.final ? text : (previous?.text ?? "") + text),
       isStreaming: !update.final,
+      afterMessageId: previous?.afterMessageId,
     };
     // Provider identities survive delayed ASR and overlapping responses. Text and
     // wall-clock proximity cannot identify which utterance a final replaces.

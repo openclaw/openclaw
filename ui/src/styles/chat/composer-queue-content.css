@@ -1,5 +1,11 @@
 .chat-queue {
   --chat-queue-row-height: 42px;
+  /* Rows repaint this opaque ground, including underneath the scroll fade. */
+  --chat-queue-surface: color-mix(
+    in srgb,
+    var(--text-strong) 4%,
+    var(--composer-attached-surface, var(--chat-composer-surface))
+  );
 
   position: relative;
   box-sizing: border-box;
@@ -11,7 +17,7 @@
   border: 1px solid var(--chat-composer-hairline);
   border-radius: calc(20px * var(--openclaw-corner-radius-scale));
   corner-shape: superellipse(1.5);
-  background: var(--composer-attached-surface, var(--chat-composer-surface));
+  background: var(--chat-queue-surface);
   backdrop-filter: blur(8px);
 }
 
@@ -77,7 +83,7 @@
 }
 
 .chat-queue__item {
-  --chat-queue-row-surface: var(--composer-attached-surface, var(--chat-composer-surface));
+  --chat-queue-row-surface: var(--chat-queue-surface);
   --chat-queue-leading-columns: var(--chat-stack-icon-size) var(--chat-queue-avatar-size, 20px);
 
   position: relative;
@@ -123,26 +129,18 @@
 
 @media (hover: hover) and (pointer: fine) {
   .chat-queue__item:hover:not(.chat-queue__item--editing) {
-    --chat-queue-row-surface: color-mix(
-      in srgb,
-      var(--text-strong) 3%,
-      var(--composer-attached-surface, var(--chat-composer-surface))
-    );
+    background: color-mix(in srgb, var(--text-strong) 3%, var(--chat-queue-row-surface));
   }
 }
 
 .chat-queue__item--steered {
-  --chat-queue-row-surface: var(--composer-attached-surface, var(--chat-composer-surface));
+  --chat-queue-row-surface: var(--chat-queue-surface);
 }
 
 /* The edited row keeps its slot so the operator can see where the corrected
    message lands. The input owns focus, so the row itself stays neutral. */
 .chat-queue__item--editing {
-  --chat-queue-row-surface: color-mix(
-    in srgb,
-    var(--text-strong) 4%,
-    var(--composer-attached-surface, var(--chat-composer-surface))
-  );
+  --chat-queue-row-surface: color-mix(in srgb, var(--text-strong) 4%, var(--chat-queue-surface));
 }
 
 /* Drop target reads as an insertion edge rather than a selected row, so the
@@ -209,11 +207,7 @@
 }
 
 .chat-queue__item--failed {
-  --chat-queue-row-surface: color-mix(
-    in srgb,
-    var(--danger) 8%,
-    var(--composer-attached-surface, var(--chat-composer-surface))
-  );
+  --chat-queue-row-surface: color-mix(in srgb, var(--danger) 8%, var(--chat-queue-surface));
 }
 
 .chat-queue__leading {

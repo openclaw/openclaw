@@ -603,8 +603,16 @@ export interface Tool<TParameters extends TSchema = TSchema> {
   async?: false;
 }
 
+/** Derived prompt bytes belong to this exact immutable text revision. */
+export interface PreparedSystemPrompt {
+  readonly text: string;
+  readonly stripped: string;
+  readonly instructions: string;
+}
+
 export interface Context {
   systemPrompt?: string;
+  preparedSystemPrompt?: PreparedSystemPrompt;
   messages: Message[];
   tools?: Tool[];
 }

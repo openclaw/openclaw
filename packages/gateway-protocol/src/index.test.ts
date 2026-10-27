@@ -62,8 +62,11 @@ describe("precompiled protocol validators", () => {
     const undo = validation(p.validateSkillsWorkshopUndoParams);
     changes.accepts({}, { agentId: "main", limit: 500, beforeMs: 1_700_000_000_000 });
     changes.rejects({ limit: 0 }, { limit: 501 });
-    read.accepts({ name: "deploy-notes", filePath: "references/api.md", versionId: "v1" });
-    read.rejects({}, { name: "" });
+    read.accepts(
+      { name: "deploy-notes", filePath: "references/api.md", versionId: "v1" },
+      { name: "deploy-notes", draftId: "deploy-notes-1a2b3c4d" },
+    );
+    read.rejects({}, { name: "" }, { name: "deploy-notes", draftId: "" });
     archive.accepts({ name: "deploy-notes", reason: "superseded" });
     archive.rejects(
       { name: "deploy-notes", reason: "" },

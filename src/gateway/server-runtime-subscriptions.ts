@@ -36,7 +36,7 @@ import {
   runWithRetainedGatewayRootWork,
 } from "../process/gateway-work-admission.js";
 import {
-  listRpcSourceEntries,
+  getRpcSourceForGateway,
   getRpcSourceIdentity,
   getRpcSourceLifecycleGeneration,
   type RpcSourceRef,
@@ -79,17 +79,11 @@ import {
   resolveSessionEventAgentScope,
 } from "./session-request-agent.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
-import { captureGatewayScopeMatcher } from "./session-runtime-scope.js";
 
 /** Register gateway runtime event subscriptions and return unsubscribe handles. */
 export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionParams) {
-  const matchesGateway = captureGatewayScopeMatcher(params.resolveGatewayContext);
-  const getScopedRpcSource = (runId: string): RpcSourceRef | undefined => {
-    const matches = listRpcSourceEntries().filter(
-      ([candidateRunId, source]) => candidateRunId === runId && matchesGateway(source.input),
-    );
-    return matches.length === 1 ? matches[0]?.[1] : undefined;
-  };
+  const getScopedRpcSource = (runId: string) =>
+    getRpcSourceForGateway(runId, params.resolveGatewayContext);
   // Collection changes gate new work; the writer retains accepted work and maintenance.
   const auditRecorder = createAuditEventRecorder({
     getConfig: getRuntimeConfig,

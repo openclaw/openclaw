@@ -1,6 +1,9 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { resolveSessionWorkStartError } from "./lifecycle.js";
-import { projectSessionSharingEntry } from "./session-accessor.sqlite-entry-cache.types.js";
+import {
+  projectSessionSharingEntry,
+  sessionSharingEntriesEqual,
+} from "./session-accessor.sqlite-entry-cache.types.js";
 import type { InternalSessionEntry } from "./types.js";
 
 const sessionId = "sharing-lifecycle";
@@ -81,4 +84,31 @@ it("retains independent nested lifecycle records after the source entry changes"
   for (const key of ["providerReview", "mainRestartRecovery", "pendingWorktree"] as const) {
     expect(retained[key]).toEqual(expected[key]);
   }
+});
+
+it("captures inherited tool policy once and keeps both sides independently mutable", () => {
+  const entry: InternalSessionEntry = {
+    sessionId,
+    updatedAt: 1,
+    inheritedToolAllow: ["read", "write"],
+    inheritedToolDeny: ["exec"],
+  };
+  // Array spreads iterate; the snapshot's structured clone already copies these arrays.
+  using allowCopies = vi.spyOn(entry.inheritedToolAllow!, Symbol.iterator);
+  using denyCopies = vi.spyOn(entry.inheritedToolDeny!, Symbol.iterator);
+  const retained = projectSessionSharingEntry(entry);
+  expect(sessionSharingEntriesEqual(entry, retained)).toBe(true);
+  expect(allowCopies).not.toHaveBeenCalled();
+  expect(denyCopies).not.toHaveBeenCalled();
+
+  entry.inheritedToolAllow!.push("edit");
+  entry.inheritedToolDeny![0] = "browser";
+  expect(retained.inheritedToolAllow).toEqual(["read", "write"]);
+  expect(retained.inheritedToolDeny).toEqual(["exec"]);
+  expect(sessionSharingEntriesEqual(entry, retained)).toBe(false);
+
+  retained.inheritedToolAllow![0] = "search";
+  retained.inheritedToolDeny!.push("process");
+  expect(entry.inheritedToolAllow).toEqual(["read", "write", "edit"]);
+  expect(entry.inheritedToolDeny).toEqual(["browser"]);
 });

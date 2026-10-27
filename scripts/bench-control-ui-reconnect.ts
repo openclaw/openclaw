@@ -24,6 +24,7 @@ import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-
 import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
 import {
   createInteractionFixture,
+  installInteractionNavigationPreloadObserver,
   settleSidebarBackgroundWork,
 } from "./lib/control-ui-interaction-scenarios.ts";
 import { summarizeInteractionTrace } from "./lib/control-ui-interaction-trace.ts";
@@ -45,8 +46,12 @@ const { values } = parseArgs({
     "update-reload": { type: "boolean", default: false },
     "asset-latency-ms": { type: "string", default: "0" },
     "warm-picker": { type: "boolean", default: false },
+    "graph-counts": { type: "boolean", default: false },
   },
 });
+if (values["graph-counts"] && values.trace) {
+  throw new Error("Run reactive graph counts separately from CPU traces");
+}
 type Scenario = "brief-drop" | "long-sleep" | "restart" | "update";
 const scenarios = (values.smoke ? ["brief-drop"] : values.scenarios.split(",")) as Scenario[];
 const rtts = values.smoke ? [100] : values.rtt.split(",").map(Number);
@@ -345,6 +350,7 @@ type Sample = {
     byMethod: Record<string, number>;
   };
   trace?: ReturnType<typeof summarizeInteractionTrace>;
+  reactiveGraphArtifact?: string;
   retainedPicker?: { sameNode: true; mutationRequests: 0 };
   updateReload?: {
     wallMs: number;
@@ -527,6 +533,7 @@ try {
             const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
             const page = await context.newPage();
             page.setDefaultTimeout(30_000);
+            await page.addInitScript(installInteractionNavigationPreloadObserver);
             const errors: string[] = [];
             page.on("pageerror", (error) => errors.push(String(error)));
             let cdp: CDPSession | undefined;
@@ -797,6 +804,15 @@ try {
               }
               const before = await metrics(cdp);
               result.stage = "restore";
+              if (values["graph-counts"]) {
+                await page.evaluate((label) => {
+                  const graph = Reflect.get(window, "__openclawReactiveGraph");
+                  if (!graph) {
+                    throw new Error("--graph-counts requires the explicit reactive graph build");
+                  }
+                  graph.start(label);
+                }, id);
+              }
               await page.evaluate(
                 (restorationSignal) =>
                   Reflect.get(window, "reconnectBench").change(true, restorationSignal),
@@ -833,6 +849,14 @@ try {
                 performance.mark("reconnect:end");
               });
               const after = await metrics(cdp);
+              if (values["graph-counts"]) {
+                const graph = await page.evaluate(() =>
+                  Reflect.get(window, "__openclawReactiveGraph").stop(),
+                );
+                const artifact = `${id}.reactive-graph.json`;
+                await writeFile(path.join(output, artifact), JSON.stringify(graph, null, 2));
+                result.reactiveGraphArtifact = artifact;
+              }
               result.wallMs = await page.evaluate(() => {
                 const state = Reflect.get(window, "reconnectBench");
                 return state.completedAt - state.restoredAt;

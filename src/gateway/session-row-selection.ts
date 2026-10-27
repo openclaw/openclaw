@@ -1,8 +1,10 @@
+import { isDeepStrictEqual } from "node:util";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { isConfiguredGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
 import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { recordSessionRowPartitionRevision } from "../infra/gateway-work-metrics.js";
 import {
   projectSessionOwner,
   resolveSessionProfileId,
@@ -22,6 +24,48 @@ const sentinel = (key: string) => key === "global" || key === "unknown";
 type SelectionScope = ReturnType<ReturnType<typeof prepareSessionRowScopes>["select"]>;
 const EMPTY_KEYS: ReadonlySet<string> = Object.freeze(new Set<string>());
 type IndexedTarget = { row: SelectionTarget; pair: SessionEntryPair };
+
+// Search and live-run queries bypass retained partitions; display facts publish separately.
+const presentationFields = new Set<string>([
+  "activeWriterRunId",
+  "activitySummary",
+  "sessionDiffBaseline",
+  "sessionDiffBaselineCapture",
+  "pendingFinalDelivery",
+  "contextBudgetStatus",
+  "abortedLastRun",
+  "startedAt",
+  "inputTokens",
+  "outputTokens",
+  "cacheRead",
+  "cacheWrite",
+  "estimatedCostUsd",
+  "contextTokens",
+  "contextTokensSource",
+  "totalTokens",
+  "totalTokensFresh",
+  "totalTokensVersion",
+  "usageReport",
+] satisfies (keyof SelectionTarget["entry"])[]);
+
+function sameSelectionFacts(previous: SelectionTarget, next: SelectionTarget) {
+  if (
+    rowIdentity(previous) !== rowIdentity(next) ||
+    previous.generation !== next.generation ||
+    previous.hasBoard !== next.hasBoard ||
+    previous.entry.updatedAt !== next.entry.updatedAt ||
+    !isDeepStrictEqual(previous.selection, next.selection)
+  ) {
+    return false;
+  }
+  const before = new Map<string, unknown>(
+    Object.entries(previous.entry).filter(([field]) => !presentationFields.has(field)),
+  );
+  const after = new Map<string, unknown>(
+    Object.entries(next.entry).filter(([field]) => !presentationFields.has(field)),
+  );
+  return isDeepStrictEqual(before, after);
+}
 
 export function createSessionRowSelection(
   cfg: OpenClawConfig,
@@ -193,7 +237,7 @@ export function createSessionRowSelection(
   };
   const keyFor = (row: Pick<SelectionTarget, "key" | "agentId">) =>
     sentinel(row.key) && activeOnly ? JSON.stringify([row.key, row.agentId]) : row.key;
-  const update = (id: string, key: string, row?: SelectionTarget) => {
+  const update = (id: string, key: string, row?: SelectionTarget, changeScope?: string) => {
     let group = groups.get(key);
     const oldWinner = winners.get(key);
     const eligible =
@@ -233,6 +277,17 @@ export function createSessionRowSelection(
     } else {
       duplicates.delete(key);
     }
+    if (
+      winner &&
+      oldWinner &&
+      winner !== oldWinner &&
+      sameSelectionFacts(oldWinner.row, winner.row)
+    ) {
+      oldWinner.row = winner.row;
+      oldWinner.pair[1] = winner.row.entry;
+      group?.set(rowIdentity(winner.row), oldWinner);
+      return;
+    }
     if (winner) {
       winners.set(key, winner);
     } else {
@@ -246,6 +301,7 @@ export function createSessionRowSelection(
     const partition = partitionFor(key);
     if (partition) {
       partition.revision = {};
+      recordSessionRowPartitionRevision(changeScope);
       if (winner) {
         partition.entries.set(key, winner.pair);
       } else {
@@ -288,7 +344,7 @@ export function createSessionRowSelection(
       update(rowIdentity(row), keyFor(row), row);
     },
     change(change: Exclude<SelectionChange, { kind: "reset" }>) {
-      update(change.id, keyFor(change), change.row);
+      update(change.id, keyFor(change), change.row, change.scope);
     },
     createdEntries(profileIds: ReadonlySet<string>): Iterable<SelectionTarget> {
       assertCanonical();

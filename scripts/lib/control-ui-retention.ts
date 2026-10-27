@@ -252,14 +252,23 @@ export function summarizeRetentionHeap(heap: HeapSnapshot) {
   };
 }
 
-export async function captureRetention(page: Page, cdp: CDPSession, file: string) {
+export async function captureRetention(
+  page: Page,
+  cdp: CDPSession,
+  file: string,
+  options: { preserveFixtureRequests?: boolean } = {},
+) {
   await settleRetention(page);
-  const requests = await cdp.send("Runtime.evaluate", {
-    expression: `(() => { const requests = window.openclawControlUiE2eGateway.requests; const count = requests.length; requests.length = 0; return count; })()`,
-    returnByValue: true,
-  });
-  if (requests.exceptionDetails) {
-    throw new Error(requests.exceptionDetails.text);
+  let clearedFixtureRequests = 0;
+  if (!options.preserveFixtureRequests) {
+    const requests = await cdp.send("Runtime.evaluate", {
+      expression: `(() => { const requests = window.openclawControlUiE2eGateway.requests; const count = requests.length; requests.length = 0; return count; })()`,
+      returnByValue: true,
+    });
+    if (requests.exceptionDetails) {
+      throw new Error(requests.exceptionDetails.text);
+    }
+    clearedFixtureRequests = requests.result.value;
   }
   await cdp.send("HeapProfiler.collectGarbage");
   await cdp.send("HeapProfiler.collectGarbage");
@@ -301,7 +310,7 @@ export async function captureRetention(page: Page, cdp: CDPSession, file: string
     listeners: Record<string, Record<string, number>>;
   } = JSON.parse(globals.result.value);
   return {
-    clearedFixtureRequests: requests.result.value,
+    clearedFixtureRequests,
     heapUsedBytes: metrics.find((metric) => metric.name === "JSHeapUsedSize")!.value,
     durations: Object.fromEntries(
       metrics

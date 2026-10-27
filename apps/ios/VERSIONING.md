@@ -266,9 +266,11 @@ commit subjects. Focused endpoint diffs support the notes; current source and
 build configuration check feature availability. Localization catalogs contribute
 structural summaries instead of raw translation diffs. A separate factual review
 can request one correction. Each stage reports progress, with at most five model
-requests per audience and a five-minute generation budget. Exhausted budgets or
-unapproved notes stop preparation before upload. Retrying a saved, valid artifact
-reuses its exact text without another model call.
+stages per audience. Each stage permits one SDK retry for a transient connection,
+timeout, or retryable API failure, including backoff within the unchanged
+five-minute generation budget. Exhausted budgets or unapproved notes stop
+preparation before upload. Retrying a saved, valid artifact reuses its exact text
+without another model call.
 
 After Apple processes the IPA, the pipeline records its source ref, writes
 What's New, selects that exact build, and reads both back. For the sole first

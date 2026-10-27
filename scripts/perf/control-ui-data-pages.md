@@ -43,11 +43,15 @@ node --import ./scripts/tsx.mjs scripts/bench-control-ui-interactions.ts \
   --retained-heap --pairs 1 --output <memory-artifact-parent>
 ```
 
-`--retained-heap` invokes `HeapProfiler.collectGarbage` before action metrics and
-tracing start, then again after the action metrics and trace interval close. It
-adds `retainedHeap.beforeBytes`, `afterBytes`, and `deltaBytes` alongside the
-unforced heap endpoints. This collection is labeled GC-controlled proof in the
-manifest; keep its timing results separate from normal CPU comparisons.
+`--retained-heap` uses the existing retention collector before action metrics and
+tracing start, then after the action metrics and trace interval close. Both
+milestones preserve the synthetic request history, collect garbage twice, and save
+full heap snapshots plus DOM, live/disposed Solid owner, timer and listener counts.
+`retainedHeap.before` and `after` contain these summaries and artifact names;
+`beforeBytes`, `afterBytes`, and `deltaBytes` preserve the heap endpoints. These
+observations are diagnostic, with timing distributions excluded from comparisons.
+Request history remains part of these whole-page snapshots so setup cursors and
+cumulative request assertions keep their existing meaning.
 The long-stream fixture releases consumed response arrays before both heap
 endpoints so its synthetic response queue is not mistaken for UI retention.
 
@@ -74,22 +78,33 @@ Installed plugins, catalog entries, skills, and tool summaries each contain 1,00
 items. The catalog uses 100-item cursor pages. The agent roster contains 300 agents;
 the tool report has 40 groups of 25 tools with effective-access diagnostics.
 
-| Scenario                     | Measured action and visible assertion                                         |
-| ---------------------------- | ----------------------------------------------------------------------------- |
-| `data-plugins-render`        | Open installed-plugin settings; assert 1,000 rows.                            |
-| `data-plugins-filter`        | Type a label prefix; assert 100 matching rows.                                |
-| `data-plugins-refresh`       | Deliver a plugin-change receipt; await the updated 1,000-row inventory.       |
-| `data-plugins-scroll`        | Scroll the final installed plugin into view.                                  |
-| `data-catalog-load-more`     | Append the final 100-item cursor page to 900 existing cards.                  |
-| `data-catalog-search`        | Search through the debounced Gateway query; assert 100 results.               |
-| `data-agent-selection`       | Reopen the hydrated 300-agent selector and select its final agent.            |
-| `data-agent-selection-100ms` | Repeat hydrated selection with 100 ms simulated identity-RPC round trips.     |
-| `data-agent-skills-render`   | Reveal the Skills panel; assert 1,000 skill rows.                             |
-| `data-agent-skills-filter`   | Filter to the final skill; assert one row.                                    |
-| `data-agent-skills-refresh`  | Refresh skills; await the report and preserved rows.                          |
-| `data-agent-skills-scroll`   | Scroll the final skill into view.                                             |
-| `data-agent-tools-render`    | Reveal Tools; assert 1,000 summaries and record mounted detail panels.        |
-| `data-agent-tool-disclosure` | Open one tool; assert its effective-access details and record mounted panels. |
+Catalog counts below describe the complete represented result set, not the number of
+mounted cards. Large result grids, including uncapped publisher groups in search,
+mount a window while retaining all loaded entries in the catalog owner. Appending
+keeps visible cards keyed by plugin ID; native Tab and Shift+Tab traversal retain
+the focused row, its neighbors, and the first and last rows. Intermediate offscreen
+cards have no DOM node to focus directly. Browser Find can only match mounted
+cards; use catalog search to find offscreen plugins. `data-catalog-scroll` records
+the mounted window and retained cards after scrolling to the final entry. The catalog
+`-100ms` variants delay only the browse RPC, not the whole network.
+
+| Scenario                      | Measured action and visible assertion                                         |
+| ----------------------------- | ----------------------------------------------------------------------------- |
+| `data-plugins-render`         | Open installed-plugin settings; assert 1,000 rows.                            |
+| `data-plugins-filter`         | Type a label prefix; assert 100 matching rows.                                |
+| `data-plugins-refresh`        | Deliver a plugin-change receipt; await the updated 1,000-row inventory.       |
+| `data-plugins-scroll`         | Scroll the final installed plugin into view.                                  |
+| `data-catalog-load-more`      | Append the final 100-item cursor page to 900 existing cards.                  |
+| `data-catalog-search`         | Search through the debounced Gateway query; assert 100 results.               |
+| `data-agent-selection`        | Reopen the hydrated 300-agent selector and select its final agent.            |
+| `data-agent-selection-100ms`  | Repeat hydrated selection with 100 ms simulated identity-RPC round trips.     |
+| `data-agent-reopen-retention` | Explicit-only diagnostic: close/reopen the hydrated selector ten times.       |
+| `data-agent-skills-render`    | Reveal the Skills panel; assert 1,000 skill rows.                             |
+| `data-agent-skills-filter`    | Filter to the final skill; assert one row.                                    |
+| `data-agent-skills-refresh`   | Refresh skills; await the report and preserved rows.                          |
+| `data-agent-skills-scroll`    | Scroll the final skill into view.                                             |
+| `data-agent-tools-render`     | Reveal Tools; assert 1,000 summaries and record mounted detail panels.        |
+| `data-agent-tool-disclosure`  | Open one tool; assert its effective-access details and record mounted panels. |
 
 ## Activity and logs
 
@@ -101,21 +116,31 @@ buffer and disables auto-follow through its visible control except in the
 explicit follow case. Tail measurements hold the next native poll before the
 interval, then release that response during the measured action.
 
-| Scenario                     | Measured action and visible assertion                                                                                                                                                 |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `data-activity-first-render` | Open Activity from Pages; assert its 100-row window.                                                                                                                                  |
-| `data-activity-search`       | Search for the final session beyond the initial window; assert its title.                                                                                                             |
-| `data-activity-time-filter`  | Select All time; await the bounded 100-row replacement.                                                                                                                               |
-| `data-activity-live-update`  | Deliver one current session receipt; assert its updated recap and retained 100-row window.                                                                                            |
-| `data-activity-scroll`       | Scroll to the last row and assert its label and retained count.                                                                                                                       |
-| `data-logs-first-render`     | Open Logs from the settings sidebar; assert the newest of 500 lines.                                                                                                                  |
-| `data-logs-filter`           | Filter the full buffer by sentinel; assert 20 matching rows and the final sentinel.                                                                                                   |
-| `data-logs-level-filter`     | Disable info; assert 800 warning/error rows.                                                                                                                                          |
-| `data-logs-tail-update`      | Release 500 new lines; assert the newest line, 2,000-row cap, and eviction of the oldest.                                                                                             |
-| `data-logs-follow-update`    | Release a tail with auto-follow enabled; assert a bottom gap below 120 px before and after.                                                                                           |
-| `data-logs-refresh`          | Refresh from a full buffer; assert replacement by the latest 500 lines.                                                                                                               |
-| `data-logs-scroll`           | Scroll up, release a tail, assert no scroll jump, then scroll to the bottom.                                                                                                          |
-| `data-logs-long-stream`      | Deliver 10,000 lines over 20 native two-second polls; assert newest line and 2,000-row cap. Expected wall duration is about 40 seconds; its wait is explicitly bounded at 60 seconds. |
+| Scenario                     | Measured action and visible assertion                                                                                                                                                                |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `data-activity-first-render` | Open Activity from Pages; assert its 100-row window.                                                                                                                                                 |
+| `data-activity-search`       | Search for the final session beyond the initial window; assert its title.                                                                                                                            |
+| `data-activity-time-filter`  | Select All time; await the bounded 100-row replacement.                                                                                                                                              |
+| `data-activity-live-update`  | Deliver one current session receipt; assert its updated recap and retained 100-row window.                                                                                                           |
+| `data-activity-scroll`       | Scroll to the last row and assert its label and retained count.                                                                                                                                      |
+| `data-logs-first-render`     | Open Logs from the settings sidebar; assert the newest of 500 lines.                                                                                                                                 |
+| `data-logs-filter`           | Filter the full buffer by sentinel; assert 20 matching rows and the final sentinel.                                                                                                                  |
+| `data-logs-level-filter`     | Disable info; assert 800 warning/error results and a bounded mounted window.                                                                                                                         |
+| `data-logs-tail-update`      | Release 500 new lines; assert the retained reader position, 2,000-line cap, and eviction of the oldest.                                                                                              |
+| `data-logs-follow-update`    | Release a tail with auto-follow enabled; assert a bottom gap below 120 px before and after.                                                                                                          |
+| `data-logs-refresh`          | Refresh from a full buffer; assert replacement by the latest 500 lines.                                                                                                                              |
+| `data-logs-scroll`           | Scroll up, release a tail, assert no scroll jump, then scroll to the bottom.                                                                                                                         |
+| `data-logs-long-stream`      | Enable auto-follow, deliver 10,000 lines over 20 native two-second polls, then assert newest line and 2,000-line cap. Expected wall duration is about 40 seconds; its wait is bounded at 60 seconds. |
+
+Logs always render a variable-height window. The scenarios
+read the retained result count from list-item `aria-setsize` and assert fewer than
+100 mounted rows; eager comparison builds use their DOM count. The append-only
+tail scenario keeps auto-follow disabled and verifies that the retained last
+line's position moves from 2,000 to 1,500 after trim. Follow and scroll scenarios
+separately reach the newest line. The plain End key converges on the final row
+as wrapped heights settle; the Logs browser regression covers desktop and narrow
+viewports. The application filter and export still cover all retained lines;
+browser Find and native text selection cover mounted rows.
 
 ## Board, dashboards, and workspace
 
@@ -125,32 +150,43 @@ from iframe process startup. The gallery has 1,000 saved dashboards with one pre
 widget each. Workspace browsing has 20 folders with 250 files per folder (the real
 per-folder cap); warm tree cases open all folders before measuring the action.
 
-| Scenario                                | Measured action and visible assertion                                                   |
-| --------------------------------------- | --------------------------------------------------------------------------------------- |
-| `data-board-first-render`               | Open Dashboard; assert 250 visible report widgets.                                      |
-| `data-board-tab-switch`                 | Switch to another tab; assert its 250 reports and retain the visited tab.               |
-| `data-board-live-update`                | Deliver a receipt updating one report; assert its new value and widget count.           |
-| `data-board-scroll`                     | Scroll the board; assert its mounted reports remain.                                    |
-| `data-dashboards-first-render`          | Open Dashboards from Pages; assert 1,000 cards.                                         |
-| `data-dashboards-search`                | Search by final title; assert one card.                                                 |
-| `data-dashboards-sort`                  | Sort by title; assert all 1,000 cards and their new leading title.                      |
-| `data-dashboards-scroll`                | Scroll to the last gallery row; record nearby preview reads.                            |
-| `data-dashboards-responsive-navigation` | Verify native keyboard navigation and 3/2/1-column geometry at 1280/900/520 px.         |
-| `data-workspace-first-render`           | Open Files; assert the 20-folder root listing.                                          |
-| `data-workspace-expand`                 | Open the last folder after the other 19; await its final child and record mounted rows. |
-| `data-workspace-search`                 | Search the loaded tree; assert 20 authoritative matches.                                |
-| `data-workspace-filter`                 | Select Changed; assert modified files and their folders.                                |
-| `data-workspace-scroll`                 | Scroll within the expanded 5,000-file Files panel.                                      |
+| Scenario                                | Measured action and visible assertion                                                                                        |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `data-board-first-render`               | Open Dashboard; assert 250 visible report widgets.                                                                           |
+| `data-board-tab-switch`                 | Switch to another tab; assert its 250 reports and retain the visited tab.                                                    |
+| `data-board-live-update`                | Deliver a receipt updating one report; assert its new value and widget count.                                                |
+| `data-board-scroll`                     | Scroll the board; assert its mounted reports remain.                                                                         |
+| `data-dashboards-first-render`          | Open Dashboards from Pages; assert 1,000 represented results, the initial preview SVG, and mounted cards.                    |
+| `data-dashboards-first-render-100ms`    | Explicit-only first render with 100 ms delays on measured dashboard-list and preview RPC responses; same visible assertions. |
+| `data-dashboards-search`                | Search by final title; assert one card.                                                                                      |
+| `data-dashboards-sort`                  | Sort by title; assert 1,000 represented results, bounded cards, and the leading title.                                       |
+| `data-dashboards-scroll`                | Scroll to the last gallery row; record nearby preview reads.                                                                 |
+| `data-dashboards-scroll-100ms`          | Explicit-only scroll with a 100 ms delay on measured preview RPC responses; assert the final author and preview SVG.         |
+| `data-dashboards-responsive-navigation` | Verify native keyboard navigation, focus through resize, and 3/2/1-column geometry.                                          |
+| `data-dashboards-native-navigation`     | Press Enter on the final card; assert its exact route and visible destination report.                                        |
+| `data-workspace-first-render`           | Open Files; assert the 20-folder root listing.                                                                               |
+| `data-workspace-expand`                 | Open the last folder after the other 19; await its final child and record mounted rows.                                      |
+| `data-workspace-search`                 | Search the loaded tree; assert 20 authoritative matches.                                                                     |
+| `data-workspace-filter`                 | Select Changed; assert modified files and their folders.                                                                     |
+| `data-workspace-scroll`                 | Scroll within the expanded 5,000-file Files panel.                                                                           |
 
-`data-dashboards-responsive-navigation` is correctness/capture proof; exclude it
-from timing comparisons. At widths of 1280, 900, and 520 px, it expects three,
+`data-dashboards-responsive-navigation` and `data-dashboards-native-navigation` are
+correctness/capture proof; exclude both from timing comparisons. At widths of
+1280, 900, and 520 px, the responsive scenario expects three,
 two, and one columns respectively, with no horizontal grid or document overflow.
-It scrolls to and focuses the final card, waits for its author and report preview,
-and checks that its original native anchor retains identity and focus. Shift+Tab
-reaches the preceding card and Tab returns to the final card. All 1,000 cards,
-anchors, and titles remain mounted. The scenario preserves the viewport height
-and restores the original viewport before the harness's normal capture; it does
-not produce a screenshot at each tested width.
+Before deliberate refocusing at each width, the original final anchor must retain
+native focus through the resize. Then 15 consecutive native Tab moves from the
+first card check navigation across window boundaries. It scrolls to and focuses
+the final card, waits for its author and report preview, and checks that its original native anchor retains
+identity and focus. Shift+Tab reaches the preceding card and Tab returns to the
+final card. All 1,000 results remain represented; windowed renderers mount at most
+100 cards, with one native anchor and title per mounted card. The eager baseline
+may still mount all 1,000 cards. The candidate-only screen rejects that eager
+fallback and requires a windowed gallery with at most 100 mounted cards, including
+at all three responsive widths. Gallery search covers the full data set; browser
+Find cannot search unmounted offscreen titles. The scenario preserves the viewport
+height and restores the original viewport before the harness's normal capture;
+it does not produce a screenshot at each tested width.
 
 ## Boundaries and exclusions
 
@@ -158,9 +194,42 @@ These are renderer measurements, not real-Gateway, filesystem, provider, network
 throughput, or backend-query benchmarks. No model or external service is called.
 Agent selection waits for all 300 identity-only emoji avatars before measuring
 reopening and selection. Its two variants use local responses or a 100 ms delay
-on each identity RPC; this is not a whole-network latency simulation. Other
-scenarios install no network delay. Gateway callbacks use the existing mock transport;
+on each identity RPC; this is not a whole-network latency simulation. The explicit-only
+Gallery `-100ms` variants delay RPC responses issued during the measured action:
+dashboard `sessions.list` and preview `board.get` for first render, and preview
+`board.get` for scroll. Setup responses are immediate. Workspace `-100ms` variants
+delay their named listing or search RPC. Other scenarios install no network delay.
+Gateway callbacks use the existing mock transport;
 Usage filtering/paging and session-window selection reuse production owners.
+
+Agent selection also records `agentAvatarsInitial`, `agentAvatarsRetained`, and
+`agentAvatarsFinal` alongside the outer-row identity probe. These compare the
+avatar elements before reopening and after selection; they count retained final
+elements, not transient construction. The first open, first close, and warm
+reopen must keep all 300 avatars; the measured interval must issue zero identity
+requests. Post-selection retention remains observational so the same scenario
+runs on a baseline that replaces inner content when selection changes.
+
+Run `data-agent-reopen-retention` with `--retained-heap` separately from timing.
+Its two milestones are after the first hydrated open/close and after ten more
+same-selection open/close cycles. All avatar observation handles are disposed
+before each GC snapshot. Compare the exact same milestones for base, candidate,
+and A/A control; reject growing live owners, DOM nodes, detached nodes, or active
+timers/listeners after warmup. Report any constant candidate heap increase at
+both milestones separately; do not call the retained 300-row cache a leak or
+invent a byte cap. A positive heap slope without structural attribution needs
+inspection of the retained snapshots before acceptance.
+
+Run the separate `data-agent-selection-retention` diagnostic with `--retained-heap`
+to distinguish warmed selection cost from accumulation. It first selects agents
+0001, 0149, 0299, then main through the real menu before the first GC checkpoint.
+The measured phase repeats that four-selection cycle ten times and returns to
+main before the second checkpoint, retaining the same 300-agent roster throughout.
+The baseline may replace its inner avatars on each selection; report that
+observationally and require full inner-avatar retention only on the candidate.
+Compare structural counts and post-GC heap growth separately from the constant
+candidate-versus-base heap difference. This is finite selection-lifecycle proof,
+not roster-refresh, whole-page disposal, or arbitrary-duration leak proof.
 
 The workload does not invent sort controls on pages without them. Plugin-provided
 views and heavy iframe documents belong to their separate lane. Mobile coverage

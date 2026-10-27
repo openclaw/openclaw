@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ElementHandle, Page } from "playwright";
 import { buildWidgetDocument } from "../../src/canvas/wrap.ts";
 import type { ConfigSchemaResponse, CronJob, GatewaySessionRow } from "../../ui/src/api/types.ts";
@@ -62,6 +63,7 @@ const progressClockSessions = Array.from(
 const progressClocks =
   'openclaw-session-progress-widget [data-progress-card-placement="board"] time';
 const initialProgressClocks = new WeakMap<Page, { count: number; labels: string[] }>();
+const graphStreamingRuns = new WeakMap<Page, string>();
 
 const nativeBoardSessions = Array.from(
   { length: 6 },
@@ -123,7 +125,10 @@ export type InteractionScenario = {
   explicitOnly?: boolean;
   fixture?: InteractionFixtureOptions;
   /** Large-data campaigns replace only their domain's synthetic Gateway responses. */
-  fixtureOverrides?: (sandbox?: InteractionSandbox) => InteractionFixtureOverrides;
+  fixtureOverrides?: (
+    sandbox: InteractionSandbox | undefined,
+    base: ReturnType<typeof createInteractionFixture>,
+  ) => InteractionFixtureOverrides;
   createRequestHandlers?: (
     defaults: Readonly<Record<string, (params: unknown) => unknown>>,
   ) => Record<string, (params: unknown) => unknown>;
@@ -149,7 +154,7 @@ export function createScenarioFixture(
   sandbox?: InteractionSandbox,
 ): ControlUiMockGatewayScenario & { sessions: InteractionSession[] } {
   const base = createInteractionFixture(buildId, version, scenario.fixture, sandbox);
-  const overrides = scenario.fixtureOverrides?.(sandbox);
+  const overrides = scenario.fixtureOverrides?.(sandbox, base);
   return {
     ...base,
     ...overrides,
@@ -272,6 +277,29 @@ function progressClockResponses(updatedAt: number, revision = 1) {
   };
 }
 
+function createInteractionConfig() {
+  return {
+    transcripts: {
+      enabled: true,
+      autoStart: ["Alpha", "Beta"].map((title) => ({
+        providerId: "test-voice",
+        guildId: "guild",
+        channelId: title.toLowerCase(),
+        title,
+      })),
+    },
+  };
+}
+
+function createInteractionModels() {
+  return Array.from({ length: 1_000 }, (_, index) => ({
+    id: `model-${index}`,
+    name: `Warm model ${String(index).padStart(4, "0")}`,
+    provider: "example",
+    contextWindow: 128_000,
+  }));
+}
+
 export function createInteractionFixture(
   buildId: string,
   version: string,
@@ -284,13 +312,8 @@ export function createInteractionFixture(
   ) {
     throw new Error("Frame resource fixtures require the native sandbox descriptor");
   }
-  const captureSources = ["Alpha", "Beta"].map((title) => ({
-    providerId: "test-voice",
-    guildId: "guild",
-    channelId: title.toLowerCase(),
-    title,
-  }));
-  const config = { transcripts: { enabled: true, autoStart: captureSources } };
+  const config = createInteractionConfig();
+  const captureSources = config.transcripts.autoStart;
   const keyForIndex = (index: number) => sessionKeys[index] ?? `agent:main:interaction-${index}`;
   const startedAt = options.runningSessions ? Date.now() - 5_000 : undefined;
   const sessions = Array.from({ length: 1_000 }, (_, index) => {
@@ -423,12 +446,7 @@ export function createInteractionFixture(
           },
         ]),
     ),
-    models: Array.from({ length: 1_000 }, (_, index) => ({
-      id: `model-${index}`,
-      name: `Warm model ${String(index).padStart(4, "0")}`,
-      provider: "example",
-      contextWindow: 128_000,
-    })),
+    models: createInteractionModels(),
     methodResponses: {
       ...(options.browserResources ? browserResourceMethodResponses() : {}),
       ...(options.mcpAppResources
@@ -1313,20 +1331,58 @@ async function settleSidebarCapture(page: Page) {
   await page.evaluate(
     () =>
       new Promise<void>((resolve) => {
-        setTimeout(() => requestIdleCallback(() => resolve(), { timeout: 1000 }), 500);
+        setTimeout(() => {
+          if (typeof requestIdleCallback === "function") {
+            requestIdleCallback(() => resolve(), { timeout: 1000 });
+          } else {
+            setTimeout(resolve, 0);
+          }
+        }, 500);
       }),
   );
 }
 
-export async function settleSidebarBackgroundWork(page: Page) {
-  // The prefetch owner automatically warms New Session; other groups require navigation intent.
-  const prefetchAssets = await page.evaluate(async () => {
+type InteractionPreloadWindow = Window & {
+  openclawInteractionPreloadState?: WeakMap<HTMLLinkElement, "load" | "error">;
+};
+
+export type InteractionNavigationPreloads = {
+  group: string | undefined;
+  assets: Array<{
+    href: string;
+    linkStates: Array<"load" | "error" | "pending">;
+    resourceComplete: boolean;
+  }>;
+};
+
+export function installInteractionNavigationPreloadObserver() {
+  const settled = new WeakMap<HTMLLinkElement, "load" | "error">();
+  Object.assign(window, { openclawInteractionPreloadState: settled });
+  for (const type of ["load", "error"] as const) {
+    document.addEventListener(
+      type,
+      (event) => {
+        if (event.target instanceof HTMLLinkElement) {
+          settled.set(event.target, type);
+        }
+      },
+      true,
+    );
+  }
+}
+
+export async function settleInteractionNavigationPreloads(
+  page: Page,
+): Promise<InteractionNavigationPreloads> {
+  // Headless Chromium can strand the shell's idle callback until another frame runs.
+  await frames(page);
+  const expected = await page.evaluate(async () => {
     const descriptor = document
       .getElementById("openclaw-navigation-preloads")
       ?.getAttribute("content");
     const route = window.openclawControlUi?.snapshot().route?.matches[0]?.routeId;
     if (!descriptor || !route) {
-      throw new Error("Warm sidebar measurement requires the built navigation prefetch manifest");
+      throw new Error("Warm interaction requires the built navigation prefetch manifest");
     }
     // The fixture server mounts resources at /; deep-link entry-script aliases differ.
     const base = new URL("/", location.origin);
@@ -1335,30 +1391,67 @@ export async function settleSidebarBackgroundWork(page: Page) {
       throw new Error("Could not read the built navigation prefetch manifest");
     }
     const manifest: Record<string, string[]> = await response.json();
-    return [...new Set(route === "new-session" ? [] : (manifest["new-session"] ?? []))].map(
-      (file) => new URL(file, base).href,
-    );
+    // Match the idle owner's automatic group; explicit navigation intent remains native.
+    const next = `${route}-next`;
+    const group = manifest[next] ? next : route === "new-session" ? undefined : "new-session";
+    if (group && !manifest[group]?.length) {
+      throw new Error(`Navigation prefetch manifest has no ${group} assets`);
+    }
+    return {
+      group,
+      assets: [...new Set(group ? manifest[group] : [])].map((file) => new URL(file, base).href),
+    };
   });
+  const ready = await page.waitForFunction(
+    ({ group, assets }) => {
+      // SAFETY: the page's initialization script installs this diagnostic map before navigation.
+      const settled = (window as InteractionPreloadWindow).openclawInteractionPreloadState;
+      if (!settled) {
+        throw new Error("Navigation prefetch observer must be installed before navigation");
+      }
+      const links = [
+        ...document.querySelectorAll<HTMLLinkElement>(
+          'link[rel="preload"], link[rel="modulepreload"]',
+        ),
+      ];
+      const observations = assets.map((href) => {
+        const matching = links.filter((link) => link.href === href);
+        const linkStates = matching.map((link) => settled.get(link) ?? ("pending" as const));
+        if (linkStates.includes("error")) {
+          throw new Error(`Navigation prefetch failed: ${href}`);
+        }
+        return {
+          href,
+          linkStates,
+          resourceComplete: performance
+            .getEntriesByName(href, "resource")
+            .some((entry) => entry instanceof PerformanceResourceTiming && entry.responseEnd > 0),
+        };
+      });
+      return observations.every((asset) =>
+        asset.linkStates.length
+          ? asset.linkStates.every((state) => state === "load")
+          : asset.resourceComplete,
+      )
+        ? { group, assets: observations }
+        : false;
+    },
+    expected,
+    { timeout: 60_000, polling: 100 },
+  );
   try {
-    await page.waitForFunction(
-      (assets) => {
-        const fetched = new Set(
-          performance.getEntriesByType("resource").map((entry) => entry.name),
-        );
-        return assets.every((asset) => fetched.has(asset));
-      },
-      prefetchAssets,
-      { timeout: 60_000, polling: 100 },
-    );
-  } catch (error) {
-    const missing = await page.evaluate((assets) => {
-      const fetched = new Set(performance.getEntriesByType("resource").map((entry) => entry.name));
-      return assets.filter((asset) => !fetched.has(asset));
-    }, prefetchAssets);
-    throw new Error(`Warm navigation prefetch did not finish: ${missing.join(", ")}`, {
-      cause: error,
-    });
+    const evidence = await ready.jsonValue();
+    if (!evidence) {
+      throw new Error("Navigation prefetch did not complete");
+    }
+    return evidence;
+  } finally {
+    await ready.dispose();
   }
+}
+
+export async function settleSidebarBackgroundWork(page: Page) {
+  await settleInteractionNavigationPreloads(page);
   await settleSidebarCapture(page);
   await page.waitForLoadState("networkidle");
   await frames(page);
@@ -1670,6 +1763,61 @@ async function prepareProviderUsage(page: Page) {
     await summary.click();
   }
   await page.locator(".provider-usage__window").first().waitFor();
+}
+
+const providerModelPickerSelector = ".model-providers__defaults openclaw-select-picker";
+const providerModelValue = "example/model-999";
+
+function providerModelPicker(page: Page) {
+  return page.locator(providerModelPickerSelector).first();
+}
+
+async function openProviderModelPicker(page: Page) {
+  await providerModelPicker(page).locator(".picker-select__trigger").click();
+  await page.waitForFunction((selector) => {
+    const picker = document.querySelector(selector);
+    const search = picker?.querySelector(".picker-select__search");
+    return (
+      picker?.querySelector(".picker-select__trigger")?.getAttribute("aria-expanded") === "true" &&
+      search === document.activeElement &&
+      picker
+        .querySelector<HTMLElement>('[role="option"][data-value^="example/model-"]')
+        ?.checkVisibility()
+    );
+  }, providerModelPickerSelector);
+}
+
+async function closeProviderModelPicker(page: Page) {
+  await providerModelPicker(page).locator(".picker-select__search").press("Escape");
+  await page.waitForFunction((selector) => {
+    const picker = document.querySelector(selector);
+    const trigger = picker?.querySelector(".picker-select__trigger");
+    return (
+      trigger?.getAttribute("aria-expanded") === "false" &&
+      trigger === document.activeElement &&
+      picker?.querySelectorAll('[role="option"]').length === 0
+    );
+  }, providerModelPickerSelector);
+}
+
+async function prepareProviderModelPicker(page: Page) {
+  await prepareProviderUsage(page);
+  await openProviderModelPicker(page);
+  await closeProviderModelPicker(page);
+}
+
+async function searchProviderModels(page: Page) {
+  await providerModelPicker(page).locator(".picker-select__search").pressSequentially(modelQuery);
+  await page.waitForFunction(
+    ({ selector, value }) => {
+      const picker = document.querySelector(selector);
+      const rows = [...(picker?.querySelectorAll<HTMLElement>('[role="option"]') ?? [])].filter(
+        (option) => option.checkVisibility(),
+      );
+      return rows.length === 1 && rows[0]?.dataset.value === value;
+    },
+    { selector: providerModelPickerSelector, value: providerModelValue },
+  );
 }
 
 export const interactionScenarios: readonly InteractionScenario[] = [
@@ -2215,68 +2363,15 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     route: pathForRoute("model-providers"),
     expected:
       "The generic 1,000-model primary picker filters to Warm model 0999, closes without saving, and returns focus.",
-    prepare: async (page) => {
-      await prepareProviderUsage(page);
-      const picker = page.locator(".model-providers__defaults openclaw-select-picker").first();
-      const trigger = picker.locator(".picker-select__trigger");
-      await trigger.click();
-      await picker.locator(".picker-select__search").waitFor();
-      await page.waitForFunction(
-        () =>
-          document
-            .querySelector(".model-providers__defaults openclaw-select-picker")
-            ?.querySelectorAll('[role="option"][data-value^="example/model-"]').length === 1_000,
-      );
-      await picker.locator(".picker-select__search").press("Escape");
-      await page.waitForFunction(() => {
-        const hostElement = document.querySelector(
-          ".model-providers__defaults openclaw-select-picker",
-        );
-        const triggerElement = hostElement?.querySelector(".picker-select__trigger");
-        return (
-          triggerElement?.getAttribute("aria-expanded") === "false" &&
-          triggerElement === document.activeElement
-        );
-      });
-    },
+    prepare: prepareProviderModelPicker,
     run: async (page, gateway) => {
-      const picker = page.locator(".model-providers__defaults openclaw-select-picker").first();
+      const picker = providerModelPicker(page);
       const trigger = picker.locator(".picker-select__trigger");
       const selected = await trigger.getAttribute("aria-label");
       const saves = (await gateway.getRequests("config.patch")).length;
-      await trigger.click();
-      const search = picker.locator(".picker-select__search");
-      await search.waitFor();
-      await page.waitForFunction(
-        () =>
-          document.querySelector(
-            ".model-providers__defaults openclaw-select-picker .picker-select__search",
-          ) === document.activeElement,
-      );
-      await search.pressSequentially(modelQuery);
-      await picker.locator('[role="option"][data-value="example/model-999"]').waitFor();
-      await page.waitForFunction(() => {
-        const hostElement = document.querySelector(
-          ".model-providers__defaults openclaw-select-picker",
-        );
-        return (
-          [...(hostElement?.querySelectorAll<HTMLElement>('[role="option"]') ?? [])].filter(
-            (option) => option.checkVisibility(),
-          ).length === 1
-        );
-      });
-      await search.press("Escape");
-      await page.waitForFunction(() => {
-        const hostElement = document.querySelector(
-          ".model-providers__defaults openclaw-select-picker",
-        );
-        const triggerElement = hostElement?.querySelector(".picker-select__trigger");
-        return (
-          triggerElement?.getAttribute("aria-expanded") === "false" &&
-          triggerElement === document.activeElement &&
-          hostElement?.querySelectorAll('[role="option"]').length === 0
-        );
-      });
+      await openProviderModelPicker(page);
+      await searchProviderModels(page);
+      await closeProviderModelPicker(page);
       if (
         (await trigger.getAttribute("aria-label")) !== selected ||
         (await gateway.getRequests("config.patch")).length !== saves
@@ -2284,6 +2379,114 @@ export const interactionScenarios: readonly InteractionScenario[] = [
         throw new Error(
           "Searching and dismissing the provider model picker must preserve its selection without saving",
         );
+      }
+    },
+  },
+  {
+    id: "provider-model-picker-long-name",
+    route: pathForRoute("model-providers"),
+    resourceOnly: true,
+    expected:
+      "The generic picker preserves its intrinsic popup width for a long synthetic model name and leaves its filtered choice visible.",
+    fixtureOverrides: () => {
+      const models = createInteractionModels();
+      models[998]!.name =
+        "Warm model 0998 — Synthetic extended-context reasoning model with a deliberately wide provider name";
+      return { models };
+    },
+    prepare: prepareProviderModelPicker,
+    run: async (page) => {
+      await openProviderModelPicker(page);
+      const picker = providerModelPicker(page);
+      await picker.locator(".picker-select__search").fill("model 0998");
+      await picker.locator('[role="option"][data-value="example/model-998"]').waitFor({
+        state: "visible",
+      });
+      await frames(page);
+    },
+  },
+  {
+    id: "provider-model-picker-first-open",
+    route: pathForRoute("model-providers"),
+    resourceOnly: true,
+    expected: "The generic model picker loads its first window and focuses search on first open.",
+    prepare: prepareProviderUsage,
+    run: openProviderModelPicker,
+  },
+  {
+    id: "provider-model-picker-open",
+    route: pathForRoute("model-providers"),
+    resourceOnly: true,
+    expected: "The warm generic model picker opens with visible choices and focuses its search.",
+    prepare: prepareProviderModelPicker,
+    run: openProviderModelPicker,
+  },
+  {
+    id: "provider-model-picker-search",
+    route: pathForRoute("model-providers"),
+    resourceOnly: true,
+    expected: "The already-open generic model picker filters to Warm model 0999.",
+    prepare: async (page) => {
+      await prepareProviderModelPicker(page);
+      await openProviderModelPicker(page);
+      await frames(page);
+    },
+    run: searchProviderModels,
+  },
+  {
+    id: "provider-model-picker-select",
+    route: pathForRoute("model-providers"),
+    resourceOnly: true,
+    expected:
+      "Enter selects Warm model 0999 once, persists its exact reference, and returns focus to the updated trigger.",
+    fixtureOverrides: () => ({
+      methodResponses: {
+        "config.patch": {
+          config: {
+            ...createInteractionConfig(),
+            agents: { defaults: { model: providerModelValue } },
+          },
+          hash: "interaction-selected-model",
+        },
+      },
+    }),
+    prepare: async (page) => {
+      await prepareProviderModelPicker(page);
+      await openProviderModelPicker(page);
+      await searchProviderModels(page);
+      await frames(page);
+    },
+    run: async (page, gateway) => {
+      const saves = (await gateway.getRequests("config.patch")).length;
+      await providerModelPicker(page).locator(".picker-select__search").press("Enter");
+      const request = await gateway.waitForRequest("config.patch", { after: saves });
+      const params = request.params;
+      const patch: unknown =
+        isRecord(params) && typeof params.raw === "string" ? JSON.parse(params.raw) : undefined;
+      if (
+        !isRecord(patch) ||
+        !isRecord(patch.agents) ||
+        !isRecord(patch.agents.defaults) ||
+        patch.agents.defaults.model !== providerModelValue
+      ) {
+        throw new Error("The provider picker must persist the exact selected model reference");
+      }
+      await page.waitForFunction(
+        ({ selector, label }) => {
+          const picker = document.querySelector(selector);
+          const trigger = picker?.querySelector<HTMLButtonElement>(".picker-select__trigger");
+          return (
+            trigger?.getAttribute("aria-expanded") === "false" &&
+            !trigger.disabled &&
+            trigger === document.activeElement &&
+            trigger.getAttribute("aria-label")?.includes(label) &&
+            picker?.querySelectorAll('[role="option"]').length === 0
+          );
+        },
+        { selector: providerModelPickerSelector, label: modelQuery },
+      );
+      if ((await gateway.getRequests("config.patch")).length !== saves + 1) {
+        throw new Error("Selecting a provider model must issue exactly one config patch");
       }
     },
   },
@@ -2322,6 +2525,115 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     run: refreshSessions,
   },
   {
+    id: "graph-stream-100-deltas",
+    route: controlUiSessionPath(sessionKeys[0]),
+    explicitOnly: true,
+    expected:
+      "One hundred separately flushed chat deltas render the complete reply, which remains visible after finalization.",
+    prepare: async (page, gateway) => {
+      await prepareChat(page);
+      const after = (await gateway.getRequests("chat.send")).length;
+      await page
+        .locator(`${activePane} .agent-chat__composer-combobox textarea`)
+        .fill("Produce the synthetic graph measurement reply.");
+      await page.locator(`${activePane} .chat-send-btn--send`).click();
+      const request = await gateway.waitForRequest("chat.send", { after });
+      if (!isRecord(request.params) || typeof request.params.idempotencyKey !== "string") {
+        throw new Error("Graph streaming fixture did not start a chat run");
+      }
+      graphStreamingRuns.set(page, request.params.idempotencyKey);
+      await page.locator(`${activePane} .chat-send-btn--stop`).waitFor();
+      await frames(page);
+    },
+    run: async (page, gateway) => {
+      const runId = graphStreamingRuns.get(page);
+      if (!runId) {
+        throw new Error("Graph streaming fixture has no prepared run");
+      }
+      const text = await page.evaluate(
+        async ({ sessionKey, runId: targetRunId }) => {
+          const mock = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+          let reply = "";
+          for (let index = 1; index <= 100; index++) {
+            reply += `Graph streaming checkpoint ${index}.\n\n`;
+            mock.emit("chat", {
+              sessionKey,
+              runId: targetRunId,
+              seq: index,
+              state: "delta",
+              message: { role: "assistant", content: [{ type: "text", text: reply }] },
+            });
+            // Give every event its own reactive flush and native presentation turn.
+            await new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            });
+          }
+          return reply;
+        },
+        { sessionKey: sessionKeys[0], runId },
+      );
+      const liveReply = page.locator(`${activePane} .chat-bubble.streaming`);
+      await liveReply.getByText("Graph streaming checkpoint 100.", { exact: true }).waitFor();
+      await liveReply.getByText("Graph streaming checkpoint 1.", { exact: true }).waitFor();
+      await gateway.emitChatFinal({ sessionKey: sessionKeys[0], runId, text });
+      const reply = page.locator(`${activePane} .chat-bubble:not(.streaming)`);
+      await reply.getByText("Graph streaming checkpoint 100.", { exact: true }).waitFor();
+      await reply.getByText("Graph streaming checkpoint 1.", { exact: true }).waitFor();
+      const rendered =
+        (await reply.filter({ hasText: "Graph streaming checkpoint 100." }).textContent()) ?? "";
+      if (
+        text
+          .trim()
+          .split("\n\n")
+          .some((checkpoint) => !rendered.includes(checkpoint))
+      ) {
+        throw new Error("Graph streaming lost content during finalization");
+      }
+      await page.locator(`${activePane} .chat-send-btn--send`).waitFor();
+      return { deltas: 100, finalized: true };
+    },
+  },
+  {
+    id: "graph-sidebar-live-update",
+    route: controlUiSessionPath(sessionKeys[0]),
+    explicitOnly: true,
+    expected:
+      "An existing sidebar session adopts its live title while the selected transcript stays visible.",
+    prepare: async (page) => {
+      await prepareChat(page);
+      await navigation(page, "sessions");
+      await page
+        .locator(`.sidebar-recent-session[data-session-key="${sessionKeys[1]}"]`)
+        .getByText("Interaction 0001", { exact: true })
+        .waitFor();
+      await settleSidebarBackgroundWork(page);
+    },
+    run: async (page, gateway) => {
+      const row = await gateway.getSessionRow(sessionKeys[1]);
+      const updatedAt = Math.max(Date.now(), (row.updatedAt ?? 0) + 1);
+      const label = "Graph sidebar live update witness";
+      await gateway.emitGatewayEvent("sessions.changed", {
+        sessionKey: row.key,
+        sessionId: row.sessionId,
+        agentId: "main",
+        reason: "patch",
+        ts: updatedAt,
+        session: { ...row, label, displayName: label, updatedAt, snapshotAt: updatedAt },
+        ancestorSessions: [],
+      });
+      await page
+        .locator(`.sidebar-recent-session[data-session-key="${sessionKeys[1]}"]`)
+        .getByText(label, { exact: true })
+        .waitFor();
+      await page
+        .locator(activePane)
+        .getByText("Transcript 0 message 399.", { exact: false })
+        .waitFor();
+      await frames(page);
+      return { updatedRows: 1 };
+    },
+  },
+  {
     id: "chat-typing",
     route: controlUiSessionPath(sessionKeys[0]),
     expected: "Typing preserves the composer draft without sending a chat request.",
@@ -2357,8 +2669,14 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     prepare: prepareChat,
     run: async (page) => {
       const thread = page.locator(`${activePane} .chat-thread`);
-      await thread.hover();
-      await page.mouse.wheel(0, -(await thread.evaluate((element) => element.scrollHeight)));
+      if (page.viewportSize()!.width < 768) {
+        // Playwright's mobile WebKit driver has no wheel input. Use the same
+        // native scrollport jump in both mobile engines (not a wheel-latency sample).
+        await thread.evaluate((element) => element.scrollTo({ top: 0, behavior: "instant" }));
+      } else {
+        await thread.hover();
+        await page.mouse.wheel(0, -(await thread.evaluate((element) => element.scrollHeight)));
+      }
       await thread.getByText("Transcript 0 message 0.", { exact: false }).waitFor();
       await page.waitForFunction(
         (selector) => document.querySelector(selector)?.scrollTop === 0,
@@ -2371,7 +2689,10 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     id: "sidebar-toggle",
     route: controlUiSessionPath(sessionKeys[0]),
     expected: "The 1,000-session sidebar closes and reopens.",
-    prepare: prepareSidebarInventory,
+    prepare: async (page, gateway) => {
+      await prepareSidebarInventory(page, gateway);
+      await settleSidebarBackgroundWork(page);
+    },
     run: async (page) => {
       const mobile = (await page.locator(".shell--mobile-nav").count()) > 0;
       if (mobile) {

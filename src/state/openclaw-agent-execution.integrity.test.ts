@@ -135,14 +135,46 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
+const makeEnv = (prefix: string) => ({
+  OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make(prefix)),
+});
+const checks = () => Array.from(new Int32Array(counter.checks));
+const initialized = (scope: AgentDatabaseExecutionScope, sessionId: string, agentId = "main") =>
+  scope.execute({
+    type: "session.transcript.initialize",
+    input: { sessionKey: `agent:${agentId}:${sessionId}`, sessionId },
+  });
+
+function dormantBorrowers(prefix: string) {
+  const options = { agentId: "main", env: makeEnv(prefix) };
+  closeAgent(openAgent(options).path);
+  return { rejected: capture(options), retained: capture(options) };
+}
+
+function holdIntegrity(pathname: string) {
+  const gate = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2));
+  Atomics.store(gate, 0, 1);
+  counter.path = pathname;
+  counter.gate = gate.buffer;
+  return {
+    gate,
+    entered: () => Promise.resolve(Atomics.waitAsync(gate, 1, 0).value),
+    release() {
+      Atomics.store(gate, 0, 0);
+      Atomics.notify(gate, 0);
+      counter.gate = undefined;
+    },
+  };
+}
+
 // Direct native fixtures hold their generation until their explicit close.
 function nativeGeneration(
   database: Pick<OpenClawAgentDatabase, "agentId" | "path">,
   context: ReturnType<typeof workerContext>,
-  assertCurrent: () => void,
+  assertCurrent = () => context.admission.assertCurrent(),
   assertCleanup = assertCurrent,
 ) {
-  return createAgentDatabaseNativeGeneration(
+  const generation = createAgentDatabaseNativeGeneration(
     database.agentId,
     database.path,
     context,
@@ -153,6 +185,7 @@ function nativeGeneration(
     () => {},
     () => {},
   );
+  return Object.assign(generation, { source: sourceFor(assertCurrent) });
 }
 
 function sourceFor(
@@ -176,12 +209,7 @@ function sourceFor(
 }
 
 it("keeps retained borrowers after a caller is refused before native promotion", async () => {
-  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-pre-promotion-")) };
-  const options = { agentId: "main", env };
-  const database = openAgent(options);
-  closeAgent(database.path);
-  const initiator = capture(options);
-  const retained = capture(options);
+  const { rejected: initiator, retained } = dormantBorrowers("agent-pre-promotion-");
   const refusal = new Error("Caller revoked before native promotion");
   let current = true;
   const source = sourceFor(() => {
@@ -207,11 +235,7 @@ it("keeps retained borrowers after a caller is refused before native promotion",
     await expect(
       retained.runExisting(
         sourceFor(() => {}),
-        (scope) =>
-          scope.execute({
-            type: "session.transcript.initialize",
-            input: { sessionKey: "agent:main:retained", sessionId: "retained" },
-          }),
+        (scope) => initialized(scope, "retained"),
       ),
     ).resolves.toMatchObject({ kind: "session-transcript-initialized" });
   } finally {
@@ -223,7 +247,7 @@ it("keeps retained borrowers after a caller is refused before native promotion",
 it.for(["revoked", "aborted"] as const)(
   "keeps shared integrity preparation alive after its initiating caller is %s",
   async (cancellation, { signal }) => {
-    const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-stale-shared-")) };
+    const env = makeEnv("agent-stale-shared-");
     const options = { agentId: "main", env };
     const database = openAgent(options);
     const stale = claimOpenClawAgentDatabaseLease({ ...options, path: database.path });
@@ -235,11 +259,8 @@ it.for(["revoked", "aborted"] as const)(
     revokeSqliteDatabaseAdmissionsForPath(database.path);
     expect(readSqliteDatabaseCleanClose(database.path)).toBe(false);
 
-    counter.path = database.path;
     counter.checks = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
-    const gate = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2));
-    Atomics.store(gate, 0, 1);
-    counter.gate = gate.buffer;
+    const integrity = holdIntegrity(database.path);
     const initiator = capture(options);
     const borrowers = [initiator, ...Array.from({ length: 2 }, () => capture(options))];
     const source = sourceFor(() => {});
@@ -253,13 +274,8 @@ it.for(["revoked", "aborted"] as const)(
         throw refused;
       }
     });
-    const initialize = (scope: AgentDatabaseExecutionScope, sessionId: string) =>
-      scope.execute({
-        type: "session.transcript.initialize",
-        input: { sessionKey: `agent:main:${sessionId}`, sessionId },
-      });
     const initiatingOperation = vi.fn((scope: AgentDatabaseExecutionScope) =>
-      initialize(scope, "initiator"),
+      initialized(scope, "initiator"),
     );
     const initiating =
       cancellation === "aborted"
@@ -268,7 +284,7 @@ it.for(["revoked", "aborted"] as const)(
     void initiating.catch(() => {});
     let peers: Promise<unknown>[] = [];
     try {
-      await withinTest(Promise.resolve(Atomics.waitAsync(gate, 1, 0).value), signal);
+      await withinTest(integrity.entered(), signal);
       if (cancellation === "aborted") {
         controller.abort(refused);
         await expect(initiating).rejects.toBe(refused);
@@ -287,14 +303,12 @@ it.for(["revoked", "aborted"] as const)(
             ...sourceFor(() => registry.assertCurrent()),
             onRegistryChange: registry.followRegistration,
           },
-          (scope) => initialize(scope, `peer-${index}`),
+          (scope) => initialized(scope, `peer-${index}`),
         );
       });
       void Promise.allSettled(peers);
     } finally {
-      Atomics.store(gate, 0, 0);
-      Atomics.notify(gate, 0);
-      counter.gate = undefined;
+      integrity.release();
     }
     try {
       expect(await Promise.allSettled(peers)).toEqual(
@@ -311,7 +325,7 @@ it.for(["revoked", "aborted"] as const)(
       await expect(initiator.runExisting(initiatingSource, initiatingOperation)).rejects.toBe(
         refused,
       );
-      expect(Array.from(new Int32Array(counter.checks))).toEqual([1, 1]);
+      expect(checks()).toEqual([1, 1]);
     } finally {
       await Promise.all(borrowers.map((borrower) => borrower.release()));
     }
@@ -328,7 +342,7 @@ it.for(["revoked", "aborted"] as const)(
     const reopened = nativeGeneration(database, workerContext({ env }), () => {});
     try {
       expect(await reopened.run(source, async () => "reopened")).toBe("reopened");
-      expect(Array.from(new Int32Array(counter.checks))).toEqual([1, 1]);
+      expect(checks()).toEqual([1, 1]);
     } finally {
       await reopened.close();
     }
@@ -338,22 +352,18 @@ it.for(["revoked", "aborted"] as const)(
 it.for(["warm", "cold"] as const)(
   "admits durable channel messages while agent integrity is pending (%s shared writer)",
   async (sharedWriter, { signal }) => {
-    const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-ingress-isolation-")) };
+    const env = makeEnv("agent-ingress-isolation-");
     const ready = openAgent({ agentId: "ready", env });
     const preparing = openAgent({ agentId: "preparing", env });
     const context = workerContext({ env });
-    const assertCurrent = () => context.admission.assertCurrent();
-    const source = sourceFor(assertCurrent);
-    const readyGeneration = nativeGeneration(ready, context, assertCurrent);
-    const preparingGeneration = nativeGeneration(preparing, context, assertCurrent);
+    const readyGeneration = nativeGeneration(ready, context);
+    const preparingGeneration = nativeGeneration(preparing, context);
+    const { source } = readyGeneration;
     const queue = createChannelIngressQueue<{ text: string }>({
       channelId: "synthetic",
       stateDir: env.OPENCLAW_STATE_DIR,
     });
-    const gate = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2));
-    Atomics.store(gate, 0, 1);
-    counter.path = preparing.path;
-    counter.gate = gate.buffer;
+    const integrity = holdIntegrity(preparing.path);
     invalidateValidation(preparing.path);
     let preparation: Promise<unknown> | undefined;
     try {
@@ -364,17 +374,15 @@ it.for(["warm", "cold"] as const)(
       await readyGeneration.run(source, async () => {});
       preparation = preparingGeneration.run(source, async () => {});
       void preparation.catch(() => {});
-      await withinTest(Promise.resolve(Atomics.waitAsync(gate, 1, 0).value), signal);
+      await withinTest(integrity.entered(), signal);
 
       await withinTest(queue.enqueue("during", { text: "during preparation" }), signal);
-      expect(Atomics.load(gate, 0)).toBe(1);
+      expect(Atomics.load(integrity.gate, 0)).toBe(1);
       expect((await queue.listPending()).map((event) => event.id)).toEqual(
         sharedWriter === "warm" ? ["before", "during"] : ["during"],
       );
     } finally {
-      Atomics.store(gate, 0, 0);
-      Atomics.notify(gate, 0);
-      counter.gate = undefined;
+      integrity.release();
       await preparation;
       await preparingGeneration.close();
       await readyGeneration.close();
@@ -385,15 +393,10 @@ it.for(["warm", "cold"] as const)(
 it("prepares another agent on the free carrier while integrity holds its peer", async ({
   signal,
 }) => {
-  const env = {
-    OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-preparation-isolation-")),
-  };
+  const env = makeEnv("agent-preparation-isolation-");
   const databases = ["slow", "ready", "next"].map((agentId) => openAgent({ agentId, env }));
   const slow = databases[0]!;
-  const gate = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2));
-  Atomics.store(gate, 0, 1);
-  counter.path = slow.path;
-  counter.gate = gate.buffer;
+  const integrity = holdIntegrity(slow.path);
   invalidateValidation(slow.path);
   const executions = databases.map((database) =>
     capture({ agentId: database.agentId, path: database.path, env }),
@@ -407,7 +410,7 @@ it("prepares another agent on the free carrier while integrity holds its peer", 
     });
     pending.push(preparing);
     void preparing.catch(() => {});
-    await withinTest(Promise.resolve(Atomics.waitAsync(gate, 1, 0).value), signal);
+    await withinTest(integrity.entered(), signal);
 
     const ready = executions[1]!.prepare(source);
     pending.push(ready);
@@ -416,12 +419,10 @@ it("prepares another agent on the free carrier while integrity holds its peer", 
     pending.push(next);
     await withinTest(next, signal);
 
-    expect(Atomics.load(gate, 0)).toBe(1);
+    expect(Atomics.load(integrity.gate, 0)).toBe(1);
     expect(slowPrepared).toBe(false);
   } finally {
-    Atomics.store(gate, 0, 0);
-    Atomics.notify(gate, 0);
-    counter.gate = undefined;
+    integrity.release();
     await Promise.allSettled(pending);
     await Promise.all(executions.map((execution) => execution.release()));
   }
@@ -440,10 +441,8 @@ it.each(["confirmed close", "native exit"] as const)(
         .all(database.path);
     const hostLeases = leases();
     expect(hostLeases).toHaveLength(1);
-    const context = workerContext({ env });
-    const assertCurrent = () => context.admission.assertCurrent();
-    const source = sourceFor(assertCurrent);
-    const generation = nativeGeneration(database, context, assertCurrent);
+    const generation = nativeGeneration(database, workerContext({ env }));
+    const { source } = generation;
     const workers: Worker[] = [];
     const observeWorker = (worker: Worker) => workers.push(worker);
     const cleanup = vi.spyOn(stateWorkerStore, "openOpenClawStateWorkerCleanupStore");
@@ -480,12 +479,7 @@ it.each(["confirmed close", "native exit"] as const)(
 );
 
 it("retires every borrower when native open refusal retains admission cleanup failure", async () => {
-  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-open-cleanup-")) };
-  const options = { agentId: "main", env };
-  const database = openAgent(options);
-  closeAgent(database.path);
-  const rejected = capture(options);
-  const retained = capture(options);
+  const { rejected, retained } = dormantBorrowers("agent-open-cleanup-");
   const refusal = new Error("Physical owner refused native agent open");
   const cleanupError = new Error("Physical owner cleanup failed after granting open");
   let nativeCurrent = true;
@@ -540,12 +534,7 @@ it("retires every borrower when native open refusal retains admission cleanup fa
 });
 
 it("retires every borrower when native opening reports a protocol failure", async () => {
-  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-open-protocol-")) };
-  const options = { agentId: "main", env };
-  const database = openAgent(options);
-  closeAgent(database.path);
-  const rejected = capture(options);
-  const retained = capture(options);
+  const { rejected, retained } = dormantBorrowers("agent-open-protocol-");
   const source = sourceFor(() => {});
   const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
   const fault = vi
@@ -585,7 +574,7 @@ it("retires every borrower when native opening reports a protocol failure", asyn
 it.each(["settled", "pending"] as const)(
   "prepares missing storage after an existing-only miss (%s)",
   async (timing) => {
-    const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-prepare-missing-")) };
+    const env = makeEnv("agent-prepare-missing-");
     const execution = capture({ agentId: "main", env });
     const source = sourceFor(() => execution.assertCurrent());
     try {
@@ -616,24 +605,18 @@ it("opens an unconfigured external store without reconstructing unknown deletion
   retained.db.exec("INSERT INTO auth_profile_state VALUES ('preserved', '{\"ok\":true}', 1)");
   closeAgent(pathname);
   const bytes = fs.readFileSync(pathname);
-  const context = workerContext({ env });
-  const assertCurrent = () => context.admission.assertCurrent();
-  const source = sourceFor(assertCurrent);
-  const generation = nativeGeneration(retained, context, assertCurrent);
+  const generation = nativeGeneration(retained, workerContext({ env }));
+  const { source } = generation;
   const opening = await Promise.allSettled([generation.run(source, async () => "opened")]);
   const closing = await Promise.allSettled([generation.close()]);
   expect(opening).toEqual([{ status: "fulfilled", value: "opened" }]);
   expect(closing).toEqual([{ status: "fulfilled", value: undefined }]);
   expect(fs.readFileSync(pathname)).toEqual(bytes);
   expect(fs.readdirSync(external).toSorted()).toEqual(["retained.sqlite", "retained.sqlite.seal"]);
-  const shared = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath(env), { readOnly: true });
-  try {
-    expect(
-      shared.prepare("SELECT name FROM sqlite_schema WHERE name = 'agent_deletion_journal'").get(),
-    ).toBeUndefined();
-  } finally {
-    shared.close();
-  }
+  using shared = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath(env), { readOnly: true });
+  expect(
+    shared.prepare("SELECT name FROM sqlite_schema WHERE name = 'agent_deletion_journal'").get(),
+  ).toBeUndefined();
 });
 
 it.each([
@@ -657,7 +640,7 @@ it.each([
   "closed-host-no-receipt",
   "closed-host-no-receipt-rollback",
 ] as const)("native execution borrows only current host integrity proof (%s)", async (proof) => {
-  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-native-integrity-")) };
+  const env = makeEnv("agent-native-integrity-");
   const database = openAgent({ agentId: "main", env });
   expect(getValidation(database)).toBeDefined();
   const verifiedAt = readSqliteDatabaseIntegrityVerification(database.path)?.verifiedAt;
@@ -765,7 +748,7 @@ it.each([
         "Agent schema admission changed before publication",
       );
       expect(revokedAfterVerificationAdmission).toBe(true);
-      expect(Array.from(new Int32Array(counter.checks))).toEqual([1, 1]);
+      expect(checks()).toEqual([1, 1]);
       expect(operation).not.toHaveBeenCalled();
       return;
     }
@@ -774,13 +757,13 @@ it.each([
         "OpenClaw agent database claim is no longer current",
       );
       expect(getValidation(database)).toBeUndefined();
-      expect(Array.from(new Int32Array(counter.checks))).toEqual([0, 0]);
+      expect(checks()).toEqual([0, 0]);
       return;
     }
     await expect(
       generation.run(source, async () => "opened", undefined, proof === "prepared-existing"),
     ).resolves.toBe("opened");
-    expect(Array.from(new Int32Array(counter.checks))).toEqual(
+    expect(checks()).toEqual(
       proof === "verified" ||
         proof === "prepared-existing" ||
         proof === "closed-host" ||
@@ -919,19 +902,13 @@ it.runIf(process.platform === "linux")(
           continue;
         }
         const sessionKey = `agent:${agentId}:after-crash`;
-        const initialize = async () => {
-          await expect(
-            generation.run(source, (scope) => {
-              expect(Array.from(new Int32Array(counter.checks)), agentId).toEqual([1, 1]);
-              return scope.execute({
-                type: "session.transcript.initialize",
-                input: { sessionKey, sessionId: "after-crash" },
-              });
-            }),
-          ).resolves.toMatchObject({ kind: "session-transcript-initialized", sessionKey });
-        };
-        await initialize();
-        expect(Array.from(new Int32Array(counter.checks)), agentId).toEqual([1, 1]);
+        await expect(
+          generation.run(source, (scope) => {
+            expect(checks(), agentId).toEqual([1, 1]);
+            return initialized(scope, "after-crash", agentId);
+          }),
+        ).resolves.toMatchObject({ kind: "session-transcript-initialized", sessionKey });
+        expect(checks(), agentId).toEqual([1, 1]);
         expect(readSqliteDatabaseIntegrityVerification(pathname)).toEqual({
           verifiedAt: expect.any(Number),
         });
@@ -953,7 +930,7 @@ it.runIf(process.platform === "linux")(
 it("settles peer native leases when close revokes a shared worker's opening executor", async () => {
   const fixture = () => ({
     agentId: "main",
-    env: { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-close-peers-")) },
+    env: makeEnv("agent-close-peers-"),
   });
   const source = sourceFor(() => {});
   const peers = [];

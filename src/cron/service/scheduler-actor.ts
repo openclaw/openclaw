@@ -38,6 +38,7 @@ type ActorConnection = {
   unregister: () => void;
   releaseRefresh: () => void;
   pending: Promise<void>;
+  refreshAfter?: Promise<unknown>;
 };
 
 const connections = new WeakMap<CronServiceState, ActorConnection>();
@@ -254,8 +255,17 @@ export function refreshCronScheduler(state: CronServiceState): void {
   if (!connection || state.stopped) {
     return;
   }
-  void state.op
+  const operation = state.op;
+  if (connection.refreshAfter === operation) {
+    return;
+  }
+  connection.refreshAfter = operation;
+  void operation
     .then(async () => {
+      // Share only notifications before capture, behind this same mutation boundary.
+      if (connection.refreshAfter === operation) {
+        connection.refreshAfter = undefined;
+      }
       if (connections.get(state) !== connection || state.stopped) {
         return;
       }

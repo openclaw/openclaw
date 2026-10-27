@@ -8,6 +8,7 @@ import { bindPreparedToolAuthority } from "../agents/harness/tool-authority-prep
 import {
   captureRequesterOrigin,
   resolveRequesterPrincipalKey,
+  type RequesterOrigin,
 } from "../agents/requester-origin.js";
 import { hasInboundAudio } from "../auto-reply/reply/inbound-media.js";
 import {
@@ -60,6 +61,8 @@ export function captureReplyMessageInjectionTarget(
   }
   const toolAuthority = "toolAuthority" in attachment ? attachment.toolAuthority : undefined;
   const attemptAuthority = toolAuthority?.source === "attempt" ? toolAuthority : undefined;
+  // CLI preparation binds requester authority to the operation, not the placeholder attempt.
+  const operationAuthority = !toolAuthority && backend.kind === "cli";
   const participants = attemptAuthority
     ? attemptAuthority.personalToolParticipants
     : operation.personalToolParticipants;
@@ -112,7 +115,9 @@ export function captureReplyMessageInjectionTarget(
       projectToolAuthorityFingerprintAsync: projectAsync,
       projectRequesterToolAuthorityFingerprint: (requester) => {
         try {
-          return toolAuthority?.projectRequester?.(requester);
+          return operationAuthority
+            ? operation.projectRequesterToolAuthorityFingerprint?.(requester)
+            : toolAuthority?.projectRequester?.(requester);
         } catch {
           toolAuthority?.assertActive();
           return undefined;
@@ -120,7 +125,9 @@ export function captureReplyMessageInjectionTarget(
       },
       projectRequesterToolAuthorityFingerprintAsync: async (requester) => {
         try {
-          return await toolAuthority?.projectRequesterAsync?.(requester);
+          return operationAuthority
+            ? await operation.projectRequesterToolAuthorityFingerprintAsync?.(requester)
+            : await toolAuthority?.projectRequesterAsync?.(requester);
         } catch {
           toolAuthority?.assertActive();
           return undefined;
@@ -180,12 +187,18 @@ function resolveReplyMessageInjectionRejection(params: {
   }
   const toolAuthority =
     attachment && "toolAuthority" in attachment ? attachment.toolAuthority : undefined;
+  const acceptsRequesterOrigin = (origin: RequesterOrigin) =>
+    !toolAuthority && backend?.kind === "cli"
+      ? operation.requesterPrincipalKey !== undefined &&
+        operation.requesterPrincipalKey ===
+          resolveRequesterPrincipalKey({ requesterOrigin: origin })
+      : toolAuthority?.acceptsRequesterOrigin(origin) === true;
   if (params.requesterToolAuthority) {
     if (backend?.messageInjectionV2?.version !== 2) {
       return { reason: "guarded_injection_unsupported" };
     }
     try {
-      if (!toolAuthority?.acceptsRequesterOrigin(params.requesterToolAuthority.requesterOrigin)) {
+      if (!acceptsRequesterOrigin(params.requesterToolAuthority.requesterOrigin)) {
         return { reason: "requester_origin_mismatch" };
       }
     } catch {
@@ -215,7 +228,7 @@ function resolveReplyMessageInjectionRejection(params: {
     toolAuthority?.assertActive();
     if (
       params.requesterToolAuthority &&
-      !toolAuthority?.acceptsRequesterOrigin(params.requesterToolAuthority.requesterOrigin)
+      !acceptsRequesterOrigin(params.requesterToolAuthority.requesterOrigin)
     ) {
       return false;
     }

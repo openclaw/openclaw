@@ -24,11 +24,6 @@ type StreamingSessionState = {
   hasNote: boolean;
 };
 
-type LocalServer = {
-  port: number;
-  stop: () => Promise<void>;
-};
-
 type StreamingRequest = {
   url: URL;
   body: string;
@@ -37,15 +32,11 @@ type StreamingRequest = {
 };
 
 const serverStops: Array<() => Promise<void>> = [];
-const HERMETIC_PUBLIC_LOOKUP_ADDRESS = "93.184.216.34";
+const hermeticPublicLookup: LookupFn = async () => [{ address: "93.184.216.34", family: 4 }];
 
-const hermeticPublicLookup: LookupFn = async () => [
-  { address: HERMETIC_PUBLIC_LOOKUP_ADDRESS, family: 4 },
-];
-
-async function startLocalServer(
+async function createStreamingFetch(
   handler: (request: StreamingRequest) => void | Promise<void>,
-): Promise<LocalServer> {
+): Promise<StreamingFetchDeps> {
   const server = createServer((req, res) => {
     void (async () => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -59,13 +50,12 @@ async function startLocalServer(
     });
   });
   const port = await listenOnLoopback(server);
-  return {
-    port,
-    stop: async () =>
-      await new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      }),
-  };
+  serverStops.push(async () => {
+    await new Promise<void>((resolve, reject) => {
+      server.close((err) => (err ? reject(err) : resolve()));
+    });
+  });
+  return { fetchImpl: createLocalRedirectFetch(port), lookupFn: hermeticPublicLookup };
 }
 
 function createLocalRedirectFetch(port: number): FeishuStreamingFetch {
@@ -80,26 +70,15 @@ function createLocalRedirectFetch(port: number): FeishuStreamingFetch {
   });
 }
 
-async function createStreamingFetch(
-  handler: (request: StreamingRequest) => void | Promise<void>,
-): Promise<StreamingFetchDeps> {
-  const server = await startLocalServer(handler);
-  serverStops.push(server.stop);
-  return {
-    fetchImpl: createLocalRedirectFetch(server.port),
-    lookupFn: hermeticPublicLookup,
-  };
-}
-
 function createMemoryFetch(
-  handler: (url: URL, body: string) => Response | Promise<Response>,
+  handler: (url: URL, body: string, init?: RequestInit) => Response | Promise<Response>,
 ): StreamingFetchDeps {
   return {
     fetchImpl: withFetchPreconnect(
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = new URL(input instanceof Request ? input.url : input.toString());
         const body = typeof init?.body === "string" ? init.body : "";
-        return await handler(url, body);
+        return await handler(url, body, init);
       }),
     ) as FeishuStreamingFetch,
     lookupFn: hermeticPublicLookup,
@@ -111,28 +90,11 @@ function writeJson(res: ServerResponse, payload: unknown, status = 200): void {
   res.end(JSON.stringify(payload));
 }
 
-function setStreamingSessionInternals(
-  session: FeishuStreamingSession,
-  values: {
-    state: StreamingSessionState;
-    lastUpdateTime?: number;
-  },
-): void {
-  const internals = session as unknown as {
-    state: StreamingSessionState;
-    lastUpdateTime: number;
-  };
-  internals.state = values.state;
-  if (values.lastUpdateTime !== undefined) {
-    internals.lastUpdateTime = values.lastUpdateTime;
-  }
-}
-
 function createActiveSession(
   deps: StreamingFetchDeps,
   options: {
     cardId: string;
-    messageId: string;
+    messageId?: string;
     text?: string;
     hasNote?: boolean;
     lastUpdateTime?: number;
@@ -145,18 +107,31 @@ function createActiveSession(
     options.log,
     deps,
   );
-  setStreamingSessionInternals(session, {
-    state: {
-      cardId: options.cardId,
-      messageId: options.messageId,
-      sequence: 1,
-      currentText: options.text ?? "",
-      sentText: options.text ?? "",
-      hasNote: options.hasNote ?? false,
-    },
-    lastUpdateTime: options.lastUpdateTime,
-  });
+  const internals = session as unknown as {
+    state: StreamingSessionState;
+    lastUpdateTime: number;
+  };
+  internals.state = {
+    cardId: options.cardId,
+    messageId: options.messageId ?? options.cardId.replace(/^card/, "om"),
+    sequence: 1,
+    currentText: options.text ?? "",
+    sentText: options.text ?? "",
+    hasNote: options.hasNote ?? false,
+  };
+  internals.lastUpdateTime = options.lastUpdateTime ?? 0;
   return session;
+}
+
+function partialDelivery(content: string, details: Record<string, unknown> = {}) {
+  return {
+    code: "CHANNEL_PARTIAL_DELIVERY",
+    deliveryResult: { visibleReplySent: true, content, ...details },
+  };
+}
+
+function readSummary(body: string | undefined): string {
+  return JSON.parse(JSON.parse(body ?? "{}").settings ?? "{}").config?.summary?.content ?? "";
 }
 
 describe("FeishuStreamingSession", () => {
@@ -172,14 +147,22 @@ describe("FeishuStreamingSession", () => {
     }
   });
 
-  function mockFetches(
-    updateBodies: string[],
-    failedContentUpdateIndexes: ReadonlySet<number> = new Set<number>(),
-    replaceBodies: string[] = [],
-    failedContentUpdateStatuses: ReadonlyMap<number, number> = new Map<number, number>(),
-    failedReplaceStatuses: ReadonlyMap<number, number> = new Map<number, number>(),
-  ): StreamingFetchDeps {
-    return createMemoryFetch((url, body) => {
+  function mockActiveSession(
+    options: Omit<Parameters<typeof createActiveSession>[1], "log">,
+    failures: {
+      updateIndexes?: ReadonlySet<number>;
+      updateStatuses?: ReadonlyMap<number, number>;
+      replaceStatuses?: ReadonlyMap<number, number>;
+      bodyErrors?: Record<string, { code: number; msg: string }>;
+      onSettings?: (session: FeishuStreamingSession) => void;
+    } = {},
+  ) {
+    const updateBodies: string[] = [];
+    const replaceBodies: string[] = [];
+    const noteBodies: string[] = [];
+    const settingsBodies: string[] = [];
+    const log = vi.fn();
+    const deps = createMemoryFetch((url, body) => {
       let status = 200;
       if (url.pathname.includes("/auth/")) {
         return jsonResponse(createStreamingTokenPayload());
@@ -187,58 +170,39 @@ describe("FeishuStreamingSession", () => {
       if (url.pathname.includes("/elements/content/content")) {
         const updateIndex = updateBodies.length;
         updateBodies.push(body);
-        if (failedContentUpdateIndexes.has(updateIndex)) {
+        if (failures.updateIndexes?.has(updateIndex)) {
           throw new Error(`content update ${updateIndex} failed`);
         }
-        const failedStatus = failedContentUpdateStatuses.get(updateIndex);
+        const failedStatus = failures.updateStatuses?.get(updateIndex);
         if (failedStatus !== undefined) {
           status = failedStatus;
         }
       } else if (url.pathname.includes("/elements/content")) {
         const replaceIndex = replaceBodies.length;
         replaceBodies.push(body);
-        const failedStatus = failedReplaceStatuses.get(replaceIndex);
+        const failedStatus = failures.replaceStatuses?.get(replaceIndex);
         if (failedStatus !== undefined) {
           status = failedStatus;
         }
+      } else if (url.pathname.includes("/elements/note/content")) {
+        noteBodies.push(body);
+      } else if (url.pathname.includes("/settings")) {
+        settingsBodies.push(body);
+        failures.onSettings?.(session);
       }
-      return jsonResponse({ code: 0, msg: "ok" }, status);
+      const error = Object.entries(failures.bodyErrors ?? {}).find(([path]) =>
+        url.pathname.endsWith(path),
+      )?.[1];
+      return jsonResponse(error ?? { code: 0, msg: "ok" }, status);
     });
-  }
-
-  function mockStreamingTokenStart(resolveAuthJson: (token: string) => Record<string, unknown>): {
-    authTokens: string[];
-    startSession: () => Promise<void>;
-  } {
-    const authTokens: string[] = [];
-    const deps = createMemoryFetch((url) => {
-      if (url.pathname.includes("/auth/")) {
-        const token = `token-${authTokens.length + 1}`;
-        authTokens.push(token);
-        return jsonResponse(resolveAuthJson(token));
-      }
-      return jsonResponse({
-        code: 0,
-        msg: "ok",
-        data: { card_id: `card-${authTokens.length}` },
-      });
-    });
-    const client = {
-      im: {
-        message: {
-          create: vi.fn(async () => ({ code: 0, msg: "ok", data: { message_id: "om_1" } })),
-        },
-      },
-    } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
+    const session = createActiveSession(deps, { ...options, log });
     return {
-      authTokens,
-      startSession: () =>
-        createStreamingSession(
-          client,
-          { appId: "app_unsafe_token_expiry", appSecret: "secret" },
-          undefined,
-          deps,
-        ).start("chat_id", "open_id"),
+      session,
+      updateBodies,
+      replaceBodies,
+      noteBodies,
+      settingsBodies,
+      log,
     };
   }
 
@@ -247,11 +211,20 @@ describe("FeishuStreamingSession", () => {
     response?: { code: number; msg: string; data?: { message_id?: string } };
     rejectClose?: boolean;
     rejectClear?: boolean;
+    tokenExpiry?: number;
   }) {
+    const authTokens: string[] = [];
     const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
     const deps = createMemoryFetch((url, body) => {
       if (url.pathname.includes("/auth/")) {
-        return jsonResponse(createStreamingTokenPayload());
+        const token = `token-${authTokens.length + 1}`;
+        authTokens.push(token);
+        return jsonResponse({
+          ...createStreamingTokenPayload(),
+          ...(params.tokenExpiry !== undefined
+            ? { tenant_access_token: token, expire: params.tokenExpiry }
+            : {}),
+        });
       }
       if (url.pathname.endsWith("/cardkit/v1/cards")) {
         return jsonResponse({ code: 0, msg: "ok", data: { card_id: "card_accepted" } });
@@ -270,28 +243,42 @@ describe("FeishuStreamingSession", () => {
     const reply = vi.fn(async () => response);
     const remove = vi.fn(async () => ({ code: 0, msg: "ok" }));
     const client = {
-      im: { message: { create, reply, delete: remove } },
+      im: {
+        message: params.tokenExpiry === undefined ? { create, reply, delete: remove } : { create },
+      },
     } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
-    const session = createStreamingSession(
-      client,
-      { appId: params.accountId, appSecret: "test-secret" },
-      undefined,
-      deps,
-    );
-    return { session, requests, create, reply, remove };
+    const newSession = () =>
+      createStreamingSession(
+        client,
+        { appId: params.accountId, appSecret: "test-secret" },
+        undefined,
+        deps,
+      );
+    return { session: newSession(), newSession, authTokens, requests, create, reply, remove };
   }
 
   it.each([
-    { mode: "create", options: undefined, method: "create" },
-    { mode: "root_create", options: { rootId: "root_1" }, method: "create" },
+    {
+      mode: "create",
+      options: undefined,
+      method: "create",
+      data: expect.not.objectContaining({ root_id: expect.anything() }),
+    },
+    {
+      mode: "root_create",
+      options: { rootId: "root_1" },
+      method: "create",
+      data: expect.objectContaining({ root_id: "root_1" }),
+    },
     {
       mode: "reply",
       options: { replyToMessageId: "inbound_1", replyInThread: true, rootId: "root_1" },
       method: "reply",
+      data: expect.objectContaining({ reply_in_thread: true }),
     },
   ] as const)(
     "updates and closes an accepted $mode card when its optional message receipt is absent",
-    async ({ mode, options, method }) => {
+    async ({ mode, options, method, data }) => {
       const { session, requests, create, reply } = mockAcceptedStreamingCard({
         accountId: `accepted-without-receipt-${mode}`,
       });
@@ -303,28 +290,13 @@ describe("FeishuStreamingSession", () => {
         visibleReplySent: true,
         content: "The accepted answer",
       });
-      expect(method === "reply" ? reply : create).toHaveBeenCalledOnce();
+      expect(method === "reply" ? reply : create).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          data,
+          ...(method === "reply" ? { path: { message_id: "inbound_1" } } : {}),
+        }),
+      );
       expect(method === "reply" ? create : reply).not.toHaveBeenCalled();
-      if (mode === "root_create") {
-        expect(create).toHaveBeenCalledWith(
-          expect.objectContaining({
-            data: expect.objectContaining({ root_id: "root_1" }),
-          }),
-        );
-      } else if (mode === "create") {
-        expect(create).toHaveBeenCalledWith(
-          expect.objectContaining({
-            data: expect.not.objectContaining({ root_id: expect.anything() }),
-          }),
-        );
-      } else {
-        expect(reply).toHaveBeenCalledWith(
-          expect.objectContaining({
-            path: { message_id: "inbound_1" },
-            data: expect.objectContaining({ reply_in_thread: true }),
-          }),
-        );
-      }
       expect(requests.map(({ path }) => path)).toEqual([
         "/open-apis/cardkit/v1/cards/card_accepted/elements/content/content",
         "/open-apis/cardkit/v1/cards/card_accepted/settings",
@@ -333,45 +305,40 @@ describe("FeishuStreamingSession", () => {
     },
   );
 
-  it("clears an accepted preview without requesting deletion with an absent message receipt", async () => {
-    const { session, requests, remove } = mockAcceptedStreamingCard({
-      accountId: "discard-without-receipt",
-    });
+  it.each([undefined, "om_accepted"])(
+    "discards an accepted preview with receipt %s",
+    async (messageId) => {
+      const { session, requests, remove } = mockAcceptedStreamingCard({
+        accountId: `discard-${messageId ?? "without-receipt"}`,
+        response: { code: 0, msg: "ok", data: { message_id: messageId } },
+      });
 
-    await session.start("chat_1");
-    await session.update("Transient preview");
-    await session.discard();
+      await session.start("chat_1");
+      await session.update("Transient preview");
+      await session.discard();
 
-    expect(remove).not.toHaveBeenCalled();
-    expect(requests.map(({ path }) => path)).toEqual([
-      "/open-apis/cardkit/v1/cards/card_accepted/elements/content/content",
-      "/open-apis/cardkit/v1/cards/card_accepted/elements/content",
-      "/open-apis/cardkit/v1/cards/card_accepted/settings",
-    ]);
-    expect(JSON.parse(String(requests[1]?.body.element))).toEqual({
-      tag: "markdown",
-      content: "",
-      element_id: "content",
-    });
-    expect(session.isActive()).toBe(false);
-  });
-
-  it("deletes an accepted preview normally when its message receipt is present", async () => {
-    const { session, requests, remove } = mockAcceptedStreamingCard({
-      accountId: "discard-with-receipt",
-      response: { code: 0, msg: "ok", data: { message_id: "om_accepted" } },
-    });
-
-    await session.start("chat_1");
-    await session.update("Transient preview");
-    await session.discard();
-
-    expect(remove).toHaveBeenCalledExactlyOnceWith({ path: { message_id: "om_accepted" } });
-    expect(requests.map(({ path }) => path)).toEqual([
-      "/open-apis/cardkit/v1/cards/card_accepted/elements/content/content",
-    ]);
-    expect(session.isActive()).toBe(false);
-  });
+      if (messageId) {
+        expect(remove).toHaveBeenCalledExactlyOnceWith({ path: { message_id: messageId } });
+      } else {
+        expect(remove).not.toHaveBeenCalled();
+        expect(JSON.parse(String(requests[1]?.body.element))).toEqual({
+          tag: "markdown",
+          content: "",
+          element_id: "content",
+        });
+      }
+      expect(requests.map(({ path }) => path)).toEqual([
+        "/open-apis/cardkit/v1/cards/card_accepted/elements/content/content",
+        ...(!messageId
+          ? [
+              "/open-apis/cardkit/v1/cards/card_accepted/elements/content",
+              "/open-apis/cardkit/v1/cards/card_accepted/settings",
+            ]
+          : []),
+      ]);
+      expect(session.isActive()).toBe(false);
+    },
+  );
 
   it.each([undefined, "om_accepted"])(
     "retains accepted content and receipt %s when preview removal fails",
@@ -385,14 +352,9 @@ describe("FeishuStreamingSession", () => {
       await session.start("chat_1");
       await session.update("Already visible answer");
 
-      await expect(session.discard()).rejects.toMatchObject({
-        code: "CHANNEL_PARTIAL_DELIVERY",
-        deliveryResult: {
-          visibleReplySent: true,
-          content: "Already visible answer",
-          ...(messageId ? { messageIds: [messageId] } : {}),
-        },
-      });
+      await expect(session.discard()).rejects.toMatchObject(
+        partialDelivery("Already visible answer", messageId ? { messageIds: [messageId] } : {}),
+      );
       expect(remove).toHaveBeenCalledTimes(messageId ? 1 : 0);
       expect(session.isActive()).toBe(false);
     },
@@ -407,13 +369,9 @@ describe("FeishuStreamingSession", () => {
     await session.start("chat_1");
     await session.update("Already visible answer");
 
-    await expect(session.closeWithResult("Already visible answer")).rejects.toMatchObject({
-      code: "CHANNEL_PARTIAL_DELIVERY",
-      deliveryResult: {
-        visibleReplySent: true,
-        content: "Already visible answer",
-      },
-    });
+    await expect(session.closeWithResult("Already visible answer")).rejects.toMatchObject(
+      partialDelivery("Already visible answer"),
+    );
   });
 
   it("still rejects provider-declined streaming card messages", async () => {
@@ -426,70 +384,66 @@ describe("FeishuStreamingSession", () => {
     expect(session.isActive()).toBe(false);
   });
 
-  it("rejects oversized streaming tenant-token JSON before buffering the full body", async () => {
-    let clientClosed: Promise<void> | undefined;
-    const deps = await createStreamingFetch(({ url, res }) => {
-      if (url.pathname.includes("/auth/")) {
-        clientClosed = writeOversizedJson(
-          res,
-          FEISHU_JSON_MAX_BYTES,
-          '{"code":0,"msg":"ok","tenant_access_token":"token","padding":"',
-        );
-        return;
-      }
-      writeJson(res, { code: 0, msg: "ok", data: { card_id: "card_oversized_token" } });
-    });
-
-    const session = createStreamingSession(
-      {} as never,
-      {
-        appId: "app_oversized_token",
-        appSecret: "secret",
-      },
-      undefined,
-      deps,
-    );
-
-    await expect(session.start("chat_id", "open_id")).rejects.toThrow(
-      /feishu\.streaming-card\.token: JSON response exceeds \d+ bytes/,
-    );
-    await expect(clientClosed).resolves.toBeUndefined();
-  });
+  it.each(["token", "create"])(
+    "rejects oversized streaming %s JSON before buffering the full body",
+    async (operation) => {
+      let clientClosed: Promise<void> | undefined;
+      const deps = await createStreamingFetch(({ url, res }) => {
+        if (url.pathname.includes("/auth/") && operation === "create") {
+          writeJson(res, createStreamingTokenPayload());
+        } else if (url.pathname.includes("/auth/") || operation === "create") {
+          clientClosed = writeOversizedJson(
+            res,
+            FEISHU_JSON_MAX_BYTES,
+            '{"code":0,"msg":"ok","tenant_access_token":"token","padding":"',
+          );
+        } else {
+          writeJson(res, { code: 0, msg: "ok", data: { card_id: "card_oversized_token" } });
+        }
+      });
+      const session = createStreamingSession(
+        (operation === "token"
+          ? {}
+          : { im: { message: { create: vi.fn() } } }) as unknown as ConstructorParameters<
+          typeof FeishuStreamingSession
+        >[0],
+        { appId: `app_oversized_${operation}`, appSecret: "secret" },
+        undefined,
+        deps,
+      );
+      await expect(session.start("chat_id", "open_id")).rejects.toThrow(
+        new RegExp(`feishu\\.streaming-card\\.${operation}: JSON response exceeds \\d+ bytes`),
+      );
+      await expect(clientClosed).resolves.toBeUndefined();
+    },
+  );
 
   it("aborts a stalled Feishu tenant-token request after the configured timeout", async () => {
     vi.useFakeTimers();
     let authRequestReceived = false;
-    const deps: StreamingFetchDeps = {
-      fetchImpl: withFetchPreconnect(
-        vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-          const url = new URL(input instanceof Request ? input.url : input.toString());
-          if (!url.pathname.includes("/auth/")) {
-            return jsonResponse({ code: 0, msg: "ok", data: { card_id: "card_should_not_reach" } });
-          }
-          authRequestReceived = true;
-          return await new Promise<Response>((_resolve, reject) => {
-            const signal = init?.signal;
-            if (!signal) {
-              reject(new Error("missing guarded fetch signal"));
-              return;
-            }
-            signal.addEventListener(
-              "abort",
-              () => {
-                const reason = signal.reason;
-                reject(
-                  reason instanceof Error
-                    ? reason
-                    : new Error("request aborted", { cause: reason }),
-                );
-              },
-              { once: true },
+    const deps = createMemoryFetch(async (url, _body, init) => {
+      if (!url.pathname.includes("/auth/")) {
+        return jsonResponse({ code: 0, msg: "ok", data: { card_id: "card_should_not_reach" } });
+      }
+      authRequestReceived = true;
+      return await new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (!signal) {
+          reject(new Error("missing guarded fetch signal"));
+          return;
+        }
+        signal.addEventListener(
+          "abort",
+          () => {
+            const reason = signal.reason;
+            reject(
+              reason instanceof Error ? reason : new Error("request aborted", { cause: reason }),
             );
-          });
-        }),
-      ) as FeishuStreamingFetch,
-      lookupFn: hermeticPublicLookup,
-    };
+          },
+          { once: true },
+        );
+      });
+    });
 
     const session = createStreamingSession(
       {} as never,
@@ -513,103 +467,66 @@ describe("FeishuStreamingSession", () => {
     await vi.advanceTimersByTimeAsync(26);
     await result;
     expect(authRequestReceived).toBe(true);
-    console.log(
-      "[feishu streaming-card stall proof] stalled tenant-token fetch honored configured timeout",
-    );
   });
 
-  it("rejects oversized streaming card-create JSON before buffering the full body", async () => {
-    let clientClosed: Promise<void> | undefined;
-    const deps = await createStreamingFetch(({ url, res }) => {
-      if (url.pathname.includes("/auth/")) {
-        writeJson(res, createStreamingTokenPayload());
-        return;
-      }
-      clientClosed = writeOversizedJson(
-        res,
-        FEISHU_JSON_MAX_BYTES,
-        '{"code":0,"msg":"ok","tenant_access_token":"token","padding":"',
-      );
-    });
-
-    const session = createStreamingSession(
-      {
-        im: {
-          message: {
-            create: vi.fn(),
-          },
-        },
-      } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0],
-      {
-        appId: "app_oversized_card_create",
-        appSecret: "secret",
-      },
-      undefined,
-      deps,
-    );
-
-    await expect(session.start("chat_id", "open_id")).rejects.toThrow(
-      /feishu\.streaming-card\.create: JSON response exceeds \d+ bytes/,
-    );
-    await expect(clientClosed).resolves.toBeUndefined();
-  });
-
-  it("flushes only the latest authoritative snapshot after the throttle window", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    const updateBodies: string[] = [];
-    const deps = mockFetches(updateBodies);
-
-    const session = createActiveSession(deps, {
+  it.each([
+    {
+      name: "latest throttled snapshot",
       cardId: "card_1",
-      messageId: "om_1",
-      text: "visible",
-      lastUpdateTime: 1_000,
+      time: 1_000,
+      previous: "visible",
+      drafts: ["draft one", "draft two"],
+      delayed: true,
+    },
+    {
+      name: "natural boundary immediately",
+      cardId: "card_2",
+      time: 2_000,
+      previous: "hello",
+      drafts: ["hello!"],
+      delayed: false,
+    },
+  ])("flushes $name", async ({ cardId, time, previous, drafts, delayed }) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(time);
+    const { session, updateBodies } = mockActiveSession({
+      cardId,
+      text: previous,
+      lastUpdateTime: time,
     });
-
-    await session.update("draft one");
-    await session.update("draft two");
-    expect(updateBodies).toHaveLength(0);
-
-    await vi.advanceTimersByTimeAsync(160);
-
+    for (const draft of drafts) {
+      await session.update(draft);
+    }
+    if (delayed) {
+      expect(updateBodies).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(160);
+    }
     expect(updateBodies).toHaveLength(1);
     expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
-      content: "draft two",
+      content: drafts.at(-1),
       sequence: 2,
-      uuid: "s_card_1_2",
+      uuid: `s_${cardId}_2`,
     });
   });
 
   it("retries the same throttled snapshot after a CardKit body error", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_500);
-    const updateBodies: string[] = [];
-    const deps = createMemoryFetch((url, body) => {
-      if (url.pathname.includes("/auth/")) {
-        return jsonResponse(createStreamingTokenPayload());
-      }
-      if (url.pathname.includes("/elements/content/content")) {
-        updateBodies.push(body);
-        return jsonResponse(
-          updateBodies.length === 1
-            ? { code: 19_001, msg: "sequence rejected" }
-            : { code: 0, msg: "ok" },
-        );
-      }
-      return jsonResponse({ code: 0, msg: "ok" });
-    });
-    const log = vi.fn();
-    const session = createActiveSession(deps, {
-      cardId: "card_rejected_flush",
-      messageId: "om_rejected_flush",
-      text: "hello",
-      lastUpdateTime: 1_500,
-      log,
-    });
+    const bodyErrors: NonNullable<Parameters<typeof mockActiveSession>[1]>["bodyErrors"] = {
+      "/elements/content/content": { code: 19_001, msg: "sequence rejected" },
+    };
+    const { session, updateBodies, log } = mockActiveSession(
+      {
+        cardId: "card_rejected_flush",
+        text: "hello",
+        lastUpdateTime: 1_500,
+      },
+      { bodyErrors },
+    );
 
     await session.update("hello small");
     await vi.advanceTimersByTimeAsync(160);
+    delete bodyErrors["/elements/content/content"];
     await session.update("hello small");
     await vi.advanceTimersByTimeAsync(160);
 
@@ -623,40 +540,13 @@ describe("FeishuStreamingSession", () => {
     ]);
   });
 
-  it("pushes natural-boundary updates immediately inside the throttle window", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(2_000);
-    const updateBodies: string[] = [];
-    const deps = mockFetches(updateBodies);
-
-    const session = createActiveSession(deps, {
-      cardId: "card_2",
-      messageId: "om_2",
-      text: "hello",
-      lastUpdateTime: 2_000,
-    });
-
-    await session.update("hello!");
-
-    expect(updateBodies).toHaveLength(1);
-    expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
-      content: "hello!",
-      sequence: 2,
-      uuid: "s_card_2_2",
-    });
-  });
-
   it("closes with a throttled divergent latest snapshot without merging it", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(2_750);
-    const updateBodies: string[] = [];
-    const replaceBodies: string[] = [];
-    const deps = mockFetches(updateBodies, new Set<number>(), replaceBodies);
     const previous = "> Thinking one\n\n---\n\nanswer";
     const next = "> Thinking two\n\n---\n\nanswer more";
-    const session = createActiveSession(deps, {
+    const { session, updateBodies, replaceBodies } = mockActiveSession({
       cardId: "card_pending_reasoning_close",
-      messageId: "om_pending_reasoning_close",
       text: previous,
       lastUpdateTime: 2_750,
     });
@@ -670,110 +560,66 @@ describe("FeishuStreamingSession", () => {
     expect(updateBodies).toHaveLength(0);
     expect(replaceBodies).toHaveLength(1);
     const payload = JSON.parse(replaceBodies[0] ?? "{}") as { element?: string };
-    expect(JSON.parse(payload.element ?? "{}")).toMatchObject({ content: next });
+    expect({ ...payload, element: JSON.parse(payload.element ?? "{}") }).toEqual({
+      element: { tag: "markdown", content: next, element_id: "content" },
+      sequence: 2,
+      uuid: "r_card_pending_reasoning_close_2",
+    });
   });
 
   it("retains prior visible content when CardKit rejects a divergent close replacement", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(2_900);
-    const replaceBodies: string[] = [];
-    const settingsBodies: string[] = [];
     const previous = "> Thinking one\n\n---\n\nanswer";
     const next = "> Thinking two\n\n---\n\nanswer more";
     let sentTextWhenSettingsClosed: string | undefined;
-    const state: StreamingSessionState = {
-      cardId: "card_rejected_pending_reasoning_close",
-      messageId: "om_rejected_pending_reasoning_close",
-      sequence: 1,
-      currentText: previous,
-      sentText: previous,
-      hasNote: false,
-    };
-    const deps = createMemoryFetch((url, body) => {
-      if (url.pathname.includes("/auth/")) {
-        return jsonResponse(createStreamingTokenPayload());
-      }
-      if (url.pathname.endsWith("/elements/content")) {
-        replaceBodies.push(body);
-        return jsonResponse({ code: 19_002, msg: "replacement rejected" });
-      }
-      if (url.pathname.includes("/settings")) {
-        settingsBodies.push(body);
-        sentTextWhenSettingsClosed = state.sentText;
-      }
-      return jsonResponse({ code: 0, msg: "ok" });
-    });
-    const log = vi.fn();
-    const session = createStreamingSession(
-      {} as never,
-      { appId: "app_rejected_pending_reasoning_close", appSecret: "secret" },
-      log,
-      deps,
+    const { session, replaceBodies, settingsBodies, log } = mockActiveSession(
+      { cardId: "card_rejected_pending_reasoning_close", text: previous, lastUpdateTime: 2_900 },
+      {
+        bodyErrors: { "/elements/content": { code: 19_002, msg: "replacement rejected" } },
+        onSettings: (active) => {
+          sentTextWhenSettingsClosed = (active as unknown as { state: StreamingSessionState }).state
+            .sentText;
+        },
+      },
     );
-    setStreamingSessionInternals(session, {
-      state,
-      lastUpdateTime: 2_900,
-    });
 
     await session.update(next);
-    await expect(session.closeWithResult()).rejects.toMatchObject({
-      code: "CHANNEL_PARTIAL_DELIVERY",
-      deliveryResult: { visibleReplySent: true, content: previous },
-    });
+    await expect(session.closeWithResult()).rejects.toMatchObject(partialDelivery(previous));
 
     expect(replaceBodies).toHaveLength(1);
     expect(settingsBodies).toHaveLength(1);
     expect(sentTextWhenSettingsClosed).toBe(previous);
-    const settingsPayload = JSON.parse(settingsBodies[0] ?? "{}") as { settings?: string };
-    const settings = JSON.parse(settingsPayload.settings ?? "{}") as {
-      config?: { summary?: { content?: string } };
-    };
-    expect(settings.config?.summary?.content).toBe(previous.replaceAll("\n", " ").trim());
-    expect(settings.config?.summary?.content).not.toContain("Thinking two");
+    expect(readSummary(settingsBodies[0])).toBe(previous.replaceAll("\n", " ").trim());
+    expect(readSummary(settingsBodies[0])).not.toContain("Thinking two");
     expect(log).toHaveBeenCalledWith(
       "Final replace failed: Error: Replace card content failed: replacement rejected (code=19002)",
     );
   });
 
   it("logs CardKit body errors for note updates and streaming close settings", async () => {
-    const noteBodies: string[] = [];
-    const settingsBodies: string[] = [];
-    const deps = createMemoryFetch((url, body) => {
-      if (url.pathname.includes("/auth/")) {
-        return jsonResponse(createStreamingTokenPayload());
-      }
-      if (url.pathname.includes("/elements/note/content")) {
-        noteBodies.push(body);
-        return jsonResponse({ code: 19_003, msg: "note rejected" });
-      }
-      if (url.pathname.includes("/settings")) {
-        settingsBodies.push(body);
-        return jsonResponse({ code: 19_004, msg: "settings rejected" });
-      }
-      return jsonResponse({ code: 0, msg: "ok" });
-    });
-    const log = vi.fn();
-    const session = createActiveSession(deps, {
-      cardId: "card_rejected_note_and_close",
-      messageId: "om_rejected_note_and_close",
-      text: "visible answer",
-      hasNote: true,
-      log,
-    });
+    const { session, noteBodies, settingsBodies, log } = mockActiveSession(
+      {
+        cardId: "card_rejected_note_and_close",
+        text: "visible answer",
+        hasNote: true,
+      },
+      {
+        bodyErrors: {
+          "/elements/note/content": { code: 19_003, msg: "note rejected" },
+          "/settings": { code: 19_004, msg: "settings rejected" },
+        },
+      },
+    );
 
     const error = await session
       .closeWithResult(undefined, { note: "model note" })
       .catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(Error);
-    expect(error).toMatchObject({
-      code: "CHANNEL_PARTIAL_DELIVERY",
-      deliveryResult: {
-        visibleReplySent: true,
-        content: "visible answer",
-        messageIds: ["om_rejected_note_and_close"],
-      },
-    });
+    expect(error).toMatchObject(
+      partialDelivery("visible answer", { messageIds: ["om_rejected_note_and_close"] }),
+    );
 
     expect(noteBodies).toHaveLength(1);
     expect(settingsBodies).toHaveLength(1);
@@ -785,107 +631,32 @@ describe("FeishuStreamingSession", () => {
     );
   });
 
-  it("retries cumulative content after a failed streaming update", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(3_000);
-    const updateBodies: string[] = [];
-    const deps = mockFetches(updateBodies, new Set([0]));
+  it.each(["network", "http"])(
+    "retries cumulative content after a %s update failure",
+    async (kind) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(3_000);
+      const { session, updateBodies } = mockActiveSession(
+        { cardId: `card_${kind}`, text: "hello", lastUpdateTime: 2_000 },
+        kind === "network"
+          ? { updateIndexes: new Set([0]) }
+          : { updateStatuses: new Map([[0, 429]]) },
+      );
 
-    const session = createActiveSession(deps, {
-      cardId: "card_3",
-      messageId: "om_3",
-      text: "hello",
-      lastUpdateTime: 2_000,
-    });
+      await session.update("hello world");
+      await session.update("hello world!");
 
-    await session.update("hello world");
-    await session.update("hello world!");
-
-    expect(updateBodies).toHaveLength(2);
-    expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
-      content: "hello world",
-      sequence: 2,
-      uuid: "s_card_3_2",
-    });
-    expect(JSON.parse(updateBodies[1] ?? "{}")).toEqual({
-      content: "hello world!",
-      sequence: 3,
-      uuid: "s_card_3_3",
-    });
-  });
-
-  it("retries cumulative content after a non-OK streaming update", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(3_500);
-    const updateBodies: string[] = [];
-    const deps = mockFetches(updateBodies, new Set<number>(), [], new Map([[0, 429]]));
-
-    const session = createActiveSession(deps, {
-      cardId: "card_5",
-      messageId: "om_5",
-      text: "hello",
-      lastUpdateTime: 2_000,
-    });
-
-    await session.update("hello world");
-    await session.update("hello world!");
-
-    expect(updateBodies).toHaveLength(2);
-    expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
-      content: "hello world",
-      sequence: 2,
-      uuid: "s_card_5_2",
-    });
-    expect(JSON.parse(updateBodies[1] ?? "{}")).toEqual({
-      content: "hello world!",
-      sequence: 3,
-      uuid: "s_card_5_3",
-    });
-  });
-
-  it("replaces content when final text removes transient streamed status", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(4_000);
-    const updateBodies: string[] = [];
-    const replaceBodies: string[] = [];
-    const deps = mockFetches(updateBodies, new Set<number>(), replaceBodies);
-
-    const session = createActiveSession(deps, {
-      cardId: "card_4",
-      messageId: "om_4",
-      text: "Web Search\n\nfinal answer",
-      lastUpdateTime: 3_000,
-    });
-
-    await session.closeWithResult("final answer");
-
-    expect(updateBodies).toHaveLength(0);
-    expect(replaceBodies).toHaveLength(1);
-    const replacePayload = JSON.parse(replaceBodies[0] ?? "{}") as {
-      element?: string;
-      sequence?: number;
-      uuid?: string;
-    };
-    expect({
-      ...replacePayload,
-      element: JSON.parse(replacePayload.element ?? "{}"),
-    }).toEqual({
-      element: {
-        tag: "markdown",
-        content: "final answer",
-        element_id: "content",
-      },
-      sequence: 2,
-      uuid: "r_card_4_2",
-    });
-  });
+      expect(updateBodies.map((body) => JSON.parse(body))).toEqual([
+        { content: "hello world", sequence: 2, uuid: `s_card_${kind}_2` },
+        { content: "hello world!", sequence: 3, uuid: `s_card_${kind}_3` },
+      ]);
+    },
+  );
 
   it("drops a surrogate pair whole when truncating the closeout summary", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(4_200);
-    // 46 'a' + 😀 (U+1F600, UTF-16 indices 46-47) + 20 'b' = 68-char string.
-    // truncateSummary's default max is 50, so it slices at max-3 = 47, which
-    // lands between the high and low surrogate halves of the emoji.
+    // Summary's 47-code-unit cut lands inside this emoji's surrogate pair.
     const finalText = `${"a".repeat(46)}\u{1F600}${"b".repeat(20)}`;
     const settingsBodies: string[] = [];
     const deps = await createStreamingFetch(({ url, body, res }) => {
@@ -901,136 +672,75 @@ describe("FeishuStreamingSession", () => {
 
     const session = createActiveSession(deps, {
       cardId: "card_surrogate",
-      messageId: "om_surrogate",
       lastUpdateTime: 3_000,
     });
 
     await session.closeWithResult(finalText);
 
     expect(settingsBodies).toHaveLength(1);
-    const settingsPayload = JSON.parse(settingsBodies[0] ?? "{}") as { settings?: string };
-    const settings = JSON.parse(settingsPayload.settings ?? "{}") as {
-      config?: { summary?: { content?: string } };
-    };
-    const summary = settings.config?.summary?.content ?? "";
-    // The half-emoji must be dropped whole: 46 a's + "...", and the summary
-    // must NOT end with a lone high surrogate (which Feishu renders as �).
+    const summary = readSummary(settingsBodies[0]);
     expect(summary).toBe(`${"a".repeat(46)}...`);
     expect(summary).not.toContain("\uD83D");
     expect(summary.charCodeAt(summary.length - 4)).not.toBe(0xd83d);
   });
 
-  it("logs a final replacement failure when CardKit returns non-OK", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(4_500);
-    const updateBodies: string[] = [];
-    const replaceBodies: string[] = [];
-    const deps = mockFetches(
-      updateBodies,
-      new Set<number>(),
-      replaceBodies,
-      new Map<number, number>(),
-      new Map([[0, 500]]),
-    );
-    const log = vi.fn();
-
-    const session = createActiveSession(deps, {
-      cardId: "card_6",
-      messageId: "om_6",
-      text: "working\n\nfinal answer",
-      lastUpdateTime: 3_000,
-      log,
-    });
-
-    await expect(session.closeWithResult("final answer")).rejects.toMatchObject({
-      code: "CHANNEL_PARTIAL_DELIVERY",
-      deliveryResult: { visibleReplySent: true, content: "working\n\nfinal answer" },
-    });
-
-    expect(updateBodies).toHaveLength(0);
-    expect(replaceBodies).toHaveLength(1);
-    expect(log).toHaveBeenCalledWith(
-      "Final replace failed: Error: Replace card content failed with HTTP 500",
-    );
-  });
-
-  it("reports the final text as not accepted when CardKit rejects the final update after a visible preview", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(4_600);
-    const updateBodies: string[] = [];
-    const replaceBodies: string[] = [];
-    // CardKit closes streaming mode ~10 minutes after it was enabled; every later
-    // content write is rejected while the earlier preview stays visible in the chat.
-    const deps = mockFetches(updateBodies, new Set<number>(), replaceBodies, new Map([[0, 500]]));
-    const log = vi.fn();
-
-    const session = createActiveSession(deps, {
-      cardId: "card_8",
-      messageId: "om_8",
-      text: "working",
-      lastUpdateTime: 3_000,
-      log,
-    });
-
-    await expect(session.closeWithResult("working\n\nfinal answer")).rejects.toMatchObject({
-      code: "CHANNEL_PARTIAL_DELIVERY",
-      deliveryResult: {
-        visibleReplySent: true,
-        content: "working",
-        messageIds: ["om_8"],
-        finalTextAccepted: false,
-      },
-    });
-
-    expect(updateBodies).toHaveLength(1);
-    expect(replaceBodies).toHaveLength(0);
-    expect(log).toHaveBeenCalledWith(
-      "Final update failed: Error: Update card content failed with HTTP 500",
-    );
-  });
-
-  it("reports no visible content when final close update fails before any accepted text", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(4_800);
-    const updateBodies: string[] = [];
-    const replaceBodies: string[] = [];
-    const deps = mockFetches(updateBodies, new Set<number>(), replaceBodies, new Map([[0, 500]]));
-    const log = vi.fn();
-
-    const session = createActiveSession(deps, {
-      cardId: "card_7",
-      messageId: "om_7",
-      lastUpdateTime: 3_000,
-      log,
-    });
-
-    const error = await session.closeWithResult("final answer").catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(Error);
-    expect(error).toMatchObject({ message: "Update card content failed with HTTP 500" });
-    expect(error).not.toHaveProperty("deliveryResult");
-
-    expect(updateBodies).toHaveLength(1);
-    expect(replaceBodies).toHaveLength(0);
-    expect(log).toHaveBeenCalledWith(
-      "Final update failed: Error: Update card content failed with HTTP 500",
-    );
-  });
+  it.each([
+    { mode: "replace", text: "working\n\nfinal answer", finalText: "final answer" },
+    { mode: "update", text: "working", finalText: "working\n\nfinal answer" },
+    { mode: "empty", text: "", finalText: "final answer" },
+  ])(
+    "reports rejected final writes correctly for $mode content",
+    async ({ mode, text, finalText }) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(mode === "replace" ? 4_500 : mode === "update" ? 4_600 : 4_800);
+      const replace = mode === "replace";
+      const { session, updateBodies, replaceBodies, log } = mockActiveSession(
+        {
+          cardId: `card_failed_${mode}`,
+          text,
+          lastUpdateTime: 3_000,
+        },
+        replace
+          ? { replaceStatuses: new Map([[0, 500]]) }
+          : { updateStatuses: new Map([[0, 500]]) },
+      );
+      const error = await session.closeWithResult(finalText).catch((caught: unknown) => caught);
+      if (text) {
+        expect(error).toMatchObject(
+          partialDelivery(
+            text,
+            replace ? {} : { messageIds: [`om_failed_${mode}`], finalTextAccepted: false },
+          ),
+        );
+      } else {
+        expect(error).toBeInstanceOf(Error);
+        expect(error).toMatchObject({ message: "Update card content failed with HTTP 500" });
+        expect(error).not.toHaveProperty("deliveryResult");
+      }
+      expect(updateBodies).toHaveLength(replace ? 0 : 1);
+      expect(replaceBodies).toHaveLength(replace ? 1 : 0);
+      expect(log).toHaveBeenCalledWith(
+        replace
+          ? "Final replace failed: Error: Replace card content failed with HTTP 500"
+          : "Final update failed: Error: Update card content failed with HTTP 500",
+      );
+    },
+  );
 
   it("bounds streaming token cache lifetime when token expiry overflows", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-29T12:00:00.000Z"));
-    const { authTokens, startSession } = mockStreamingTokenStart((token) => ({
-      code: 0,
-      msg: "ok",
-      tenant_access_token: token,
-      expire: Number.MAX_SAFE_INTEGER,
-    }));
+    const { authTokens, newSession } = mockAcceptedStreamingCard({
+      accountId: "app_unsafe_token_expiry",
+      tokenExpiry: Number.MAX_SAFE_INTEGER,
+      response: { code: 0, msg: "ok", data: { message_id: "om_1" } },
+    });
 
-    await startSession();
+    await newSession().start("chat_id", "open_id");
     expect(authTokens).toEqual(["token-1"]);
 
     vi.setSystemTime(Date.now() + 7200 * 1000 - 60_000 + 1);
-    await startSession();
+    await newSession().start("chat_id", "open_id");
 
     expect(authTokens).toEqual(["token-1", "token-2"]);
   });

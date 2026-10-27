@@ -30,6 +30,7 @@ import {
   summarizeIOSBuildTiming,
 } from "./ios-release-e2e-diagnostics.js";
 import { prepareIOSReleaseGateway } from "./ios-release-gateway.js";
+import { waitForIOSSimulatorHeadroom } from "./ios-simulator-headroom.js";
 import { hasUnjoinedWork, runManagedCommand } from "./managed-child-process.mjs";
 
 const DEVICE_TYPE = "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro";
@@ -832,6 +833,17 @@ export async function createNativeDependencies(options: {
                       },
                     );
                   }
+                  await phase("simulator-headroom", async () => {
+                    const readiness = await waitForIOSSimulatorHeadroom(fixtureSignal).catch(
+                      (error: unknown) => {
+                        throw operationError("simulator-headroom", error);
+                      },
+                    );
+                    fixtureEvidence.simulatorHeadroom = readiness;
+                    if (readiness.status !== "ready") {
+                      throw new OperationError("simulator-headroom", "timeout");
+                    }
+                  });
                 }
               } catch (error) {
                 if (!options.signal.aborted) {

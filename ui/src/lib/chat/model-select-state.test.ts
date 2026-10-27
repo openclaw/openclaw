@@ -7,6 +7,7 @@ import {
   resolveChatModelUnavailableReason,
   resolveChatFastModeSelectState,
   resolveChatModelSelectState,
+  resolveChatModelSelectValues,
 } from "./model-select-state.ts";
 
 type ModelInput = Parameters<typeof resolveChatModelSelectState>[0];
@@ -157,6 +158,104 @@ it("uses the agent default rather than the global default", () => {
     },
     { defaultModel: "openai/agent", defaultLabel: "Default (Agent)" },
   );
+});
+
+it.each<[string, ModelCatalogEntry[], string]>([
+  [
+    "canonical available alias wins even when legacy appears first",
+    [
+      model("choice", "Legacy", "codex", { available: true }),
+      model("choice", "Canonical", "openai", { available: true }),
+    ],
+    "openai/choice",
+  ],
+  [
+    "available legacy alias wins over unavailable canonical",
+    [
+      model("choice", "Canonical", "openai", { available: false }),
+      model("choice", "Legacy", "codex", { available: true }),
+    ],
+    "codex/choice",
+  ],
+  [
+    "available automatic-only alias still suppresses an unavailable manual alias",
+    [
+      model("choice", "Legacy", "codex", { available: false, manualSelectionAllowed: true }),
+      model("choice", "Canonical", "openai", { available: true, manualSelectionAllowed: false }),
+    ],
+    "CODEX/CHOICE",
+  ],
+  [
+    "manual exclusion leaves the available legacy choice",
+    [
+      model("choice", "Canonical", "openai", { available: true, manualSelectionAllowed: false }),
+      model("choice", "Legacy", "codex", { available: true }),
+    ],
+    "codex/choice",
+  ],
+  [
+    "duplicate canonical identities retain the first available spelling",
+    [
+      model("Choice", "First", "OpenAI", { available: true }),
+      model("choice", "Later", "openai", { available: true }),
+      model("choice", "Legacy", "codex", { available: false }),
+    ],
+    "OpenAI/Choice",
+  ],
+])("resolves value-only model identities: %s", (_name, catalog, expected) => {
+  expect(
+    resolveChatModelSelectValues(
+      modelState({
+        chatModelCatalog: [
+          model("unrelated", "Canonical", "other", { alias: "choice", available: true }),
+          ...catalog,
+        ],
+        modelOverrides: { main: "CODEX/CHOICE" },
+        modelSelectionPolicy: { restricted: true, defaultModel: "CODEX/CHOICE" },
+      }),
+    ),
+  ).toEqual({ currentOverride: expected, defaultModel: expected });
+});
+
+it("preserves unknown value-only model identities instead of matching display aliases", () => {
+  expect(
+    resolveChatModelSelectValues(
+      modelState({
+        chatModelCatalog: [model("known", "Known", "openai", { alias: "proxy/retired" })],
+        modelOverrides: { main: " proxy/retired " },
+        agentDefaultModel: " custom/missing ",
+      }),
+    ),
+  ).toEqual({ currentOverride: "proxy/retired", defaultModel: "custom/missing" });
+});
+
+it.each<[string, Partial<Omit<ModelInput, "sessionsResult">>, string]>([
+  ["agent before global", {}, "openai/agent"],
+  ["global when the agent has no default", { agentDefaultModel: undefined }, "openai/global"],
+  [
+    "restricted policy before configured defaults",
+    { modelSelectionPolicy: { restricted: true, defaultModel: "openai/policy" } },
+    "openai/policy",
+  ],
+  [
+    "restricted policy with no permitted default",
+    { modelSelectionPolicy: { restricted: true, defaultModel: null } },
+    "",
+  ],
+  ["retired catalog", { catalogRetired: true }, ""],
+  ["uninitialized catalog", { catalogInitialized: false }, ""],
+])("resolves value-only model defaults: %s", (_name, input, expectedDefault) => {
+  expect(
+    resolveChatModelSelectValues(
+      modelState({
+        chatModelCatalog: ["agent", "global", "policy"].map((id) => model(id, id)),
+        modelOverrides: { main: null },
+        agentDefaultModel: "openai/agent",
+        sessionsResult: session("global", "openai"),
+        ...input,
+      }),
+    ),
+  ).toEqual({ currentOverride: "", defaultModel: expectedDefault });
 });
 
 type UnavailableReason = NonNullable<ModelCatalogEntry["unavailableReason"]>;

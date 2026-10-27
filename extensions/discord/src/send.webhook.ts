@@ -42,6 +42,7 @@ type DiscordWebhookSendOpts = {
   avatarUrl?: string;
   tableMode?: MarkdownTableMode;
   wait?: boolean;
+  signal?: AbortSignal;
   /** Opt into configured line limits; omission preserves character-only chunking. */
   chunking?: { maxChars?: number; maxLines?: number };
   onPlatformSendDispatch?: () => Promise<void>;
@@ -129,6 +130,7 @@ export async function sendWebhookMessageDiscord(
   }
   const deadline = buildTimeoutAbortSignal({
     timeoutMs: DISCORD_WEBHOOK_TIMEOUT_MS,
+    signal: opts.signal,
     operation: "discord.webhook.send",
   });
   const request = createDiscordRetryRunner({ signal: deadline.signal });

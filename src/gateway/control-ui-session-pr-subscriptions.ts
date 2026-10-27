@@ -471,6 +471,7 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
   };
 
   const stopLineage = sessionChanges.subscribeFacts((change) => {
+    const facts = "facts" in change ? change.facts?.kind : undefined;
     const ownAuthorityChanged =
       "all" in change &&
       (change.scope === "profiles" ||
@@ -480,8 +481,7 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
       keyStates.size === 0 ||
       (!ownAuthorityChanged && !sessionChangeScopeAffectsStoredRows(change)) ||
       (!change.factsInvalidated &&
-        "facts" in change &&
-        (change.facts?.kind === "unchanged" || change.facts?.kind === "category")) ||
+        (facts === "unchanged" || facts === "participants" || facts === "category")) ||
       change.factsInvalidated === "category"
     ) {
       return;

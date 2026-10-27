@@ -13,6 +13,7 @@ import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox/runtime-s
 import { isToolAllowedByPolicyName } from "../../agents/tool-policy-match.js";
 import { resolveConfiguredModelCompat } from "../../agents/tools-effective-inventory.js";
 import { getMemoryLearnContribution } from "../../plugins/memory-state.js";
+import { listWorkshopDrafts, type WorkshopDraft } from "../../skills/workshop/drafts.js";
 import { WorkshopWriteError } from "../../skills/workshop/library.js";
 import {
   describeWorkshopReviewUndo,
@@ -93,6 +94,26 @@ function buildLearnPrompt(request: string, media: LearnMedia): string {
   return lines.join("\n");
 }
 
+/**
+ * Builds the /learn drafts turn over the drafts the command selected. The agent proposes and
+ * the user approves: nothing is saved until the user answers, and undecided drafts stay.
+ */
+function buildDraftReviewPrompt(drafts: readonly WorkshopDraft[], focus: string): string {
+  const listed = drafts.map((draft) => ({ id: draft.id, skill: draft.skillName }));
+  return [
+    "The user asked you to review Skill Workshop drafts: changes background reviews proposed but did not apply.",
+    `Drafts to review (JSON): ${JSON.stringify(listed)}. Review only these.`,
+    ...(focus ? [`User focus (JSON string): ${JSON.stringify(focus)}`] : []),
+    "",
+    "View each draft with skill_workshop action=view draft=<id>, and view the live skill it would change. Judge the drafts together by the method below: most are local fixes, and related drafts merge into one change.",
+    SKILL_LEARNING_METHOD_PROMPT,
+    "Do not save anything yet. Show the user each change you would make (the skill, what changes, which drafts it uses) and each draft you would drop and why, then ask which to save.",
+    "When the user answers, save the approved changes with create or patch and a short reason, discard the drafts the user approved or rejected, and leave drafts the user did not decide on for a later review.",
+    "",
+    SKILL_AUTHORING_STANDARDS_PROMPT,
+  ].join("\n");
+}
+
 const LEARN_COMMAND_PREFIX = "/learn";
 const SKILL_WORKSHOP_TOOL_NAME = "skill_workshop";
 const SKILL_WORKSHOP_UNAVAILABLE_REPLY =
@@ -103,7 +124,13 @@ const LEARN_UNAVAILABLE_REPLY =
 // Only this exact form undoes; any other "/learn undo ..." text stays a learn request.
 const UNDO_PATTERN = /^undo\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
-type LearnCommand = { kind: "learn"; request: string } | { kind: "undo"; reviewId: string };
+// "/learn drafts [skill] [focus]" reviews drafts; other text after "drafts" is a learn request.
+const DRAFTS_PATTERN = /^drafts(?:[\s;:,]+(.*))?$/is;
+
+type LearnCommand =
+  | { kind: "learn"; request: string }
+  | { kind: "undo"; reviewId: string }
+  | { kind: "drafts"; args: string };
 
 function parseLearnCommand(raw: string): LearnCommand | null {
   const request = matchSlashCommandToken(raw, LEARN_COMMAND_PREFIX);
@@ -111,7 +138,31 @@ function parseLearnCommand(raw: string): LearnCommand | null {
     return null;
   }
   const reviewId = UNDO_PATTERN.exec(request)?.[1];
-  return reviewId ? { kind: "undo", reviewId: reviewId.toLowerCase() } : { kind: "learn", request };
+  if (reviewId) {
+    return { kind: "undo", reviewId: reviewId.toLowerCase() };
+  }
+  const drafts = DRAFTS_PATTERN.exec(request);
+  if (drafts) {
+    return { kind: "drafts", args: drafts[1]?.trim() ?? "" };
+  }
+  return { kind: "learn", request };
+}
+
+/**
+ * Selects the drafts a /learn drafts turn reviews. A first word naming a drafted skill narrows
+ * the review to that skill's drafts; the rest is the user's focus.
+ */
+async function startDraftReview(params: HandleCommandsParams, args: string) {
+  const drafts = await listWorkshopDrafts(params.cfg, params.agentId);
+  const [first = ""] = args.split(/\s+/, 1);
+  const skill = drafts.some((draft) => draft.skillName === first) ? first : undefined;
+  const selected = skill ? drafts.filter((draft) => draft.skillName === skill) : drafts;
+  if (selected.length === 0) {
+    return commandReply("No Skill Workshop drafts are waiting for review.");
+  }
+  const focus = (skill ? args.slice(first.length) : args).replace(/^[\s;:,]+/, "").trim();
+  applyCommandTextToParams(params, buildDraftReviewPrompt(selected, focus));
+  return { shouldContinue: true };
 }
 
 /**
@@ -300,6 +351,11 @@ export const handleLearnCommand: CommandHandler = defineAuthorizedTextCommand(
       return commandReply(
         getMemoryLearnContribution() ? LEARN_UNAVAILABLE_REPLY : SKILL_WORKSHOP_UNAVAILABLE_REPLY,
       );
+    }
+    if (command.kind === "drafts") {
+      return media.workshop
+        ? startDraftReview(params, command.args)
+        : commandReply(SKILL_WORKSHOP_UNAVAILABLE_REPLY);
     }
 
     applyCommandTextToParams(params, buildLearnPrompt(command.request, media));

@@ -23,42 +23,6 @@ import type { CostUsageTotals } from "./session-cost-usage.types.js";
 const QUARTER_COLUMNS = TABLE_OFFSETS[QUARTERS]!;
 export const quarterColumn = (index: number) => QUARTER_COLUMNS + index;
 
-function addOwnedUint32(
-  target: Float64Array,
-  width: number,
-  field: number,
-  owners: Int32Array,
-  rows: number,
-  data: Uint32Array,
-  offset: number,
-) {
-  for (let row = 0; row < rows; row += 1) {
-    const owner = owners[row]!;
-    if (owner >= 0) {
-      const index = owner * width + field;
-      target[index] = target[index]! + data[offset + row]!;
-    }
-  }
-}
-
-function addOwnedFloat64(
-  target: Float64Array,
-  width: number,
-  field: number,
-  owners: Int32Array,
-  rows: number,
-  data: Float64Array,
-  offset: number,
-) {
-  for (let row = 0; row < rows; row += 1) {
-    const owner = owners[row]!;
-    if (owner >= 0) {
-      const index = owner * width + field;
-      target[index] = target[index]! + data[offset + row]!;
-    }
-  }
-}
-
 /** Add one stored column into `target[owner * width + field]` for rows with an owner. */
 export function addColumn(
   target: Float64Array,
@@ -75,21 +39,21 @@ export function addColumn(
   }
   const offset = block.offsets[columnIndex]!;
   if (data instanceof Uint32Array) {
-    addOwnedUint32(target, width, field, owners, rows, data, offset);
+    for (let row = 0; row < rows; row += 1) {
+      const owner = owners[row]!;
+      if (owner >= 0) {
+        const index = owner * width + field;
+        target[index] = target[index]! + data[offset + row]!;
+      }
+    }
   } else {
-    addOwnedFloat64(target, width, field, owners, rows, data, offset);
-  }
-}
-
-function copyUint32(target: Float64Array, rows: number, data: Uint32Array, offset: number) {
-  for (let row = 0; row < rows; row += 1) {
-    target[row] = data[offset + row]!;
-  }
-}
-
-function copyFloat64(target: Float64Array, rows: number, data: Float64Array, offset: number) {
-  for (let row = 0; row < rows; row += 1) {
-    target[row] = data[offset + row]!;
+    for (let row = 0; row < rows; row += 1) {
+      const owner = owners[row]!;
+      if (owner >= 0) {
+        const index = owner * width + field;
+        target[index] = target[index]! + data[offset + row]!;
+      }
+    }
   }
 }
 
@@ -104,9 +68,15 @@ export function readColumn(
   if (!data) {
     target.fill(0, 0, rows);
   } else if (data instanceof Uint32Array) {
-    copyUint32(target, rows, data, block.offsets[columnIndex]!);
+    const offset = block.offsets[columnIndex]!;
+    for (let row = 0; row < rows; row += 1) {
+      target[row] = data[offset + row]!;
+    }
   } else {
-    copyFloat64(target, rows, data, block.offsets[columnIndex]!);
+    const offset = block.offsets[columnIndex]!;
+    for (let row = 0; row < rows; row += 1) {
+      target[row] = data[offset + row]!;
+    }
   }
   return target;
 }

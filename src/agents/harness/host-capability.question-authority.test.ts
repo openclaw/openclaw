@@ -1,5 +1,5 @@
 import { AsyncResource } from "node:async_hooks";
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   claimPendingAgentQuestionAnswerFromCaller,
@@ -7,29 +7,22 @@ import {
 } from "./gateway-question.js";
 import { withQuestionGateway } from "./gateway-question.test-support.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
+import { createBaseAttemptParams } from "./lifecycle.test-support.js";
 import { withPreparedEmbeddedRunToolAuthority } from "./tool-authority.runtime.js";
 
-const attempt = {
-  sessionId: "native-question-session",
-  sessionKey: "agent:main:native-question",
-  runId: "native-question-run",
-  agentId: "main",
-  config: {},
-  sessionFile: "/tmp/native-question-session.jsonl",
-  workspaceDir: "/tmp/native-question-workspace",
-  provider: "openai",
-  modelId: "gpt-test",
-  messageProvider: "telegram",
-  senderId: "question-owner",
-  senderIsOwner: true,
-};
-
 const caller = {
-  senderId: attempt.senderId,
+  senderId: "question-owner",
   senderIsOwner: true,
   disableTools: false,
   traceAuthorized: false,
   messageProvider: "telegram",
+};
+const attempt = {
+  ...createBaseAttemptParams(),
+  ...caller,
+  sessionKey: "agent:main:native-question",
+  agentId: "main",
+  config: {},
 };
 
 it.each(["live", "copied", "closed"] as const)(
@@ -37,68 +30,58 @@ it.each(["live", "copied", "closed"] as const)(
   async (mode) => {
     const nativeCallback = new AsyncResource("native-question-callback");
     const host = await createAdmittedHostCapabilityTestFixture(attempt);
-    try {
-      await withQuestionGateway((gateway) =>
-        withPreparedEmbeddedRunToolAuthority(
-          { admittedRunContext: host.admittedRunContext },
-          { ...attempt, hostCapabilities: host.hostCapabilities },
-          undefined,
-          async () => {
-            const controller = new AbortController();
-            const delivered = createDeferredCore();
-            const hostCapabilities =
-              mode === "copied" ? { ...host.hostCapabilities } : host.hostCapabilities;
-            const pending = nativeCallback.runInAsyncScope(() =>
-              runAgentHarnessGatewayQuestion({
-                sessionKey: attempt.sessionKey,
-                agentId: attempt.agentId,
-                runId: attempt.runId,
-                timeoutMs: 10_000,
-                signal: controller.signal,
-                questions: [{ id: "choice", header: "Choice", question: "Continue?" }],
-                delivery: {
-                  hostCapabilities,
-                  onPartialReply: async () => delivered.resolve(),
-                },
-              }),
-            );
-            void pending.catch(() => undefined);
-            try {
-              await delivered.promise;
-              if (mode === "closed") {
-                host.closeHost();
-              }
-              const answer = claimPendingAgentQuestionAnswerFromCaller({
-                sessionKey: attempt.sessionKey,
-                text: "Continue",
-                caller,
-                assertSourceCurrent: () => {},
-              });
-              if (mode === "live") {
-                await expect(answer).resolves.toBe(true);
-                await expect(pending).resolves.toMatchObject({
-                  status: "answered",
-                  answers: { answers: { choice: ["Continue"] } },
-                });
-              } else {
-                await expect(answer).rejects.toThrow(
-                  mode === "copied" ? "no prepared creator authority" : "no longer active",
-                );
-                expect(
-                  gateway.requests.filter((request) => request.method === "question.resolve"),
-                ).toHaveLength(0);
-              }
-            } finally {
-              controller.abort();
-              await pending;
-            }
-          },
-        ),
-      );
-    } finally {
+    onTestFinished(() => {
       nativeCallback.emitDestroy();
       host.closeHost();
       host.closeAdmission();
-    }
+    });
+    const params = { ...attempt, hostCapabilities: host.hostCapabilities };
+    await withQuestionGateway((gateway) =>
+      withPreparedEmbeddedRunToolAuthority(host, params, undefined, async () => {
+        const controller = new AbortController();
+        const delivered = createDeferredCore();
+        const hostCapabilities =
+          mode === "copied" ? { ...host.hostCapabilities } : host.hostCapabilities;
+        const pending = nativeCallback.runInAsyncScope(() =>
+          runAgentHarnessGatewayQuestion({
+            sessionKey: attempt.sessionKey,
+            agentId: attempt.agentId,
+            runId: attempt.runId,
+            timeoutMs: 10_000,
+            signal: controller.signal,
+            questions: [{ id: "choice", header: "Choice", question: "Continue?" }],
+            delivery: { hostCapabilities, onPartialReply: async () => delivered.resolve() },
+          }),
+        );
+        void pending.catch(() => undefined);
+        try {
+          await delivered.promise;
+          if (mode === "closed") {
+            host.closeHost();
+          }
+          const answer = claimPendingAgentQuestionAnswerFromCaller({
+            sessionKey: attempt.sessionKey,
+            text: "Continue",
+            caller,
+            assertSourceCurrent: () => {},
+          });
+          if (mode === "live") {
+            await expect(answer).resolves.toBe(true);
+            await expect(pending).resolves.toMatchObject({
+              status: "answered",
+              answers: { answers: { choice: ["Continue"] } },
+            });
+          } else {
+            await expect(answer).rejects.toThrow(
+              mode === "copied" ? "no prepared creator authority" : "no longer active",
+            );
+            expect(gateway.requests.map(({ method }) => method)).not.toContain("question.resolve");
+          }
+        } finally {
+          controller.abort();
+          await pending;
+        }
+      }),
+    );
   },
 );

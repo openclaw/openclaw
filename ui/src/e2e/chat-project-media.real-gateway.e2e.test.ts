@@ -20,6 +20,7 @@ import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-rea
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
+import { createLocalNetworkControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 
 const execFileAsync = promisify(execFile);
@@ -134,111 +135,99 @@ suite.define(() => {
     const issued = new URL((JSON.parse(dashboard.stdout) as { browserUrl: string }).browserUrl);
     const url = new URL(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "chat"));
     url.hash = issued.hash;
-    await suite.withPage(
-      {
-        locale: "en-US",
-        viewport: { width: 1440, height: 1000 },
-        serviceWorkers: "block",
-        permissions: ["local-network-access"],
-      },
-      async ({ page }) => {
-        const cards = page.locator(".chat-assistant-attachment-card");
-        const allow = (root: Page | Locator = page) =>
-          root.getByRole("button", { name: "Allow image", exact: true });
-        const decoded = async (image: Locator) =>
-          (await image.count()) === 1
-            ? image.evaluate((element) =>
-                element instanceof HTMLImageElement && element.complete ? element.naturalWidth : 0,
-              )
-            : 0;
-        expect((await page.goto(url.toString()))?.status()).toBe(404);
-        await enterControlUiSession(page);
-        await waitForControlUiGatewayReady(page);
-        await page.getByText(introduction, { exact: true }).waitFor();
-        const projectPreview = page.locator('img.chat-message-image[src*="project.png"]');
-        await expect.poll(() => decoded(projectPreview)).toBeGreaterThan(0);
-        const selected = cards.filter({ has: page.getByText("selected.png", { exact: true }) });
-        const other = cards.filter({ hasText: "unselected.png" });
-        await expect.poll(() => allow().count()).toBe(2);
-        const selectedTitle = selected.locator(".chat-assistant-attachment-card__title");
-        await selectedTitle.hover();
-        await expect.poll(() => tooltipTitleText(selectedTitle)).toContain(outsideImage);
-        await page
-          .locator("openclaw-tooltip .tooltip-content")
-          .filter({ hasText: outsideImage })
-          .waitFor({ state: "visible" });
-        await allow(selected).click();
-        const allowedPreview = page.locator(
-          'img.chat-message-image[src*="selected.png"]:not([src*="unselected.png"])',
-        );
-        await expect.poll(() => decoded(allowedPreview)).toBeGreaterThan(0);
-        expect(await allow(other).count()).toBe(1);
+    await suite.withPage(createLocalNetworkControlUiContextOptions(), async ({ page }) => {
+      const cards = page.locator(".chat-assistant-attachment-card");
+      const allow = (root: Page | Locator = page) =>
+        root.getByRole("button", { name: "Allow image", exact: true });
+      const decoded = async (image: Locator) =>
+        (await image.count()) === 1
+          ? image.evaluate((element) =>
+              element instanceof HTMLImageElement && element.complete ? element.naturalWidth : 0,
+            )
+          : 0;
+      expect((await page.goto(url.toString()))?.status()).toBe(404);
+      await enterControlUiSession(page);
+      await waitForControlUiGatewayReady(page);
+      await page.getByText(introduction, { exact: true }).waitFor();
+      const projectPreview = page.locator('img.chat-message-image[src*="project.png"]');
+      await expect.poll(() => decoded(projectPreview)).toBeGreaterThan(0);
+      const selected = cards.filter({ has: page.getByText("selected.png", { exact: true }) });
+      const other = cards.filter({ hasText: "unselected.png" });
+      await expect.poll(() => allow().count()).toBe(2);
+      const selectedTitle = selected.locator(".chat-assistant-attachment-card__title");
+      await selectedTitle.hover();
+      await expect.poll(() => tooltipTitleText(selectedTitle)).toContain(outsideImage);
+      await page
+        .locator("openclaw-tooltip .tooltip-content")
+        .filter({ hasText: outsideImage })
+        .waitFor({ state: "visible" });
+      await allow(selected).click();
+      const allowedPreview = page.locator(
+        'img.chat-message-image[src*="selected.png"]:not([src*="unselected.png"])',
+      );
+      await expect.poll(() => decoded(allowedPreview)).toBeGreaterThan(0);
+      expect(await allow(other).count()).toBe(1);
 
-        const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
-        const permissionTrigger = pane.locator('[data-chat-permission-select="true"]');
-        const selectPermission = async (mode: "full" | "workspace") => {
-          await permissionTrigger.click();
-          await pane.locator(`[data-chat-permission-option="${mode}"]`).click();
-          await expect
-            .poll(() => permissionTrigger.getAttribute("data-chat-select-value"))
-            .toBe(mode);
-          await expect.poll(() => permissionTrigger.isEnabled()).toBe(true);
-        };
-        await selectPermission("full");
-        for (const filename of ["project.png", "selected.png", "unselected.png"]) {
-          await expect
-            .poll(() => decoded(page.locator(`img.chat-message-image[src*="%2F${filename}"]`)))
-            .toBeGreaterThan(0);
-        }
-        expect(await allow().count()).toBe(0);
+      const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+      const permissionTrigger = pane.locator('[data-chat-permission-select="true"]');
+      const selectPermission = async (mode: "full" | "workspace") => {
+        await permissionTrigger.click();
+        await pane.locator(`[data-chat-permission-option="${mode}"]`).click();
+        await expect
+          .poll(() => permissionTrigger.getAttribute("data-chat-select-value"))
+          .toBe(mode);
+        await expect.poll(() => permissionTrigger.isEnabled()).toBe(true);
+      };
+      await selectPermission("full");
+      for (const filename of ["project.png", "selected.png", "unselected.png"]) {
+        await expect
+          .poll(() => decoded(page.locator(`img.chat-message-image[src*="%2F${filename}"]`)))
+          .toBeGreaterThan(0);
+      }
+      expect(await allow().count()).toBe(0);
 
-        await selectPermission("workspace");
-        await expect.poll(() => decoded(projectPreview)).toBeGreaterThan(0);
-        await expect.poll(() => allow().count()).toBe(2);
+      await selectPermission("workspace");
+      await expect.poll(() => decoded(projectPreview)).toBeGreaterThan(0);
+      await expect.poll(() => allow().count()).toBe(2);
 
-        const filename = "café 雪 🦞.txt";
-        const bytes = Buffer.from("café|雪|🦞\r\n139+241=380\r\n");
-        const saved = await withEnvAsync({ OPENCLAW_STATE_DIR: owner.env.OPENCLAW_STATE_DIR }, () =>
-          saveMediaBuffer(bytes, "text/plain", "inbound", undefined, filename),
-        );
-        await append({
-          role: "user",
-          timestamp: Date.now(),
-          content: "Synthetic original-filename download proof.",
-          __openclaw: {
-            media: [
-              {
-                url: `media://inbound/${saved.id}`,
-                contentType: "text/plain",
-                kind: "document",
-                fileName: filename,
-                sizeBytes: bytes.length,
-                origin: "file",
-                hydrationSuppressed: true,
-              },
-            ],
-          },
-        });
-        await page.reload();
-        await waitForControlUiGatewayReady(page);
-        const fileCard = cards.filter({ hasText: filename });
-        const downloadFile = async (link: Locator) => {
-          // Focus keeps the action exposed while reloaded images move the card.
-          await link.focus();
-          const [download] = await Promise.all([page.waitForEvent("download"), link.click()]);
-          expect(await readControlUiE2eDownload(download)).toEqual(bytes);
-          expect(download.suggestedFilename()).toBe(filename);
-        };
-        await downloadFile(
-          fileCard.getByRole("link", { name: `Download ${filename}`, exact: true }),
-        );
-        await fileCard
-          .getByRole("button", { name: `Open ${filename} in the side panel`, exact: true })
-          .click();
-        await downloadFile(
-          page.locator("openclaw-chat-detail-panel:visible").locator("a[download]"),
-        );
-      },
-    );
+      const filename = "café 雪 🦞.txt";
+      const bytes = Buffer.from("café|雪|🦞\r\n139+241=380\r\n");
+      const saved = await withEnvAsync({ OPENCLAW_STATE_DIR: owner.env.OPENCLAW_STATE_DIR }, () =>
+        saveMediaBuffer(bytes, "text/plain", "inbound", undefined, filename),
+      );
+      await append({
+        role: "user",
+        timestamp: Date.now(),
+        content: "Synthetic original-filename download proof.",
+        __openclaw: {
+          media: [
+            {
+              url: `media://inbound/${saved.id}`,
+              contentType: "text/plain",
+              kind: "document",
+              fileName: filename,
+              sizeBytes: bytes.length,
+              origin: "file",
+              hydrationSuppressed: true,
+            },
+          ],
+        },
+      });
+      await page.reload();
+      await waitForControlUiGatewayReady(page);
+      const fileCard = cards.filter({ hasText: filename });
+      const downloadFile = async (link: Locator) => {
+        // Focus keeps the action exposed while reloaded images move the card.
+        await link.focus();
+        const [download] = await Promise.all([page.waitForEvent("download"), link.click()]);
+        expect(await readControlUiE2eDownload(download)).toEqual(bytes);
+        expect(download.suggestedFilename()).toBe(filename);
+      };
+      await downloadFile(fileCard.getByRole("link", { name: `Download ${filename}`, exact: true }));
+      await fileCard
+        .getByRole("button", { name: `Open ${filename} in the side panel`, exact: true })
+        .click();
+      await downloadFile(page.locator("openclaw-chat-detail-panel:visible").locator("a[download]"));
+    });
   });
 });

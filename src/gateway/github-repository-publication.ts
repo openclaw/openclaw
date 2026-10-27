@@ -463,7 +463,8 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       getCommittedRuntimeConfig,
       assertCurrent: params.assertCurrent,
       isExecuting: (requestId) => active.has(requestId),
-      execute: (row, assertCustody) => execute(row, { assertCustody }),
+      execute: (row, assertCustody, recoveryResult) =>
+        execute(row, { assertCustody, recoveryResult }),
     }),
     preparePersonalStatus,
     async personalStatusAsync(

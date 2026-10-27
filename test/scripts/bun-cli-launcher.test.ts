@@ -43,9 +43,9 @@ type LifecycleOptions = {
 };
 const packageParams = (target: ReturnType<typeof fixture>, options: LifecycleOptions = {}) => ({
   packageRoot: target.packageRoot,
-  bunVersion: options.bunVersion ?? "1.4.3",
+  bunVersion: options.bunVersion ?? "1.4.4",
   env: {
-    npm_config_user_agent: options.agent ?? "bun/1.4.3",
+    npm_config_user_agent: options.agent ?? "bun/1.4.4",
     OPENCLAW_PACKAGE_BUN_LAUNCHER: options.marker ?? target.bunPath,
   },
 });
@@ -248,7 +248,7 @@ describe.skipIf(process.platform === "win32")("packaged Bun launcher lifecycle",
     lifecycle.probeNode.mockReset().mockReturnValue({
       version: "24.22.0",
       execPath: "/runtime/bun",
-      bunVersion: "1.4.3",
+      bunVersion: "1.4.4",
     });
   });
 

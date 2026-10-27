@@ -3,6 +3,7 @@ import type { Page } from "playwright";
 import { assert, expect, it } from "vitest";
 import type { CommandEntry } from "../../../packages/gateway-protocol/src/index.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
 import { polledAttribute, polledText } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { setupPages } from "./model-setup-fixtures.test-support.ts";
@@ -39,12 +40,7 @@ async function installCommands(
   return installMockGateway(page, {
     methodResponses: {
       "chat.startup": {
-        agentsList: {
-          agents: [{ id: "main", name: "OpenClaw" }],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
-        },
+        agentsList: agentRoster({ main: "OpenClaw" }, "main", "agent"),
         messages: [],
         metadata: { commands, models: [] },
         sessionId,
@@ -191,10 +187,11 @@ suite.define(() => {
           nodes.findIndex((node) => node.textContent?.trim().startsWith("/viewport-15")),
         );
         expect(targetIndex).toBeGreaterThan(10);
+        await polledAttribute(options.first(), "aria-selected").toBe("true");
         for (let index = 0; index < targetIndex; index += 1) {
           await composer.press("ArrowDown");
+          await polledAttribute(options.nth(index + 1), "aria-selected").toBe("true");
         }
-        await polledAttribute(options.nth(targetIndex), "aria-selected").toBe("true");
         await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
         if (selection === "pointer") {
           await options.nth(targetIndex).click();
@@ -232,6 +229,7 @@ suite.define(() => {
         expect(activeIndex).toBeGreaterThanOrEqual(0);
         for (let index = activeIndex; index < choices.length - 1; index += 1) {
           await composer.press("ArrowDown");
+          await polledAttribute(options.nth(index + 1), "aria-selected").toBe("true");
         }
         await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
         await composer.fill("/viewport-");

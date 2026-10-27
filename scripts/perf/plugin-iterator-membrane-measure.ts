@@ -2,6 +2,8 @@
  * Isolated plugin iterator owner benchmark; no Gateway, network, or model calls.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/plugin-iterator-membrane-measure.ts timing 20000
  * Repeat with allocation and promises; alternate base/candidate for five samples.
+ * The verify mode asserts one membrane continuation Promise per event per layer.
+ * Promise instrumentation also counts reaction jobs; it is separate from timing/allocation.
  * Optional final argument: path to a frozen PluginInstance source module.
  * Acceptance: identical events and source call counts, lower allocation or CPU,
  * with no reproducible adverse CPU change. Promise counts are a separate pass.
@@ -24,7 +26,7 @@ const { PluginInstance } = (await import(
 
 const mode = process.argv[2] ?? "timing";
 const iterations = Number(process.argv[3] ?? 20000);
-assert(["timing", "allocation", "promises"].includes(mode));
+assert(["timing", "allocation", "promises", "verify"].includes(mode));
 assert(Number.isSafeInteger(iterations) && iterations > 0);
 assert(global.gc, "Run with --expose-gc");
 
@@ -60,10 +62,18 @@ for (const layers of [0, 1, 3]) {
   global.gc();
   const inspector = new Session();
   let promises = 0;
+  let reactions = 0;
+  const promiseIds = new Set<number>();
   const hook = createHook({
-    init(_id, type) {
+    init(id, type) {
       if (type === "PROMISE") {
         promises++;
+        promiseIds.add(id);
+      }
+    },
+    before(id) {
+      if (promiseIds.has(id)) {
+        reactions++;
       }
     },
   });
@@ -75,7 +85,7 @@ for (const layers of [0, 1, 3]) {
       includeObjectsCollectedByMinorGC: true,
     });
   }
-  if (mode === "promises") {
+  if (mode === "promises" || mode === "verify") {
     hook.enable();
   }
   const hostLoad = loadavg();
@@ -85,6 +95,11 @@ for (const layers of [0, 1, 3]) {
   const wallMs = performance.now() - wallStart;
   const cpu = process.threadCpuUsage(start);
   hook.disable();
+  if (mode === "verify") {
+    // The async run() call and its consumer contribute two Promises and one reaction.
+    assert.equal(promises, iterations * (layers + 2) + 2);
+    assert.equal(reactions, iterations * (layers + 1) + 1);
+  }
   let allocatedBytes: number | undefined;
   if (mode === "allocation") {
     const { profile } = await inspector.post("HeapProfiler.stopSampling");
@@ -109,8 +124,11 @@ for (const layers of [0, 1, 3]) {
       wallMs,
       allocatedBytes,
       bytesPerEvent: allocatedBytes === undefined ? undefined : allocatedBytes / iterations,
-      promises: mode === "promises" ? promises : undefined,
-      promisesPerEvent: mode === "promises" ? (promises - 2) / iterations : undefined,
+      promises: mode === "promises" || mode === "verify" ? promises : undefined,
+      reactionsPerEvent:
+        mode === "promises" || mode === "verify" ? (reactions - 1) / iterations : undefined,
+      promisesPerEvent:
+        mode === "promises" || mode === "verify" ? (promises - 2) / iterations : undefined,
     }),
   );
 }

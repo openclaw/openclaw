@@ -2,7 +2,7 @@ import { createMemo, For, isPending } from "solid-js";
 import { pathForRoute } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { registerCronEnglish } from "../../../i18n/locales/en-cron.ts";
 import { handleNavigationClick } from "../../../lib/navigation-click.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -16,7 +16,7 @@ import "../../../styles/chat/summary-automations.css";
 import { SessionAutomationResult } from "./session-automation-result.tsx";
 import { createSessionAutomationSchedule } from "./session-automation-schedule-loader.ts";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 registerEnglishCatalog(registerCronEnglish);
 

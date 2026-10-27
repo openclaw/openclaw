@@ -9,7 +9,7 @@
   "type": "module",
   "dependencies": {
     "@line/bot-sdk": "11.3.0",
-    "typebox": "1.4.1",
+    "typebox": "1.4.2",
     "zod": "4.6.7"
   },
   "devDependencies": {

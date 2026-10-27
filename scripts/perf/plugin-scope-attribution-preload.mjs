@@ -206,4 +206,5 @@ if (isMainThread) {
       ),
     );
   });
+  process.channel?.unref();
 }

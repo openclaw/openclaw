@@ -27,6 +27,7 @@ import {
 } from "./model-picker.js";
 import {
   authorizeMattermostCommandInvocation,
+  MATTERMOST_PAIRING_QUEUE_FULL_TEXT,
   normalizeMattermostAllowList,
 } from "./monitor-auth.js";
 import { resolveMattermostThreadSessionContext } from "./monitor-context.js";
@@ -454,11 +455,13 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
           });
           return {
             ok: false,
-            denyText: core.channel.pairing.buildPairingReply({
-              channel: "mattermost",
-              idLine: `Your Mattermost user id: ${senderId}`,
-              code,
-            }),
+            denyText: code
+              ? core.channel.pairing.buildPairingReply({
+                  channel: "mattermost",
+                  idLine: `Your Mattermost user id: ${senderId}`,
+                  code,
+                })
+              : MATTERMOST_PAIRING_QUEUE_FULL_TEXT,
           };
         }
 

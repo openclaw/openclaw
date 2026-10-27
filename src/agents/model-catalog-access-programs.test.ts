@@ -1,6 +1,9 @@
 import { expect, it } from "vitest";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
-import { resolveModelCatalogAccessPrograms } from "./model-catalog-access-programs.js";
+import {
+  projectModelCatalogAccessPrograms,
+  resolveModelCatalogAccessPrograms,
+} from "./model-catalog-access-programs.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 
 const route = {
@@ -116,3 +119,40 @@ it("uses native-owned observations only while native account ownership is curren
     }),
   ).toBeUndefined();
 });
+
+it.each(["openclaw", "codex"])(
+  "publishes a Standard baseline without Daybreak entitlement for %s",
+  (runtimeId) => {
+    const params = {
+      snapshot: { ...snapshot, providerOutcomes: [] },
+      entry,
+      evaluation,
+      runtimeId,
+      isCurrent: () => true,
+    };
+    expect(projectModelCatalogAccessPrograms({ ...params, config: {} })).toEqual({
+      cyberAccessProgramDefault: "standard",
+    });
+    expect(
+      projectModelCatalogAccessPrograms({
+        ...params,
+        config: {
+          agents: { defaults: { params: { accessPrograms: { cyber: "daybreak_blue" } } } },
+        },
+      }),
+    ).toEqual({ cyberAccessProgramDefault: "daybreak_blue" });
+    expect(
+      projectModelCatalogAccessPrograms({
+        ...params,
+        entry: { ...entry, provider: "other" },
+        config: {},
+      }),
+    ).toEqual({});
+    expect(
+      projectModelCatalogAccessPrograms({
+        ...params,
+        config: { agents: { defaults: { params: { accessPrograms: {} } } } },
+      }),
+    ).toEqual({});
+  },
+);

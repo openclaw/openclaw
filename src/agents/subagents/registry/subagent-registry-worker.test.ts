@@ -1,9 +1,6 @@
-import { randomBytes } from "node:crypto";
-import { Session } from "node:inspector/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { setImmediate } from "node:timers/promises";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import {
   emptySqliteCounts,
@@ -18,6 +15,7 @@ import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-context-binding.js";
+import * as sessionStateNotices from "../../../sessions/session-state-notices.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { clearOpenClawDatabaseQuarantine } from "../../../state/openclaw-quarantine-store.js";
 import { seedOpenClawDatabaseQuarantine } from "../../../state/openclaw-quarantine-store.test-support.js";
@@ -28,18 +26,10 @@ import {
 } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../../test-utils/openclaw-test-state.js";
-import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
 import { bindSubagentRunGatewayOwners } from "./subagent-registry-gateway-owner.js";
 import { getSubagentActivationRuns, subagentRuns } from "./subagent-registry-memory.js";
-import {
-  mutateSubagentRuns,
-  restoreSubagentRunsFromDisk,
-} from "./subagent-registry-persistence.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import {
   getSubagentRegistryPublicationRevision,
   subscribeSubagentRunChanges,
@@ -51,24 +41,26 @@ import {
   saveSubagentRegistryChangesToSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
 import {
-  clearSubagentRunsReadCacheForTest,
   getSubagentRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForRead,
   prepareSubagentRegistrationRows,
-  prepareSubagentRunsSnapshotForRunIds,
 } from "./subagent-registry-state.js";
+import {
+  change,
+  entry,
+  postimages,
+  register,
+  restore,
+  stored,
+  useSubagentRegistryWorkerFixture,
+} from "./subagent-registry-worker.test-support.js";
 import { streamSubagentRegistryInWorker } from "./subagent-registry.store.restore.worker.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
-let state: OpenClawTestState;
-const restore = () => restoreSubagentRunsFromDisk({ runs: subagentRuns });
-const stored = (id: string) => loadSubagentRegistryFromSqlite().get(id);
+const fixture = useSubagentRegistryWorkerFixture();
 const projections = [getSubagentRunsSnapshotForRead, getSubagentSessionListRunsSnapshotForRead];
 
-function postimages(rows: Iterable<readonly [string, SubagentRunRecord | null]>) {
-  return { value: undefined, postimages: new Map(rows) };
-}
 function seed(...rows: SubagentRunRecord[]) {
   saveSubagentRegistryChangesToSqlite(
     new Map(rows.map((row) => [row.runId, row])),
@@ -93,130 +85,6 @@ function interceptChunks(
       }),
     );
 }
-
-beforeAll(async () => {
-  state = await createOpenClawTestState({ scenario: "minimal", applyEnv: true });
-  openOpenClawStateDatabase();
-});
-beforeEach(() => {
-  subagentRuns.clear();
-  clearSubagentRunsReadCacheForTest();
-});
-afterEach(async () => {
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-  // Restore also reconciles uncertain or source-superseded writes before deleting fixture rows.
-  await restore();
-  const runIds = [...subagentRuns.keys()];
-  if (runIds.length) {
-    await mutateSubagentRuns(runIds, () => postimages(runIds.map((runId) => [runId, null])));
-  }
-  subagentRuns.clear();
-  clearSubagentRunsReadCacheForTest();
-});
-afterAll(async () => {
-  await state.cleanup();
-});
-
-function entry(runId: string, overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
-  return createSubagentRunRecord({
-    runId,
-    childSessionKey: `agent:main:subagent:${runId}`,
-    requesterSessionKey: "agent:main:requester",
-    createdAt: 1,
-    completion: { required: false },
-    delivery: { status: "not_required" },
-    ...overrides,
-  });
-}
-
-async function register(...entries: SubagentRunRecord[]) {
-  await mutateSubagentRuns(
-    entries.map((row) => row.runId),
-    () => postimages(entries.map((row) => [row.runId, row])),
-  );
-}
-
-it.each(["0", "1"])(
-  "releases completed payloads and persists their removal (catalog=%s)",
-  async (readPersisted) => {
-    vi.stubEnv("OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE", readPersisted);
-    const gc = async () => {
-      const inspector = new Session();
-      inspector.connect();
-      try {
-        await inspector.post("HeapProfiler.collectGarbage");
-      } finally {
-        inspector.disconnect();
-      }
-    };
-    await register(entry("warm-retention"));
-    await setImmediate();
-    await gc();
-    const before = process.memoryUsage().heapUsed;
-    // Independent flat strings expose sliced-preview and full-row cache retention.
-    for (let batch = 0; batch < 4; batch++) {
-      await register(
-        ...Array.from({ length: 16 }, (_, index) => {
-          const resultText = randomBytes(96 * 1024).toString("base64");
-          return entry(`retained-${batch * 16 + index}`, {
-            // A short-task row also catches equality-elided payload removal after compaction.
-            task:
-              batch === 0 && index === 1 ? "short task" : randomBytes(96 * 1024).toString("base64"),
-            execution: {
-              status: "terminal" as const,
-              endedAt: 2,
-              outcome: { status: "ok" as const },
-            },
-            cleanupCompletedAt: 3,
-            completion: {
-              required: false,
-              resultText,
-              fallbackResultText: "retained fallback",
-              terminalReply: { disposition: "visible" as const, text: resultText.slice(0, 4096) },
-            },
-          });
-        }),
-      );
-    }
-    await setImmediate();
-    await gc();
-    expect(process.memoryUsage().heapUsed - before).toBeLessThan(6 * 1024 * 1024);
-    expect(subagentRuns.get("retained-0")?.task.length).toBeLessThanOrEqual(160);
-    expect(subagentRuns.get("retained-0")?.completion?.resultText).toBeUndefined();
-
-    const prepared = await prepareSubagentRunsSnapshotForRunIds(subagentRuns, ["retained-0"]);
-    const full = prepared.consume((rows) => rows.get("retained-0"));
-    expect(full.ready).toBe(true);
-    if (!full.ready) {
-      throw new Error("Expected a current completed run");
-    }
-    expect(full.value?.task).toHaveLength(128 * 1024);
-    expect(full.value?.completion?.resultText).toHaveLength(128 * 1024);
-    await change("retained-0", { label: "updated after completion" });
-    const durable = stored("retained-0");
-    expect(durable?.task).toBe(full.value?.task);
-    expect(durable?.completion?.resultText).toBe(full.value?.completion?.resultText);
-    expect(durable?.completion?.terminalReply).toEqual(full.value?.completion?.terminalReply);
-    expect(durable?.label).toBe("updated after completion");
-    subagentRuns.clear();
-    await restore();
-    expect(subagentRuns.get("retained-0")?.task.length).toBeLessThanOrEqual(160);
-    expect(subagentRuns.get("retained-0")?.completion?.resultText).toBeUndefined();
-    const resident = subagentRuns.get("retained-1");
-    expect(resident?.task).toBe("short task");
-    expect(resident?.completion?.resultText).toBeUndefined();
-    expect(resident?.completion?.fallbackResultText).toBeUndefined();
-    await change("retained-1", (row) => {
-      delete row.completion!.resultText;
-      delete row.completion!.fallbackResultText;
-    });
-    const cleared = stored("retained-1");
-    expect(cleared).toBeDefined();
-    expect(cleared?.completion?.resultText).toBeUndefined();
-    expect(cleared?.completion?.fallbackResultText).toBeUndefined();
-  },
-);
 
 it("restores rows without an explicit read transaction", async () => {
   seed(entry("autocommit-restore"));
@@ -311,7 +179,7 @@ it("refuses quarantined registry reads in the worker without replacing resident 
   subagentRuns.set(resident.runId, resident);
   const revision = getSubagentRegistryPublicationRevision();
   const reason = "synthetic registry quarantine";
-  seedOpenClawDatabaseQuarantine({ env: state.env, kind: "state", path: pathname, reason });
+  seedOpenClawDatabaseQuarantine({ env: fixture.state.env, kind: "state", path: pathname, reason });
   const staging = vi.spyOn(snapshotSource, "startSqliteReadOnlyLocationAsync");
   const hostSql = observeParentSqlite();
   try {
@@ -324,36 +192,10 @@ it("refuses quarantined registry reads in the worker without replacing resident 
   } finally {
     hostSql.restore();
     staging.mockRestore();
-    clearOpenClawDatabaseQuarantine(pathname, { env: state.env });
+    clearOpenClawDatabaseQuarantine(pathname, { env: fixture.state.env });
     await closeOpenClawStateDatabaseAsync();
   }
 });
-
-function change(
-  runId: string,
-  update: Partial<SubagentRunRecord> | ((row: SubagentRunRecord) => void),
-  options?: Pick<
-    NonNullable<Parameters<typeof mutateSubagentRuns>[2]>,
-    "assertCurrent" | "onPublished"
-  >,
-) {
-  return mutateSubagentRuns(
-    [runId],
-    (rows) => {
-      const current = rows.get(runId);
-      if (!current) {
-        throw new Error("Missing test row");
-      }
-      const next =
-        typeof update === "function" ? structuredClone(current) : { ...current, ...update };
-      if (typeof update === "function") {
-        update(next);
-      }
-      return postimages([[runId, next]]);
-    },
-    options,
-  );
-}
 
 function interceptWrites(callback: (phase: "before" | "after") => void | Promise<void>) {
   return probe.command(stateWorker, async (command, executeOptions, scope) => {
@@ -384,6 +226,141 @@ function holdFirstAck(onWrite = () => {}) {
   });
   return { reached, release };
 }
+
+it.each(["delivered", "lost"] as const)(
+  "publishes native registry receipts once without repeating their payload in the reply (%s)",
+  async (delivery) => {
+    const original = entry(`native-receipt-${delivery}`);
+    await register(original);
+    const replies: unknown[] = [];
+    probe.command(stateWorker, async (command, executeOptions, scope) => {
+      const reply = await scope.execute(command, executeOptions);
+      if (command.type === "subagents.persistChanges") {
+        replies.push(reply);
+        if (delivery === "lost") {
+          throw new SqliteWorkerError("Synthetic lost registry ACK", "outcome-unknown");
+        }
+      }
+      return reply;
+    });
+    const notify = vi
+      .spyOn(sessionStateNotices, "enqueueSessionStateNotice")
+      .mockImplementation(() => {});
+    const published = vi.fn();
+    const stop = subscribeSubagentRunChanges("persistence", published);
+    const onPublished = vi.fn();
+    try {
+      const value = await mutateSubagentRuns(
+        [original.runId],
+        (rows) => ({
+          value: "updated",
+          postimages: new Map([
+            [original.runId, { ...rows.get(original.runId)!, label: "native receipt" }],
+          ]),
+          terminalEvents: [
+            {
+              input: {
+                event: {
+                  sessionKey: original.childSessionKey,
+                  agentId: "main",
+                  kind: "goal_changed",
+                  actorType: "system",
+                  summary: "Synthetic registry receipt notice",
+                  watcherSessionKeys: [original.requesterSessionKey],
+                },
+                now: Date.now(),
+              },
+            },
+          ],
+        }),
+        { onPublished },
+      );
+      expect(value).toBe("updated");
+      expect(subagentRuns.get(original.runId)?.label).toBe("native receipt");
+      expect(stored(original.runId)?.label).toBe("native receipt");
+      expect(published).toHaveBeenCalledOnce();
+      expect(onPublished).toHaveBeenCalledOnce();
+      expect(notify).toHaveBeenCalledExactlyOnceWith({
+        watcherSessionKey: original.requesterSessionKey,
+        watcherStorePath: null,
+        targetSessionKey: original.childSessionKey,
+        lastSeenSequence: 0,
+        queueOnly: false,
+      });
+      expect(replies).toEqual([undefined]);
+    } finally {
+      stop();
+    }
+  },
+);
+
+it.each(["after acknowledgment", "lost acknowledgment", "missing receipt"] as const)(
+  "preserves the registry commit outcome and failure with %s",
+  async (fault) => {
+    const original = entry(`settlement-${fault}`);
+    await register(original);
+    const failure =
+      fault === "lost acknowledgment"
+        ? new SqliteWorkerError("Synthetic registry settlement failure", "outcome-unknown")
+        : new Error("Synthetic registry settlement failure");
+    const run = stateWorker.runOpenClawStateWorkerOperation;
+    vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementationOnce(
+      (context, operation, options) => {
+        let admission: operationAdmission.SqliteWorkerOperationAdmission | undefined;
+        const loseReceipt = () => {
+          expect(admission?.committed).toBeDefined();
+          Object.defineProperty(admission, "committed", { value: undefined });
+        };
+        return run(
+          context,
+          async (scope) => {
+            const value = await operation({
+              execute: async (command, executeOptions) => {
+                const result = await scope.execute(command, executeOptions);
+                if (
+                  command.type === "subagents.persistChanges" &&
+                  fault !== "after acknowledgment"
+                ) {
+                  loseReceipt();
+                  if (fault === "lost acknowledgment") {
+                    throw failure;
+                  }
+                }
+                return result;
+              },
+            });
+            if (fault === "after acknowledgment") {
+              loseReceipt();
+              throw failure;
+            }
+            return value;
+          },
+          {
+            ...options,
+            createAdmission: (nativeOperation) => {
+              const prepared = options!.createAdmission!(nativeOperation);
+              admission = prepared.admission;
+              return prepared;
+            },
+          },
+        );
+      },
+    );
+    const outcome = await change(original.runId, { label: "durably updated" }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(stored(original.runId)?.label).toBe("durably updated");
+    expect(subagentRuns.get(original.runId)?.label).toBe(original.label);
+    expect(outcome).toMatchObject({
+      outcome: fault === "after acknowledgment" ? "committed" : "unknown",
+      cause:
+        fault === "missing receipt"
+          ? expect.objectContaining({ message: "Registry committed receipt is unavailable" })
+          : failure,
+    });
+  },
+);
 
 it("publishes overlapping durable and runtime-only mutations in FIFO order", async () => {
   await register({ ...entry("overlap"), cleanupHandled: false });
@@ -749,7 +726,7 @@ it.each(["before ACK", "inside failing callback"] as const)(
     const stop = subscribeSubagentRunChanges("persistence", observed);
     const revision = getSubagentRegistryPublicationRevision();
     const replaceSource = () => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(state.stateDir, "replacement"));
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(fixture.state.stateDir, "replacement"));
     };
     interceptWrites(async (phase) => {
       if (phase === "after" && transition === "before ACK") {

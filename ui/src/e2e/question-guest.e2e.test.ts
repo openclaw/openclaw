@@ -7,6 +7,7 @@ import {
   installMockGateway,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { createDarkDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   createGuestQuestionFixture,
@@ -52,12 +53,7 @@ async function releaseQuestionBridge(page: Page, gateway: MockGatewayControls) {
 suite.define(() => {
   it("recovers and answers its own admitted run's question and settles cancellation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const context = await suite.newBrowserContext({
-        locale: "en-US",
-        colorScheme: "dark",
-        serviceWorkers: "block",
-        viewport: { width: 1440, height: 900 },
-      });
+      const context = await suite.newBrowserContext(createDarkDesktopControlUiContextOptions());
       const page = await context.newPage();
       let gateway: MockGatewayControls | undefined;
       const fixture = await createGuestQuestionFixture(async (frame) => {

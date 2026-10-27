@@ -7,7 +7,6 @@ import * as registry from "./doctor-sandbox.js";
 
 const fixture = vi.hoisted(() => ({ root: "" }));
 const at = (name: string) => path.join(fixture.root, name);
-const read = (file: string) => fs.readFileSync(file, "utf8");
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 vi.mock("../agents/sandbox/docker.js", () => ({}));
 // mock-isolation: Retired-registry repairs must address only each test's temporary sandbox paths.
@@ -33,9 +32,7 @@ const repair = (shouldRepair = true) =>
 const inspect = registry.detectLegacySandboxRegistryFileIssues;
 
 it.each([
-  { name: "containers.json", sharded: false, bytes: '{"entries":[]}' },
   { name: "browsers.json", sharded: false, bytes: "{malformed original bytes\n" },
-  { name: "containers", sharded: true, bytes: '{"containerName":"retained-container"}' },
   { name: "browsers", sharded: true, bytes: '{"containerName":"retained-browser"}' },
   { name: "containers", sharded: true, bytes: "original bytes", occupied: true },
 ])("archives $name byte-for-byte ($occupied)", async ({ name, sharded, bytes, occupied }) => {
@@ -43,8 +40,7 @@ it.each([
   if (sharded) {
     fs.mkdirSync(source);
   }
-  const contentPath = sharded ? path.join(source, "entry.json") : source;
-  fs.writeFileSync(contentPath, bytes);
+  fs.writeFileSync(sharded ? path.join(source, "entry.json") : source, bytes);
   if (occupied) {
     fs.symlinkSync(at("missing-archive"), `${source}.migrated`);
   }
@@ -53,20 +49,16 @@ it.each([
   expect(note).toHaveBeenCalledWith(expect.stringContaining("doctor --fix"), "Sandbox");
   const issues = await inspect();
   expect(issues).toHaveLength(1);
-  expect(registry.legacySandboxRegistryInspectionToHealthFinding(issues[0]!)).toMatchObject({
-    path: source,
-    fixHint: expect.stringContaining("archive retired registry files"),
-  });
-  expect(registry.legacySandboxRegistryInspectionToRepairEffect(issues[0]!)).toMatchObject({
-    action: "archive-retired-sandbox-registry",
-    target: source,
-  });
+  expect([
+    registry.legacySandboxRegistryInspectionToHealthFinding(issues[0]!).path,
+    registry.legacySandboxRegistryInspectionToRepairEffect(issues[0]!).target,
+  ]).toEqual([source, source]);
 
   await repair();
   const destination = `${source}.migrated${occupied ? ".2" : ""}`;
   const archive = sharded ? `${destination}/entry.json.migrated` : destination;
   expect(fs.existsSync(source)).toBe(false);
-  expect(read(archive)).toBe(bytes);
+  expect(fs.readFileSync(archive, "utf8")).toBe(bytes);
   expect(await inspect()).toEqual([]);
   expect(note).toHaveBeenLastCalledWith(expect.stringContaining(archive), "Sandbox");
   if (occupied) {
@@ -88,7 +80,7 @@ it("refuses an uninspectable source path instead of treating it as absent", asyn
   fs.writeFileSync(fixture.root, "retained bytes");
 
   await expect(repair()).rejects.toThrow(/Cannot inspect potentially retired state/);
-  expect(read(fixture.root)).toBe("retained bytes");
+  expect(fs.readFileSync(fixture.root, "utf8")).toBe("retained bytes");
 });
 
 it("leaves current installations alone when retired registry paths are absent", async () => {

@@ -10,7 +10,11 @@
 // --subscribe measures real subscribe handlers plus settled passive watcher work.
 // Its baseline also needs server-methods/control-ui.<suffix>.ts.
 // --subscriptions measures passive watcher polls with a runtime publication per poll;
-// iterations must be divisible by 64 and count watcher validations, not polls.
+// iterations must be divisible by --clients and count watcher validations, not polls.
+// --notifications --clients 65 measures participant-fact notifications (one event per turn);
+// --idle supplies the matching event-loop-only control. Iterations count events/idle turns.
+// Notification arms install and stop their subscriptions outside each sample, so global
+// publications never exercise the other arm's watchers. Report checks separately from events.
 // Both arms share one prepared fixture; five pairs alternate AB/BA without rebuilding state.
 // Fixture setup is excluded: 10k persisted rows, 40 configured agents, 64 retained readers.
 // Each reader has four shared descendants created by a different profile.
@@ -28,7 +32,10 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import type { SessionEntry } from "../../src/config/sessions/types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
-import type { ControlUiSessionPrRead } from "../../src/gateway/control-ui-session-pr-read.js";
+import type {
+  ControlUiSessionPrRead,
+  ControlUiSessionPrTarget,
+} from "../../src/gateway/control-ui-session-pr-read.js";
 import type { GatewayClient } from "../../src/gateway/server-methods/client-types.js";
 import { createControlUiRequestOptions } from "../../src/gateway/server-methods/control-ui-request.test-support.js";
 import type {
@@ -45,6 +52,9 @@ const { values } = parseArgs({
     allocations: { type: "boolean", default: false },
     subscriptions: { type: "boolean", default: false },
     subscribe: { type: "boolean", default: false },
+    notifications: { type: "boolean", default: false },
+    idle: { type: "boolean", default: false },
+    clients: { type: "string", default: "64" },
     "unrelated-churn": { type: "boolean", default: false },
     "base-owner-suffix": { type: "string" },
     "base-projection-suffix": { type: "string" },
@@ -53,13 +63,17 @@ const { values } = parseArgs({
     output: { type: "string" },
   },
 });
-const integer = (name: "iterations" | "warmup" | "pairs") =>
+const integer = (name: "iterations" | "warmup" | "pairs" | "clients") =>
   parseStrictIntegerOption({ raw: values[name], label: `--${name}`, min: 1, fallback: 1 });
 const iterations = integer("iterations");
 const warmup = integer("warmup");
 const pairs = integer("pairs");
-const watchSubscriptions = values.subscriptions || values.subscribe;
-assert(!(values.subscriptions && values.subscribe), "Choose --subscribe or --subscriptions");
+const watchSubscriptions = values.subscriptions || values.subscribe || values.notifications;
+assert(
+  [values.subscriptions, values.subscribe, values.notifications].filter(Boolean).length <= 1,
+  "Choose --subscribe, --subscriptions, or --notifications",
+);
+assert(!values.idle || values.notifications, "--idle requires --notifications");
 assert(!(values.captures && watchSubscriptions), "Choose --captures or subscription work");
 assert(
   !values["unrelated-churn"] || (!watchSubscriptions && !values.captures),
@@ -133,11 +147,12 @@ for (const directory of ["home", "tmp"]) {
   mkdirSync(path.join(stateDir, directory));
 }
 const sessionCount = 10_000;
-const readerCount = 64;
-if (watchSubscriptions) {
-  assert.equal(iterations % readerCount, 0, "--iterations must be divisible by 64");
+const readerCount = integer("clients");
+if (watchSubscriptions && !values.notifications) {
+  assert.equal(iterations % readerCount, 0, "--iterations must be divisible by --clients");
 }
 const childrenPerRoot = 4;
+assert(readerCount * (childrenPerRoot + 1) < sessionCount, "Too many clients for the fixture");
 const agentIds = ["main", ...Array.from({ length: 39 }, (_, i) => `worker-${i}`)];
 const cfg: OpenClawConfig = {
   agents: {
@@ -229,6 +244,7 @@ const observer = new PerformanceObserver((list) => {
 });
 const schedulers: InstanceType<typeof GatewayScheduler>[] = [];
 const stopSubscriptions: (() => Promise<void>)[] = [];
+let stopNotificationArm: (() => Promise<void>) | undefined;
 try {
   runOpenClawAgentWriteTransaction(
     (database) => {
@@ -310,6 +326,9 @@ try {
     }
     const source = targets[0]!.readSource;
     assert(targets.every((target) => target?.readSource.path === source.path));
+    let watcherChecks = 0;
+    let prepare = async () => {};
+    let cleanup = async () => {};
     let run = (count: number) =>
       owner.withControlUiSessionPrSource(source, async (assertSourceCurrent) => {
         for (let index = 0; index < count; index++) {
@@ -345,7 +364,68 @@ try {
         }
       };
     }
-    if (owner.subscriptions) {
+    if (values.notifications && owner.subscriptions) {
+      const subscriptionOwner = owner.subscriptions;
+      const wrapped = new WeakMap<ControlUiSessionPrTarget, ControlUiSessionPrTarget>();
+      const countedReads = reads.map((read): ControlUiSessionPrRead => async () => {
+        const target = await read();
+        if (!target) {
+          return undefined;
+        }
+        let counted = wrapped.get(target);
+        if (!counted) {
+          counted = {
+            ...target,
+            assertCurrent: () => {
+              watcherChecks++;
+              target.assertCurrent!();
+            },
+          };
+          wrapped.set(target, counted);
+        }
+        return counted;
+      });
+      prepare = async () => {
+        assert(!stopNotificationArm, "Only one notification arm may subscribe");
+        const scheduler = new GatewayScheduler();
+        let publications = 0;
+        const subscriptions = subscriptionOwner.createControlUiSessionPullRequestSubscriptions({
+          scheduler,
+          getSessionRowProjection: () => projection,
+          broadcastToConnIds: () => publications++,
+          isConnectionActive: () => true,
+          prepareRead: async (connId) => countedReads[Number(connId)],
+        });
+        stopNotificationArm = async () => {
+          await subscriptions.stop();
+          await scheduler.stop();
+        };
+        for (let index = 0; index < readerCount; index++) {
+          await subscriptions.replace(String(index), [], new Set(), new Set([keyFor(index)]));
+        }
+        assert.equal(publications, readerCount, "Each real subscription must publish its snapshot");
+        watcherChecks = 0;
+      };
+      cleanup = async () => {
+        await stopNotificationArm?.();
+        stopNotificationArm = undefined;
+      };
+      run = async (count) => {
+        for (let index = 0; index < count; index++) {
+          if (!values.idle) {
+            sessionChanges.emit({
+              agentId: "main",
+              storePath: source.path,
+              sessionKey: keyFor(index % readerCount),
+              scope: "session-entry",
+              facts: { kind: "participants", projectionChanged: false },
+            });
+          }
+          // Drain the owner's existing deferred pass, without adding a poll.
+          await nextTurn();
+        }
+      };
+    } else if (owner.subscriptions) {
       const scheduler = new GatewayScheduler();
       schedulers.push(scheduler);
       let publications = 0;
@@ -433,8 +513,10 @@ try {
         }
       };
     }
+    await prepare();
     await run(warmup);
-    arms.push({ owner, run });
+    await cleanup();
+    arms.push({ owner, run, prepare, cleanup, watcherChecks: () => watcherChecks });
   }
   if (values.allocations) {
     inspector.connect();
@@ -444,6 +526,7 @@ try {
   for (let pair = 0; pair < pairs; pair++) {
     const order = pair % 2 === 0 ? arms : arms.toReversed();
     for (const arm of order) {
+      await arm.prepare();
       global.gc();
       await nextTurn();
       gc.length = 0;
@@ -483,11 +566,29 @@ try {
         allocation:
           bytes === undefined
             ? null
-            : { sampledBytes: bytes, bytesPerReadAndAssertion: bytes / iterations },
+            : {
+                sampledBytes: bytes,
+                ...(values.notifications
+                  ? { bytesPerTurn: bytes / iterations }
+                  : { bytesPerReadAndAssertion: bytes / iterations }),
+              },
         cpu: {
           mainThreadMs: (cpu.user + cpu.system) / 1000,
-          microsecondsPerReadAndAssertion: (cpu.user + cpu.system) / iterations,
+          ...(values.notifications
+            ? { microsecondsPerTurn: (cpu.user + cpu.system) / iterations }
+            : { microsecondsPerReadAndAssertion: (cpu.user + cpu.system) / iterations }),
         },
+        ...(values.notifications
+          ? {
+              work: {
+                turns: iterations,
+                notifications: values.idle ? 0 : iterations,
+                watcherChecks: arm.watcherChecks(),
+                notificationsPerSecond: values.idle ? 0 : (iterations * 1000) / (ended - started),
+                watcherChecksPerSecond: (arm.watcherChecks() * 1000) / (ended - started),
+              },
+            }
+          : {}),
         elapsedMs: ended - started,
         gc: {
           count: measuredGc.length,
@@ -497,6 +598,7 @@ try {
         memory: { before, after },
         hostLoad: { before: hostLoadBefore, after: hostLoadAfter },
       });
+      await arm.cleanup();
     }
   }
   for (const source of sources) {
@@ -539,9 +641,11 @@ try {
   const result = {
     scope: values.captures
       ? "real resident row captures on Team-shaped state; no transport or whole-Gateway claim"
-      : values.subscribe
-        ? "real subscribe handler and settled owner work; no transport or whole-Gateway claim"
-        : "real in-process PR reader, physical source and final currency assertions; no transport or whole-Gateway claim",
+      : values.notifications
+        ? "real subscription-owner participant notifications or idle control; no transport or production-frequency claim"
+        : values.subscribe
+          ? "real subscribe handler and settled owner work; no transport or whole-Gateway claim"
+          : "real in-process PR reader, physical source and final currency assertions; no transport or whole-Gateway claim",
     node: process.version,
     owners: sources.map(
       ({
@@ -582,6 +686,8 @@ try {
       pairs,
       subscriptions: values.subscriptions,
       subscribe: values.subscribe,
+      notifications: values.notifications,
+      idle: values.idle,
       unrelatedChurn: values["unrelated-churn"],
       captures: values.captures,
     },
@@ -594,6 +700,7 @@ try {
   }
   process.stdout.write(output);
 } finally {
+  await stopNotificationArm?.();
   for (const stop of stopSubscriptions) {
     await stop();
   }

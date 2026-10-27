@@ -40,6 +40,10 @@ it("prepares unchanged frozen fields once across row revisions and delivery hist
       const lastAssistantMessage = event < 6 ? first : replacement;
       const rows: GatewaySessionRow[] = Array.from({ length: audiences }, (_, audience) =>
         Object.freeze({
+          // Team-shaped rows have many unchanged metadata fields around a small runtime delta.
+          ...Object.fromEntries(
+            Array.from({ length: 40 }, (_value, field) => [`metadata${field}`, field]),
+          ),
           key: "agent:main:stream",
           agentId: "main",
           sessionId: "stream",
@@ -77,8 +81,8 @@ it("prepares unchanged frozen fields once across row revisions and delivery hist
     expect(deliveries).toBe(12 * owners.length - 1);
     expect(fieldPreparations).toBe(12 * audiences);
     expect([...encodings.values()]).toEqual([1, 1]);
-    // The first publication has no baseline; each later immutable row is sized once.
-    expect(fullEnvelopeEncodings).toBe(11 * audiences);
+    // Only the large replacement needs exact sizing; small runtime patches are already smaller.
+    expect(fullEnvelopeEncodings).toBe(audiences + 1);
   } finally {
     encoding.mockRestore();
     preparing.mockRestore();

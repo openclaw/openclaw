@@ -3,6 +3,7 @@ import path from "node:path";
 import { constants, createZstdDecompress } from "node:zlib";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { root as openSafeRoot } from "openclaw/plugin-sdk/file-access-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import type { CodexSessionSource, CodexThread } from "./app-server/protocol.js";
@@ -12,6 +13,8 @@ import type {
 } from "./session-catalog-index-row.js";
 import { detachCodexCatalogString } from "./session-catalog-limits.js";
 import { boundedCatalogString, truncateCodexCatalogPreview } from "./session-catalog-parsing.js";
+
+const loadTextChunking = createLazyRuntimeModule(() => import("openclaw/plugin-sdk/text-chunking"));
 
 const WINDOW_BYTES = 128 * 1024;
 const ROLLOUT_SOURCE_DENIAL_CODES = new Set([
@@ -219,7 +222,7 @@ export async function readCodexCatalogRollout(
     };
     // Response items include injected model context. Only native user events
     // represent a first-user preview; a missed prefix keeps the native value.
-    const { sanitizeTerminalText } = await import("openclaw/plugin-sdk/text-chunking");
+    const { sanitizeTerminalText } = await loadTextChunking();
     for (const window of windows) {
       for (const record of window) {
         if (record?.type !== "event_msg" || !isRecord(record.payload)) {

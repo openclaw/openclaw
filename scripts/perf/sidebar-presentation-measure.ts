@@ -6,7 +6,9 @@
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/sidebar-presentation-measure.ts \
  *   --state-dir .local/sidebar/run-1 --output .local/sidebar/run-1.json
  * Add --owner-file <baseline/session-row-presentation.ts> to substitute only that
- * owner at load time. Alternate baseline/candidate runs (at least five pairs),
+ * owner at load time. Repeat --source-file <saved/session-utils-display.ts> (original
+ * basename required) to substitute additional Gateway owners; sourceHashes records each.
+ * Alternate baseline/candidate runs (at least five pairs),
  * with matched A/A controls before timing claims. Each run needs a fresh state dir.
  * Use separate --allocations runs for sampled bytes including collected objects;
  * use separate --trace-gc-nvp runs with --gc-log <redirected stdout> for promotion.
@@ -16,6 +18,8 @@
  * Timing and GC gates use untraced, unsampled runs. Defaults: 10k rows, 10 clients,
  * two identities, 100-row pages, 1,000 warm reads. --sessions 10 --operations 10
  * is a setup smoke. The clients are in-process recipients, not live sockets.
+ * <output>.wire.json captures packed bytes with fixture profile IDs and snapshotAt
+ * normalized; packedGolden compares those bytes across revisions and preserves field order.
  * --repeats N reuses fixture setup, writing <output>.<1-based repeat>.json.
  * With --barrier-dir <fresh directory> --side base|fix, publish <side>.ready
  * after warmup and wait for <repeat>.<side>.go before each measured repeat.
@@ -26,7 +30,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
-import { registerHooks, stripTypeScriptTypes } from "node:module";
+import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import {
@@ -38,6 +42,7 @@ import {
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { getHeapSpaceStatistics } from "node:v8";
+import { transformSync } from "esbuild";
 import { expandSessionRowFacts } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { GatewayClient } from "../../src/gateway/server-methods/types.js";
@@ -50,6 +55,7 @@ const { values } = parseArgs({
     "state-dir": { type: "string" },
     output: { type: "string" },
     "owner-file": { type: "string" },
+    "source-file": { type: "string", multiple: true },
     "gc-log": { type: "string" },
     "barrier-dir": { type: "string" },
     side: { type: "string" },
@@ -98,14 +104,26 @@ for (const dir of ["home", "tmp"]) {
 const output = path.resolve(values.output);
 const ownerFile = path.resolve(values["owner-file"] ?? "src/gateway/session-row-presentation.ts");
 const ownerSource = readFileSync(ownerFile, "utf8");
-let replaced = false;
+const sources = new Map<string, string>();
 if (values["owner-file"]) {
+  sources.set("session-row-presentation.ts", ownerSource);
+}
+for (const file of values["source-file"] ?? []) {
+  sources.set(path.basename(file), readFileSync(path.resolve(file), "utf8"));
+}
+const replaced = new Set<string>();
+if (sources.size) {
   registerHooks({
     load(url, context, next) {
       const loaded = next(url, context);
-      if (url.endsWith("/src/gateway/session-row-presentation.ts")) {
-        replaced = true;
-        return { ...loaded, source: stripTypeScriptTypes(ownerSource) };
+      for (const [name, source] of sources) {
+        if (url.endsWith(`/src/gateway/${name}`)) {
+          replaced.add(name);
+          return {
+            ...loaded,
+            source: transformSync(source, { loader: "ts", format: "esm", target: "esnext" }).code,
+          };
+        }
       }
       return loaded;
     },
@@ -173,7 +191,7 @@ const [
   import("../../src/plugins/registry-empty.js"),
   import("../../src/plugins/runtime.js"),
 ]);
-assert(!values["owner-file"] || replaced, "owner substitution did not run");
+assert.equal(replaced.size, sources.size, "source substitution did not run");
 setActivePluginRegistry(createEmptyPluginRegistry());
 setRuntimeConfigSnapshot(cfg, cfg);
 const profiles = ["alice", "bob"].map((name) =>
@@ -290,6 +308,8 @@ try {
   );
   const backfillDeadline = Date.now() + 120_000;
   while (pendingBackfill.size) {
+    // Keep admitting the live page while optional transcript facts settle.
+    await list(0);
     for (const key of pendingBackfill) {
       if (
         projection.capture({ agentId: "main", key })?.retainedDatabaseFacts
@@ -304,6 +324,20 @@ try {
     }
   }
   const golden: string[] = [];
+  const packedGolden: string[] = [];
+  const packedSamples = new Map<string, string>();
+  const packedDigest = (result: Awaited<ReturnType<typeof list>>) => {
+    let bytes = JSON.stringify(
+      { sessions: result.sessions, sharedFacts: result.sharedFacts },
+      (key, value) => (key === "snapshotAt" ? 1_800_000_000_000 : value),
+    );
+    for (const [index, profile] of profiles.entries()) {
+      bytes = bytes.replaceAll(profile.id, `synthetic-profile-${index}`);
+    }
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    packedSamples.set(digest, bytes);
+    return digest;
+  };
   for (let index = 0; index < clients; index++) {
     const result = await list(index, false);
     const rows = expandSessionRowFacts(result.sessions, result.sharedFacts);
@@ -314,7 +348,9 @@ try {
       index % profiles.length === (sessions - 1) % profiles.length ? "owner" : "viewer",
     );
     golden.push(createHash("sha256").update(JSON.stringify(rows)).digest("hex"));
+    packedGolden.push(packedDigest(result));
   }
+  writeFileSync(`${output}.wire.json`, JSON.stringify([...packedSamples.values()]));
   if (values.allocations) {
     inspector.connect();
     connected = true;
@@ -429,6 +465,7 @@ try {
         .update(JSON.stringify(expandSessionRowFacts(result.sessions, result.sharedFacts)))
         .digest("hex");
       assert.equal(digest, golden[index], "warm recipient facts changed without a publication");
+      assert.equal(packedDigest(result), packedGolden[index], "warm packed wire bytes changed");
     }
     const gc = (kind?: number) =>
       distribution(
@@ -450,6 +487,18 @@ try {
           : "untraced-timing",
       node: process.version,
       sourceHash: createHash("sha256").update(ownerSource).digest("hex"),
+      sourceHashes: Object.fromEntries(
+        [
+          "session-row-presentation.ts",
+          "session-row-prepared-read.ts",
+          "session-utils-display.ts",
+        ].map((name) => [
+          name,
+          createHash("sha256")
+            .update(sources.get(name) ?? readFileSync(path.resolve("src/gateway", name), "utf8"))
+            .digest("hex"),
+        ]),
+      ),
       sessions,
       clients,
       identities: profiles.length,
@@ -467,6 +516,9 @@ try {
       goldenScope:
         "within-run stability only; includes generated profile IDs and presentation timestamps",
       golden,
+      packedGoldenScope:
+        "Exact sessions/sharedFacts JSON, with generated profile IDs and snapshotAt normalized",
+      packedGolden,
       loadStart,
       heapSpaces,
       loadEnd: loadavg(),

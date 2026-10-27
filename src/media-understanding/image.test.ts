@@ -112,6 +112,75 @@ async function describeCn(providers: Providers, workspaceDir?: string) {
 describe("describeImageWithModelCore", () => {
   installImageRuntimeTestHooks({ apiKey: "test-api-key" });
 
+  it("surfaces provider errors from image-model responses", async () => {
+    mockOpenAi();
+    completeMock.mockResolvedValue({
+      ...openAiCompletion(""),
+      stopReason: "error",
+      errorMessage: "boom",
+    });
+    await expect(describeImageWithModelCore(request())).rejects.toThrow(/boom/i);
+    expect(completeMock).toHaveBeenCalledOnce();
+  });
+
+  it("returns trimmed text from image-model responses", async () => {
+    const ref = { provider: "anthropic", model: "claude-opus-4-6" };
+    mockImageModel({ provider: ref.provider, id: ref.model, api: "anthropic-messages" });
+    completeMock.mockResolvedValue(
+      imageCompletion("anthropic-messages", ref.provider, ref.model, "  hello  "),
+    );
+    await expect(describeImageWithModelCore(request(ref))).resolves.toEqual({
+      text: "hello",
+      model: ref.model,
+    });
+  });
+
+  it.each([
+    ["reasoning_content", "reasoning_content", true, 0],
+    ["Responses JSON", JSON.stringify({ id: "rs_123", type: "reasoning" }), true, 0],
+    ["Responses object", { id: "rs_456", type: "reasoning.encrypted" }, true, 0],
+    [
+      "oversized Responses JSON",
+      JSON.stringify({
+        id: "rs_123",
+        summary: [{ text: "x".repeat(2_100) }],
+        type: "reasoning",
+      }),
+      true,
+      0,
+    ],
+    ["signature after bounded block scan", "reasoning_content", false, 50],
+  ] as const)(
+    "retries image reasoning-only responses: %s",
+    async (_name, signature, retry, precedingBlocks) => {
+      mockOpenAi();
+      const completion = openAiCompletion("retry ok");
+      completeMock
+        .mockResolvedValueOnce({
+          ...completion,
+          content: [
+            ...Array.from({ length: precedingBlocks }, () => ({
+              type: "thinking",
+              thinking: "untagged",
+            })),
+            {
+              type: "thinking",
+              thinking: "  <think>private</think> maybe a cat  ",
+              thinkingSignature: signature,
+            },
+          ],
+        })
+        .mockResolvedValueOnce(completion);
+      const result = describeImageWithModelCore(request());
+      if (retry) {
+        await expect(result).resolves.toEqual({ text: "retry ok", model: openai.model });
+      } else {
+        await expect(result).rejects.toThrow(/returned no text/i);
+      }
+      expect(completeMock).toHaveBeenCalledTimes(retry ? 2 : 1);
+    },
+  );
+
   it.each([
     { modelMaxTokens: undefined, requested: undefined, expected: 4096 },
     { modelMaxTokens: 1024.5, requested: 2048, expected: 1024.5 },

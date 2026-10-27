@@ -500,7 +500,16 @@ export function sanitizeChatHistoryMessage(
       readRecord(entry.details)?.errorKind === "state_contention"
         ? { errorKind: "state_contention", diagnostic: STATE_CONTENTION_DIAGNOSTIC }
         : undefined;
-    const projectedDetails = conflictDetails ?? toolResultDetails?.details ?? runFailureDetails;
+    const modelChange =
+      entry.role === "custom" && entry.customType === "session-model-change"
+        ? readRecord(entry.details)
+        : undefined;
+    const modelChangeDetails =
+      typeof modelChange?.from === "string" && typeof modelChange.to === "string"
+        ? { from: modelChange.from, to: modelChange.to }
+        : undefined;
+    const projectedDetails =
+      conflictDetails ?? toolResultDetails?.details ?? runFailureDetails ?? modelChangeDetails;
     if (projectedDetails) {
       entry.details = projectedDetails;
     } else {

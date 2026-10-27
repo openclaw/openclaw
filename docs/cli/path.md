@@ -224,7 +224,8 @@ depending on the per-kind AST shape.
   `+++` is ordinary body text. Section bodies are not writable as a whole
   through `set`.
 - JSONC leaf writes coerce the string value to the existing leaf type
-  (`string`, finite `number`, `true`/`false`, or `null`). Use `--value-json`
+  (`string`, finite `number`, `true`/`false`, or `null`). Blank numeric replacements
+  are rejected; use `0` to write zero. Use `--value-json`
   when a JSONC/JSON/JSONL leaf replacement should parse `<value>` as JSON and
   may change shape, such as replacing a string secret-ref shorthand with an
   object. JSONC object and array insertions parse `<value>` as JSON and use

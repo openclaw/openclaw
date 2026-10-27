@@ -1,7 +1,58 @@
 import { describe, expect, it } from "vitest";
+import { resolveColdLoadLatency } from "../../../scripts/lib/control-ui-bench-latency.ts";
 import { createColdLoadProbeInitScript } from "./control-ui-cold-load-probes.ts";
+import { sidebarPresentationProbe } from "./control-ui-sidebar-presentation-probe.test-support.ts";
 
 describe("serialized cold-load probes", () => {
+  it.each([true, false])(
+    "rejects an incomplete sidebar handoff (blank frame: %s)",
+    async (blank) => {
+      const iframe = document.createElement("iframe");
+      document.body.append(iframe);
+      try {
+        const target = iframe.contentWindow;
+        const doc = iframe.contentDocument;
+        if (!target || !doc) {
+          throw new Error("Probe realm was not created");
+        }
+        const script = doc.createElement("script");
+        script.textContent = `
+        const __name = fn => fn;
+        const frames = [];
+        window.requestAnimationFrame = callback => { frames.push(callback); return frames.length; };
+        const aside = document.createElement("aside");
+        aside.className = "sidebar";
+        aside.dataset.snapshotState = "cached";
+        const row = '<div class="sidebar-recent-session" data-session-key="synthetic" style="height:20px;width:100px"></div>';
+        aside.innerHTML = '<div class="sidebar-shell__body sidebar-session-content" style="height:80px">'+row+'</div>';
+        document.body.append(aside);
+        (${sidebarPresentationProbe.toString()})();
+        window.sidebarProof = (async () => {
+          frames.shift()(0);
+          if (${blank}) {
+            aside.firstElementChild.innerHTML = "";
+            await Promise.resolve();
+            frames.shift()(0);
+            aside.dataset.snapshotState = "live";
+            aside.firstElementChild.innerHTML = row;
+            await Promise.resolve();
+            frames.shift()(0);
+          }
+          return __sidebarPresentation.read();
+        })();
+      `;
+        doc.body.append(script);
+        const proof = await Reflect.get(target, "sidebarProof");
+        expect(proof.handoffChanges).toBeNull();
+        expect(proof.frames.map((frame: { rows: unknown[] }) => frame.rows.length)).toEqual(
+          blank ? [1, 0, 1] : [1],
+        );
+      } finally {
+        iframe.remove();
+      }
+    },
+  );
+
   it("preserves event order in separate tasks when timers wake out of order", () => {
     const iframe = document.createElement("iframe");
     document.body.append(iframe);
@@ -67,7 +118,14 @@ describe("serialized cold-load probes", () => {
     }
   });
 
-  it("serializes ready reply bytes on the selected download link", () => {
+  it.each([
+    8,
+    resolveColdLoadLatency({
+      profile: "live-capped",
+      methodLatencyMs: [],
+      sidebarQueryLatencyMs: [],
+    }).downloadKbps,
+  ])("serializes ready reply bytes on the %i Kbit/s download link", (downloadKbps) => {
     const iframe = document.createElement("iframe");
     document.body.append(iframe);
     try {
@@ -82,7 +140,7 @@ describe("serialized cold-load probes", () => {
         const timers = [];
         window.setTimeout = (callback, delay) => { timers.push({callback, delay}); return timers.length; };
         window.WebSocket = class extends EventTarget { send() {} };
-        ${createColdLoadProbeInitScript({ ownerProbes: false, latencyMs: 100, downloadKbps: 8, frameGapMs: 0, events: [] })}
+        ${createColdLoadProbeInitScript({ ownerProbes: false, latencyMs: 100, downloadKbps, frameGapMs: 0, events: [] })}
         const socket = new WebSocket();
         let delivered = 0;
         socket.addEventListener("message", () => delivered++);
@@ -104,7 +162,8 @@ describe("serialized cold-load probes", () => {
       doc.body.append(script);
       const proof = Reflect.get(target, "downloadProof");
       expect(proof.eligibility).toEqual([100, 100]);
-      expect(proof.delivery).toEqual([proof.bytes, proof.bytes * 2]);
+      const transferMs = (proof.bytes * 8) / downloadKbps;
+      expect(proof.delivery).toEqual([transferMs, transferMs * 2]);
       expect(proof.before).toBe(0);
       expect(proof.delivered).toBe(2);
     } finally {
@@ -142,6 +201,77 @@ describe("serialized cold-load probes", () => {
         pending: 0,
         rpcs: 2,
       });
+    } finally {
+      iframe.remove();
+    }
+  });
+
+  it("records history response outcomes without retaining or changing response bodies", () => {
+    const iframe = document.createElement("iframe");
+    document.body.append(iframe);
+    try {
+      const target = iframe.contentWindow;
+      const doc = iframe.contentDocument;
+      if (!target || !doc) {
+        throw new Error("Probe realm was not created");
+      }
+      const responses = [
+        { method: "chat.startup", ok: true, payload: { messages: ["synthetic"] } },
+        { method: "chat.history", ok: false, error: { message: "Synthetic failure" } },
+        {
+          method: "sessions.messages.subscribe",
+          ok: true,
+          payload: { initialHistory: { ok: true } },
+        },
+        {
+          method: "sessions.messages.subscribe",
+          ok: true,
+          payload: { initialHistory: { ok: false } },
+        },
+        {
+          method: "sessions.messages.subscribe",
+          ok: false,
+          error: { message: "Synthetic failure" },
+        },
+      ];
+      const script = doc.createElement("script");
+      script.textContent = `
+        const timers = [];
+        window.setTimeout = callback => { timers.push(callback); return timers.length; };
+        window.WebSocket = class extends EventTarget { send() {} };
+        ${createColdLoadProbeInitScript({ ownerProbes: false, latencyMs: 0, frameGapMs: 0, events: [] })}
+        const socket = new WebSocket();
+        const delivered = [];
+        socket.addEventListener("message", event => delivered.push(JSON.parse(event.data)));
+        const sent = ${JSON.stringify(responses)}.map(({method, ...response}, index) => {
+          const id = String(index);
+          socket.send(JSON.stringify({type: "req", id, method, params: {sessionKey: "synthetic-session"}}));
+          const frame = {type: "res", id, ...response};
+          socket.dispatchEvent(new MessageEvent("message", {data: JSON.stringify(frame)}));
+          return frame;
+        });
+        while (timers.length) timers.shift()();
+        window.historyResponseProof = {sent, delivered, rpcs: __coldLoad.read().rpcs};
+      `;
+      doc.body.append(script);
+      const proof = Reflect.get(target, "historyResponseProof");
+      expect(proof.delivered).toEqual(proof.sent);
+      expect(
+        proof.rpcs.map((rpc: Record<string, unknown>) => ({
+          responseOk: rpc.responseOk,
+          initialHistoryOk: rpc.initialHistoryOk,
+        })),
+      ).toEqual([
+        { responseOk: true, initialHistoryOk: undefined },
+        { responseOk: false, initialHistoryOk: undefined },
+        { responseOk: true, initialHistoryOk: true },
+        { responseOk: true, initialHistoryOk: false },
+        { responseOk: false, initialHistoryOk: undefined },
+      ]);
+      for (const rpc of proof.rpcs) {
+        expect(rpc).not.toHaveProperty("payload");
+        expect(rpc).not.toHaveProperty("error");
+      }
     } finally {
       iframe.remove();
     }

@@ -38,6 +38,27 @@ describe("session row provenance", () => {
     expect(provenance.mergeRow(accepted, cached).label).toBe("Current");
   });
 
+  it("admits unsampled writes and orders sampled rows before read revision", () => {
+    const provenance = createSessionRowProvenance();
+    const initial = row({ label: "Initial", snapshotAt: 100, updatedAt: 10 });
+    const updated = row({ label: "Updated", updatedAt: 20 });
+    provenance.observeReadRow(initial, 2);
+    provenance.observeReadRow(updated, 1);
+    const merged = provenance.mergeRow(initial, updated);
+    expect(merged.label).toBe("Updated");
+
+    const undated = row({ label: "Undated" });
+    provenance.observeReadRow(undated, 3);
+    expect(provenance.mergeRow(merged, undated).label).toBe("Undated");
+    expect(provenance.mergeRow(undated, updated).label).toBe("Undated");
+
+    const sampled = row({ label: "Newer write", snapshotAt: 100, updatedAt: 20 });
+    const older = row({ label: "Older write", snapshotAt: 100, updatedAt: 10 });
+    provenance.observeReadRow(sampled, 4);
+    provenance.observeReadRow(older, 5);
+    expect(provenance.mergeRow(sampled, older).label).toBe("Newer write");
+  });
+
   it.each([
     ["descriptor-first", "compact"],
     ["compact-first", "compact"],

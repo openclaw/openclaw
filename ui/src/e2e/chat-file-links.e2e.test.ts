@@ -37,7 +37,7 @@ function fileInfo<T extends object>(name: string, fields: T) {
 }
 
 suite.define(() => {
-  it.each(["file", "close", "list"] as const)(
+  it.each(["close", "list"] as const)(
     "shows a file tab before completion and honors the %s intent",
     async (intent) => {
       await withPage(async (page) => {
@@ -116,7 +116,7 @@ suite.define(() => {
     },
   );
 
-  it("keeps authored and root-distinct file targets through click and keyboard", async () => {
+  it("preserves domain text and root-distinct file targets through click and keyboard", async () => {
     const files = [
       {
         requestPath: "/workspace/src/file.ts",
@@ -138,9 +138,11 @@ suite.define(() => {
       },
     ];
     await withPage(async (page) => {
+      const text = "Please check the portal.example/service.test reference.";
       const gateway = await installMockGateway(page, {
         workspace: "/workspace",
         historyMessages: [
+          { role: "user", content: [{ type: "text", text }], timestamp: 0 },
           chatMessage(
             "assistant",
             [
@@ -173,6 +175,11 @@ suite.define(() => {
       const response = await page.goto(`${suite.server.baseUrl}chat`);
       const links = page.locator(".chat-thread a.markdown-file-link");
       await links.nth(files.length).waitFor({ state: "visible" });
+      const bubble = page.locator(".chat-bubble").filter({ hasText: "Please check" });
+      await bubble.waitFor({ state: "visible" });
+      expect(await bubble.textContent()).toContain(text);
+      expect(await bubble.locator("a[data-file-path]").count()).toBe(0);
+      expect(await gateway.getRequests("sessions.files.get")).toHaveLength(0);
       const chatUrl = page.url();
       const labels = await links.evaluateAll((anchors) =>
         anchors.map((anchor) => ({

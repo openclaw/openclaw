@@ -16,7 +16,11 @@ import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
+import {
+  intersectOperatorScopes,
+  resolveMissingOperatorScope,
+  roleScopesAllow,
+} from "../shared/operator-scope-compat.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
 import type { UserChannelAuthorizationReference } from "../state/user-profiles.types.js";
@@ -138,6 +142,7 @@ function prepareRunRolePolicy(
         sessionAccessCap: role.sessions.others,
         sandboxRequired: role.sandbox === "required",
         agents: role.agents,
+        accessPrograms: role.accessPrograms,
       }
     : undefined;
 }
@@ -402,10 +407,8 @@ export async function captureGatewayOperatorRunAuthority(input: {
   };
   const assertRoleCurrent = () => {
     const policy = resolveCurrentRole();
-    if (
-      policy &&
-      !roleScopesAllow({ role: "operator", requestedScopes: scopes, allowedScopes: policy.scopes })
-    ) {
+    // Role grants are exact config enum values, unlike signed connection scopes.
+    if (policy && resolveMissingOperatorScope(scopes, policy.scopes) !== null) {
       throw new Error("Your operator role changed; reconnect before continuing.");
     }
   };

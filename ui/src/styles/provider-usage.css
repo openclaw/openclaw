@@ -1,6 +1,5 @@
 /* Carapace data marks (sparkline, meter, usage rows) adapted from openclaw/carapace
  * at 5463792; roles resolve through carapace-control-ui.css. */
-@import "./carapace-control-ui.css";
 
 .oc-sparkline {
   display: block;

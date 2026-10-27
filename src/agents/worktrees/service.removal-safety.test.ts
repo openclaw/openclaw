@@ -1,11 +1,17 @@
+import { execFile, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { promisify } from "node:util";
+import { beforeEach, describe, expect, it, vi, afterEach } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import * as commandRunner from "../../process/exec-runner.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import * as checkoutGitOwner from "./checkout-git-config.js";
 import * as checkoutInspection from "./checkout-inspection.js";
@@ -19,13 +25,14 @@ import {
   materializeManagedWorktreeFixture,
   useManagedWorktreeTestRepository,
 } from "./service.test-support.js";
+import { readExactStateSnapshot } from "./snapshot-exact-state.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
-const read = (directory: string) => fs.readFile(path.join(directory, "README.md"), "utf8");
-const write = (directory: string, content: string) =>
-  fs.writeFile(path.join(directory, "README.md"), content);
-
 describe("managed removal custody", () => {
+  const read = (directory: string) => fs.readFile(path.join(directory, "README.md"), "utf8");
+  const write = (directory: string, content: string) =>
+    fs.writeFile(path.join(directory, "README.md"), content);
+
   const initializeRepository = useManagedWorktreeTestRepository();
   const tempDirs = useStateDatabaseTempDirs();
   let root: string;
@@ -365,5 +372,365 @@ describe("managed removal custody", () => {
     expect(registry(created.id)).toBeUndefined();
     await expect(git(repo, "show-ref", "--verify", pendingRef)).rejects.toThrow();
     expect(await git(repo, "rev-parse", created.branch)).toBe(head);
+  });
+});
+
+describe("managed exact-state retirement", () => {
+  const read = (root: string, file: string) => fs.readFile(path.join(root, file), "utf8");
+
+  const exec = promisify(execFile);
+  async function exactGit(cwd: string, ...args: string[]) {
+    return (
+      await exec("git", ["--no-optional-locks", "-C", cwd, ...args], { encoding: "utf8" })
+    ).stdout.trim();
+  }
+  const sha256 = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+
+  const initializeRepository = useManagedWorktreeTestRepository();
+  const temps = useAutoCleanupTempDirTracker((cleanup) =>
+    afterEach(() => {
+      vi.restoreAllMocks();
+      closeOpenClawStateDatabaseForTest();
+      cleanup();
+    }),
+  );
+  let repo: string;
+  let stateDir: string;
+  let env: NodeJS.ProcessEnv;
+  let service: ManagedWorktreeService;
+  type WorktreeRecord = Awaited<ReturnType<typeof materializeManagedWorktreeFixture>>;
+  const fixture = (
+    name: string,
+    overrides: Partial<Parameters<typeof materializeManagedWorktreeFixture>[0]> = {},
+  ) =>
+    materializeManagedWorktreeFixture({
+      env,
+      repoRoot: repo,
+      stateDir,
+      name,
+      now: 1_800_000_000_000,
+      ownerKind: "manual",
+      ...overrides,
+    });
+  const indexPath = async (checkout: string) =>
+    path.resolve(checkout, await exactGit(checkout, "rev-parse", "--git-path", "index"));
+  const discardRecovery = (recoveryPath: string) =>
+    exactGit(repo, "worktree", "remove", "--force", recoveryPath);
+  const retire = async (
+    record: WorktreeRecord,
+    head: string,
+    branchHead = head,
+    indexSha256?: string,
+  ) =>
+    service.remove({
+      id: record.id,
+      reason: "exact metadata fixture",
+      exactState: {
+        ownerKind: record.ownerKind,
+        ownerId: record.ownerId,
+        createdAt: record.createdAt,
+        lastActiveAt: record.lastActiveAt,
+        head,
+        branchHead,
+        indexSha256: indexSha256 ?? sha256(await fs.readFile(await indexPath(record.path))),
+      },
+    });
+  beforeEach(async () => {
+    const root = temps.make("openclaw-exact-state-");
+    repo = await initializeRepository(root);
+    stateDir = path.join(root, "state");
+    env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    service = new ManagedWorktreeService({
+      env,
+      getConfig: () => ({ worktreeAcceleration: false }),
+    });
+  });
+
+  async function retiredFixture(name: string, prepare?: (checkout: string) => Promise<void>) {
+    const created = await fixture(name);
+    const head = await exactGit(created.path, "rev-parse", "HEAD");
+    await exactGit(created.path, "checkout", "--detach", "HEAD");
+    await prepare?.(created.path);
+    const retired = await retire(created, head);
+    return { created, retired, head };
+  }
+
+  it("round-trips detached HEAD, separate branch, split index and work bytes from snapshot objects", async () => {
+    await fs.writeFile(path.join(repo, ".gitignore"), "saved.secret\ncache.tmp\n");
+    await exactGit(repo, "add", ".gitignore");
+    await exactGit(repo, "commit", "-m", "ignore fixture data");
+    await fs.writeFile(path.join(repo, "saved.secret"), "provisioned secret\n");
+    const created = await fixture("exact-state", {
+      ownerKind: "session",
+      ownerId: "exact-state-owner",
+      provisionedPaths: ["saved.secret"],
+    });
+    const branchHead = await exactGit(created.path, "rev-parse", "HEAD");
+    await exactGit(created.path, "checkout", "--detach", "HEAD~1");
+    const head = await exactGit(created.path, "rev-parse", "HEAD");
+    // Keep native ignore/provisioning policy while HEAD differs from the recorded branch.
+    await fs.writeFile(path.join(created.path, ".gitignore"), "saved.secret\ncache.tmp\n");
+    await fs.writeFile(
+      path.join(created.path, ".gitattributes"),
+      "*.txt text eol=crlf\n*.utf16 working-tree-encoding=UTF-16LE\n",
+    );
+    await fs.writeFile(path.join(created.path, "raw.txt"), "raw LF bytes\n");
+    await fs.writeFile(path.join(created.path, "encoded.utf16"), Buffer.from([0x78, 0]));
+    await fs.writeFile(path.join(created.path, "README.md"), "staged half\n");
+    await fs.writeFile(path.join(created.path, "staged-only.txt"), "only reachable from index\n");
+    await fs.mkdir(path.join(created.path, "missing-parent", "nested"), { recursive: true });
+    await fs.writeFile(
+      path.join(created.path, "missing-parent", "nested", "staged-child.txt"),
+      "nested index-only bytes\n",
+    );
+    await exactGit(created.path, "add", "README.md", "staged-only.txt", "missing-parent");
+    await fs.rm(path.join(created.path, "missing-parent"), { recursive: true });
+    const stagedBlob = await exactGit(created.path, "rev-parse", ":staged-only.txt");
+    await fs.writeFile(path.join(created.path, "README.md"), "unstaged half\n");
+    await fs.rm(path.join(created.path, "staged-only.txt"));
+    await fs.writeFile(path.join(created.path, "untracked.sh"), "#!/bin/sh\nprintf exact\n", {
+      mode: 0o751,
+    });
+    await fs.chmod(path.join(created.path, "untracked.sh"), 0o751);
+    if (process.platform !== "win32") {
+      await fs.symlink("README.md", path.join(created.path, "readme-link"));
+    }
+    await fs.writeFile(path.join(created.path, "saved.secret"), "saved ignored bytes\n", {
+      mode: 0o600,
+    });
+    await fs.chmod(path.join(created.path, "saved.secret"), 0o600);
+    await fs.writeFile(path.join(created.path, "cache.tmp"), "discarded native cache\n");
+    await fs.utimes(path.join(created.path, "untracked.sh"), 1_600_000_000, 1_600_000_001);
+    await exactGit(created.path, "update-index", "--split-index");
+    const indexBytes = await fs.readFile(await indexPath(created.path));
+    const indexSha256 = sha256(indexBytes);
+    const status = await exactGit(created.path, "status", "--porcelain=v1", "-z");
+    const staged = await exactGit(created.path, "diff", "--cached", "--binary");
+    const unstaged = await exactGit(created.path, "diff", "--binary");
+    const removed = await retire(created, head, branchHead, indexSha256);
+    expect(removed.removed).toBe(true);
+    expect(await fs.stat(created.path).catch(() => undefined)).toBeUndefined();
+    expect(await exactGit(repo, "rev-parse", created.branch)).toBe(branchHead);
+    expect(removed.recoveryPath).toBeTruthy();
+    expect(removed.recoveryRetainedUntil).toBeGreaterThan(Date.now());
+    // The independent snapshot must keep index-only objects alive after losing the retained checkout.
+    await discardRecovery(removed.recoveryPath!);
+    await exactGit(repo, "prune", "--expire=now");
+    expect(await exactGit(repo, "cat-file", "-p", stagedBlob)).toBe("only reachable from index");
+    const restored = await service.restore({ id: created.id });
+    expect(await exactGit(restored.path, "rev-parse", "HEAD")).toBe(head);
+    expect(
+      await exec("git", ["-C", restored.path, "symbolic-ref", "-q", "HEAD"]).catch(() => null),
+    ).toBeNull();
+    expect(await exactGit(repo, "rev-parse", restored.branch)).toBe(branchHead);
+    expect(sha256(await fs.readFile(await indexPath(restored.path)))).toBe(indexSha256);
+    expect(await exactGit(restored.path, "status", "--porcelain=v1", "-z")).toBe(status);
+    expect(await exactGit(restored.path, "diff", "--cached", "--binary")).toBe(staged);
+    expect(await exactGit(restored.path, "diff", "--binary")).toBe(unstaged);
+    await expect(fs.lstat(path.join(restored.path, "missing-parent"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(await read(restored.path, "saved.secret")).toBe("saved ignored bytes\n");
+    expect(await read(restored.path, "cache.tmp").catch(() => undefined)).toBeUndefined();
+    if (process.platform !== "win32") {
+      expect((await fs.stat(path.join(restored.path, "untracked.sh"))).mode & 0o777).toBe(0o751);
+      expect((await fs.stat(path.join(restored.path, "saved.secret"))).mode & 0o777).toBe(0o600);
+      expect(await fs.readlink(path.join(restored.path, "readme-link"))).toBe("README.md");
+    }
+    expect((await fs.stat(path.join(restored.path, "untracked.sh"))).mtimeMs).toBe(
+      1_600_000_001_000,
+    );
+    expect(await read(restored.path, "raw.txt")).toBe("raw LF bytes\n");
+    expect(await fs.readFile(path.join(restored.path, "encoded.utf16"))).toEqual(
+      Buffer.from([0x78, 0]),
+    );
+    expect(restored.snapshotRef).toBe(removed.snapshotRef);
+    expect(await exactGit(repo, "rev-parse", `${removed.snapshotRef}^{commit}`)).toMatch(
+      /^[a-f0-9]{40}$/u,
+    );
+  });
+  it("keeps resolve-undo and cache-tree dependencies after the original index is gone", async () => {
+    await exactGit(repo, "commit", "--allow-empty", "-m", "recorded branch tip");
+    const record = await fixture("resolve-undo");
+    const branchHead = await exactGit(record.path, "rev-parse", "HEAD");
+    await exactGit(record.path, "checkout", "--detach", "HEAD~1");
+    const head = await exactGit(record.path, "rev-parse", "HEAD");
+    await fs.writeFile(path.join(record.path, "README.md"), "ours-only\n");
+    await exactGit(record.path, "add", "README.md");
+    const ours = await exactGit(record.path, "rev-parse", ":README.md");
+    const oursTree = await exactGit(record.path, "write-tree");
+    await fs.writeFile(path.join(record.path, "README.md"), "theirs-only\n");
+    await exactGit(record.path, "add", "README.md");
+    const theirs = await exactGit(record.path, "rev-parse", ":README.md");
+    const theirsTree = await exactGit(record.path, "write-tree");
+    await exactGit(record.path, "read-tree", oursTree);
+    await exactGit(record.path, "read-tree", "-m", "-i", "HEAD", oursTree, theirsTree);
+    await fs.writeFile(path.join(record.path, "README.md"), "resolved\n");
+    await exactGit(record.path, "add", "README.md");
+    const cacheTree = await exactGit(record.path, "write-tree");
+    await exactGit(record.path, "update-index", "--index-version=4");
+    expect(await exactGit(record.path, "ls-files", "--resolve-undo")).toContain(ours);
+    const index = await fs.readFile(await indexPath(record.path));
+    const result = await retire(record, head, branchHead, sha256(index));
+    await discardRecovery(result.recoveryPath!);
+    await exactGit(repo, "prune", "--expire=now");
+    expect(await exactGit(repo, "cat-file", "-p", ours)).toBe("ours-only");
+    expect(await exactGit(repo, "cat-file", "-p", theirs)).toBe("theirs-only");
+    expect(await exactGit(repo, "cat-file", "-t", cacheTree)).toBe("tree");
+    const restored = await service.restore({ id: record.id });
+    expect(await fs.readFile(await indexPath(restored.path))).toEqual(index);
+    await exactGit(restored.path, "checkout", "-m", "README.md");
+    expect(await exactGit(restored.path, "ls-files", "--unmerged")).toContain(ours);
+    expect(await exactGit(restored.path, "ls-files", "--unmerged")).toContain(theirs);
+    expect(await read(restored.path, "README.md")).toContain("<<<<<<<");
+  });
+  it("refuses a fallback parent swapped to a symlink before publication", async () => {
+    const { created, retired } = await retiredFixture("parent-swap", async (checkout) => {
+      await fs.mkdir(path.join(checkout, "nested"));
+      await fs.writeFile(path.join(checkout, "nested/child.txt"), "captured bytes\n");
+    });
+    await discardRecovery(retired.recoveryPath!);
+    const outside = path.join(stateDir, "outside");
+    await fs.mkdir(outside);
+    const temporaryName = createHash("sha256")
+      .update(Buffer.from("nested/child.txt").toString("hex"))
+      .digest("hex");
+    const write = fs.writeFile;
+    let swapped = false;
+    vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+      const result = await write(...args);
+      if (
+        !swapped &&
+        typeof args[0] === "string" &&
+        path.basename(args[0]) === temporaryName &&
+        path.basename(path.dirname(args[0])) === "files"
+      ) {
+        swapped = true;
+        await fs.rename(
+          path.join(created.path, "nested"),
+          path.join(created.path, "original-nested"),
+        );
+        await fs.symlink(outside, path.join(created.path, "nested"), "dir");
+      }
+      return result;
+    });
+    await expect(service.restore({ id: created.id })).rejects.toThrow(
+      /changed|directory|unexpected/i,
+    );
+    expect(swapped).toBe(true);
+    expect(await fs.readdir(outside)).toEqual([]);
+  });
+  it.each([false, true])(
+    "rejects a replaced captured-missing parent (symlink=%s)",
+    async (symlink) => {
+      const { created, retired } = await retiredFixture("missing-parent", async (checkout) => {
+        await fs.mkdir(path.join(checkout, "missing-parent"));
+        await fs.writeFile(path.join(checkout, "missing-parent", "staged.txt"), "index only\n");
+        await exactGit(checkout, "add", "missing-parent");
+        await fs.rm(path.join(checkout, "missing-parent"), { recursive: true });
+      });
+      await discardRecovery(retired.recoveryPath!);
+      const outside = path.join(stateDir, "outside-parent");
+      await fs.mkdir(outside);
+      const target = path.join(created.path, "missing-parent");
+      const write = fs.writeFile;
+      let injected = false;
+      vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+        const result = await write(...args);
+        if (
+          !injected &&
+          typeof args[0] === "string" &&
+          path.basename(path.dirname(args[0])) === "files"
+        ) {
+          injected = true;
+          if (symlink) {
+            fsSync.symlinkSync(outside, target, process.platform === "win32" ? "junction" : "dir");
+          } else {
+            fsSync.writeFileSync(target, "concurrent bytes\n");
+          }
+        }
+        return result;
+      });
+      await expect(service.restore({ id: created.id })).rejects.toThrow(
+        /non-directory parent|ENOTDIR/i,
+      );
+      expect(injected).toBe(true);
+      expect(await fs.readdir(outside)).toEqual([]);
+      if (symlink) {
+        expect(await fs.realpath(target)).toBe(await fs.realpath(outside));
+      } else {
+        expect(await fs.readFile(target, "utf8")).toBe("concurrent bytes\n");
+      }
+      expect(await exactGit(repo, "rev-parse", retired.snapshotRef!)).toBeTruthy();
+    },
+  );
+
+  it("does not apply restored metadata through an outside hard-link alias", async () => {
+    const { created, retired } = await retiredFixture("hardlink");
+    await discardRecovery(retired.recoveryPath!);
+    const outside = path.join(stateDir, "outside-alias");
+    const target = path.join(created.path, "README.md");
+    const link = fsSync.linkSync;
+    let linked = false;
+    let originalMode = 0;
+    let originalMtime = 0;
+    vi.spyOn(fsSync, "linkSync").mockImplementation((...args) => {
+      link(...args);
+      if (!linked && String(args[1]) === target) {
+        linked = true;
+        link(target, outside);
+        const observed = fsSync.statSync(outside);
+        originalMode = observed.mode;
+        originalMtime = observed.mtimeMs;
+      }
+    });
+    await expect(service.restore({ id: created.id })).rejects.toThrow(/hard.link|shared.*inode/i);
+    expect(linked).toBe(true);
+    const final = await fs.stat(outside);
+    expect(final.mode).toBe(originalMode);
+    expect(final.mtimeMs).toBe(originalMtime);
+  });
+
+  it("reads raw high-bit Git snapshot names without treating them as traversal", async () => {
+    const { retired, head } = await retiredFixture("raw-path");
+    const snapshot = await exactGit(repo, "rev-parse", retired.snapshotRef!);
+    const metadata = JSON.parse(await exactGit(repo, "show", snapshot + "^2:manifest.json"));
+    const manifestFile = path.join(stateDir, "raw-manifest.json");
+    for (const raw of ["aeae", "2e2e", "2e676974"]) {
+      metadata.files[0].path = raw;
+      await fs.writeFile(manifestFile, JSON.stringify(metadata));
+      const blob = await exactGit(repo, "hash-object", "-w", manifestFile);
+      const tree = spawnSync("git", ["-C", repo, "mktree"], {
+        input: `100644 blob ${blob}\tmanifest.json\n`,
+        encoding: "utf8",
+      });
+      expect(tree.status).toBe(0);
+      const manifest = await exactGit(
+        repo,
+        "commit-tree",
+        tree.stdout.trim(),
+        "-p",
+        head,
+        "-m",
+        "raw path fixture",
+      );
+      const candidate = await exactGit(
+        repo,
+        "commit-tree",
+        await exactGit(repo, "rev-parse", snapshot + "^{tree}"),
+        "-p",
+        head,
+        "-p",
+        manifest,
+        "-m",
+        "raw snapshot fixture",
+      );
+      const decoded = readExactStateSnapshot(repo, candidate, retired.snapshotRef!, undefined);
+      if (raw === "aeae") {
+        expect((await decoded)?.files[0]?.path).toBe(raw);
+      } else {
+        await expect(decoded).rejects.toThrow("Invalid path in exact-state snapshot");
+      }
+    }
   });
 });

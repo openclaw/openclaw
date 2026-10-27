@@ -113,7 +113,7 @@ function renderReadySession(
   tail?: TestContentRow["content"],
 ) {
   return transcript.renderSession(`agent:main:${key}`, (session) => {
-    session.setContentReady(true);
+    session.layout.ready = true;
     return session.render(
       rows,
       (row) => (row.kind === "content" ? row.content : null),

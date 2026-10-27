@@ -146,6 +146,8 @@ export type SelectionChange =
       key: string;
       agentId: string;
       row: SelectionRow | undefined;
+      /** Synchronous internal publication scope; deferred refreshes have no causal label. */
+      scope?: string;
     };
 
 export function selectionRow(row: Row): SelectionRow | undefined {
@@ -167,6 +169,7 @@ export type Query = {
   storePath?: string;
   key?: string;
   sessionIdOrKey?: string;
+  candidateSessionIdsOrKeys?: ReadonlySet<string>;
   /** Prepared qualified rows carry identity; raw keys retain alias resolution. */
   parentSessionKey?: string | Pick<Row, "key" | "agentId">;
   sortBy?: Parameters<typeof compareSessionEntryPairs>[2] | null;

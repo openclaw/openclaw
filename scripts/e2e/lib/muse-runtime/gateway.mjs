@@ -91,7 +91,11 @@ export async function createHarness() {
       assert(Date.now() < deadline, "Gateway readiness timeout");
       await delay(200);
     }
-    client = await new Promise((resolve, reject) => {
+    client = await connect(["operator.admin", "operator.approvals"]);
+  }
+  /** An admin client is the owner; a client without operator.admin is not. */
+  function connect(scopes) {
+    return new Promise((resolve, reject) => {
       const connection = new GatewayClient({
         url: "ws://127.0.0.1:18789",
         token,
@@ -99,9 +103,9 @@ export async function createHarness() {
         clientName: "gateway-client",
         mode: "backend",
         role: "operator",
-        scopes: ["operator.admin", "operator.approvals"],
+        scopes,
         // Scope grants approval access; the cap makes this client a plugin approval route.
-        caps: ["plugin-approvals"],
+        caps: scopes.includes("operator.approvals") ? ["plugin-approvals"] : [],
         onHelloOk: () => resolve(connection),
         onConnectError: reject,
         onEvent: (event) => {
@@ -124,25 +128,28 @@ export async function createHarness() {
       connection.start();
     });
   }
-  async function turn(message, { decision, expectError = false, afterApproval } = {}) {
+  async function turn(
+    message,
+    { decision, expectError = false, afterApproval, via = client, key = sessionKey } = {},
+  ) {
     activeApprovals = [];
     activeDecision = decision;
     activeAfterApproval = afterApproval;
     approvalFailure = undefined;
-    const started = await client.request("chat.send", {
-      sessionKey,
+    const started = await via.request("chat.send", {
+      sessionKey: key,
       message,
       idempotencyKey: randomUUID(),
     });
     assert.equal(started.status, "started");
     assert.equal(typeof started.runId, "string");
     activeRunId = started.runId;
-    const wait = await client.request(
+    const wait = await via.request(
       "agent.wait",
       { runId: started.runId, timeoutMs: 300000 },
       { timeoutMs: 310000 },
     );
-    const history = await client.request("chat.history", { sessionKey, limit: 100 });
+    const history = await via.request("chat.history", { sessionKey: key, limit: 100 });
     if (approvalFailure) {
       throw new Error("Approval resolution failed", { cause: approvalFailure });
     }
@@ -165,6 +172,7 @@ export async function createHarness() {
     start,
     stop,
     turn,
+    connect,
     get client() {
       return client;
     },

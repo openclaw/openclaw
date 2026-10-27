@@ -178,14 +178,21 @@ it("follows outside layout shifts and a signaled ancestor animation", async () =
     { duration: 2_000, fill: "forwards" },
   );
   try {
+    // Keep frame tracking active without racing the compositor's wall clock.
+    animation.playbackRate = 0;
+    animation.currentTime = 500;
+    await animation.ready;
     await frame();
     await frame();
     const animationReads = vi.spyOn(container, "getAnimations");
+    animation.currentTime = 1_000;
     await frame();
     await frame();
     expect(animationReads).not.toHaveBeenCalled();
     animationReads.mockRestore();
+    expect(animation.playState).toBe("running");
     expectAnchored(surface, element);
+    animation.playbackRate = 1;
     animation.finish();
     await frame();
     expectAnchored(surface, element);

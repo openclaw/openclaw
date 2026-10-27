@@ -1,9 +1,17 @@
+import assert from "node:assert/strict";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { makeUserMessage } from "../../test/helpers/user-message.js";
+import { withPreparedTranscriptCorrection } from "../config/sessions/session-transcript-correction.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
+import * as codeModeJson from "./code-mode-json.js";
 import {
   bindCodeModeSessionStore,
   createCodeModeSessionStoreAccess,
 } from "./code-mode-session-store.js";
+import { withSessionState } from "./sessions/session-manager-fixtures.test-support.js";
+import { withSelectedTranscriptReader } from "./sessions/session-manager-reader.test-support.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { fakeTool } from "./test-helpers/fake-tool.js";
 import { clearToolSearchCatalog, restrictToolSearchCatalog } from "./tool-search-catalog.js";
@@ -39,6 +47,118 @@ async function saveCell(owner: Pick<ReturnType<typeof run>, "cell">, key: string
   await cell.save(key, value, false);
   await cell.commit();
 }
+
+async function loadDurableStore(scope: Parameters<typeof withSelectedTranscriptReader>[0]) {
+  return withSelectedTranscriptReader(
+    scope,
+    async () => {
+      const owner = run(await SessionManager.openAsync(scope));
+      try {
+        return await owner.cell().load("key");
+      } finally {
+        owner.close();
+      }
+    },
+    true,
+  );
+}
+
+it("reuses committed encodings across admitted turns while isolating loads and branch changes", () =>
+  withSessionState("store-replay-turns", async ({ scope }) => {
+    const admitted = <T>(operation: () => Promise<T>) =>
+      withSelectedTranscriptReader(scope, operation, true);
+    const originalLeaf = await admitted(async () => {
+      const source = await SessionManager.openAsync(scope);
+      const seed = run(source);
+      await saveCell(seed, "key", { z: "🦞\n", a: [1, null] });
+      seed.close();
+      return source.getLeafId()!;
+    });
+
+    const stringify = vi.spyOn(codeModeJson, "stringifyCodeModeJsonSafe");
+    const first = await loadDurableStore(scope);
+    expect(stringify).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(first.value)).toBe('{"z":"🦞\\n","a":[1,null]}');
+    assert(isRecord(first.value));
+    first.value.z = "caller mutation";
+
+    await admitted(async () => {
+      const source = await SessionManager.openAsync(scope);
+      await source.appendMessageAsync(makeUserMessage("Another turn", 1));
+    });
+    stringify.mockClear();
+    const second = await loadDurableStore(scope);
+    expect(stringify).not.toHaveBeenCalled();
+    expect(second).toEqual({ value: { z: "🦞\n", a: [1, null] }, networkContent: false });
+    expect(second.value).not.toBe(first.value);
+
+    await closeOpenClawAgentDatabaseByPathAsync(scope.storePath, scope.agentId);
+    stringify.mockClear();
+    await expect(loadDurableStore(scope)).resolves.toEqual(second);
+    expect(stringify).toHaveBeenCalledTimes(1);
+
+    await admitted(async () => {
+      const changed = run(await SessionManager.openAsync(scope));
+      await saveCell(changed, "key", "appended value");
+      changed.close();
+    });
+    await expect(loadDurableStore(scope)).resolves.toEqual({
+      value: "appended value",
+      networkContent: false,
+    });
+    await admitted(async () => {
+      const source = await SessionManager.openAsync(scope);
+      await source.branchAsync(originalLeaf);
+      const branch = run(source);
+      try {
+        await expect(branch.cell().load("key")).resolves.toEqual({
+          value: { z: "🦞\n", a: [1, null] },
+          networkContent: false,
+        });
+      } finally {
+        branch.close();
+      }
+    });
+  }));
+
+it("invalidates cached encodings when a transcript rewrite preserves custom entry IDs", () =>
+  withSessionState("store-replay-rewrite", async ({ scope }) => {
+    const admitted = <T>(operation: () => Promise<T>) =>
+      withSelectedTranscriptReader(scope, operation, true);
+    const entryId = await admitted(async () => {
+      const source = await SessionManager.openAsync(scope);
+      const seed = run(source);
+      await saveCell(seed, "key", { before: 1, after: 2 });
+      seed.close();
+      return source.getLeafId();
+    });
+    await expect(loadDurableStore(scope)).resolves.toEqual({
+      value: { before: 1, after: 2 },
+      networkContent: false,
+    });
+
+    await admitted(() =>
+      withPreparedTranscriptCorrection(scope, async (correction) => {
+        const entries = await correction.readEvents();
+        const index = entries.findIndex((entry) => isRecord(entry) && entry.id === entryId);
+        const original = entries[index];
+        assert(isRecord(original));
+        const replacement = entries.slice();
+        replacement[index] = {
+          ...original,
+          data: {
+            set: { key: { after: 2, before: 1 } },
+            delete: [],
+            networkContent: { key: true },
+          },
+        };
+        await correction.replaceEvents(replacement);
+      }),
+    );
+    const loaded = await loadDurableStore(scope);
+    expect(JSON.stringify(loaded.value)).toBe('{"after":2,"before":1}');
+    expect(loaded.networkContent).toBe(true);
+  }));
 
 it("keeps the projection unchanged after failed persistence and admits a later cell", async () => {
   const { manager, ...owner } = run();

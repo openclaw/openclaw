@@ -6,10 +6,10 @@ import type {
   TranscriptUpdatePayload,
 } from "./session-accessor.sqlite-contract.js";
 import { resolveSqliteTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import {
   captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
-  withSessionActorStorage,
 } from "./session-actor-storage-binding.js";
 import type { SessionEntryReadSource } from "./session-entry-read-source.types.js";
 import { captureOwnedTranscriptWriteAssertion } from "./transcript-write-context.js";

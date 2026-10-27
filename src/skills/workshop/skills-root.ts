@@ -9,3 +9,12 @@ export function resolveWorkshopSkillsDir(
 ): string {
   return path.join(resolveAgentDir(config, agentId, env), "workshop-skills");
 }
+
+/** Drafts a background review proposed instead of changing skills; discovery never loads them. */
+export function resolveWorkshopDraftsDir(
+  config: OpenClawConfig,
+  agentId: string,
+  env?: NodeJS.ProcessEnv,
+): string {
+  return path.join(resolveWorkshopSkillsDir(config, agentId, env), ".drafts");
+}

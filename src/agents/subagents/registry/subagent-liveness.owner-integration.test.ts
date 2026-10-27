@@ -193,6 +193,16 @@ it("retains quiet admitted execution in listing, admission count, and requester 
     expect(isSubagentRunLive(entry)).toBe(true);
     expect(isSubagentRunLive(updated)).toBe(true);
     expect(isSubagentRunLive({ ...updated })).toBe(false);
+    const displayed = buildSubagentSessionListReadIndex().getDisplaySubagentRun(
+      entry.childSessionKey,
+    );
+    expect(displayed).not.toBe(updated);
+    const serialize = vi.spyOn(JSON, "stringify");
+    const live = Array.from({ length: 100 }, () => isSubagentRunLive(displayed));
+    const serializations = serialize.mock.calls.length;
+    serialize.mockRestore();
+    expect(live.every(Boolean)).toBe(true);
+    expect(serializations).toBe(0);
     expect(sweepStaleRunContexts()).toBe(0);
     await testing.sweepOnceForTests();
     expect(entry.execution.endedAt).toBeUndefined();

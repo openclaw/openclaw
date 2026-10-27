@@ -85,7 +85,7 @@ export async function reactivateCompletedSubagentSession(params: {
   task?: string;
   gatewayContextResolver?: GatewayContextResolver;
   assertCurrent?: () => void;
-  acpSession?: {
+  session?: {
     cfg: OpenClawConfig;
     activeSessionAgentId: string;
     sessionEntry?: SessionEntry;
@@ -95,6 +95,10 @@ export async function reactivateCompletedSubagentSession(params: {
   if (!runId) {
     return false;
   }
+  const admittedEntry = params.session?.sessionEntry;
+  const sessionEntry = admittedEntry
+    ? { sessionId: admittedEntry.sessionId, lifecycleRevision: admittedEntry.lifecycleRevision }
+    : undefined;
   const paused = getLatestLiveSubagentRunByChildSessionKey(
     params.sessionKey,
     (entry) => entry.pauseReason === "sessions_yield",
@@ -108,14 +112,14 @@ export async function reactivateCompletedSubagentSession(params: {
   if (params.gatewayContextResolver && !params.gatewayContextResolver()) {
     return false;
   }
-  if (params.acpSession) {
+  if (params.session) {
     const [acpMeta] = await readAcpSessionMetaForEntries({
-      cfg: params.acpSession.cfg,
+      cfg: params.session.cfg,
       entries: [
         {
-          agentId: params.acpSession.activeSessionAgentId,
+          agentId: params.session.activeSessionAgentId,
           sessionKey: params.sessionKey,
-          entry: params.acpSession.sessionEntry,
+          entry: params.session.sessionEntry,
         },
       ],
     });
@@ -185,7 +189,7 @@ export async function reactivateCompletedSubagentSession(params: {
           nextRunId: runId,
           ...(continuesInterruptedTask
             ? { expected: source, preserveRequesterSettleWake: true }
-            : { preserveCompletedRun: true }),
+            : { preserveCompletedRun: true, sessionEntry }),
           runTimeoutSeconds: source.runTimeoutSeconds ?? 0,
           ...(hasTask ? { task } : {}),
           assertCurrent: assertOriginalOwnerCurrent,

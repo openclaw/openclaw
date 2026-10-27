@@ -3,6 +3,7 @@ import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema, quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
 import { ensureColumn, readTableColumns, tableExists } from "./openclaw-state-db-schema-helpers.js";
+import { withLegacyLocalWorkspaceCas } from "./openclaw-state-db-schema-v35-workspace-cas.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const projectionTable = "local_workspace_projections";
@@ -63,7 +64,7 @@ export const stateLocalWorkspaceManifestMigration = {
 
 /** Keep exact predecessor declarations for SQLite admission and PostgreSQL backups. */
 export function withLegacyLocalWorkspaceManifests(schema: string): string {
-  return schema
+  return withLegacyLocalWorkspaceCas(schema)
     .replace(/\n {2}(?:checkpoint_json TEXT|"checkpoint_json" text COLLATE "C"),/gu, "")
     .replace(/^ {2}CHECK \([^\n]*baseline_json[^\n]*baseline_ref[^\n]*\),$/gmu, (check) =>
       check.includes('"')

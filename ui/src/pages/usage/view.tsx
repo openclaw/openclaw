@@ -25,7 +25,7 @@ import type { UsageProps } from "./types.ts";
 import { DailyChartCompact, CostBreakdownCompact } from "./view-chart.tsx";
 import { UsageCreatorFilter, UsageCreators } from "./view-creators.tsx";
 import { SessionDetailPanel } from "./view-details.tsx";
-import { renderUsageHeatmap } from "./view-heatmap.tsx";
+import { UsageHeatmap } from "./view-heatmap.tsx";
 import { renderCostWindowComparison, renderFilterChips, UsageInsights } from "./view-overview.tsx";
 import { UsageQueryFilter } from "./view-query-filter.tsx";
 import { SessionsCard } from "./view-sessions-card.tsx";
@@ -142,7 +142,7 @@ function UsageView(props: UsageProps & { loading: boolean; read: UsageRead }) {
   const displayTotals = createMemo(() => (overview().hasOverviewData ? props.data.totals : null));
   const filterOptions = createMemo(
     () =>
-      props.data.overview?.filterOptions ?? {
+      props.data.filterOptions ?? {
         agent: [],
         channel: [],
         provider: [],
@@ -662,11 +662,11 @@ function UsageView(props: UsageProps & { loading: boolean; read: UsageRead }) {
               props.filters.endDate,
               props.filters.timeZone,
             )}
-            {renderUsageHeatmap(
-              props.data.costDaily,
-              props.filters.startDate,
-              props.filters.endDate,
-            )}
+            <UsageHeatmap
+              daily={props.data.costDaily}
+              rangeStartDate={props.filters.startDate}
+              rangeEndDate={props.filters.endDate}
+            />
             {
               <UsageMosaic
                 overview={props.data.overview}

@@ -8,7 +8,7 @@ import {
 } from "../state/openclaw-state-lease.js";
 
 const PROJECT_CHECKOUT_LEASE_MS = 30_000;
-export const PROJECT_CHECKOUT_WAIT_MS = 30_000;
+const PROJECT_CHECKOUT_WAIT_MS = 30_000;
 
 export class ProjectCheckoutError extends Error {
   override name = "ProjectCheckoutError";
@@ -88,9 +88,5 @@ export async function resolveProjectCheckout(projectPath: string) {
   if (headResult.code !== 0) {
     throw new ProjectCheckoutError(`project checkout has no commits: ${projectPath}`);
   }
-  const originResult = await runGit(repoRoot, ["config", "--get", "remote.origin.url"], {
-    operation: "project.checkout",
-  });
-  const originUrl = originResult.code === 0 ? originResult.stdout.trim() : "";
-  return { path: requested, repoRoot, ...(originUrl ? { originUrl } : {}) };
+  return { path: requested, repoRoot };
 }

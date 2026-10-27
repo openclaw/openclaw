@@ -8,7 +8,16 @@ export function warmReloadProbe(
   const shifts: Array<{ at: number; value: number }> = [];
   const states: Array<{ at: number; state: string }> = [];
   const longTasks: Array<{ at: number; duration: number }> = [];
-  const reads: Array<{ at: number; store: string; hit: boolean }> = [];
+  const reads: Array<{ at: number; store: string; hit: boolean; cursor?: boolean }> = [];
+  const historyRequests: Array<{
+    method: string;
+    sentAt: number;
+    cursor: boolean;
+    receivedAt?: number;
+    responseBytes?: number;
+    kind?: string;
+    messages?: number;
+  }> = [];
   const transactions: Array<{
     at: number;
     label: string;
@@ -196,7 +205,14 @@ export function warmReloadProbe(
     const request = get.apply(this, args);
     const store = this.name;
     request.addEventListener("success", () => {
-      reads.push({ at: performance.now(), store, hit: request.result !== undefined });
+      reads.push({
+        at: performance.now(),
+        store,
+        hit: request.result !== undefined,
+        ...(store === "snapshots"
+          ? { cursor: Boolean(request.result?.snapshot?.deltaCursor) }
+          : {}),
+      });
       if (store === "snapshots" && request.result !== undefined) {
         mark("cacheRead");
       }
@@ -209,13 +225,30 @@ export function warmReloadProbe(
       mark("socketCreated");
       const socket: WebSocket = Reflect.construct(target, args);
       socket.addEventListener("open", () => mark("socketOpen"), { once: true });
-      const pending = new Map<string, string>();
+      const pending = new Map<
+        string,
+        { method: string; history?: (typeof historyRequests)[number] }
+      >();
       const send = socket.send.bind(socket);
       socket.send = (data) => {
         if (typeof data === "string") {
           const frame = JSON.parse(data);
           if (frame.type === "req") {
-            pending.set(frame.id, frame.method);
+            const params = frame.params?.initialHistory ?? frame.params;
+            const history =
+              frame.method === "chat.startup" ||
+              frame.method === "chat.history" ||
+              (frame.method === "sessions.messages.subscribe" && frame.params?.initialHistory)
+                ? {
+                    method: frame.method,
+                    sentAt: performance.now(),
+                    cursor: Boolean(params?.cursor),
+                  }
+                : undefined;
+            if (history) {
+              historyRequests.push(history);
+            }
+            pending.set(frame.id, { method: frame.method, history });
             if (frame.method === "connect") {
               mark("connectSent");
             } else if (milestones.hello !== undefined) {
@@ -230,9 +263,20 @@ export function warmReloadProbe(
         if (frame.type === "event" && frame.event === "connect.challenge") {
           mark("challenge");
         }
-        const method = pending.get(frame.id);
-        if (method) {
+        const request = pending.get(frame.id);
+        if (request) {
           pending.delete(frame.id);
+          const { method, history } = request;
+          if (history) {
+            const result =
+              method === "sessions.messages.subscribe"
+                ? frame.payload?.initialHistory?.payload
+                : frame.payload;
+            history.receivedAt = performance.now();
+            history.responseBytes = new TextEncoder().encode(event.data).byteLength;
+            history.kind = result?.kind ?? (result?.messages ? "window" : "error");
+            history.messages = result?.messages?.length;
+          }
           if (method === "connect") {
             mark("hello");
           }
@@ -540,12 +584,48 @@ export function warmReloadProbe(
           `Unqualified row-facts sample: cached rows or fact coverage missing (${JSON.stringify(coverage)})`,
         );
       }
+      const pane = document.querySelector(".chat-pane-cache__pane--active");
+      const thread = pane?.querySelector(".chat-thread");
+      const bounds = thread?.getBoundingClientRect();
+      const textRoots = [
+        ...(thread?.querySelectorAll(".chat-virtual-row .chat-text") ?? []),
+      ].filter((element) => element.textContent?.trim());
+      // Capture-only eligibility explains missing Element Timing without turning
+      // a DOM observation or compositor-only reveal into a measured text paint.
+      const paintable = textRoots.some((element) => {
+        if (!bounds || !element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) {
+          return false;
+        }
+        const rect = element.getBoundingClientRect();
+        return (
+          Math.min(rect.right, bounds.right, innerWidth) > Math.max(rect.left, bounds.left, 0) &&
+          Math.min(rect.bottom, bounds.bottom, innerHeight) > Math.max(rect.top, bounds.top, 0)
+        );
+      });
       return {
         milestones,
+        transcriptPresentation: {
+          at: performance.now(),
+          status:
+            milestones.firstTranscriptPaint !== undefined
+              ? "measured"
+              : paintable
+                ? "visible-without-element-timing"
+                : textRoots.length
+                  ? "hidden-or-clipped"
+                  : pane
+                    ? "empty"
+                    : "absent",
+          paintable,
+          textRoots: textRoots.length,
+          taggedTextOwners:
+            pane?.querySelectorAll('[elementtiming="openclaw-transcript"]').length ?? 0,
+        },
         measures: performance.getEntriesByType("measure").map((entry) => entry.toJSON()),
         transcriptPaints,
         largestPaints,
         reads,
+        historyRequests,
         transactions,
         shifts,
         cls: shifts.reduce((sum, shift) => sum + shift.value, 0),

@@ -26,6 +26,9 @@ import { createPluginRecord } from "./status.test-helpers.js";
 import { appendRuntimePluginToolGrant } from "./tool-grant-allowlist.js";
 import {
   createNamedToolEntry,
+  createOptionalToolManifest as createToolManifest,
+  createOptionalToolContext as createContext,
+  createConfiguredFeishuToolContext,
   createFeishuToolManifest,
   createToolRegistry,
   createXaiToolManifest,
@@ -105,50 +108,6 @@ let clearPluginMetadataLifecycleCaches: typeof import("./plugin-metadata-lifecyc
 let setCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata.test-support.js").setCurrentPluginMetadataSnapshot;
 let getPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").getPluginRuntimeGatewayRequestScope;
 let withPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").withPluginRuntimeGatewayRequestScope;
-
-function createToolManifest(
-  id: string,
-  toolNames: readonly string[],
-  overrides: Record<string, unknown> = {},
-) {
-  return {
-    id,
-    origin: "bundled" as const,
-    enabledByDefault: true,
-    channels: [],
-    providers: [],
-    contracts: { tools: [...toolNames] },
-    ...overrides,
-  };
-}
-
-function createContext(): { config: OpenClawConfig; workspaceDir: string } {
-  return {
-    config: {
-      plugins: {
-        enabled: true,
-        load: { paths: ["/tmp/plugin.js"] },
-        slots: { memory: "none" },
-      },
-    },
-    workspaceDir: "/tmp",
-  };
-}
-
-function createConfiguredFeishuToolContext<T extends string>(conversationReadOrigin: T) {
-  const context = createContext();
-  return {
-    ...context,
-    config: {
-      ...context.config,
-      plugins: {
-        ...context.config.plugins,
-        allow: ["feishu"],
-      },
-    },
-    conversationReadOrigin,
-  };
-}
 
 function createResolveToolsParams(params?: {
   context?: ReturnType<typeof createContext> & Record<string, unknown>;
@@ -1891,6 +1850,42 @@ describe("resolvePluginTools optional tools", () => {
       expect(resolvePluginTools({ ...nextParams, clientCaps: [] })).toEqual([]);
       expect(nextFactory).toHaveBeenCalledTimes(3);
       expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([true, false])(
+    "prepares registration membership only for completed generations (published=%s)",
+    (published) => {
+      const context = createContext();
+      const factory = vi.fn((ctx: { runId?: string }) => ({
+        ...makeTool("prepared_tool"),
+        description: ctx.runId,
+      }));
+      const entries = [createNamedToolEntry("prepared-owner", "prepared_tool", { factory })];
+      const publishedRegistry = setRegistry(entries, context.config);
+      const registry = published ? publishedRegistry : createToolRegistry(entries);
+      const iterations = vi.spyOn(registry.tools, Symbol.iterator);
+      const resolve = (runId: string) =>
+        resolvePluginTools({
+          ...createResolveToolsParams({ context: { ...context, runId } }),
+          runtimeRegistry: registry as PluginRegistry,
+        });
+
+      expect(resolve("first")[0]?.description).toBe("first");
+      expect(resolve("second")[0]?.description).toBe("second");
+      expect(factory).toHaveBeenCalledTimes(2);
+      expect(iterations).toHaveBeenCalledTimes(published ? 1 : 2);
+
+      if (published) {
+        setActivePluginRegistry(
+          registry as PluginRegistry,
+          "next-tool-generation",
+          "gateway-bindable",
+          "/tmp",
+        );
+        expect(resolve("third")[0]?.description).toBe("third");
+        expect(iterations).toHaveBeenCalledTimes(2);
+      }
     },
   );
 

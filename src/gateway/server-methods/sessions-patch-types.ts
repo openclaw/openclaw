@@ -1,5 +1,4 @@
 import type { ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
-import type { ModelRef } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SqliteLifecycleTargetSnapshot } from "../../config/sessions/session-accessor.sqlite-entry-equality.js";
 import type { SessionEntryCanonicalReplacement } from "../../config/sessions/session-accessor.sqlite-replacement-projection.js";
@@ -27,7 +26,6 @@ export type MutationOutcome =
       applied: boolean;
       accessChanged: boolean;
       entry: SessionEntry;
-      previousModel?: ModelRef;
     }
   | { ok: false; error: ErrorShape };
 

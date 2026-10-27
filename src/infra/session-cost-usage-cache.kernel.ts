@@ -18,6 +18,7 @@ import {
 import { USAGE_COST_QUARTER_SCOPE } from "./session-cost-usage-quarters.js";
 import {
   decodeUsageCostRollupEnvelope,
+  readUsageCostDeferredMetadata,
   USAGE_COST_ROLLUP_SCOPE as ROLLUP_SCOPE,
   type UsageCostFreshnessCheckpoint,
 } from "./session-cost-usage-rollup-codec.js";
@@ -113,32 +114,9 @@ export function readSessionCostUsageRollupRowsInDatabase(
         }
         if (row.value_json === null || headerBytes > budget.remainingBytes) {
           if (!invalidBody && envelope && budget.deferredMetadata.size < budget.metadataLimit) {
-            const source = envelope.checkpoint;
-            const checkpoint: UsageCostFreshnessCheckpoint =
-              source.kind === "jsonl"
-                ? {
-                    kind: source.kind,
-                    observedSize: source.observedSize,
-                    observedMtimeMs: source.observedMtimeMs,
-                    device: source.device,
-                    inode: source.inode,
-                  }
-                : {
-                    kind: source.kind,
-                    maxSeq: source.maxSeq,
-                    eventCount: source.eventCount,
-                    size: source.size,
-                    mtimeMs: source.mtimeMs,
-                  };
-            // Only numeric freshness facts fit the reserved descriptor allowance.
-            if (
-              Object.entries(checkpoint).every(
-                ([key, value]) =>
-                  key === "kind" || (typeof value === "number" && Number.isFinite(value)),
-              ) &&
-              Number.isFinite(envelope.scannedAt)
-            ) {
-              budget.deferredMetadata.set(row.key, { checkpoint, scannedAt: envelope.scannedAt });
+            const metadata = readUsageCostDeferredMetadata(envelope);
+            if (metadata) {
+              budget.deferredMetadata.set(row.key, metadata);
             }
           }
           continue;

@@ -2,11 +2,12 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { createSignal } from "solid-js";
-import { beforeAll, expect, it, onTestFinished, vi } from "vitest";
+import { beforeAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { CyberAccessProgram } from "../../../api/types.ts";
 import { i18n } from "../../../i18n/index.ts";
 import { captureI18nStateForTesting } from "../../../i18n/lib/translate.test-support.ts";
 import { createSessionsListResult } from "../../../test-helpers/chat-model.ts";
+import { createMediaQueryList } from "../../../test-helpers/media-query.ts";
 import { installModelPickerLayout } from "../../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
@@ -20,6 +21,13 @@ beforeAll(async () => {
     import("./chat-model-picker-panel.tsx"),
     import("./chat-effort-picker-panel.tsx"),
   ]);
+});
+
+beforeEach(() => {
+  // jsdom has no Web Animations API; the browser suite owns motion proof.
+  vi.stubGlobal("matchMedia", (query: string) =>
+    createMediaQueryList(query, query === "(prefers-reduced-motion: reduce)"),
+  );
 });
 
 async function controls(overrides: Partial<Props>) {
@@ -377,7 +385,7 @@ it("does not invent reasoning options for an offline non-reasoning model", async
   expect(view.container.querySelector("[data-chat-thinking-select]")).toBeNull();
 });
 
-it("never borrows access entitlement from another runtime or a retired catalog", async () => {
+it("retains the Access selection without borrowing entitlement from another runtime or a retired catalog", async () => {
   const model = {
     id: "primary",
     name: "primary",
@@ -387,28 +395,41 @@ it("never borrows access entitlement from another runtime or a retired catalog",
     availableAccessPrograms: {
       cyber: ["standard", "daybreak_blue"] satisfies CyberAccessProgram[],
     },
+    cyberAccessProgramDefault: "daybreak_blue" as const,
     runtimeChoices: [{ agentRuntime: { id: "codex", source: "model" as const } }],
   };
+  const onSelect = vi.fn();
   const view = await controls({
     modelCatalog: [model, { id: "other", name: "other", provider: "example" }],
     selectedAgentRuntime: "codex",
     requestedAccessProgram: "daybreak_red",
-    onAccessProgramSelect: vi.fn(),
+    onAccessProgramSelect: onSelect,
   });
-  const accessOptions = () =>
-    Array.from(
-      view.container.querySelectorAll<HTMLButtonElement>("[data-chat-access-option]"),
-      (option) => option.getAttribute("data-chat-access-option"),
-    );
-  expect(accessOptions()).toEqual([]);
+  const options = () => [
+    ...view.container.querySelectorAll<HTMLButtonElement>("[data-chat-access-option]"),
+  ];
+  const unavailable = () =>
+    view.container.querySelector('.chat-controls__access-options [aria-disabled="true"]')
+      ?.textContent;
+  expect(options()).toHaveLength(0);
+  expect(unavailable()).toBeUndefined();
   view.update({ selectedAgentRuntime: "openclaw" });
-  expect(accessOptions()).toEqual(["standard", "daybreak_blue"]);
+  expect(options().map((option) => option.textContent)).toEqual(["Blue"]);
+  expect(unavailable()).toContain("unavailable");
+  view.update({ requestedAccessProgram: undefined });
+  expect(options()[0]?.getAttribute("aria-pressed")).toBe("true");
+  options()[0]?.click();
+  expect(onSelect).not.toHaveBeenCalled();
   view.update({ modelCatalogState: { hasSnapshot: true, status: "loading", retired: true } });
-  expect(accessOptions()).toEqual([]);
-  const unknownModel = { ...model, availableAccessPrograms: undefined };
+  expect(options()).toHaveLength(0);
+  view.update({ requestedAccessProgram: "daybreak_red" });
+  expect(unavailable()).toBeUndefined();
+  expect(options()).toHaveLength(0);
   view.update({
     modelCatalogState: { hasSnapshot: true, status: "ready" },
-    modelCatalog: [unknownModel],
+    modelCatalog: [{ ...model, available: false }],
   });
-  expect(accessOptions()).toEqual([]);
+  expect(options().every((option) => option.disabled)).toBe(true);
+  options()[0]?.click();
+  expect(onSelect).not.toHaveBeenCalled();
 });

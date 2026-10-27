@@ -209,7 +209,7 @@ describe("runCliAgent spawn path", () => {
       createData: () => Buffer.from("selected-node-token"),
     };
     context.openClawHistoryPrompt = "gateway transcript reseed";
-    context.claudeSkillsPluginArgs = ["--plugin-dir", "/tmp/gateway-skills"];
+    context.claudeSkillsPlugin = { args: ["--plugin-dir", "/tmp/gateway-skills"] };
     context.params.forkCliSessionOnResume = true;
     context.params.claimCliSessionFork = vi.fn(async () => true);
     context.params.persistCliSessionForkSuccessor = vi.fn(async () => {});

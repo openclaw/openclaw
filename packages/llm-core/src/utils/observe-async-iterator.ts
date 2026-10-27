@@ -39,9 +39,15 @@ export function observeAsyncIterator<T>(options: {
       reading = true;
       return (active = operation());
     }
-    const pending = Promise.withResolvers<IteratorResult<T>>();
-    queue.push({ operation, ...pending });
-    return pending.promise;
+    // Package declarations target ES2023, which lacks Promise.withResolvers.
+    let resolve!: (result: IteratorResult<T>) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<IteratorResult<T>>((resolvePending, rejectPending) => {
+      resolve = resolvePending;
+      reject = rejectPending;
+    });
+    queue.push({ operation, promise, resolve, reject });
+    return promise;
   }
   function settled() {
     const pending = queue.shift();

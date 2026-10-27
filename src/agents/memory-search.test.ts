@@ -386,6 +386,62 @@ describe("memory search config", () => {
   });
 
   it.each([
+    { sharedProvider: "openai", provider: "gemini", baseUrl: undefined },
+    { sharedProvider: "openai", provider: "gemini", baseUrl: "https://other.example/v1" },
+    { sharedProvider: "tenant-a", provider: "tenant-b", baseUrl: undefined },
+  ])(
+    "does not inherit another destination's credentials: $sharedProvider -> $provider",
+    ({ sharedProvider, provider, baseUrl }) => {
+      const resolved = resolve(
+        {
+          provider: sharedProvider,
+          remote: {
+            apiKey: "shared-owner-key",
+            headers: { Authorization: "Bearer shared-owner" },
+            batch: { enabled: true },
+          },
+        },
+        { provider, remote: { baseUrl } },
+      );
+      expect(resolved?.remote).toMatchObject({ batch: { enabled: true } });
+      expect(resolved?.remote?.apiKey).toBeUndefined();
+      expect(resolved?.remote?.headers).toBeUndefined();
+      expect(resolved?.remote?.baseUrl).toBe(baseUrl);
+    },
+  );
+
+  it.each([
+    { sharedProvider: "gemini", provider: "google" },
+    { sharedProvider: "google", provider: "gemini" },
+    { sharedProvider: "auto", provider: "openai" },
+    { sharedProvider: undefined, provider: "openai" },
+    { sharedProvider: "OpenAI", provider: "openai" },
+  ])(
+    "retains credentials for the same canonical provider: $sharedProvider -> $provider",
+    ({ sharedProvider, provider }) => {
+      expect(
+        resolve({ provider: sharedProvider, remote: { apiKey: "same-owner-key" } }, { provider })
+          ?.remote?.apiKey,
+      ).toBe("same-owner-key");
+    },
+  );
+
+  it("inherits a shared router and its credentials together across adapters", () => {
+    const remote = {
+      baseUrl: "https://router.example/v1",
+      apiKey: "router-owned-key",
+      headers: { "X-Router": "owner" },
+    };
+    expect(resolve({ provider: "openai", remote }, { provider: "gemini" })?.remote).toMatchObject(
+      remote,
+    );
+    expect(
+      resolve({ provider: "openai", remote }, { provider: "gemini", remote: { baseUrl: "" } })
+        ?.remote?.apiKey,
+    ).toBeUndefined();
+  });
+
+  it.each([
     { search: { experimental: { sessionMemory: true } }, enabledBy: "sessionMemory" },
     { search: { rememberAcrossConversations: true }, enabledBy: "conversation recall" },
   ])("keeps a requested session source when $enabledBy is enabled", ({ search }) => {

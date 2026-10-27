@@ -59,6 +59,7 @@ type Call = {
   url?: string;
   releaseId?: number;
   makeLatest?: boolean;
+  delay?: number;
 };
 type Transition = {
   kind: "replace-release" | "move-tag" | "select-latest";
@@ -432,8 +433,8 @@ try {
     take("replaceReleaseAfterDownload", () => transition({ kind: "replace-release", tag }), { tag, name });
     take("authorityAfterDownload", ({ change }) => changeAuthority(change), { tag, name });
   } else if (tool === "sleep") {
-    assert(args.length === 1 && ["2", "5", "10"].includes(args[0]));
-    state.calls.push({ tool, action: "wait" });
+    assert(args.length === 1 && /^[1-9][0-9]*$/u.test(args[0]) && Number(args[0]) <= 60);
+    state.calls.push({ tool, action: "wait", delay: Number(args[0]) });
   } else if (tool === "minisign") {
     state.calls.push({ tool, action: "verify" });
     for (const option of ["-Vm", "-x", "-p"]) {
@@ -1063,6 +1064,7 @@ it("rejects corrupted public bundle readback before publishing channel metadata"
   const f = fixture({ fault: { point: "upload-readback", tag, name: appimageName } });
   failed(() => f.run("publish"), "Public asset digest mismatch");
   expect(f.state().releases.some((release) => release.tag_name === channel)).toBe(false);
+  expect(f.calls("curl")).toHaveLength(1);
   expect(f.calls("sleep")).toEqual([]);
 });
 
@@ -1306,6 +1308,23 @@ it.each(["canonical", "canonical reread", "existing feed reread", "legacy asset"
   },
 );
 
+it("recovers API-confirmed metadata readback beyond the former convergence window", () => {
+  // Four stale responses exhaust the former convergence window.
+  const f = published({ advance: true });
+  const stale = staleFeed(nextTag, { remaining: 4 });
+  f.update((state) => {
+    state.calls = [];
+    state.staleAfterUpload = stale;
+  });
+  expect(f.run("mirror", nextTag)).toMatchObject({ state: "mirrored" });
+  expect(stale.remaining).toBe(0);
+  const waits = f.calls("sleep").map((call) => call.delay ?? 0);
+  const waited = waits.reduce((total, delay) => total + delay, 0);
+  expect(waited).toBeGreaterThan(17);
+  expect(waited).toBeLessThanOrEqual(120);
+  expect(f.mutations({ action: "upload", tag: nextTag, name: "latest.json" })).toHaveLength(1);
+});
+
 it.each(["stale public bytes", "wrong uploaded bytes", "asset replaced"])(
   "stops feed readback on %s with no repeat upload",
   (failure) => {
@@ -1340,7 +1359,8 @@ it.each(["stale public bytes", "wrong uploaded bytes", "asset replaced"])(
       expect(error.message).toContain(`asset=${uploaded.id}`);
       expect(error.message).toContain(`expected=${hash(f.bytes(channel))}`);
       expect(error.message).toContain(`observed=${hash(staleBytes)}`);
-      expect(f.calls("sleep")).toHaveLength(3);
+      const waits = f.calls("sleep").map((call) => call.delay ?? 0);
+      expect(waits.reduce((total, delay) => total + delay, 0)).toBe(120);
     } else if (failure === "wrong uploaded bytes") {
       expect(f.calls("sleep")).toEqual([]);
     }

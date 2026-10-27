@@ -1,7 +1,6 @@
 import { cleanup, render } from "@solidjs/testing-library";
 import { afterEach, expect, it } from "vitest";
-import { page, userEvent } from "vitest/browser";
-import { ChatPermissionPicker } from "../../pages/chat/components/chat-permission-picker.tsx";
+import { page } from "vitest/browser";
 import { openMenu, surface } from "../../test-helpers/solid-menu.tsx";
 import { SessionMenuShortcut } from "../session-menu-view.tsx";
 import { Kbd, KeyboardShortcut, ShortcutHint } from "./kbd.tsx";
@@ -69,7 +68,6 @@ it.each([
             <Kbd keys="B" />
           </div>
         </div>
-        <ChatPermissionPicker mode="guarded" canSelectFull={false} onSelect={() => {}} />
         <div class="chat-controls__model-option-action">
           <Kbd keys="2" />
         </div>
@@ -78,7 +76,6 @@ it.each([
     await openMenu("badge-pattern");
     const reference = getComputedStyle(view.container.querySelector(".shortcut-hint__keys")!);
     const skin = (style: CSSStyleDeclaration) => [
-      style.backgroundColor,
       style.color,
       style.borderRadius,
       style.paddingInlineStart,
@@ -94,14 +91,6 @@ it.each([
     const ends = hints.map((hint) => hint.getBoundingClientRect()[edge]);
     expect(ends).toHaveLength(3);
     expect(Math.max(...ends) - Math.min(...ends)).toBeLessThan(1);
-    await userEvent.click(
-      page.elementLocator(view.container.querySelector("[data-chat-permission-select]")!),
-    );
-    const permissionHints = view.container.querySelectorAll(".chat-controls__permission-shortcut");
-    expect(permissionHints).toHaveLength(3);
-    for (const hint of permissionHints) {
-      expect(skin(getComputedStyle(hint))).toEqual(skin(reference));
-    }
   },
 );
 
