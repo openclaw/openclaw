@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
@@ -211,16 +211,21 @@ suite.define(() => {
       await expect.poll(() => response(aborts()[0]?.id)).toMatchObject(ack);
       await stop.waitFor({ state: "detached" });
 
-      // This cursor-free client reads persistence independently of the browser cache and live stream buffer.
-      const abortedHistory = await readHistory();
-      expect(abortedHistory.inFlightRun ?? null).toBeNull();
-      const partials = abortedHistory.messages?.filter(({ role }) => role === "assistant");
-      expect(partials).toHaveLength(1);
-      expect(partials?.[0]).toMatchObject({
-        content: [{ type: "text", text: opening + offlineTail }],
-        idempotencyKey: `${runId}:assistant`,
-        openclawAbort: { aborted: true, origin: "rpc", runId },
-      });
+      // Stop acknowledges cancellation before the producer's deferred partial is persisted.
+      await vi.waitFor(
+        async () => {
+          const abortedHistory = await readHistory();
+          expect(abortedHistory.inFlightRun ?? null).toBeNull();
+          const partials = abortedHistory.messages?.filter(({ role }) => role === "assistant");
+          expect(partials).toHaveLength(1);
+          expect(partials?.[0]).toMatchObject({
+            content: [{ type: "text", text: opening + offlineTail }],
+            idempotencyKey: `${runId}:assistant`,
+            openclawAbort: { aborted: true, origin: "rpc", runId },
+          });
+        },
+        { timeout: 15_000 },
+      );
 
       const followUpTurn = provider.plan();
       await composer.fill(followUpPrompt);
@@ -231,12 +236,19 @@ suite.define(() => {
       await followUpTurn.finish();
       // Final text hands off from the live stream to persisted history at settlement.
       await stop.waitFor({ state: "detached" });
-      const completedHistory = await readHistory();
-      expect(completedHistory.inFlightRun ?? null).toBeNull();
-      expect(completedHistory.messages?.filter(({ role }) => role === "assistant")).toMatchObject([
-        { content: [{ type: "text", text: opening + offlineTail }] },
-        { content: [{ type: "text", text: followUpReply }] },
-      ]);
+      await vi.waitFor(
+        async () => {
+          const completedHistory = await readHistory();
+          expect(completedHistory.inFlightRun ?? null).toBeNull();
+          expect(
+            completedHistory.messages?.filter(({ role }) => role === "assistant"),
+          ).toMatchObject([
+            { content: [{ type: "text", text: opening + offlineTail }] },
+            { content: [{ type: "text", text: followUpReply }] },
+          ]);
+        },
+        { timeout: 15_000 },
+      );
       await assistant(followUpReply).waitFor();
 
       await page.reload();

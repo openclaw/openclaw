@@ -10523,13 +10523,10 @@ describe("ci workflow guards", () => {
         manifest.outputs.reuse_browser_extension_build === "true",
     ).toBe(selected.mocked.length + selected.browser.length > 0);
     expect(manifest.outputs.run_ui_real_gateway).toBe(String(!isPr && selected.real.length > 0));
-    const uiShardLimit = isPr ? 2 : 3;
     expect(JSON.parse(expectDefined(manifest.outputs.ui_test_matrix, "UI matrix")).include).toEqual(
-      expectedUi.slice(0, uiShardLimit).map((_, index) => ({ shard: index + 1 })),
+      expectedUi.slice(0, 3).map((_, index) => ({ shard: index + 1 })),
     );
-    expect(manifest.outputs.ui_test_shard_count).toBe(
-      String(Math.min(uiShardLimit, expectedUi.length)),
-    );
+    expect(manifest.outputs.ui_test_shard_count).toBe(String(Math.min(3, expectedUi.length)));
     expect(
       resolveSelectedUiIncludes(
         expectDefined(manifest.outputs.ui_test_groups_gzip_base64, "UI selection"),
@@ -10748,44 +10745,6 @@ describe("ci workflow guards", () => {
     },
   );
 
-  it.each<{
-    label: string;
-    options: Partial<Parameters<typeof runCiManifestFixture>[0]>;
-    shards: number;
-  }>([
-    { label: "pull request", options: { eventName: "pull_request" }, shards: 2 },
-    { label: "main push", options: { eventName: "push" }, shards: 2 },
-    { label: "scheduled main", options: { eventName: "schedule" }, shards: 2 },
-    { label: "manual", options: { eventName: "workflow_dispatch" }, shards: 3 },
-    {
-      label: "noncanonical",
-      options: { eventName: "pull_request", repository: "contributor/openclaw" },
-      shards: 3,
-    },
-  ])("preserves the complete UI inventory across $label rows", ({ options, shards }) => {
-    const manifest = runCiManifestFixture({
-      bundledPlanner: true,
-      historicalCompatibility: false,
-      runNode: false,
-      ...options,
-      scopeEnv: {
-        OPENCLAW_CI_RUN_UI_TESTS: "true",
-        OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40),
-        ...options.scopeEnv,
-      },
-    });
-    expect(manifest.status, manifest.output).toBe(0);
-    expect(manifest.outputs.ui_test_shard_count).toBe(String(shards));
-    expect(JSON.parse(expectDefined(manifest.outputs.ui_test_matrix, "UI matrix")).include).toEqual(
-      Array.from({ length: shards }, (_, index) => ({ shard: index + 1 })),
-    );
-    expect(
-      resolveSelectedUiIncludes(
-        expectDefined(manifest.outputs.ui_test_groups_gzip_base64, "UI selection"),
-      ).flat(),
-    ).toEqual(CI_MANIFEST_FIXTURE_TARGETS.ui);
-  });
-
   // Runtime-owner changes keep complete Bun UI proof in the affected PR plan.
   it.each([
     { paths: ["scripts/lib/ci-test-runtime.mts"], selected: true },
@@ -10825,7 +10784,7 @@ describe("ci workflow guards", () => {
       expect(manifest.outputs.run_ui_tests).toBe(String(selected));
       expect(
         JSON.parse(expectDefined(manifest.outputs.ui_test_matrix, "UI matrix")).include,
-      ).toEqual(expectedUi.slice(0, 2).map((_, index) => ({ shard: index + 1 })));
+      ).toEqual(expectedUi.slice(0, 3).map((_, index) => ({ shard: index + 1 })));
       expect(
         resolveSelectedUiIncludes(
           expectDefined(manifest.outputs.ui_test_groups_gzip_base64, "UI selection"),

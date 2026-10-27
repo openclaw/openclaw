@@ -405,12 +405,9 @@ coverage plus qualified Bun coverage; see
 Both runtimes group uncached, non-isolated UI files by environment in batches
 to reduce worker restarts while retaining native shard ownership and worker budgets.
 Bun UI workers also use an [allocation-based collection trigger](/ci/scope-and-routing/job-budgets)
-to preserve memory headroom across the native shards.
-Current canonical PR, push, and scheduled plans share the unchanged unit inventory
-across two rows. Manual, frozen, and noncanonical plans retain three rows;
-compatibility targets retain their existing single row.
+to preserve memory headroom across the three native shards.
 Main runs UI on Node, so a PR changing the runtime owner
-(`scripts/lib/ci-test-runtime.mts`) selects both UI unit shards on
+(`scripts/lib/ci-test-runtime.mts`) selects the three existing UI unit shards on
 Bun; see [scope selection](/ci/scope-and-routing/selection).
 
 Frozen-target CI loads its Node shard planner, planning helpers, and measured

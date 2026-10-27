@@ -5397,7 +5397,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       frozenTarget: false,
       compatibilityTarget: false,
       policy: "bun-all",
-      shards: [1, 2],
+      shards: [1, 2, 3],
     },
     {
       label: "frozen current",

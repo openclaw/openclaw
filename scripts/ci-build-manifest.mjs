@@ -644,14 +644,7 @@ let uiTestGroups =
         ...(uiE2eSelection ? { uiE2eFiles: uiE2eSelection.files } : {}),
       })
     : null;
-// Share current automatic inventories across two rows; manual and noncurrent plans keep three.
-const uiTestShardLimit =
-  isCanonicalRepository &&
-  !frozenTarget &&
-  ["pull_request", "push", "schedule"].includes(workflowEventName)
-    ? 2
-    : 3;
-let uiTestShardCount = compatibilityTarget ? 1 : uiTestShardLimit;
+let uiTestShardCount = compatibilityTarget ? 1 : 3;
 if (selectedTestTargets) {
   if (!uiTestGroups) {
     throw new Error("Current PR CI requires UI target groups");
@@ -704,7 +697,7 @@ if (selectedTestTargets) {
     selected.has("extensions/browser/chrome-extension/bootstrap.chromium.test.ts");
   runUiRealGateway = e2eTargets.some((file) => realGatewayTargets.has(file));
   runUiE2e = runControlUiE2e || runBrowserExtensionE2e;
-  uiTestShardCount = Math.min(uiTestShardLimit, uiTargets.length);
+  uiTestShardCount = Math.min(3, uiTargets.length);
   // Keep the existing worker/row cap; omit empty file partitions.
   uiE2eJobCount = Math.min(uiE2eJobCount - 1, controlTargets.length) + 1;
 }

@@ -587,7 +587,7 @@ Plugins whose Doctor contracts require source loading retain that behavior;
 the complete config/state matrix and its assertions remain intact.
 
 Ordinary pull requests that change only independent Control UI unit-test entries
-keep the complete UI unit inventory across two rows and existing type/lint gates,
+keep all three UI unit rows and existing type/lint gates,
 without repeating dedicated UI E2E jobs. Browser and Node test entries, shared
 fixtures/helpers, production or build inputs, and tests imported by another
 owner retain E2E coverage. Main pushes, manual validation, and frozen targets

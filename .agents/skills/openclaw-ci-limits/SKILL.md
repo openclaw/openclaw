@@ -376,9 +376,6 @@ These are intentionally guarded by the `ci-workflow-guards`,
   preflight. `HYBRID_HOSTED_BASE_ROW_LIMIT = 40` admits at most two optional
   rows within `HYBRID_HOSTED_ROW_LIMIT = 45`: security and browser-extension
   E2E. Control UI unit rows retain the 8-class on eligible first attempts.
-  Current canonical PR, push, and scheduled plans use two unit rows with the
-  complete selected inventory and unchanged runtime/worker policies. Manual,
-  frozen, and noncanonical plans keep three; compatibility targets keep one.
   Above 40 base rows, retain the optional rows' existing
   Blacksmith routes; an eligible base above 45 warns with counts and retains
   the complete base manifest. The budget limits optional admission, not coverage.
