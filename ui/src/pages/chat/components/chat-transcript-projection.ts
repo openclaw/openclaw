@@ -71,13 +71,7 @@ export function projectChatTranscript(
   const mediaPolicyKey = assistantMediaPolicyKey(activeSession, props.mediaPolicyEpoch);
   const { showReasoning, reasoning } = projectChatReasoning(props);
   const assistantAgentId = props.currentAgentId ?? props.fullMessageAgentId;
-  const assistantAvatar = resolveAssistantDisplayAvatar({
-    currentAgentId: assistantAgentId,
-    agents: props.agents,
-    assistantAvatar: props.assistantAvatar,
-    assistantAvatarUrl: props.assistantAvatarUrl,
-    assistantAvatarSource: props.assistantAvatarSource,
-  });
+  const assistantAvatar = resolveAssistantDisplayAvatar(props, assistantAgentId);
   const assistantIdentity = {
     agentId: assistantAgentId,
     name: props.assistantName,

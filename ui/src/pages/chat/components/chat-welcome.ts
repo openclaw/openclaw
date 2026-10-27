@@ -48,14 +48,16 @@ export function resolveWelcomeSuggestionKeys(auth: WelcomeSuggestionAuth | undef
     : SESSION_SCOPED_WELCOME_SUGGESTION_KEYS;
 }
 
-export function resolveAssistantDisplayAvatar(props: {
-  currentAgentId?: string;
-  agents?: AgentsListResult["agents"];
-  assistantAvatar: string | null;
-  assistantAvatarUrl?: string | null;
-  assistantAvatarSource?: string | null;
-}) {
-  const id = props.currentAgentId ?? "main";
+export function resolveAssistantDisplayAvatar(
+  props: {
+    currentAgentId?: string;
+    agents?: AgentsListResult["agents"];
+    assistantAvatar: string | null;
+    assistantAvatarUrl?: string | null;
+    assistantAvatarSource?: string | null;
+  },
+  id = props.currentAgentId ?? "main",
+) {
   const agent = props.agents?.find((entry) => entry.id === id);
   const source = props.assistantAvatarSource;
   const avatar =
