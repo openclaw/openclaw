@@ -249,7 +249,7 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
       // canonical entry of its own; the matched source schema keeps that contract alive.
       executionSchema:
         getCanonicalToolParameterSchema(normalizedSchemas[index]!) ??
-        (entry?.source === sources[index] ? entry.executionSchema : undefined),
+        (entry && entry.source === sources[index] ? entry.executionSchema : undefined),
       descriptor: {
         name: tool.name,
         description: tool.description,
