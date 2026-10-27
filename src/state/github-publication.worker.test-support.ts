@@ -11,12 +11,10 @@ import type { RepositoryGitHubPublicationRow } from "./github-publication-read.t
 import type { RepositoryPublicationMutation } from "./github-publication-worker.types.js";
 
 export function publicationCommand(input: RepositoryPublicationMutation) {
+  const operationId = `${input.operation}-${"row" in input ? input.row.request_id : "report"}`;
   return {
     type: "githubPublications.repository" as const,
-    input: {
-      ...input,
-      operationId: `${input.operation}-${"row" in input ? input.row.request_id : "report"}`,
-    },
+    input: { ...input, operationId },
   };
 }
 
@@ -58,13 +56,9 @@ export async function expectNoMainThreadSql(operation: () => Promise<void>) {
 }
 
 export async function expectNoWorkerRequests(operation: () => Promise<void>) {
-  const requests = vi.spyOn(Worker.prototype, "postMessage");
-  try {
-    await operation();
-    expect(requests).not.toHaveBeenCalled();
-  } finally {
-    requests.mockRestore();
-  }
+  using requests = vi.spyOn(Worker.prototype, "postMessage");
+  await operation();
+  expect(requests).not.toHaveBeenCalled();
 }
 
 const heldReplies = new Set<() => void>();

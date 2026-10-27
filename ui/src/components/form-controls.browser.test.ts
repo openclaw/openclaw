@@ -34,6 +34,7 @@ function readUiCss(): string {
     "chat/composer",
     "sidebar-markdown",
     "chat/sidebar",
+    "chat/sidebar-panels",
     "plugins",
   ];
   return files.map((file) => readStyleSheet(`ui/src/styles/${file}.css`)).join("\n");

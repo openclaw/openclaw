@@ -16,12 +16,13 @@ import { readScratchStateFromDatabase } from "../cron/scratch-read.kernel.js";
 import { hashCronScratchSource, readCronJobScratchState } from "../cron/scratch-store.js";
 import { writeCronJobScratchInDatabase } from "../cron/scratch-write.kernel.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
-import { cronStoreKey } from "../cron/store/key.js";
+import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
 import {
   loadCronRows,
   loadedCronStoreFromRows,
   projectCronJobThroughStorageCodec,
 } from "../cron/store/row-codec.js";
+import { CronStoreSelectionRequiredError } from "../cron/store/selection-error.js";
 import type { CronStoredJob as CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage as errorMessage, hasErrnoCode } from "../infra/errors.js";
@@ -427,11 +428,12 @@ export async function collectHeartbeatScratchMigrationFindings(
       const shouldImport =
         withExistingOpenClawStateDatabaseReadOnly(
           ({ db }) => {
-            const receipt = readDefaultProactiveJobReceiptInDatabase(db, storePath, agentId);
+            const storeKey = resolveCronStoreKeyInDatabase(db, storePath, env);
+            const receipt = readDefaultProactiveJobReceiptInDatabase(db, storeKey, agentId);
             if (receipt?.phase === "complete") {
               return false;
             }
-            const jobs = decodeDoctorHeartbeatJobRows(loadCronRows(db, cronStoreKey(storePath)));
+            const jobs = decodeDoctorHeartbeatJobRows(loadCronRows(db, storeKey));
             const previous = selectDoctorHeartbeatMonitor(jobs, agentId);
             const monitor = receipt
               ? resolveDoctorHeartbeatReceiptJob(cfg, jobs, agentId, receipt, previous)
@@ -441,7 +443,7 @@ export async function collectHeartbeatScratchMigrationFindings(
               !heartbeatScratchMigrationConflict(
                 agentId,
                 source.content,
-                readScratchStateFromDatabase(db, cronStoreKey(storePath), monitor.id),
+                readScratchStateFromDatabase(db, storeKey, monitor.id),
               )
             );
           },
@@ -458,12 +460,13 @@ export async function collectHeartbeatScratchMigrationFindings(
         message: `Agent "${agentId}" still stores heartbeat instructions in HEARTBEAT.md.`,
       });
     } catch (error) {
+      const deferred = error instanceof CronStoreSelectionRequiredError;
       findings.push({
         ...MIGRATION_FINDING_DEFAULTS,
         target: agentId,
         path: heartbeatPath,
-        requirement: "heartbeat-file-migration-blocked",
-        severity: "error",
+        requirement: deferred ? "heartbeat-migration-deferred" : "heartbeat-file-migration-blocked",
+        severity: deferred ? "warning" : "error",
         message: `Agent "${agentId}" HEARTBEAT.md cannot be migrated: ${errorMessage(error)}`,
       });
     }
@@ -529,7 +532,12 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
   for (const agentId of new Set([...monitors.keys(), ...listAgentIds(params.cfg)])) {
     const monitor = monitors.get(agentId);
     const receipt = withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) => readDefaultProactiveJobReceiptInDatabase(db, storePath, agentId),
+      ({ db }) =>
+        readDefaultProactiveJobReceiptInDatabase(
+          db,
+          resolveCronStoreKeyInDatabase(db, storePath, env),
+          agentId,
+        ),
       { env },
     );
     if (!shouldInspectHeartbeatScratchSource(Boolean(monitor), receipt)) {
@@ -627,10 +635,11 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
       try {
         const { shouldWriteScratch, destination } = runOpenClawStateWriteTransaction(
           ({ db }) => {
-            const currentJob = loadedCronStoreFromRows(
-              loadCronRows(db, cronStoreKey(storePath)),
-            ).store.jobs.find((job) => job.id === monitor.id);
-            const receipt = readDefaultProactiveJobReceiptInDatabase(db, storePath, agentId);
+            const storeKey = resolveCronStoreKeyInDatabase(db, storePath, env);
+            const currentJob = loadedCronStoreFromRows(loadCronRows(db, storeKey)).store.jobs.find(
+              (job) => job.id === monitor.id,
+            );
+            const receipt = readDefaultProactiveJobReceiptInDatabase(db, storeKey, agentId);
             if (
               !currentJob ||
               receipt?.phase !== "pending" ||
@@ -642,7 +651,7 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
             ) {
               throw new Error("automation changed during scratch migration");
             }
-            const state = readScratchStateFromDatabase(db, cronStoreKey(storePath), monitor.id);
+            const state = readScratchStateFromDatabase(db, storeKey, monitor.id);
             if (state.currentRevision !== plannedRevisionByJobId.get(monitor.id)) {
               throw new Error("scratch changed during migration");
             }
@@ -650,7 +659,7 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
               return { shouldWriteScratch: false, destination: state };
             }
             const { result } = writeCronJobScratchInDatabase(db, {
-              storeKey: cronStoreKey(storePath),
+              storeKey,
               jobId: monitor.id,
               content: source.content,
               expectedRevision: state.currentRevision,
@@ -713,11 +722,11 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
         verifyDestination: () => {
           const verified = withExistingOpenClawStateDatabaseReadOnly(
             ({ db }) => {
-              const jobs = loadedCronStoreFromRows(loadCronRows(db, cronStoreKey(storePath))).store
-                .jobs;
+              const storeKey = resolveCronStoreKeyInDatabase(db, storePath, env);
+              const jobs = loadedCronStoreFromRows(loadCronRows(db, storeKey)).store.jobs;
               return importAgents.every(([agentId, monitor]) => {
                 const job = jobs.find((candidate) => candidate.id === monitor.id);
-                const receipt = readDefaultProactiveJobReceiptInDatabase(db, storePath, agentId);
+                const receipt = readDefaultProactiveJobReceiptInDatabase(db, storeKey, agentId);
                 return (
                   receipt?.phase === "pending" &&
                   receipt.jobId === monitor.id &&
@@ -727,7 +736,7 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
                     projectCronJobThroughStorageCodec(monitor),
                   ) &&
                   isDeepStrictEqual(
-                    readScratchStateFromDatabase(db, cronStoreKey(storePath), monitor.id),
+                    readScratchStateFromDatabase(db, storeKey, monitor.id),
                     verifiedScratch.get(monitor.id),
                   )
                 );

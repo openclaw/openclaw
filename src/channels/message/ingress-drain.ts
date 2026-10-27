@@ -28,7 +28,6 @@ import {
   IngressAdoptionLostError,
   isPreAdoptionState,
   resolveLaneKey,
-  sortedKeys,
   type ActiveHandlerState,
   type ChannelIngressDrainDispatchResult,
 } from "./ingress-drain-state.js";
@@ -690,9 +689,9 @@ export function createChannelIngressDrainOwner<
 
     // Keep claimed and retry-delayed lanes out of this pass.
     const blockedLaneKeys = new Set<string>([
-      ...sortedKeys(activeLaneKeys),
-      ...sortedKeys(claimedLaneKeys),
-      ...sortedKeys(retryDelayedLaneKeys),
+      ...activeLaneKeys,
+      ...claimedLaneKeys,
+      ...retryDelayedLaneKeys,
     ]);
 
     // Optional supersede scan: pending events may abort unadopted same-lane work.

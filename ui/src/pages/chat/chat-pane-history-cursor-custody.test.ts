@@ -5,7 +5,7 @@ import * as retry from "@openclaw/retry";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ChatEvent } from "../../../../packages/gateway-protocol/src/schema/logs-chat.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";

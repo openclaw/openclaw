@@ -2,19 +2,12 @@ import { describe, expect, it } from "vitest";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { pendingSessionsYield } from "../chat-sessions-yield.ts";
 import { buildChatItems, type BuildChatItemsProps } from "../chat-thread-build.ts";
-import { createProps } from "../chat-thread.test-support.ts";
+import { createProps, makeMessage } from "../chat-thread.test-support.ts";
 import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
 import { projectTranscriptChain } from "./chat-transcript-message-index.ts";
 
 const sessionKey = "agent:main:dashboard:0f6d5a1c-5a9e-4c1e-9b1a-2f3c4d5e6f70";
-function makeMessage(
-  id: string,
-  seq: number,
-  fields: { role?: string; timestamp?: number; runId?: string; [key: string]: unknown } = {},
-) {
-  const { role = "assistant", timestamp = seq * 10, runId = "run-1", ...extra } = fields;
-  return { role, content: id, timestamp, __openclaw: { id, seq, runId }, ...extra };
-}
+
 const chatItems = (overrides: Partial<BuildChatItemsProps>) =>
   buildChatItems(createProps({ sessionKey, ...overrides }));
 type Chain = ReturnType<typeof projectTranscriptChain>;

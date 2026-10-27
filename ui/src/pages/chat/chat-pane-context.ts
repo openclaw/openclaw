@@ -3,6 +3,7 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import type { ExecApprovalDecision } from "../../app/exec-approval.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
+import { SHELL_APPROVALS_OPEN_EVENT } from "../../app/lazy-shell-action.ts";
 import { hasOperatorSelfReadAccess } from "../../app/operator-access.ts";
 import {
   browserPanelSurfaceUnavailableReason,
@@ -22,7 +23,7 @@ import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { resolveSessionKey } from "../../lib/sessions/index.ts";
+import { resolveSessionKey } from "../../lib/sessions/navigation.ts";
 import {
   canonicalUiSessionKeyForPersistence,
   isUiSelectedGlobalSessionKey,
@@ -238,6 +239,17 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       approvalBusy: snapshot?.approvalBusy,
       approvalCanGrant: snapshot?.approvalCanGrant ?? false,
       approvalErrors: snapshot?.approvalErrors,
+      approvalNodeNames: snapshot?.approvalNodeNames,
+      approvalPendingCount:
+        snapshot?.approvalQueue.filter((entry) => entry.id !== inlineApproval?.id).length ?? 0,
+      onOpenPendingApprovals:
+        overlays && visible
+          ? () => {
+              if (overlays.snapshot.approvalQueue.length > 0) {
+                window.dispatchEvent(new CustomEvent(SHELL_APPROVALS_OPEN_EVENT));
+              }
+            }
+          : undefined,
       onApprovalDecision:
         overlays && visible
           ? (approvalId: string, decision: ExecApprovalDecision) =>

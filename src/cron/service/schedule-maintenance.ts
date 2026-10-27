@@ -1,6 +1,5 @@
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { noteCronJobsStoreCommit } from "../store.js";
-import { cronStoreKey } from "../store/key.js";
 import type {
   CronRuntimeMutationContracts,
   CronScheduleMaintenanceOptions,
@@ -20,7 +19,7 @@ export async function recomputeUnownedCronSchedules(
 ): Promise<MaintenanceOutcome> {
   const context = captureOpenClawStateWorkerContext();
   const generation = state.lifecycleGeneration;
-  const storeKey = cronStoreKey(state.deps.storePath);
+  const storeKey = state.deps.storeKey;
   let outcome: MaintenanceOutcome | undefined;
   await runCronRuntimeMutation({
     context,

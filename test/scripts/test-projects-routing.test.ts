@@ -230,6 +230,8 @@ describe("test-projects args", () => {
     ["extensions/google/embedding-provider.test.ts", "extension-database-workers"],
     ["src/acp/translator.stop-reason.test.ts", "infra"],
     ["src/acp/control-plane/manager.test.ts", "infra"],
+    ["src/agents/tools/message-tool.scheduled-lifetime.test.ts", "infra"],
+    ["test/telegram-recovery-notice-send.test.ts", "infra"],
     ["src/acp/control-plane/manager.cancel-session.producer-custody.worker.test.ts", "infra"],
     ["src/process/exec.test.ts", "process"],
     ["src/infra/sqlite-readonly-worker.compile-cache.process.test.ts", "cli-process"],

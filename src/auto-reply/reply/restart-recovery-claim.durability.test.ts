@@ -137,6 +137,7 @@ it.each([true, false])("keeps scheduled recovery bookkeeping quiet (scheduled=%s
       await using fixture = await createRecoveryControllerFixture(scope, entry);
       const controller = fixture.controller({
         admissionRunId: "quiet-recovery-run",
+        operatorAuthority: createOperatorRecoveryAuthority("test-operator", "test-grant"),
         requesterOrigin: { sessionKey: scope.sessionKey, operatorProfileId: "test-operator" },
         inputProvenance: scheduled
           ? { kind: "internal_system", sourceTool: "cron_execution" }
@@ -145,6 +146,7 @@ it.each([true, false])("keeps scheduled recovery bookkeeping quiet (scheduled=%s
       await expect(controller.admitUserTurn()).resolves.toBe("admitted");
       const admitted = expectDefined(loadSessionEntry(scope), "recovery admitted");
       expect(admitted.restartRecoveryDeliveryRunId).toBe("quiet-recovery-run");
+      expect(Boolean(admitted.restartRecoveryOperatorSource)).toBe(!scheduled);
       expect(admitted.startedAt).toBeGreaterThan(1);
       await controller.beginBeforeAgentReply();
       const pending = expectDefined(loadSessionEntry(scope), "hook pending");
@@ -179,7 +181,21 @@ it.each([true, false])("keeps scheduled recovery bookkeeping quiet (scheduled=%s
   }),
 );
 
-it("keeps an authenticated peer follow-up internal while retaining its operator source", () =>
+it.each([
+  { sourceTool: "sessions_send", kind: "inter_session", runId: "peer-run" },
+  { sourceTool: "subagent_announce", kind: "inter_session", runId: "announce:child-run" },
+  {
+    sourceTool: "subagent_settle",
+    kind: "inter_session",
+    runId: "announce:requester-settle:main:parent:child:yield-1",
+  },
+  {
+    sourceTool: "session_goal_continue",
+    kind: "internal_system",
+    runId: "goal:peer-session:goal-1:announce:requester-settle:main:parent:child:yield-1",
+  },
+  { sourceTool: "tool_handoff", kind: "internal_system", runId: "publication-continuation" },
+] as const)("retains the operator source for an authenticated $sourceTool continuation", (input) =>
   withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     setRuntimeConfigSnapshot({});
     const scope = recoveryScope(state.sessionsDir(), "peer-target");
@@ -188,7 +204,8 @@ it("keeps an authenticated peer follow-up internal while retaining its operator 
     const operatorAuthority = createOperatorRecoveryAuthority("peer-operator", "peer-grant");
 
     const controller = actor.controller({
-      admissionRunId: "peer-run",
+      admissionRunId: input.runId,
+      executionRunId: "continuation-execution",
       operatorAuthority,
       requesterOrigin: {
         sessionKey: "agent:main:dashboard:peer-source",
@@ -196,24 +213,26 @@ it("keeps an authenticated peer follow-up internal while retaining its operator 
       },
       sourceReplyDeliveryMode: "message_tool_only",
       inputProvenance: {
-        kind: "inter_session",
-        sourceTool: "sessions_send",
-        sourceSessionKey: "agent:main:dashboard:peer-source",
-        sourceChannel: "webchat",
+        kind: input.kind,
+        sourceTool: input.sourceTool,
+        ...(input.kind === "inter_session"
+          ? { sourceSessionKey: "agent:main:dashboard:peer-source", sourceChannel: "internal" }
+          : {}),
       },
     });
     await expect(controller.admitUserTurn()).resolves.toBe("admitted");
     expect(loadSessionEntry(scope)).toMatchObject({
-      restartRecoveryDeliverySourceRunId: "peer-run",
+      restartRecoveryDeliverySourceRunId: input.runId,
       restartRecoverySourceIngress: "internal",
       restartRecoverySourceReplyDeliveryMode: "message_tool_only",
       restartRecoveryOperatorSource: {
         sessionKey: scope.sessionKey,
-        sourceRunId: "peer-run",
+        sourceRunId: input.runId,
         snapshot: { profileId: "peer-operator", sourceIngress: "control-ui" },
       },
     });
-  }));
+  }),
+);
 it.each([
   "execute",
   "cancel",

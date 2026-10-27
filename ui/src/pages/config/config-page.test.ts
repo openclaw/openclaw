@@ -36,13 +36,14 @@ import {
 } from "./config-page.test-support.ts";
 import { preloadConfigPage, type ConfigPageId, type ConfigPageRouteData } from "./config-page.tsx";
 import { pages } from "./route.ts";
-import { extractQuickSettingsSecurity } from "./security.tsx";
+import { extractQuickSettingsSecurity } from "./security-model.ts";
 
 beforeAll(() =>
   Promise.all([
     preloadConfigPage("updates"),
     preloadConfigPage("notifications"),
     preloadConfigPage("advanced"),
+    preloadConfigPage("security"),
   ]),
 );
 
@@ -607,19 +608,59 @@ it("leaves Appearance while a camera selection is unresolved", async () => {
   const pending = deferred();
   switchActiveRealtimeTalkCameras.mockReturnValueOnce(pending.promise);
   stubCameraDevices();
-  const view = mountConfigPage(configContext(), { pageId: "appearance" });
-  await selectCamera(view.container);
+  const configPages = pages
+    .filter((page) => page.id !== "settings" && page.id !== "config")
+    .filter((page) => page.id === "appearance" || page.id === "notifications");
+  const routes = await Promise.all(
+    configPages.map(async ({ id, path, aliases, loader, loaderDeps, component }) => {
+      const module = await component();
+      return {
+        id,
+        path,
+        aliases,
+        loader,
+        loaderDeps,
+        component: () => ({
+          ...module,
+          renderSolid: (props: SolidRouteProps<ConfigPageRouteData>) =>
+            createComponent(provider.wrapper, {
+              get children() {
+                return createComponent(module.renderSolid, props);
+              },
+            }),
+        }),
+      };
+    }),
+  );
+  const router = createRouter<
+    ConfigPageId,
+    ApplicationContext,
+    ReturnType<(typeof routes)[number]["component"]>,
+    ConfigPageRouteData
+  >({ routes });
+  const context = completeConfigContext(configContext({ router }));
+  const provider = createSolidApplicationContextProvider(context);
+  const view = mountRouterOutlet({ router, retryContext: context });
+  try {
+    await router.navigate("appearance", context);
+    await selectCamera(view);
 
-  view.update({ pageId: "notifications" });
-  await waitForSolid(() => {
-    expect(view.container.querySelector("h1")?.textContent).toBe("Notifications");
-    expect(view.container.querySelector("[data-settings-camera]")).toBeNull();
-  });
+    await router.navigate("notifications", context);
+    await waitForSolid(() => {
+      expect(view.querySelector("h1")?.textContent).toBe("Notifications");
+      expect(view.querySelector("[data-settings-camera]")).toBeNull();
+    });
+    expect(loadSettings().realtimeTalkVideoDeviceId).toBeUndefined();
 
-  pending.resolve();
-  await waitForSolid(() => expect(loadSettings().realtimeTalkVideoDeviceId).toBe("camera-1"));
-  expect(view.container.querySelector("h1")?.textContent).toBe("Notifications");
-  expect(view.container.querySelector("[data-settings-camera]")).toBeNull();
+    pending.resolve();
+    await waitForSolid(() => expect(loadSettings().realtimeTalkVideoDeviceId).toBe("camera-1"));
+    expect(view.querySelector("h1")?.textContent).toBe("Notifications");
+    expect(view.querySelector("[data-settings-camera]")).toBeNull();
+  } finally {
+    pending.resolve();
+    view.dispose();
+    router.stop();
+  }
 });
 
 it("leaves the settings route before a camera switch settles and still records its outcome", async () => {

@@ -49,7 +49,17 @@ Normal maintenance remains enabled in both passes.
 
 Before stress rounds, completed mock turns and closed provider streams establish
 readiness; unrelated background sidebar publications need not become quiet.
-After each workload, subscriber events still drain before fanout counters settle.
+After each workload, tracked foreground and committed-injection events settle
+before continuous receipts check delivery across all clients. Unrelated background
+metadata and cron events do not reset that workload's one-second quiet window.
+Primary turns require both message and session-change
+events; native subagent parents and children retain per-event delivery parity,
+including child events published before the spawn response. Committed injections
+must arrive exactly once on every client. The existing bounded drain also waits
+for these receipts: an acknowledged write can still have publication queued.
+Timed counts of unrelated background
+events are diagnostic: a broadcast can cross the timing boundary between socket
+callbacks. Connection and sequence-gap checks remain active throughout.
 
 Clients subscribe to sidebar and transcript events while polling list/search,
 history, startup, diff, and reconnect paths. An independent writer commits
@@ -78,6 +88,30 @@ Allocation passes separately enable V8 heap sampling and read the profile once
 per minute. Those reads may force GC: their GC/latency figures are diagnostic,
 not acceptance gates. `--mode timing` or `--mode allocation` selects one mode.
 Without `--base`, each selected mode runs the candidate once.
+
+Use `--aa-pairs 2 --pairs 3` to insert baseline/baseline controls after the first
+two comparison pairs. Both control arms load the baseline artifact; their
+`control: true` records and comparison rows stay separate from candidate results.
+Controls reuse the same fixture seed, clock, workload, and instrumentation mode.
+
+For retention attribution, run a separate `--mode retention` campaign with the
+same workload and controls. Its V8 sampler uses
+`includeObjectsCollectedByMinorGC=false` and
+`includeObjectsCollectedByMajorGC=true`. It reads the profile only after the
+measured window, then requests GC and streams a main-isolate heap snapshot.
+Profile materialization, explicit GC, and snapshot work are outside the recorded
+timing window; sampler-enabled GC/latency still remain diagnostic, never timing
+acceptance evidence. The default `both` mode remains timing plus inclusive allocation.
+
+These samples are **survivor/major-collected bytes, not exact promoted bytes**:
+live young objects are included and the sampling protocol has no per-object
+generation field. Entries allocated during warmup may be absent from the sampled
+allocation sites while remaining reachable in the endpoint heap snapshot. Use
+the snapshot's retainer paths and dominator sizes alongside sampled sites and
+natural old-generation-after-GC telemetry; a missing restoration-site sample
+does not prove the absence of retention. See the [retained-heap runbook](heap-retention-runbook.md)
+for bounded aggregate analysis. Keep raw snapshots local; even synthetic runs
+can contain runtime environment strings.
 
 For a setup check only:
 
@@ -110,6 +144,14 @@ each state's `broadcast-measure-*` directory:
 - `stress-prometheus-*.prom`: real scrapes of the isolated Gateway.
 - `stress-telemetry.json` and `stress-allocation.heapprofile`: whole-run telemetry
   and sampled allocation evidence (profile only in allocation mode).
+- `stress-retention.heapprofile`, `stress-retention.json`, and
+  `stress-retained.heapsnapshot`: retention-only sampled survivor evidence,
+  endpoint heap-space checkpoints, and the retained main-isolate graph.
+
+Telemetry summaries also include initial heap-space sizes, so `old_space` and
+`large_object_space` growth can use the actual measurement boundary rather than
+the first minute sample. Native post-major-GC old generation is recorded from
+Prometheus scrapes; the explicit post-window collection is reported separately.
 
 CPU is main OS-thread CPU divided by wall time; 100% means one core. RSS is
 process-wide; heap is main-isolate only. Sampled allocations exclude external and
@@ -123,6 +165,15 @@ Worker heap comparisons require a complete heap census. Missing workers make
 that comparison metric unavailable; partial totals and reasons remain in raw evidence.
 Missing array-buffer details alone do not invalidate a complete heap census.
 
+For a separate worker-retention diagnostic pass, add `--worker-heap-snapshot`.
+This forwards the workload's existing retained-worker instrumentation and captures
+the largest SQLite-store, model-catalog, and Git-operation worker after the measured window.
+The worker profiler and explicit collections make this diagnostic evidence;
+use an ordinary timing pass for latency and GC acceptance.
+
+Add `--worktree-tool-churn` to create managed worktrees for foreground sessions
+and exercise provisioning workers before measuring the same concurrent turn workload.
+
 For production-shape calibration, use an authorized read-only Prometheus query.
 Compare achieved
 RPC rates, operator connections, main-thread GC seconds/minute, retained heap,
@@ -133,3 +184,20 @@ Production's exported event-loop maximum histogram is not an event-loop sample
 p99. Do not relabel it as one. This script deliberately has no production-load
 target option. Live deployment stress requires a separate, explicitly authorized
 campaign.
+
+Pass `--operator-model-policy` to exercise role-scoped model presentation. All
+clients authenticate as an identified synthetic operator through the loopback
+trusted proxy and share a role allowing `openai/*` except `openai/blocked-*`.
+The setup requires the public `models.list` response to expose the restricted
+selection policy and the mock default, and saves it in `operator-model-policy.json`.
+This avoids the shared-secret owner's role bypass. Use the same option for both
+arms and controls; it also enables the existing trusted-proxy compression path.
+Each `stress-minutes.jsonl` sample includes the host's 1/5/15-minute load averages.
+With this option, allocation passes also write `operator-model-policy-counts.json`:
+main-isolate preparation, restore, and reference-preparation calls during the
+measured window, with the instrumented function names. The private loader adds
+counters to the built policy module only in these diagnostic passes. Check the
+installed names before interpreting zero counts; `prepareRefs` runs twice per
+policy construction for the explicit allow/deny fixture. Timing passes remain
+uninstrumented. Attribute sampled bytes to the policy stacks in
+`stress-allocation.heapprofile`; sampled bytes are estimates, not exact allocation.

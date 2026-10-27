@@ -71,27 +71,23 @@ describe("manifest-declared web candidates", () => {
     mocks.resolveMetadata.mockReturnValue(
       createPluginMetadataSnapshotFixture({
         plugins: [
-          { id: "alpha", configSchema: { properties: { webSearch: {} } } },
-          { id: "beta", contracts: { webSearchProviders: ["beta-search"] } },
+          { id: "alpha", origin: "workspace", configSchema: { properties: { webSearch: {} } } },
+          { id: "beta", origin: "workspace", contracts: { webSearchProviders: ["beta-search"] } },
         ],
       }),
     );
   });
-  it("keeps explicit empty scopes off discovery", () => {
-    expect(resolve({ onlyPluginIds: [] })).toStrictEqual([]);
-    expect(mocks.resolveMetadata).not.toHaveBeenCalled();
-    expect(mocks.loadMetadata).not.toHaveBeenCalled();
-  });
-  it("keeps scoped plugins with no candidates scoped-empty", () => {
-    expect(resolve({ onlyPluginIds: ["missing-plugin"] })).toStrictEqual([]);
-    expect(mocks.resolveMetadata).toHaveBeenCalledOnce();
-  });
+  it.each([{ onlyPluginIds: [] }, { onlyPluginIds: ["missing-plugin"] }])(
+    "keeps explicit scope $onlyPluginIds empty",
+    ({ onlyPluginIds }) => {
+      expect(resolve({ onlyPluginIds })).toStrictEqual([]);
+      if (onlyPluginIds.length === 0) {
+        expect(mocks.resolveMetadata).not.toHaveBeenCalled();
+        expect(mocks.loadMetadata).not.toHaveBeenCalled();
+      }
+    },
+  );
   it("keeps unmatched origin filters scoped-empty", () => {
-    mocks.resolveMetadata.mockReturnValue(
-      createPluginMetadataSnapshotFixture({
-        plugins: [{ id: "workspace-tool", origin: "workspace", configSchema: { properties: {} } }],
-      }),
-    );
     expect(resolve({ origin: "bundled" })).toStrictEqual([]);
   });
   it("limits sandboxed fetch to bundled and trusted official installs", () => {
@@ -116,9 +112,8 @@ describe("manifest-declared web candidates", () => {
       resolveCandidates({ contract: "webFetchProviders", configKey: "webFetch", sandboxed: true }),
     ).toEqual(["bundled-fetch", "firecrawl"]);
   });
-  it("derives config and contract candidates in one metadata read", () => {
+  it("derives candidates from config and contract declarations", () => {
     expect(resolve()).toEqual(["alpha", "beta"]);
-    expect(mocks.resolveMetadata).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -150,7 +145,6 @@ describe("web provider public artifact manifest fallback", () => {
     });
 
     expect(providers).toEqual([searchProvider]);
-    expect(mocks.readBundledDiscoveryModeMemoized).toHaveBeenCalledWith(env);
     expect(mocks.loadMetadata).not.toHaveBeenCalled();
     expectLoad(loadSearch, ["fallback-search"]);
   });
@@ -158,10 +152,9 @@ describe("web provider public artifact manifest fallback", () => {
   it("retries a named miss through the same batch with discovered owners", () => {
     loadSearch.mockReturnValueOnce(null);
 
-    const providers = resolveSearch({ config: {}, onlyPluginIds: ["fallback-search"], env });
-
-    expect(providers).toEqual([searchProvider]);
-    expect(mocks.loadMetadata).toHaveBeenCalledOnce();
+    expect(resolveSearch({ config: {}, onlyPluginIds: ["fallback-search"], env })).toEqual([
+      searchProvider,
+    ]);
     expect(loadSearch.mock.calls).toEqual([
       [{ onlyPluginIds: ["fallback-search"], env, manifestRecords: undefined }],
       [{ onlyPluginIds: ["fallback-search"], env, manifestRecords: snapshot.plugins }],

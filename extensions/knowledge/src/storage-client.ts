@@ -1,14 +1,20 @@
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
-import { Worker } from "node:worker_threads";
+import type { Worker } from "node:worker_threads";
+import {
+  createCpuTrackedWorker,
+  createPluginRuntimeProcessEntrypoint,
+  resolveRuntimeWorkerUrl,
+} from "openclaw/plugin-sdk/process-runtime";
 import type { VaultAccess } from "./access.js";
-import { pluginFilesLocation, workerUrl } from "./plugin-files.js";
+import { pluginFilesLocation } from "./plugin-files.js";
 import type { StoreConfig } from "./real-vault.js";
 import type { StorageOperations } from "./storage-host.js";
 import { AUTHORITY_REVOKED, type HostMessage, type WorkerMessage } from "./storage-protocol.js";
 
 type Output<Op extends keyof StorageOperations> = Awaited<ReturnType<StorageOperations[Op]>>;
 type Input<Op extends keyof StorageOperations> = Parameters<StorageOperations[Op]>[2];
+const storageEntrypoint = createPluginRuntimeProcessEntrypoint("knowledgeStorage", import.meta.url);
 type Call = {
   access: VaultAccess;
   resolve(value: unknown): void;
@@ -18,7 +24,6 @@ type Call = {
 
 // SDK modules reachable from storage and registry code in the workers.
 const SDK_MODULES = [
-  "openclaw/plugin-sdk/database-engine-worker-runtime",
   "openclaw/plugin-sdk/feature-contract",
   "openclaw/plugin-sdk/routing",
   "openclaw/plugin-sdk/sqlite-worker-runtime",
@@ -90,7 +95,7 @@ export class StorageClient {
     if (this.worker) {
       return this.worker;
     }
-    const worker = new Worker(workerUrl("storage"), {
+    const worker = createCpuTrackedWorker(resolveRuntimeWorkerUrl(storageEntrypoint), {
       workerData: {
         sdk: sdkUrls(),
         files: pluginFilesLocation(),

@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { mockFirstRecordArg } from "../test-utils/mock-call-assertions.js";
+import { expectNoCalls, mockFirstRecordArg } from "../test-utils/mock-call-assertions.js";
 import { runChannelLogin, runChannelLogout } from "./channel-auth.js";
 import { registerChannelsCli } from "./channels-cli.js";
 
@@ -99,11 +99,6 @@ const readFirstCallArg = (mock: Parameters<typeof mockFirstRecordArg>[0]) =>
 const firstLog = () => String(mocks.runtime.log.mock.calls[0]?.[0]);
 const expectCall = (mock: Parameters<typeof mockFirstRecordArg>[0], fields: object) =>
   expect(mock).toHaveBeenCalledWith(expect.objectContaining(fields));
-function expectNoCalls(...callbacks: Parameters<typeof mockFirstRecordArg>[0][]) {
-  for (const callback of callbacks) {
-    expect(callback).not.toHaveBeenCalled();
-  }
-}
 
 function gatewayRequestError(message: string, gatewayCode: string): Error {
   const error = new Error(message) as Error & { gatewayCode: string };

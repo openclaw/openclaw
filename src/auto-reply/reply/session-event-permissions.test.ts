@@ -69,13 +69,13 @@ await Promise.all([
 ]);
 
 type EventReceipt = ReturnType<typeof enqueueSessionEventForHost>;
-function observeEnqueue(source: string, onReceipt: (receipt: EventReceipt) => void) {
+function observeEnqueue(source: string | undefined, onReceipt: (receipt: EventReceipt) => void) {
   const enqueue = sessionEventHandoff.enqueueSessionEventForHost;
   return vi
     .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
     .mockImplementation((text, options) => {
       const receipt = enqueue(text, options);
-      if (options.source === source) {
+      if (source === undefined || options.source === source) {
         onReceipt(receipt);
       }
       return receipt;
@@ -141,13 +141,9 @@ async function enqueueGuardedCliWatchdog(params: {
     ],
   });
   let receipt: ReturnType<typeof enqueueSessionEventForHost> | undefined;
-  const enqueue = sessionEventHandoff.enqueueSessionEventForHost;
-  const observer = vi
-    .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
-    .mockImplementation((...args) => {
-      receipt = enqueue(...args);
-      return receipt;
-    });
+  const observer = observeEnqueue(undefined, (value) => {
+    receipt = value;
+  });
   const supervisor = vi.spyOn(processSupervisor, "getProcessSupervisor").mockReturnValue({
     acquireScopeCleanup: () => async () => {},
     spawn: async () => ({

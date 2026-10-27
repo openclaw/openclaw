@@ -200,6 +200,8 @@ it("prepares immutable prompt lines once per run before synchronous assembly", a
   expect(Object.isFrozen(preparedBefore)).toBe(true);
   expect(Object.isFrozen(preparedBefore.context)).toBe(true);
   expect(Object.isFrozen(preparedBefore.context.availableTools)).toBe(true);
+  expect(preparedBefore.context.availableTools).toEqual(["memory_search", "wiki_search"]);
+  expect([...params.availableTools]).toEqual(["wiki_search", "memory_search"]);
   expect(Object.isFrozen(preparedBefore.lines)).toBe(true);
   expect(buildPrompt(params, preparedBefore)).toEqual(["compiled before"]);
   params.availableTools.delete("wiki_search");
@@ -240,6 +242,26 @@ it("removes prompt preparations from future runs without mutating an in-flight s
   expect(buildPrompt(params, prepared)).toEqual(["prepared wiki"]);
   expect(buildPrompt(params, afterRemoval)).toEqual([]);
   expect(listMemoryPromptPreparations()).toEqual([]);
+});
+
+it("keeps current preparation order when a callback replaces the registrations", async () => {
+  registerSupplement("zeta", () => ["zeta guidance"]);
+  registerSupplement("beta", () => ["beta guidance"]);
+  registerPreparation("gamma", async () => {
+    clearMemoryPluginState();
+    registerPreparation("replacement", async () => ["replacement recall"]);
+    return ["gamma recall"];
+  });
+  registerPreparation("alpha", async () => ["alpha recall"]);
+  const params = promptParams();
+
+  expect(buildPrompt(params, await preparePrompt(params))).toEqual([
+    "alpha recall",
+    "beta guidance",
+    "gamma recall",
+    "zeta guidance",
+  ]);
+  expect(buildPrompt(params, await preparePrompt(params))).toEqual(["replacement recall"]);
 });
 
 it("does not adopt memory sidecars across conflicting plugin owners", () => {

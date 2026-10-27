@@ -63,6 +63,8 @@ Finalization and retry owners retain access to the results while processing them
 Settled tool invocations release their pending-input observers from inherited
 async contexts. Those contexts keep assistant and tool-call attribution without
 keeping the completed agent and its transcript manager alive through the observer.
+Attempt teardown also releases abort and deferred-lifecycle callbacks, even when a
+retained cancellation reason keeps their completed owners reachable.
 
 ## Queueing and concurrency
 

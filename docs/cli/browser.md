@@ -30,8 +30,8 @@ With `--json`, local action-input, state, and viewport validation refusals write
 stdout (`ok: false`, `error.type: "cli_error"`) and exit with status 1. Without
 `--json`, the diagnostic remains on stderr.
 
-Malformed request timeouts and Gateway request rejections also use this JSON
-failure envelope, including navigation, resize, and cookie requests.
+Malformed request timeouts, invalid tab indexes, and Gateway request rejections
+also use this JSON failure envelope, including navigation, resize, and cookie requests.
 
 The CLI reserves 10 additional seconds beyond the request timeout for node and
 Gateway transport, allowing browser timeout diagnostics to reach the caller.
@@ -371,6 +371,9 @@ If navigation or a closed page stops the batch, text output reports the action n
 `fill --fields-file`, `batch --actions-file`, and batch stdin require valid UTF-8.
 Malformed bytes are rejected before any browser action runs. Save the input as
 UTF-8 and retry; valid Unicode values, including emoji and CJK text, are preserved.
+
+`fill --fields-file` requires a regular file or a symlink to one. Pipes and other
+special files are rejected before dispatch. Fields files have no size cap.
 
 ## State and storage
 

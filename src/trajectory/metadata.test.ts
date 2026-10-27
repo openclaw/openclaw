@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
+import * as configRedaction from "../config/redact-snapshot.js";
+import * as supportRedaction from "../logging/diagnostic-support-redaction.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import type { SkillSnapshot } from "../skills/types.js";
 
@@ -50,11 +55,175 @@ const partialSkill = {
 } as unknown as ResolvedSkillEntry;
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  resetSecretRedactionRegistryForTest();
   resetPluginRuntimeStateForTest();
   loadPluginMetadataSnapshot.mockClear();
 });
 
 describe("trajectory metadata", () => {
+  it("redacts each immutable config once across interleaved attempts and replacements", () => {
+    const redact = vi.spyOn(configRedaction, "redactConfigObject");
+    const configs = [1, 2].map((port) =>
+      freezeJsonSnapshot({ gateway: { port, auth: { token: "synthetic-token" } } }),
+    );
+    for (let attempt = 0; attempt < 5; attempt++) {
+      for (const config of configs) {
+        expect(metadata({ config, timeoutMs: attempt }).config).toMatchObject({
+          redacted: { gateway: { port: config.gateway.port, auth: { token: REDACTED_SENTINEL } } },
+          runtime: { timeoutMs: attempt },
+        });
+      }
+    }
+    expect(redact).toHaveBeenCalledTimes(2);
+  });
+
+  it("recaptures mutable nested config while keeping immutable captures read-only", () => {
+    const config = Object.freeze({ gateway: { port: 1, auth: { token: "synthetic-token" } } });
+    expect(metadata({ config }).config).toMatchObject({ redacted: { gateway: { port: 1 } } });
+    config.gateway.port = 2;
+    config.gateway.auth.token = "synthetic-replacement";
+    expect(metadata({ config }).config).toMatchObject({
+      redacted: { gateway: { port: 2, auth: { token: REDACTED_SENTINEL } } },
+    });
+    const frozen = freezeJsonSnapshot(config);
+    const captured = metadata({ config: frozen }).config as { redacted: typeof config };
+    expect(() => {
+      captured.redacted.gateway.port = 3;
+    }).toThrow(TypeError);
+    expect(metadata({ config: frozen }).config).toMatchObject({
+      redacted: { gateway: { port: 2 } },
+    });
+  });
+
+  it("redacts shared immutable catalog entries once for interleaved snapshot selections and homes", () => {
+    const alpha = skill("alpha", "Alpha");
+    const beta = skill("beta", "Beta");
+    for (const entry of [alpha, beta]) {
+      Object.freeze(entry.sourceInfo);
+      Object.freeze(entry);
+    }
+    const sanitize = vi.spyOn(supportRedaction, "sanitizeSupportSnapshotValue");
+    const captures = [];
+    for (let round = 0; round < 3; round++) {
+      for (const home of ["/tmp/workspace", "/elsewhere"]) {
+        captures.push(
+          metadata({
+            env: { HOME: home, OPENCLAW_STATE_DIR: `${home}/.openclaw` },
+            skillsSnapshot: {
+              prompt: "",
+              skills: [],
+              version: round,
+              resolvedSkills: round === 1 ? [beta] : [beta, alpha],
+            },
+          }).skills,
+        );
+      }
+    }
+    expect(captures[0]).toMatchObject({
+      snapshotVersion: 0,
+      entries: [
+        { name: "alpha", filePath: "~/skills/alpha/SKILL.md" },
+        { name: "beta", filePath: "~/skills/beta/SKILL.md" },
+      ],
+    });
+    expect(captures[3]).toMatchObject({
+      snapshotVersion: 1,
+      entries: [{ name: "beta", filePath: "/tmp/workspace/skills/beta/SKILL.md" }],
+    });
+    expect(captures[4]).toMatchObject({ snapshotVersion: 2 });
+    for (const entry of [alpha, beta]) {
+      expect(sanitize.mock.calls.filter(([value]) => value === entry.sourceInfo)).toHaveLength(2);
+    }
+  });
+
+  it("refreshes immutable skill redaction when a new exact secret is registered", () => {
+    const entry = skill("guide", "Guide");
+    entry.sourceInfo.source = "orchid-canary-material";
+    Object.freeze(entry.sourceInfo);
+    Object.freeze(entry);
+    const options = { skillsSnapshot: { prompt: "", skills: [], resolvedSkills: [entry] } };
+    const before = metadata(options);
+    registerSecretValueForRedaction("orchid-canary-material");
+    const after = metadata(options);
+    expect(before.skills).toMatchObject({
+      entries: [{ sourceInfo: { source: "orchid-canary-material" } }],
+    });
+    expect(after.skills).toMatchObject({ entries: [{ sourceInfo: { source: "orchid…rial" } }] });
+    resetSecretRedactionRegistryForTest();
+    expect(metadata(options).skills).toMatchObject({
+      entries: [{ sourceInfo: { source: "orchid-canary-material" } }],
+    });
+  });
+
+  it.each(["secret", "home"])("rechecks %s changes made by an earlier skill accessor", (change) => {
+    const env = { HOME: "/tmp/workspace", OPENCLAW_STATE_DIR: "/synthetic/state" };
+    const cached = skill("beta", "Beta");
+    cached.sourceInfo.source = "orchid-canary-material";
+    Object.freeze(cached.sourceInfo);
+    Object.freeze(cached);
+    const capture = (resolvedSkills: ResolvedSkillEntry[]) =>
+      metadata({ env, skillsSnapshot: { prompt: "", skills: [], resolvedSkills } }).skills;
+    capture([cached]);
+    const earlier = skill("alpha", "Alpha");
+    Object.defineProperty(earlier.sourceInfo, "source", {
+      get() {
+        if (change === "secret") {
+          registerSecretValueForRedaction("orchid-canary-material");
+        } else {
+          env.HOME = "/another/home";
+        }
+        return "workspace";
+      },
+    });
+    expect(capture([earlier, cached])).toMatchObject({
+      entries: [
+        { name: "alpha" },
+        {
+          name: "beta",
+          filePath:
+            change === "home" ? "/tmp/workspace/skills/beta/SKILL.md" : "~/skills/beta/SKILL.md",
+          sourceInfo: {
+            source: change === "secret" ? "orchid…rial" : "orchid-canary-material",
+          },
+        },
+      ],
+    });
+    if (change === "home") {
+      env.HOME = "/tmp/workspace";
+      expect(capture([cached])).toMatchObject({
+        entries: [{ name: "beta", filePath: "~/skills/beta/SKILL.md" }],
+      });
+    }
+  });
+
+  it("preserves per-capture private key numbering and mutable nested source metadata", () => {
+    const nested = { note: "first" };
+    const first = skill("alpha", "Alpha");
+    const second = skill("beta", "Beta");
+    Object.assign(first.sourceInfo, { "a@example.test": "one", nested });
+    Object.assign(second.sourceInfo, { "b@example.test": "two" });
+    for (const entry of [first, second]) {
+      Object.freeze(entry.sourceInfo);
+      Object.freeze(entry);
+    }
+    const capture = (resolvedSkills: ResolvedSkillEntry[]) =>
+      metadata({ skillsSnapshot: { prompt: "", skills: [], resolvedSkills } }).skills;
+    expect(capture([first, second])).toMatchObject({
+      entries: [
+        { sourceInfo: { "<identifier#1>": "one", nested: { note: "first" } } },
+        { sourceInfo: { "<identifier#2>": "two" } },
+      ],
+    });
+    nested.note = "changed";
+    expect(capture([second, first])).toMatchObject({
+      entries: [
+        { sourceInfo: { "<identifier#2>": "one", nested: { note: "changed" } } },
+        { sourceInfo: { "<identifier#1>": "two" } },
+      ],
+    });
+  });
+
   it("uses prepared plugin metadata without rescanning manifests", () => {
     const captured = metadata({
       pluginMetadataSnapshot: { plugins: [{ id: "prepared-plugin" }] } as never,

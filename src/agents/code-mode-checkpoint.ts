@@ -1,5 +1,6 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { cloneTranscriptEnvelope } from "../config/sessions/transcript-json.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "./code-mode-control-tools.js";
 import {
   attachInternalToolResultProvenance,
@@ -79,7 +80,8 @@ export function persistCodeModeCheckpoint<T extends object>(message: T, source: 
       : null;
   const metadata = asOptionalObjectRecord(Reflect.get(message, "__openclaw"));
   // Explicit null distinguishes current unowned/shell results from old transcripts.
-  return { ...message, __openclaw: { ...metadata, codeModeCheckpoint: checkpoint } };
+  const stamped = cloneTranscriptEnvelope(message);
+  return Object.assign(stamped, { __openclaw: { ...metadata, codeModeCheckpoint: checkpoint } });
 }
 
 export function readCodeModeCheckpointFact(value: unknown): CodeModeCheckpoint | undefined {

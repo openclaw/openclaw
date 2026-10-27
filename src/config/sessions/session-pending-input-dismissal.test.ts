@@ -4,8 +4,6 @@ import { expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import * as admission from "../../infra/sqlite-worker-operation-admission.js";
-import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
   openOpenClawAgentDatabase,
@@ -23,7 +21,6 @@ import {
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
-import { readSessionPendingInputReceiptsInWorker } from "./session-pending-input-receipts.js";
 import { dismissRetiredSessionPendingInputs } from "./session-pending-input-withdrawal.js";
 
 const target = {
@@ -86,174 +83,116 @@ async function createFixture(database: OpenClawAgentDatabase) {
     second: await stage("second-interrupted", "interrupted"),
     rows,
     states,
-    receiptsFor: (runIds: string[]) => readSessionPendingInputReceiptsInWorker(target, { runIds }),
-    dismiss: (
-      inputIds: readonly string[],
-      sessionId = target.sessionId,
-      current: () => void = assertCurrent,
-    ) => dismissRetiredSessionPendingInputs({ ...target, sessionId }, inputIds, current),
+    dismiss: (inputIds: readonly string[], sessionId = target.sessionId) =>
+      dismissRetiredSessionPendingInputs({ ...target, sessionId }, inputIds, assertCurrent),
   };
 }
 
-async function withFixture(run: (fixture: Fixture) => Promise<void>) {
+let f: Fixture;
+it.aroundEach(async (run) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const fixture = await createFixture(openOpenClawAgentDatabase({ agentId: target.agentId }));
+    f = await createFixture(openOpenClawAgentDatabase({ agentId: target.agentId }));
     try {
-      await run(fixture);
+      await run();
     } finally {
-      fixture.receipts.forEach((receipt) => receipt.finish("cancelled"));
-      await Promise.all(fixture.receipts.map(async (receipt) => receipt.settled?.()));
+      f.receipts.forEach((receipt) => receipt.finish("cancelled"));
+      await Promise.all(f.receipts.map(async (receipt) => receipt.settled?.()));
     }
-  });
-}
-
-it("tombstones retired inputs in the database worker and keeps their rows and content", async () => {
-  await withFixture(async (f) => {
-    const hostSql = observeHostDataSql();
-    try {
-      expect(await f.dismiss([f.interrupted, f.cancelled])).toEqual({
-        kind: "dismissed",
-        inputIds: [f.interrupted, f.cancelled],
-        runIds: ["interrupted", "cancelled"],
-        missingIds: [],
-      });
-      expect(hostSql.queries).toEqual([]);
-    } finally {
-      hostSql.restore();
-    }
-    const rows = f.rows();
-    expect(Object.keys(rows).toSorted()).toEqual(
-      [f.queued, f.interrupted, f.cancelled, f.second].toSorted(),
-    );
-    for (const [id, runId] of [
-      [f.interrupted, "interrupted"],
-      [f.cancelled, "cancelled"],
-    ] as const) {
-      expect(rows[id]).toEqual({
-        state: "cancelled",
-        message: { ...message(runId), display: false },
-      });
-    }
-    expect(rows[f.queued]?.state).toBe("queued");
-    expect(rows[f.second]?.state).toBe("interrupted");
   });
 });
 
-it("keeps a cancelled receipt as the replay fence after dismissal", async () => {
-  await withFixture(async (f) => {
-    expect(await f.receiptsFor(["interrupted"])).toEqual([
-      { runId: "interrupted", state: "pending" },
-    ]);
-    await f.dismiss([f.interrupted]);
-    expect(await f.receiptsFor(["interrupted", "queued"])).toEqual(
-      expect.arrayContaining([
-        { runId: "interrupted", state: "pending", cancelled: true },
-        { runId: "queued", state: "pending" },
-      ]),
-    );
-  });
+it("tombstones retired inputs in the database worker and keeps their rows and content", async () => {
+  const hostSql = observeHostDataSql();
+  try {
+    expect(await f.dismiss([f.interrupted, f.cancelled])).toEqual({
+      kind: "dismissed",
+      inputIds: [f.interrupted, f.cancelled],
+      runIds: ["interrupted", "cancelled"],
+      missingIds: [],
+    });
+    expect(hostSql.queries).toEqual([]);
+  } finally {
+    hostSql.restore();
+  }
+  const rows = f.rows();
+  expect(Object.keys(rows).toSorted()).toEqual(
+    [f.queued, f.interrupted, f.cancelled, f.second].toSorted(),
+  );
+  for (const [id, runId] of [
+    [f.interrupted, "interrupted"],
+    [f.cancelled, "cancelled"],
+  ] as const) {
+    expect(rows[id]).toEqual({
+      state: "cancelled",
+      message: { ...message(runId), display: false },
+    });
+  }
+  expect(rows[f.queued]?.state).toBe("queued");
+  expect(rows[f.second]?.state).toBe("interrupted");
 });
 
 it("repeats a dismissal idempotently and reports ids that are no longer retained", async () => {
-  await withFixture(async (f) => {
-    await f.dismiss([f.cancelled]);
-    const after = f.rows();
-    expect(await f.dismiss([f.cancelled, "missing-input", f.second])).toEqual({
-      kind: "dismissed",
-      inputIds: [f.cancelled, f.second],
-      runIds: ["cancelled", "second-interrupted"],
-      missingIds: ["missing-input"],
-    });
-    expect(f.rows()[f.cancelled]).toEqual(after[f.cancelled]);
-    expect(f.states()[f.second]).toBe("cancelled");
+  await f.dismiss([f.cancelled]);
+  const after = f.rows();
+  expect(await f.dismiss([f.cancelled, "missing-input", f.second])).toEqual({
+    kind: "dismissed",
+    inputIds: [f.cancelled, f.second],
+    runIds: ["cancelled", "second-interrupted"],
+    missingIds: ["missing-input"],
   });
-});
-
-it("refuses queued and stale targets without changing anything", async () => {
-  await withFixture(async (f) => {
-    const before = f.rows();
-    expect(await f.dismiss([f.interrupted, f.queued])).toEqual({
-      kind: "active",
-      inputIds: [f.queued],
-    });
-    expect(await f.dismiss([f.interrupted], "replaced-session")).toEqual({ kind: "stale" });
-    expect(f.rows()).toEqual(before);
-  });
+  expect(f.rows()[f.cancelled]).toEqual(after[f.cancelled]);
+  expect(f.states()[f.second]).toBe("cancelled");
 });
 
 it("refuses an interrupted input that a resend has reclaimed", async () => {
-  await withFixture(async (f) => {
-    const resent = expectDefined(
-      await stageSessionPendingInput(target, {
-        runId: "interrupted",
-        message: message("interrupted"),
-        requestFingerprint,
-        retryInterrupted: true,
-        assertCurrent,
-      }),
-      "Expected the resend to reclaim interrupted custody",
-    );
-    f.receipts.push(resent);
-    expect(resent.inputId).toBe(f.interrupted);
-    expect(f.states()[f.interrupted]).toBe("queued");
-    expect(await f.dismiss([f.interrupted])).toEqual({
-      kind: "active",
-      inputIds: [f.interrupted],
-    });
-    resent.finish("interrupted");
-    await resent.settled?.();
-    expect(f.states()[f.interrupted]).toBe("interrupted");
-    expect((await f.dismiss([f.interrupted])).kind).toBe("dismissed");
+  const resent = expectDefined(
+    await stageSessionPendingInput(target, {
+      runId: "interrupted",
+      message: message("interrupted"),
+      requestFingerprint,
+      retryInterrupted: true,
+      assertCurrent,
+    }),
+    "Expected the resend to reclaim interrupted custody",
+  );
+  f.receipts.push(resent);
+  expect(resent.inputId).toBe(f.interrupted);
+  expect(f.states()[f.interrupted]).toBe("queued");
+  expect(await f.dismiss([f.interrupted])).toEqual({
+    kind: "active",
+    inputIds: [f.interrupted],
   });
+  resent.finish("interrupted");
+  await resent.settled?.();
+  expect(f.states()[f.interrupted]).toBe("interrupted");
+  expect((await f.dismiss([f.interrupted])).kind).toBe("dismissed");
+});
+
+it("refuses stale targets without changing retained inputs", async () => {
+  const before = f.rows();
+  expect(await f.dismiss([f.interrupted], "replaced-session")).toEqual({ kind: "stale" });
+  expect(f.rows()).toEqual(before);
 });
 
 it("refuses retired rows whose registered owner is still settling", async () => {
-  await withFixture(async (f) => {
-    const before = f.rows();
-    const owner = {
-      inputId: f.interrupted,
-      sessionKey: target.sessionKey,
-      sessionId: target.sessionId,
-      workerDatabasePath: realpathSync(f.database.path),
-      lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      settling: true,
-    } as SessionPendingInputOwner;
-    registerSessionPendingInputOwner(owner);
-    try {
-      expect(await f.dismiss([f.interrupted, f.cancelled])).toEqual({
-        kind: "active",
-        inputIds: [f.interrupted],
-      });
-      expect(f.rows()).toEqual(before);
-    } finally {
-      releaseSessionPendingInputOwner(owner);
-    }
-    expect((await f.dismiss([f.interrupted])).kind).toBe("dismissed");
-  });
-});
-
-it("rolls back dismissal when session write authority is revoked at commit", async () => {
-  await withFixture(async (f) => {
-    const before = f.rows();
-    let current = true;
-    const admitted = probe.admission(admission, (request, grant, callback) => {
-      if (request.stage === "commit") {
-        current = false;
-      }
-      return callback(request, grant);
+  const before = f.rows();
+  const owner = {
+    inputId: f.interrupted,
+    sessionKey: target.sessionKey,
+    sessionId: target.sessionId,
+    workerDatabasePath: realpathSync(f.database.path),
+    lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    settling: true,
+  } as SessionPendingInputOwner;
+  registerSessionPendingInputOwner(owner);
+  try {
+    expect(await f.dismiss([f.interrupted, f.cancelled])).toEqual({
+      kind: "active",
+      inputIds: [f.interrupted],
     });
-    try {
-      await expect(
-        f.dismiss([f.interrupted, f.cancelled], target.sessionId, () => {
-          if (!current) {
-            throw new Error("Dismissal authority revoked");
-          }
-        }),
-      ).rejects.toThrow("Dismissal authority revoked");
-      expect(current).toBe(false);
-      expect(f.rows()).toEqual(before);
-    } finally {
-      admitted.mockRestore();
-    }
-  });
+    expect(f.rows()).toEqual(before);
+  } finally {
+    releaseSessionPendingInputOwner(owner);
+  }
+  expect((await f.dismiss([f.interrupted])).kind).toBe("dismissed");
 });

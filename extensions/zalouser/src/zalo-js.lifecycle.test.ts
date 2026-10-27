@@ -6,7 +6,7 @@ import {
   createPluginRuntimeMock,
   disposePluginRegistryInstances,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import setupEntry from "../setup-entry.js";
 import { zalouserPlugin } from "./channel.js";
 import { getZalouserRuntime, setZalouserRuntime } from "./runtime.js";
@@ -14,13 +14,8 @@ import type { LoginQRCallbackEvent } from "./zca-client.js";
 
 const createZaloMock = vi.hoisted(() => vi.fn());
 const saveCredentialsMock = vi.hoisted(() =>
-  vi.fn(
-    async (
-      _profile: string,
-      _credentials: unknown,
-      _env?: NodeJS.ProcessEnv,
-      assertCurrent?: () => void,
-    ) => {
+  vi.fn<typeof import("./session-state.js").saveStoredZaloCredentials>(
+    async (_profile, _credentials, _env, assertCurrent) => {
       assertCurrent?.();
     },
   ),
@@ -70,6 +65,10 @@ function register(version: string) {
     setZalouserRuntime(api.runtime);
     setupEntry.registerSetupRuntime?.(api);
   });
+  const close = () => disposePluginRegistryInstances(builder.registry);
+  onTestFinished(async () => {
+    await close();
+  });
   return {
     run,
     self: () =>
@@ -77,7 +76,7 @@ function register(version: string) {
         cfg: {},
         runtime: createNonExitingRuntimeEnv(),
       }),
-    close: () => disposePluginRegistryInstances(builder.registry),
+    close,
   };
 }
 
@@ -91,47 +90,29 @@ function session(name: string) {
   };
 }
 
-it("keeps profile APIs and group results with their managed registration", async () => {
-  const firstApi = session("first");
-  const secondApi = session("second");
-  createZaloMock.mockResolvedValue({
-    login: async ({ imei }: { imei: string }) => (imei === "first" ? firstApi : secondApi),
-  });
-  const first = register("first");
-  const second = register("second");
-  try {
-    expect(await first.self()).toMatchObject({ id: "first" });
-    expect(await first.run(() => resolveZaloGroupContext("default", "123"))).toEqual({
-      name: "first",
-      members: undefined,
-    });
-    expect
-      .soft(await second.run(() => resolveZaloGroupContext("default", "123")))
-      .toEqual({ name: "second", members: undefined });
-    expect(await second.self()).toMatchObject({ id: "second" });
-    expect(await first.self()).toMatchObject({ id: "first" });
-    expect(firstApi.getGroupInfo).toHaveBeenCalledOnce();
-    expect(secondApi.getGroupInfo).toHaveBeenCalledOnce();
-  } finally {
-    await first.close();
-    await second.close();
-  }
-});
-
-it("finishes admitted channel work on the old API while another registration is prepared", async () => {
+it("isolates managed and standalone sessions while retiring admitted work", async () => {
   const entered = createDeferred<void>();
   const finish = createDeferred<void>();
   const firstApi = session("admitted-first");
   const secondApi = session("admitted-second");
+  const standaloneApi = session("standalone");
   createZaloMock.mockResolvedValue({
-    login: async ({ imei }: { imei: string }) => (imei === "first" ? firstApi : secondApi),
+    login: async ({ imei }: { imei: string }) =>
+      imei === "standalone" ? standaloneApi : imei === "first" ? firstApi : secondApi,
+  });
+  setZalouserRuntime(createPluginRuntimeMock({ version: "standalone" }));
+  onTestFinished(async () => {
+    await logoutZaloProfile();
   });
   const first = register("first");
   let second: ReturnType<typeof register> | undefined;
   let pending: ReturnType<typeof first.self> | undefined;
   let retirement: ReturnType<typeof first.close> | undefined;
+  const group = () => resolveZaloGroupContext("default", "123");
   try {
+    expect(await getZaloUserInfo()).toMatchObject({ userId: "standalone" });
     await first.self();
+    expect(await first.run(group)).toEqual({ name: "admitted-first", members: undefined });
     firstApi.fetchAccountInfo.mockImplementationOnce(async () => {
       entered.resolve();
       await finish.promise;
@@ -141,6 +122,8 @@ it("finishes admitted channel work on the old API while another registration is 
     await entered.promise;
     second = register("second");
     expect(await second.self()).toMatchObject({ id: "admitted-second" });
+    expect(await second.run(group)).toEqual({ name: "admitted-second", members: undefined });
+    expect(await first.run(group)).toEqual({ name: "admitted-first", members: undefined });
     retirement = first.close();
     expect(await second.self()).toMatchObject({ id: "admitted-second" });
     expect(firstApi.listener.stop).not.toHaveBeenCalled();
@@ -151,34 +134,12 @@ it("finishes admitted channel work on the old API while another registration is 
     expect(secondApi.listener.stop).not.toHaveBeenCalled();
     expect(() => first.self()).toThrow("reloaded or disabled");
     expect(await second.self()).toMatchObject({ id: "admitted-second" });
+    expect(standaloneApi.listener.stop).not.toHaveBeenCalled();
+    expect(await getZaloUserInfo()).toMatchObject({ userId: "standalone" });
   } finally {
     finish.resolve();
     await pending;
     await retirement;
-    await first.close();
-    await second?.close();
-  }
-});
-
-it("does not retire standalone session reuse with a managed registration", async () => {
-  const standaloneApi = session("standalone");
-  const managedApi = session("managed");
-  createZaloMock.mockResolvedValue({
-    login: async ({ imei }: { imei: string }) =>
-      imei === "standalone" ? standaloneApi : managedApi,
-  });
-  setZalouserRuntime(createPluginRuntimeMock({ version: "standalone" }));
-  const managed = register("managed");
-  try {
-    expect(await getZaloUserInfo()).toMatchObject({ userId: "standalone" });
-    expect(await managed.self()).toMatchObject({ id: "managed" });
-    await managed.close();
-    expect(managedApi.listener.stop).toHaveBeenCalledOnce();
-    expect(standaloneApi.listener.stop).not.toHaveBeenCalled();
-    expect(await getZaloUserInfo()).toMatchObject({ userId: "standalone" });
-  } finally {
-    await managed.close();
-    await logoutZaloProfile();
   }
 });
 

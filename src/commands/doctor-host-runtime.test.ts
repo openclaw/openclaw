@@ -18,9 +18,6 @@ const mocks = vi.hoisted(() => ({
   install: vi.fn(),
   restart: vi.fn(),
   writeConfig: vi.fn(),
-  buildGatewayInstallPlan: vi.fn(),
-  auditGatewayServiceConfig: vi.fn(),
-  resolveSystemNodeInfo: vi.fn(),
   repairLaunchAgentBootstrap: vi.fn(),
   note: vi.fn(),
 }));
@@ -41,7 +38,6 @@ vi.mock("../daemon/service.js", async (importOriginal) => ({
 vi.mock("../daemon/runtime-paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/runtime-paths.js")>()),
   resolveNodeRuntimeInfo: mocks.resolveNodeRuntimeInfo,
-  resolveSystemNodeInfo: mocks.resolveSystemNodeInfo,
 }));
 vi.mock("../infra/runtime-guard.js", () => ({ detectRuntime: mocks.detectRuntime }));
 vi.mock("./doctor-service-repair-policy.js", async (importOriginal) => ({
@@ -54,15 +50,6 @@ vi.mock("../config/paths.js", async (importOriginal) => ({
   resolveIsNixMode: () => false,
 }));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
-vi.mock("./daemon-install-helpers.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./daemon-install-helpers.js")>()),
-  buildGatewayInstallPlan: mocks.buildGatewayInstallPlan,
-}));
-vi.mock("../daemon/service-audit.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../daemon/service-audit.js")>()),
-  auditGatewayServiceConfig: mocks.auditGatewayServiceConfig,
-  needsNodeRuntimeMigration: () => true,
-}));
 vi.mock("../daemon/launchd.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/launchd.js")>()),
   repairLaunchAgentBootstrap: mocks.repairLaunchAgentBootstrap,
@@ -148,9 +135,6 @@ it.each([
     });
   }
   expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
-  expect(mocks.buildGatewayInstallPlan).not.toHaveBeenCalled();
-  expect(mocks.auditGatewayServiceConfig).not.toHaveBeenCalled();
-  expect(mocks.resolveSystemNodeInfo).not.toHaveBeenCalled();
   expect(mocks.install).not.toHaveBeenCalled();
   expect(mocks.restart).not.toHaveBeenCalled();
   expect(mocks.writeConfig).not.toHaveBeenCalled();

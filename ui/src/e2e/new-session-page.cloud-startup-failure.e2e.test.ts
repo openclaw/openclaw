@@ -177,6 +177,7 @@ suite.define(() => {
       const diagnostic = `cloud profile was removed\n${"Enrollment detail. ".repeat(80)}\nFinal startup diagnostic.`;
       const gateway = await installMockGateway(page, {
         defaultAgentId: "cloud",
+        subscriptionInitialHistory: !historyFails,
         deferredMethods: ["sessions.dispatch", ...(historyFails ? ["chat.startup"] : [])],
         featureMethods: ["sessions.create", "sessions.dispatch", "chat.startup"],
         workspaceGit: true,

@@ -2,7 +2,7 @@
 // and the sample vault. Built output moves shared modules into host chunks, so
 // module-relative URLs cannot find them; the host-selected entry file can.
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 /** The plugin package root and the module extension its entry runs from. */
 export type PluginFilesLocation = { root: string; extension: string };
@@ -31,7 +31,3 @@ export const ontologyRoot = (): string => path.join(location.root, "ontologies")
 
 /** Directory holding the read-only sample vault. */
 export const sampleVaultRoot = (): string => path.join(location.root, "fixtures", "sample-vault");
-
-/** Worker entrypoint URL for the given worker. */
-export const workerUrl = (name: "registry" | "storage"): URL =>
-  pathToFileURL(path.join(location.root, "src", `${name}-worker${location.extension}`));

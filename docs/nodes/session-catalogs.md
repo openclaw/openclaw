@@ -36,8 +36,9 @@ covers provider discovery and queueing, not session-projection preparation or
 time spent waiting for the Gateway event loop.
 
 Paired-node discovery reuses the current committed node inventory while pairing
-writes are queued. A committed pairing change invalidates that inventory before
-the next read, including when a node's access is revoked.
+writes are queued. Committed pairing receipts refresh that inventory from the
+owner's prepared rows without another database read, including when a node's
+access is revoked. Missing or incomplete publications still reload from storage.
 
 With diagnostics enabled, slow-provider warnings report elapsed time, including
 queueing and asynchronous I/O. `isMainThread` identifies the calling thread; it

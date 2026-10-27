@@ -44,6 +44,8 @@ test("write-scoped operators change and reset effort in an existing session", as
     for (const patch of [
       { thinkingLevel: "high" },
       { fastMode: true },
+      { cyberAccessProgram: "standard" },
+      { cyberAccessProgram: "daybreak_blue" },
       { thinkingLevel: "off", fastMode: false },
       { thinkingLevel: "low", fastMode: "auto" },
     ]) {
@@ -61,12 +63,14 @@ test("write-scoped operators change and reset effort in an existing session", as
     const cleared = await rpcReq<SessionPatchResponse>(ws, "sessions.patch", {
       key: "agent:main:topic-a",
       thinkingLevel: null,
+      cyberAccessProgram: null,
       fastMode: null,
     });
     expect(cleared.ok, JSON.stringify(cleared)).toBe(true);
     const clearedEntry = loadSessionEntry({ sessionKey: "agent:main:topic-a", storePath });
     expect(clearedEntry?.thinkingLevel).toBeUndefined();
     expect(clearedEntry?.fastMode).toBeUndefined();
+    expect(clearedEntry?.cyberAccessProgram).toBeUndefined();
   } finally {
     ws.close();
   }

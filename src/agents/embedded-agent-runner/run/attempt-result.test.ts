@@ -93,6 +93,7 @@ function createResultFixture(params: ResultInput = {}) {
       bootstrap: { bootstrapPromptWarning: {} },
       systemPrompt: { systemPromptReport: undefined },
       sessionRuntime: {
+        transport: { effectiveExtraParams: {} as Record<string, unknown> },
         agentSession: {
           clientToolCallSlots: params?.clientToolCallSlots ?? [],
           hasDeliveredSourceReply: () => false,
@@ -133,6 +134,14 @@ function settledToolMessages(): EmbeddedRunAttemptResult["messagesSnapshot"] {
 }
 
 describe("attempt result projection", () => {
+  it("reports the effective Access setting even when it came from model configuration", () => {
+    const fixture = createResultFixture();
+    fixture.input.prepared.sessionRuntime.transport.effectiveExtraParams = {
+      accessPrograms: { cyber: "daybreak_blue" },
+    };
+    expect(completeFixture(fixture).cyberAccessProgram).toBe("daybreak_blue");
+  });
+
   it.each<[string[], string, number?]>([
     [["First part.", "Second part."], "First part.\nSecond part."],
     [["NO_RE", "PLY\nFirst part.", "Second part."], "First part.\nSecond part."],

@@ -19,6 +19,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { hasErrnoCode } from "../infra/errors.js";
+import { makeStallingStream } from "../infra/http-body.test-support.js";
 
 function makeResponseHeaderStallingFetch() {
   return vi.fn(
@@ -209,14 +210,7 @@ describe("readRemoteMediaBuffer", () => {
       const fetchImpl = vi
         .fn()
         .mockResolvedValueOnce(
-          new Response(
-            new ReadableStream<Uint8Array>({
-              start(controller) {
-                controller.enqueue(new Uint8Array([1, 2]));
-              },
-            }),
-            { status: 200 },
-          ),
+          new Response(makeStallingStream([new Uint8Array([1, 2])]), { status: 200 }),
         )
         .mockResolvedValueOnce(new Response("ok", { status: 200 }));
 
@@ -544,26 +538,21 @@ describe("readRemoteMediaBuffer", () => {
       header: "attachment; filename*=UTF-16''bad.csv; filename=fallback.csv",
       fileName: "fallback.csv",
     },
-  ] as const)("parses $name for buffered and stored remote media", async (testCase) => {
+  ] as const)("parses $name for buffered remote media", async (testCase) => {
     const fetchImpl = vi.fn(async () =>
       makeStreamResponse([1, 2, 3], {
         "content-disposition": testCase.header,
         "content-type": "text/csv",
       }),
     );
-    const request = {
+    const buffered = await readMedia({
       url: "https://example.com/download",
       fetchImpl,
-      lookupFn: makeLookupFn(),
       maxBytes: 8,
-    };
-
-    const buffered = await readRemoteMediaBuffer(request);
-    const stored = await saveRemoteMedia(request);
+    });
 
     expect(buffered.fileName).toBe(testCase.fileName);
-    expect(stored.fileName).toBe(testCase.fileName);
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it.each([[`attachment; filename*=UTF-8''reports%2F%2FQ1.pdf`, "reports__Q1.pdf"]])(

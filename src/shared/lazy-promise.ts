@@ -8,19 +8,17 @@ export type LazyPromiseLoader<T> = {
   clear: () => void;
 };
 
-type KeyedPromiseCacheOptions = {
-  /** Defaults to true; set false to allow retry after a rejected load. */
-  cacheRejections?: boolean;
-  /** Remove the promise after either outcome when the map only tracks in-flight work. */
-  evictOnSettled?: boolean;
-};
-
 /** Returns the cached promise for a key, creating and storing it when absent. */
 export function getOrCreatePromise<K, V>(
   cache: Map<K, Promise<V>>,
   key: K,
   create: () => Promise<V>,
-  options: KeyedPromiseCacheOptions = {},
+  options: {
+    /** Defaults to true; set false to allow retry after a rejected load. */
+    cacheRejections?: boolean;
+    /** Remove the promise after either outcome when the map only tracks in-flight work. */
+    evictOnSettled?: boolean;
+  } = {},
 ): Promise<V> {
   const cached = cache.get(key);
   if (cached) {

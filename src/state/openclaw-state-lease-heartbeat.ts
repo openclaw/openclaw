@@ -4,6 +4,7 @@ import {
   toErrorObject,
 } from "@openclaw/normalization-core/error-coercion";
 import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import { captureStateDatabaseAccess } from "../infra/gateway-state-owner.js";
 import {
   createPostgresPoolEndpoints,
   postgresPoolTransferList,
@@ -150,6 +151,7 @@ export function startOpenClawStateLeaseTimer(params: {
 
 type PendingHeartbeatRequest = {
   deferred: ReturnType<typeof createDeferredCore<number>>;
+  assertCurrent?: () => void;
   operation: LeaseHeartbeatRequest["operation"];
   budget: {
     remainingMs(): number;
@@ -232,12 +234,6 @@ export function startOpenClawStateLeaseHeartbeat(
     rejectPending(error);
   };
   const lifecycle = createLeaseHeartbeatCleanup({ cancel: close });
-  const assertRunning = () => {
-    // Local lifetime only; protected effects still check durable ownership.
-    if (Atomics.load(shared, state.status) !== state.ready) {
-      throw new Error("state lease heartbeat is not running");
-    }
-  };
   let lossReported = false;
   let workerLoss: LeaseHeartbeatLoss | undefined;
   const lossDetail = () =>
@@ -261,6 +257,17 @@ export function startOpenClawStateLeaseHeartbeat(
     ready.reject(error);
     rejectPending(error);
     params.onLost(error);
+  };
+  const assertRunning = () => {
+    // Shared loss can precede carrier notification; publish it before returning to the owner.
+    if (Atomics.load(shared, state.status) !== state.ready) {
+      const error = new OpenClawStateLeaseError("state lease heartbeat is not running", {
+        code: "OPENCLAW_STATE_LEASE_LOST",
+        loss: workerLoss?.leaseLoss,
+      });
+      fail(error);
+      throw error;
+    }
   };
   const remainingLeaseMs = () => Number(Atomics.load(shared, state.expiresAt)) - Date.now();
   const operationBudget = () => {
@@ -448,6 +455,10 @@ export function startOpenClawStateLeaseHeartbeat(
     databaseAdmission.finish();
     releaseAdmissionService();
   };
+  const stateAccess = captureStateDatabaseAccess(databasePath);
+  void stateAccess.catch((error: unknown) =>
+    fail(toErrorObject(error, "State lease heartbeat ownership capture failed")),
+  );
   try {
     params.retainCleanup?.(lifecycle.cleanup);
     const url = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.stateLeaseHeartbeat);
@@ -585,6 +596,7 @@ export function startOpenClawStateLeaseHeartbeat(
     }
     try {
       assertRunning();
+      request.assertCurrent?.();
       deferred.resolve(reply.expiresAt);
     } catch (error) {
       deferred.reject(error);
@@ -610,14 +622,34 @@ export function startOpenClawStateLeaseHeartbeat(
       }
     };
     checkDeadline();
-    try {
+    const dispatch = async () => {
+      const access = await stateAccess;
+      if (pending.get(id) !== awaiting) {
+        return;
+      }
+      const owner = access.processOwner;
+      owner?.assertCurrent();
+      // A retained heartbeat cannot adopt a successor process owner between requests.
+      const assertAccess = owner ? await access.prepareAccess(startupContext) : undefined;
+      if (pending.get(id) !== awaiting) {
+        return;
+      }
+      awaiting.assertCurrent = () => {
+        owner?.assertCurrent();
+        assertAccess?.();
+      };
+      awaiting.assertCurrent();
       assertRunning();
       worker.postMessage({ id, operation } satisfies LeaseHeartbeatRequest, []);
-    } catch (error) {
+    };
+    void dispatch().catch((error: unknown) => {
+      if (pending.get(id) !== awaiting) {
+        return;
+      }
       pending.delete(id);
       clearTimeout(awaiting.timer);
       deferred.reject(error);
-    }
+    });
     return deferred.promise;
   };
   return {

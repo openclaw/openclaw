@@ -31,7 +31,7 @@ import { createChatAttachmentDropHandlers } from "./chat-attachments.ts";
 import { ChatCommentController } from "./chat-comment-controller.ts";
 import { MessageGroup } from "./chat-message-group-view.tsx";
 import { StreamGroup } from "./chat-message-stream-view.tsx";
-import type { ChatModelControlsProps } from "./chat-model-controls.tsx";
+import type { ChatModelControlsProps } from "./chat-model-controls.types.ts";
 import { SessionRailComposer, sessionRailQuestion } from "./chat-session-rail-composer.tsx";
 import type { SidebarPanelHostRegistration } from "./chat-sidebar-region-types.ts";
 

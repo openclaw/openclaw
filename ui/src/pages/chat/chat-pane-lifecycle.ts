@@ -18,7 +18,7 @@ import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts
 import { isSessionReactionEvent } from "../../lib/protocol-validators.generated/activity.js";
 import { listen } from "../../lib/reactive/listener.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { resolveSessionKey } from "../../lib/sessions/index.ts";
+import { resolveSessionKey } from "../../lib/sessions/navigation.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { takeCreatedComposer } from "../new-session/creation-composer-registry.ts";
 import * as chatAvatars from "./chat-avatar.ts";
@@ -352,6 +352,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         });
         if (snapshot && this.ownsChatSnapshot({ sessionKey: initialSessionKey })) {
           applyChatCacheSnapshot(pageState, snapshot);
+          this.syncSessionReactions();
           const target = this.resolveChatReadTarget();
           if (target && snapshot.progressCard !== undefined) {
             this.progressCards.hydrate(target, snapshot.progressCard);

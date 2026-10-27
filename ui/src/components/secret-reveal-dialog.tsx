@@ -1,3 +1,4 @@
+import "../styles/secret-reveal.css";
 import { createSignal, Show } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import { withPromiseModalHost } from "./promise-modal-host.ts";

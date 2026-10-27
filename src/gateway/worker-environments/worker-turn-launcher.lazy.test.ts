@@ -4,14 +4,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { expectCallCount as expectCalls } from "../../test-utils/mock-call-assertions.js";
 import type { WorkerSessionTurnClaim } from "./placement-store.js";
 import type { executeWorkerTurn } from "./worker-turn-execution.js";
-
-function expectCalls(count: number, ...mocks: unknown[]) {
-  for (const mock of mocks) {
-    expect(mock).toHaveBeenCalledTimes(count);
-  }
-}
 
 let fixture: typeof import("./worker-turn-launcher.test-support.js");
 

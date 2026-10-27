@@ -88,7 +88,8 @@ the owner. The content records live under
 `.artifacts/extension-package-boundary`, outside packaged build cleanup. Private
 `.inputs.json` receipts contain normalized checkout-relative source and manifest
 paths instead of native `.tsbuildinfo` state. A warm run validates the records
-without emitting declarations.
+without emitting declarations. Before validation, preparation rebinds copied
+plugin declaration dependency links to the current checkout's plugin install.
 
 Packaged declaration builds and package-boundary records accept only checkout-owned input
 realpaths, including compiler libraries, inherited config, dependency links, and

@@ -1,11 +1,10 @@
-import assert from "node:assert/strict";
 import { afterAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.entry.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
-import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
 import * as approvals from "../../infra/exec-approvals-store.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
@@ -82,20 +81,14 @@ it.each([
       incognito: true as const,
       permissionMode: outcome === "guarded" ? ("guarded" as const) : ("workspace" as const),
     };
-    const binding = await acquireSessionActorStorage(
-      { sessionKey, agentId: "main", storePath, env },
+    const scope = { sessionKey, agentId: "main", storePath, env };
+    const created = await withSessionActorStorage(
+      scope,
       { authority, lifetime: { assertCurrent() {}, assertReadable() {} }, create: true },
+      ({ actor }) =>
+        actor.storage.mutate({ type: "session.entry.create", input: { entry } }, authority),
     );
-    assert(binding);
-    try {
-      const result = await binding.actor.storage.mutate(
-        { type: "session.entry.create", input: { entry } },
-        authority,
-      );
-      expect(result.kind).toBe("committed");
-    } finally {
-      await binding.actor.release();
-    }
+    expect(created?.kind).toBe("committed");
     const harness = privateBoard(sessionKey);
     const started = createDeferred();
     const release = createDeferred();
@@ -121,7 +114,6 @@ it.each([
         await awaitGateBeforeSettlement(started.promise, putting, "Board put did not reach review");
       }
       if (outcome === "permission" || outcome === "replacement") {
-        const scope = { sessionKey, agentId: "main", storePath, env };
         if (outcome === "permission") {
           await patchSessionEntryCore(scope, () => ({ permissionMode: "guarded" }));
         } else {

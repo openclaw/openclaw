@@ -130,6 +130,12 @@ function sampledProfile(start: number, end: number, samples: Array<{ at: number;
   });
 }
 
+function sampleWindow(earlier: number[], block: number[], later: number[]) {
+  return [earlier, block, later].flatMap((times, index) =>
+    times.map((at) => ({ at, name: ["earlierWork", "controlledBlock", "laterWork"][index]! })),
+  );
+}
+
 it.skipIf(typeof getBuiltinModule("v8").startCpuProfile !== "function")(
   "profiles a real 1,200 ms synchronous block without the unrelated work before its report",
   async () => {
@@ -166,16 +172,7 @@ it.each([
     reportAt: 2_500,
     rotationAt: 0,
     serializationMs: 0,
-    chunks: [
-      [
-        { at: 300, name: "earlierWork" },
-        { at: 525, name: "controlledBlock" },
-        { at: 1_000, name: "controlledBlock" },
-        { at: 1_675, name: "controlledBlock" },
-        { at: 1_750, name: "laterWork" },
-        { at: 2_300, name: "laterWork" },
-      ],
-    ],
+    chunks: [sampleWindow([300], [525, 1_000, 1_675], [1_750, 2_300])],
     expectedSamples: 3,
   },
   {
@@ -186,17 +183,8 @@ it.each([
     rotationAt: 5_000,
     serializationMs: 50,
     chunks: [
-      [
-        { at: 4_200, name: "earlierWork" },
-        { at: 4_450, name: "controlledBlock" },
-        { at: 4_900, name: "controlledBlock" },
-      ],
-      [
-        { at: 5_100, name: "controlledBlock" },
-        { at: 5_575, name: "controlledBlock" },
-        { at: 5_625, name: "laterWork" },
-        { at: 6_100, name: "laterWork" },
-      ],
+      sampleWindow([4_200], [4_450, 4_900], []),
+      sampleWindow([], [5_100, 5_575], [5_625, 6_100]),
     ],
     expectedSamples: 4,
   },
@@ -283,23 +271,14 @@ it("caps oversized windows and disables failed capture without failing the sampl
   expect(recorder.sample({ startedAt: 0, endedAt: 1_500 })).toBeUndefined();
 });
 
-it.each([
-  [
-    "runtime",
-    () => {
-      native.versions.node = "24.19.0";
-    },
-  ],
-  ["profiler", () => native.conflict.mockReturnValue(true)],
-  [
-    "worker",
-    () => {
-      native.mainThread = false;
-    },
-  ],
-] as const)("leaves an unsupported or conflicting %s alone", (_kind, disable) => {
-  disable();
-  const { recorder } = fixture();
-  expect(recorder.sample({ startedAt: 0, endedAt: 1_500 })).toBeUndefined();
-  expect(native.start).not.toHaveBeenCalled();
-});
+it.each(["runtime", "profiler", "worker"])(
+  "leaves an unsupported or conflicting %s alone",
+  (kind) => {
+    native.versions.node = kind === "runtime" ? "24.19.0" : "26.6.0";
+    native.conflict.mockReturnValue(kind === "profiler");
+    native.mainThread = kind !== "worker";
+    const { recorder } = fixture();
+    expect(recorder.sample({ startedAt: 0, endedAt: 1_500 })).toBeUndefined();
+    expect(native.start).not.toHaveBeenCalled();
+  },
+);

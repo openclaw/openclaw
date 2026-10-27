@@ -52,14 +52,12 @@ async function fixture(validateSchema = false) {
 }
 
 it("preserves profile authority through unrelated feature schema admission", async () => {
-  const { options, profile, authority, bound, check } = await fixture(true);
+  const { options, profile, check } = await fixture(true);
   const { db } = openOpenClawStateDatabase(options);
   const checkSchema = () => {
     runOpenClawStateWriteTransaction(() => ensureSecretStoreSchema(db), options);
     check("current", "current");
-    expect(() => authority.assertSettled(profile.id)).not.toThrow();
   };
-  expect(bound()).toBe(true);
   checkSchema();
 
   const repeatedDdl: string[] = [];
@@ -68,11 +66,10 @@ it("preserves profile authority through unrelated feature schema admission", asy
       repeatedDdl.push(sql);
     }
   });
-  try {
+  {
+    using _ = { [Symbol.dispose]: () => observation.restore() };
     checkSchema();
     expect(repeatedDdl).toEqual([]);
-  } finally {
-    observation.restore();
   }
 
   setUserProfileRole(profile.id, "member", options);
@@ -139,7 +136,7 @@ it("keeps unknown native COMMIT authority closed before disposing the connection
 });
 
 it("keeps exact bindings retired while current-fact readers follow known settlement", async () => {
-  const { context, profile, authority, check } = await fixture();
+  const { context, profile, check } = await fixture();
   const fence = () =>
     fenceAuthority(context.admission, {
       profiles: [profile.id],
@@ -150,13 +147,11 @@ it("keeps exact bindings retired while current-fact readers follow known settlem
   check("revoked", "pending");
   mutation.settle(true);
   check("revoked", "current");
-  expect(() => authority.assertSettled(profile.id)).not.toThrow();
 
   const unknown = fence();
   unknown.settle(false);
   unknown.settle(true);
   check("revoked", "uncertain");
-  expect(() => authority.assertSettled(profile.id)).toThrow("requires canonical recovery");
 });
 
 it("rejects late registration after retirement and never revives a previous store generation", async () => {

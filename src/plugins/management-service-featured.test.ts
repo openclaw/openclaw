@@ -15,6 +15,11 @@ vi.mock("./plugin-metadata-snapshot.js", () => ({
   resolvePluginMetadataSnapshot: (...args: unknown[]) => mocks.metadata(...args),
 }));
 
+vi.mock("../infra/clawhub-plugin-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/clawhub-plugin-catalog.js")>()),
+  fetchClawHubPluginDetail: async () => ({}),
+}));
+
 vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./official-external-plugin-catalog.js")>();
   return {

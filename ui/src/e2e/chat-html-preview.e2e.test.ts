@@ -168,7 +168,7 @@ suite.define(() => {
               });
             }
             await page.goto(`${suite.server.baseUrl}chat`);
-            await gateway.waitForRequest("chat.startup");
+            await gateway.waitForRequest("sessions.messages.subscribe");
             await page
               .locator('a.markdown-file-link[data-file-path="page.html"]')
               .filter({ hasText: /^page$/ })

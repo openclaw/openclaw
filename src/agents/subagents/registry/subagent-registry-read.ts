@@ -1,8 +1,12 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listLiveAgentRunIds } from "../../../infra/agent-run-registry.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { listSwarmRunReservationIds } from "../swarm/swarm-scheduler.js";
+import { matchesSubagentChildSessionIdentity } from "./subagent-child-owner-match.js";
 import {
+  getRecordedSubagentChildAuthority,
+  getSubagentChildSessionCandidates,
   getSubagentRunsForChildSession,
   getSubagentSessionReadLookup,
   immutableSubagentRunSessionList,
@@ -28,7 +32,11 @@ import {
   prepareSubagentSessionListReadCache,
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { copySubagentRunRuntimeOwner, latestSubagentRun } from "./subagent-run-generation.js";
+import {
+  compareSubagentRunGeneration,
+  copySubagentRunRuntimeOwner,
+  latestSubagentRun,
+} from "./subagent-run-generation.js";
 import { isSubagentRunLive, isSubagentRunQueued } from "./subagent-run-liveness.js";
 export { isSubagentRunLive, isSubagentRunQueued } from "./subagent-run-liveness.js";
 
@@ -203,7 +211,7 @@ export function isSubagentSessionRunActive(
 ): boolean {
   // Liveness is mutation ownership, so a persisted snapshot must not outvote the raw live map.
   return isSubagentRunLive(
-    getLatestSubagentRunForChild(subagentRuns, { childSessionKey, childAgentId }),
+    getLatestLiveSubagentRunByChildSessionKey(childSessionKey, undefined, childAgentId),
   );
 }
 
@@ -249,4 +257,35 @@ export function getLatestLiveSubagentRunByChildSessionKey(
   const key = childSessionKey.trim();
   // The live index owns child/agent matching; retained snapshots cannot confer custody.
   return latestSubagentRun(getSubagentRunsForChildSession(key, childAgentId), matches) ?? null;
+}
+
+const qualifiedChildKey = /^agent:/i;
+
+/** Read registry-owned buckets directly; executor and reservation authority stays live. */
+export function getSubagentChildControllerSessionKey(
+  childSessionKey: string,
+  session: { sessionId?: string; lifecycleRevision?: string },
+): string | undefined {
+  const key = childSessionKey.trim();
+  if (!qualifiedChildKey.test(key)) {
+    return undefined;
+  }
+  const candidates = getSubagentChildSessionCandidates(key);
+  let latest: SubagentRunRecord | undefined;
+  let index = 0;
+  while (index < candidates.length) {
+    const candidate = candidates[index++]!;
+    if (
+      (isSubagentRunLive(candidate) || isSubagentRunQueued(candidate)) &&
+      getRecordedSubagentChildAuthority(candidate).status !== "mismatch" &&
+      matchesSubagentChildSessionIdentity(candidate, session) &&
+      (!latest || compareSubagentRunGeneration(candidate, latest) > 0)
+    ) {
+      latest = candidate;
+    }
+  }
+  return (
+    normalizeOptionalString(latest?.controllerSessionKey) ??
+    normalizeOptionalString(latest?.requesterSessionKey)
+  );
 }

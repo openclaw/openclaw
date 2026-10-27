@@ -27,11 +27,9 @@ import { normalizeScpRemoteHost, normalizeScpRemotePath } from "../../infra/scp-
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveChannelRemoteInboundAttachmentRoots } from "../../media/channel-inbound-roots.js";
 import { resolveStagedInputMaxBytes } from "../../media/configured-max-bytes.js";
+import { buildInboundMediaUriFromPath } from "../../media/inbound-media-path.js";
 import { normalizeMediaFacts } from "../../media/media-facts.js";
-import {
-  buildInboundMediaUriFromPath,
-  resolveInboundMediaReference,
-} from "../../media/media-reference.js";
+import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import {
   STAGED_INPUT_MAX_BYTES,
   STAGED_INPUT_GITIGNORE,
@@ -64,6 +62,8 @@ export async function stageSandboxMedia(params: {
   sessionKey?: string;
   workspaceDir: string;
   skillsSnapshot?: SkillSnapshot;
+  /** Borrowed from the caller, which retains and disposes its live workspace ownership. */
+  preparedWorkspace?: NonNullable<Awaited<ReturnType<typeof prepareSandboxWorkspaceForSession>>>;
   remoteMediaMode?: "sandbox-or-cache" | "cache";
   abortSignal?: AbortSignal;
   awaitSessionDiffBaseline?: () => Promise<void>;
@@ -113,8 +113,11 @@ export async function stageSandboxMedia(params: {
       : null;
   using sandboxLifetime = { [Symbol.dispose]: () => sshSandbox?.[Symbol.dispose]?.() };
   void sandboxLifetime;
-  using preparedWorkspace =
-    forceRemoteCache || sshSandbox ? null : await prepareSandboxWorkspaceForSession(sandboxParams);
+  using ownedWorkspace =
+    params.preparedWorkspace || forceRemoteCache || sshSandbox
+      ? null
+      : await prepareSandboxWorkspaceForSession(sandboxParams);
+  const preparedWorkspace = params.preparedWorkspace ?? ownedWorkspace;
   const sandbox = sshSandbox ?? preparedWorkspace?.workspace;
   const assertCurrent = () => {
     abortSignal?.throwIfAborted();

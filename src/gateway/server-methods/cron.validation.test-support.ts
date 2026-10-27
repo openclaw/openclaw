@@ -118,6 +118,7 @@ export function createCronTestContext(
       waitForManualRun: vi.fn(async () => false),
       getDefaultAgentId: vi.fn(() => "main"),
       getJob: vi.fn((id: string) => jobs.find((job) => job.id === id)),
+      getLoadedJobs: vi.fn(() => jobs),
       prepareWake: vi.fn(async () => undefined),
       wake: vi.fn(async (opts: Parameters<CronService["wake"]>[0]) => {
         opts.commitGuard?.();

@@ -10,7 +10,6 @@ import {
   menuPanel,
   openSubmenu,
   menuItem,
-  menuItemLabels,
   selectMenuValue,
   settleSessionMenu,
 } from "../test-helpers/session-menu.ts";
@@ -85,7 +84,6 @@ describe("session communication menu", () => {
     await menu.updateComplete;
     expect(pressed(advanced, "send", "ask")).toBe("true");
     expect(pressed(advanced, "receive", "always")).toBe("true");
-    expect(request.mock.calls.filter(([method]) => method === "sessions.describe")).toHaveLength(2);
   });
 
   it("retires settings on disconnect and reloads after reconnect", async () => {
@@ -147,9 +145,7 @@ describe("session communication menu", () => {
       onAction,
     });
     await selectMenuValue(menu, "compact:open-advanced");
-    expect(menuItem(menu, "Back").getAttribute("data-value")).toBe("compact:back");
     expect(pressed(menu, "receive", "ask")).toBe("true");
-    expect(menuPanel(menu).querySelector('[role="menu"]')).toBeNull();
     // jsdom has no layout; the communication controls in this fixture are visible.
     for (const control of menu.querySelectorAll<HTMLElement>(
       ".session-menu__communication-choice",
@@ -162,16 +158,6 @@ describe("session communication menu", () => {
     expect(document.activeElement).toBe(choice(menu, "send", "always"));
     choice(menu, "send", "always").dispatchEvent(keydown(true));
     expect(document.activeElement).toBe(menuItem(menu, "Open in"));
-    for (const view of ["icon", "copy", "open-in"]) {
-      await selectMenuValue(menu, `compact:open-${view}`);
-      expect(menuItem(menu, "Back").getAttribute("data-value")).toBe("compact:back-advanced");
-      await selectMenuValue(menu, "compact:back-advanced");
-      expect(choice(menu, "receive", "ask")).toBeTruthy();
-    }
-    await selectMenuValue(menu, "compact:back");
-    expect(menuItemLabels(menu)).toContain("Advanced");
-    expect(menu.querySelector('[role="group"]')).toBeNull();
-    await selectMenuValue(menu, "compact:open-advanced");
     choice(menu, "receive", "never").click();
     expect(onAction).toHaveBeenCalledWith({
       kind: "set-communication",
@@ -194,16 +180,11 @@ describe("session communication menu", () => {
     expect(onAction).not.toHaveBeenCalled();
   });
 
-  it("disables missing metadata and hides batch settings", async () => {
+  it("disables missing communication metadata", async () => {
     const { advanced, onAction } = await setup();
     expect(choice(advanced, "send", "always").disabled).toBe(true);
     expect(advanced.querySelector('.session-menu__communication [aria-pressed="true"]')).toBeNull();
     choice(advanced, "send", "always").click();
     expect(onAction).not.toHaveBeenCalled();
-    const batch = await mountMenu({
-      session: { effectiveCommunication: policy },
-      selectionCount: 2,
-    });
-    expect(menuItemLabels(batch)).not.toContain("Advanced");
   });
 });

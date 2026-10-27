@@ -162,6 +162,14 @@ export async function runEmbeddedFallbackCandidate(
           turn.followupRun.run.suppressTranscriptOnlyAssistantPersistence,
         assistantErrorTranscript: params.assistantErrorTranscript,
         authProfileFailurePolicy: params.authProfileFailurePolicy,
+        ...(params.cyberAccessProgram
+          ? {
+              cyberAccessProgram: params.cyberAccessProgram,
+              ...(params.authProfileId
+                ? { authProfileId: params.authProfileId, authProfileIdSource: "user" as const }
+                : {}),
+            }
+          : {}),
         onAutoCompactionSucceeded: (count) => {
           attemptCompactionCount = Math.max(attemptCompactionCount, count);
         },

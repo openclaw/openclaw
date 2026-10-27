@@ -2,9 +2,7 @@ import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
-  formatEmbeddingModelInput,
   isEmbeddingBatchUnavailableError,
-  resolveEmbeddingInputFormatVersion,
   type EmbeddingInput,
   type MemoryEmbeddingProviderRuntime,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
@@ -35,7 +33,9 @@ import {
 } from "./manager-embedding-cache-ops.js";
 import { createMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
+  embedMemoryDocuments,
   embedMemoryQuery,
+  formatMemoryEmbeddingChunks,
   runMemoryEmbeddingBatchTimeoutRetry,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
@@ -125,6 +125,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       provider,
       cacheKeyData: runtime?.cacheKeyData,
       aliases: runtime?.indexIdentityAliases,
+      documentPrefix: this.settings.inputFormat?.document,
     });
     const generation = {
       database: this.database,
@@ -163,6 +164,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       provider: this.provider,
       cacheKeyData: this.providerRuntime?.cacheKeyData,
       aliases: this.providerRuntime?.indexIdentityAliases,
+      documentPrefix: this.settings.inputFormat?.document,
     });
   }
 
@@ -192,21 +194,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
           run: () =>
             batchEmbed({
               agentId: this.agentId,
-              chunks: resolveEmbeddingInputFormatVersion(provider.model)
-                ? missingChunks.map((chunk) => ({
-                    ...chunk,
-                    ...formatEmbeddingModelInput(chunk, provider.model, "document"),
-                    ...(chunk.embeddingInput
-                      ? {
-                          embeddingInput: formatEmbeddingModelInput(
-                            chunk.embeddingInput,
-                            provider.model,
-                            "document",
-                          ),
-                        }
-                      : {}),
-                  }))
-                : missingChunks,
+              chunks: formatMemoryEmbeddingChunks(
+                missingChunks,
+                provider.model,
+                this.settings.inputFormat,
+              ),
+              ...(this.settings.inputFormat ? { documentFormatApplied: true } : {}),
               wait: this.batch.wait,
               concurrency: this.batch.concurrency,
               pollIntervalMs: this.batch.pollIntervalMs,
@@ -294,11 +287,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
             timeoutMs,
             message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
             run: async (signal) =>
-              await provider.embedBatch(
-                batchItems.map((item) =>
-                  formatEmbeddingModelInput(item.input, provider.model, "document"),
-                ),
-                { signal, inputType: "document" },
+              await embedMemoryDocuments(
+                provider,
+                batchItems.map((item) => item.input),
+                this.settings.inputFormat,
+                { signal },
               ),
           });
           if (!structured) {
@@ -385,7 +378,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         message: `memory embedding probe timed out after ${Math.round(timeoutMs / 1000)}s`,
         deadlineControl,
         run: (signal) =>
-          embedMemoryQuery(provider, "ping", this.settings.queryInstruction, {
+          embedMemoryQuery(provider, "ping", this.settings, {
             signal,
             [MEMORY_SEARCH_DEADLINE_CONTROL]: deadlineControl,
           }),
@@ -423,7 +416,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
             signal,
             deadlineControl,
             run: async (opSignal) =>
-              await embedMemoryQuery(provider, text, this.settings.queryInstruction, {
+              await embedMemoryQuery(provider, text, this.settings, {
                 signal: opSignal,
                 ...(deadlineControl ? { [MEMORY_SEARCH_DEADLINE_CONTROL]: deadlineControl } : {}),
               }),

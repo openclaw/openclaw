@@ -3,7 +3,7 @@ import { readdir, readFile, rename, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { Check } from "typebox/value";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { Principal } from "./access.js";
 import { contract } from "./contract.js";
 import { createKnowledgeService } from "./service.js";
@@ -97,6 +97,37 @@ const entry = (snapshot: any, binding: any) =>
 // An operator's proxied read of the research agent's store.
 const query = (f: Awaited<ReturnType<typeof fixture>>, operation: string, input = {}) =>
   f.service.agent_query({ agent: "research", operation, input }, f.reader);
+
+it("membership decodes each published revision once and rejects changed ambiguous assignments", async () => {
+  const base = tempDirs.make("knowledge-membership-");
+  const host = hostApi(base, { agents: ["main", "research"] });
+  const stores = new Stores(host.api, parsePolicy(undefined), () => {});
+  afterTest(() => stores.stop());
+  const section = { team: { agents: ["research"] } };
+  const serialized = JSON.stringify(section);
+  await stores.registry.call("reconcile", serialized, storesRevision(section));
+  const parse = vi.spyOn(JSON, "parse");
+  try {
+    const first = stores.membership();
+    for (let i = 0; i < 8; i++) {
+      expect(stores.membership()).toBe(first);
+    }
+    expect(first.assigned.get("research")).toBe("team");
+    expect(parse.mock.calls.filter(([text]) => text === serialized)).toHaveLength(1);
+
+    const changed = { ...section, other: { agents: ["research"] } };
+    const nextSerialized = JSON.stringify(changed);
+    await stores.registry.call("reconcile", nextSerialized, storesRevision(changed));
+    const next = stores.membership();
+    expect(next).not.toBe(first);
+    expect(next.invalid.has("research")).toBe(true);
+    expect(next.assigned.has("research")).toBe(false);
+    expect(stores.membership()).toBe(next);
+    expect(parse.mock.calls.filter(([text]) => text === nextSerialized)).toHaveLength(1);
+  } finally {
+    parse.mockRestore();
+  }
+});
 
 it("two unassigned agents get separate stores on first use and cannot read each other", async () => {
   const f = await fixture();

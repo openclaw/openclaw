@@ -256,77 +256,71 @@ export function projectTranscriptIndex(
     props.userId,
     props.userName,
   ];
-  return indexes(chain, key, () => buildTranscriptIndex(chain, expandedToolCards, props));
-}
-
-function buildTranscriptIndex(
-  chain: TranscriptIndexSource,
-  expandedToolCards: Map<string, boolean>,
-  props: Pick<ChatThreadProps, "assistantName" | "userId" | "userName">,
-): TranscriptIndex {
-  const loadedReplySources = new Map<string, LoadedReplySource>();
-  const messageRowKeysById = new Map<string, string>();
-  const transcriptMessageKeys = new Map<string, string>();
-  // New row keys measure expanded work immediately; existing keys keep their
-  // cached height until ResizeObserver reports the changed layout.
-  const rows: TranscriptRow<ChatRenderItem>[] = [];
-  for (const item of chain.transcriptItems) {
-    rows.push({ kind: "item", key: item.key, item });
-    if (item.kind === "work-group" && expandedToolCards.get(item.key)) {
-      for (const group of item.groups) {
-        rows.push({ kind: "item", key: `${item.key}:${group.key}`, item: group });
-      }
-    }
-    const parts = item.kind === "agent-run-frame" ? item.parts : [item];
-    const groups = chatItemGroups(item);
-    const firstGroup = groups.find((group) => group.role === "assistant") ?? groups[0];
-    // The anchor owner uses the first key, so keep stream and persisted keys
-    // in their actual presentation order, including within a mixed run frame.
-    for (const part of parts) {
-      if (part.kind === "stream-run") {
-        for (const stream of part.parts) {
-          if (stream.kind === "stream") {
-            transcriptMessageKeys.set(stream.key, item.key);
-          }
+  return indexes(chain, key, (): TranscriptIndex => {
+    const loadedReplySources = new Map<string, LoadedReplySource>();
+    const messageRowKeysById = new Map<string, string>();
+    const transcriptMessageKeys = new Map<string, string>();
+    // New row keys measure expanded work immediately; existing keys keep their
+    // cached height until ResizeObserver reports the changed layout.
+    const rows: TranscriptRow<ChatRenderItem>[] = [];
+    for (const item of chain.transcriptItems) {
+      rows.push({ kind: "item", key: item.key, item });
+      if (item.kind === "work-group" && expandedToolCards.get(item.key)) {
+        for (const group of item.groups) {
+          rows.push({ kind: "item", key: `${item.key}:${group.key}`, item: group });
         }
-      } else if (part.kind === "stream") {
-        transcriptMessageKeys.set(part.key, item.key);
       }
-      for (const group of chatItemGroups(part)) {
-        const senderLabel = resolveMessageGroupSenderLabel(firstGroup ?? group, props);
-        const rowKey =
-          item.kind === "work-group" && expandedToolCards.get(item.key)
-            ? item.key + ":" + group.key
-            : item.key;
-        for (const source of group.messages) {
-          transcriptMessageKeys.set(source.key, rowKey);
-          const sourceMessageId = persistedMessageEntryId(source.message);
-          if (sourceMessageId) {
-            messageRowKeysById.set(sourceMessageId, rowKey);
-            loadedReplySources.set(sourceMessageId, {
-              message: source.message,
-              messageId: source.key,
-              senderLabel,
-            });
+      const parts = item.kind === "agent-run-frame" ? item.parts : [item];
+      const groups = chatItemGroups(item);
+      const firstGroup = groups.find((group) => group.role === "assistant") ?? groups[0];
+      // The anchor owner uses the first key, so keep stream and persisted keys
+      // in their actual presentation order, including within a mixed run frame.
+      for (const part of parts) {
+        if (part.kind === "stream-run") {
+          for (const stream of part.parts) {
+            if (stream.kind === "stream") {
+              transcriptMessageKeys.set(stream.key, item.key);
+            }
+          }
+        } else if (part.kind === "stream") {
+          transcriptMessageKeys.set(part.key, item.key);
+        }
+        for (const group of chatItemGroups(part)) {
+          const senderLabel = resolveMessageGroupSenderLabel(firstGroup ?? group, props);
+          const rowKey =
+            item.kind === "work-group" && expandedToolCards.get(item.key)
+              ? item.key + ":" + group.key
+              : item.key;
+          for (const source of group.messages) {
+            transcriptMessageKeys.set(source.key, rowKey);
+            const sourceMessageId = persistedMessageEntryId(source.message);
+            if (sourceMessageId) {
+              messageRowKeysById.set(sourceMessageId, rowKey);
+              loadedReplySources.set(sourceMessageId, {
+                message: source.message,
+                messageId: source.key,
+                senderLabel,
+              });
+            }
           }
         }
       }
     }
-  }
-  const positionIndex = projectChatPositions(
-    chain.transcriptItems,
-    expandedToolCards,
-    messageRowKeysById,
-    chain.searchActive,
-  );
-  return {
-    messageRowKeysById,
-    transcriptMessageKeys,
-    loadedReplySources,
-    positionIndex,
-    rows,
-    liveItem: chain.live?.item,
-  };
+    const positionIndex = projectChatPositions(
+      chain.transcriptItems,
+      expandedToolCards,
+      messageRowKeysById,
+      chain.searchActive,
+    );
+    return {
+      messageRowKeysById,
+      transcriptMessageKeys,
+      loadedReplySources,
+      positionIndex,
+      rows,
+      liveItem: chain.live?.item,
+    };
+  });
 }
 
 export function expandReplyTargetWork(
@@ -356,16 +350,31 @@ export function expandReplyTargetWork(
   }
 }
 
+export type PlacedContentRow = Extract<TranscriptRow, { kind: "content" }> & {
+  /** Row key this content follows; null leads the transcript and undefined trails it. */
+  after?: string | null;
+};
+
 export function projectTranscriptRows(
   rows: readonly TranscriptRow<ChatRenderItem>[],
   workPreviews: ReturnType<typeof projectTranscriptWorkPreviews>,
-  contentRows: readonly Extract<TranscriptRow, { kind: "content" }>[],
+  contentRows: readonly PlacedContentRow[],
 ): readonly TranscriptRow<ChatRenderItem>[] {
-  return presentationRows(rows, [workPreviews, ...contentRows.map((row) => row.key)], () => {
+  const key = [workPreviews, ...contentRows.flatMap((row) => [row.key, row.after])];
+  return presentationRows(rows, key, () => {
     if (!workPreviews.size && !contentRows.length) {
       return rows;
     }
-    const result: TranscriptRow<ChatRenderItem>[] = [];
+    const placed = Map.groupBy(
+      contentRows.filter((row) => row.after !== undefined),
+      (row) => row.after,
+    );
+    const take = (after: string | null) => {
+      const found = placed.get(after) ?? [];
+      placed.delete(after);
+      return found;
+    };
+    const result: TranscriptRow<ChatRenderItem>[] = take(null);
     for (const row of rows) {
       result.push(row);
       const previews = workPreviews.get(row.key);
@@ -377,7 +386,12 @@ export function projectTranscriptRows(
           content: new GuardedTranscriptItem([content], content),
         });
       }
+      result.push(...take(row.key));
     }
-    return result.concat(contentRows);
+    // An anchor outside these rows keeps its content visible at the end.
+    return result.concat(
+      [...placed.values()].flat(),
+      contentRows.filter((row) => row.after === undefined),
+    );
   });
 }

@@ -27,6 +27,11 @@ configuration, stores and access, tools, bundled skills, and limits.
 
 ## Development
 
+Registry and storage work run in worker threads under Node and Bun. Their
+entrypoints are declared in `src/infra/runtime-process-manifest.ts` for standalone
+packaging; each worker installs the host-selected SDK aliases before loading its
+storage modules.
+
 Bundled workflow skills keep shared guidance in `skills/shared/`. Refresh the
 copies embedded in each skill after editing it:
 

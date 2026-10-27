@@ -5,7 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   inspectGitHubOAuthRecord,
   listGitHubDeviceAuthorizationRecords,
-  listGitHubOAuthRecords,
+  listGitHubAuthorizationRecords,
   readGitHubDeviceAuthorizationRecord,
   writeGitHubDeviceAuthorizationRecord,
   writeGitHubOAuthRecord,
@@ -18,6 +18,7 @@ import {
 } from "../agents/github-tool-identity.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
+import * as hiddenSecrets from "../secrets/store/secret-store-hidden-github.js";
 import { writeHiddenGitHubSecretRecord } from "../secrets/store/secret-store.js";
 import { createDeferredCore as deferred } from "../shared/deferred.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
@@ -49,8 +50,12 @@ const mocks = vi.hoisted(() => ({
         expected?: GitHubOAuthRecord,
       ) => Promise<void>
     >(),
-  listOAuthRecords:
-    vi.fn<(read: typeof listGitHubOAuthRecords) => ReturnType<typeof listGitHubOAuthRecords>>(),
+  listAuthorizationRecords:
+    vi.fn<
+      (
+        read: typeof listGitHubAuthorizationRecords,
+      ) => ReturnType<typeof listGitHubAuthorizationRecords>
+    >(),
   resolveStatus: vi.fn(),
   updateConfig: vi.fn(),
 }));
@@ -68,7 +73,8 @@ vi.mock("../agents/github-oauth-records.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../agents/github-oauth-records.js")>();
   return {
     ...actual,
-    listGitHubOAuthRecords: () => mocks.listOAuthRecords(actual.listGitHubOAuthRecords),
+    listGitHubAuthorizationRecords: () =>
+      mocks.listAuthorizationRecords(actual.listGitHubAuthorizationRecords),
     writeGitHubOAuthRecord: (record: GitHubOAuthRecord, expected?: GitHubOAuthRecord) =>
       mocks.writeOAuthRecord(actual.writeGitHubOAuthRecord, record, expected),
   };
@@ -223,7 +229,7 @@ beforeEach(() => {
     return ACCOUNT;
   });
   mocks.writeOAuthRecord.mockImplementation((write, record, expected) => write(record, expected));
-  mocks.listOAuthRecords.mockImplementation((read) => read());
+  mocks.listAuthorizationRecords.mockImplementation((read) => read());
   mocks.resolveStatus.mockImplementation(async ({ selectedScope }) => statusResult(selectedScope));
   mocks.installProfile.mockImplementation(async ({ token, commitConfig }) => {
     installedTokens.push(token);
@@ -745,19 +751,34 @@ describe("GitHub OAuth authorization lifecycle", () => {
 });
 
 describe("GitHub OAuth refresh and maintenance", () => {
+  it("discovers device and OAuth records in one owner read and reuses the inventory", async () => {
+    await writeGitHubOAuthRecord(oauthRecord(OLD_PROFILE));
+    const reads = vi.spyOn(hiddenSecrets, "listHiddenGitHubSecretRecords");
+    const inventory = createGitHubOAuthInventoryReader(() => {});
+    try {
+      const first = await inventory.read();
+      expect(first.oauthRecords.map(({ profileId }) => profileId)).toEqual([OLD_PROFILE]);
+      expect(first.deviceRecords).toEqual([]);
+      expect(await inventory.read()).toBe(first);
+      expect(reads).toHaveBeenCalledTimes(1);
+    } finally {
+      inventory.close();
+    }
+  });
+
   it("keeps OAuth inventory through unrelated writes and retains writes during an awaited scan", async () => {
     const inventory = createGitHubOAuthInventoryReader(() => {});
     const scanned = deferred();
     const release = deferred();
     try {
       expect((await inventory.read()).oauthRecords).toEqual([]);
-      const scans = mocks.listOAuthRecords.mock.calls.length;
+      const scans = mocks.listAuthorizationRecords.mock.calls.length;
       writeConfigMachineState("test.oauth-unrelated", true);
       expect((await inventory.read()).oauthRecords).toEqual([]);
-      expect(mocks.listOAuthRecords).toHaveBeenCalledTimes(scans);
+      expect(mocks.listAuthorizationRecords).toHaveBeenCalledTimes(scans);
 
       await writeGitHubOAuthRecord(oauthRecord(OLD_PROFILE));
-      mocks.listOAuthRecords.mockImplementationOnce(async (read) => {
+      mocks.listAuthorizationRecords.mockImplementationOnce(async (read) => {
         const rows = await read();
         scanned.resolve();
         await release.promise;
@@ -776,13 +797,13 @@ describe("GitHub OAuth refresh and maintenance", () => {
         OLD_PROFILE,
         NEW_PROFILE,
       ]);
-      const scansBeforeClose = mocks.listOAuthRecords.mock.calls.length;
+      const scansBeforeClose = mocks.listAuthorizationRecords.mock.calls.length;
       await closeOpenClawStateDatabaseAsync();
       expect((await inventory.read()).oauthRecords.map(({ profileId }) => profileId)).toEqual([
         OLD_PROFILE,
         NEW_PROFILE,
       ]);
-      expect(mocks.listOAuthRecords).toHaveBeenCalledTimes(scansBeforeClose + 1);
+      expect(mocks.listAuthorizationRecords).toHaveBeenCalledTimes(scansBeforeClose + 1);
     } finally {
       release.resolve();
       inventory.close();
@@ -1009,6 +1030,6 @@ describe("GitHub OAuth refresh and maintenance", () => {
     await lifecycle.maintain();
 
     expect(await listGitHubDeviceAuthorizationRecords()).toEqual([]);
-    expect(await listGitHubOAuthRecords()).toEqual([]);
+    expect(await listGitHubAuthorizationRecords()).toEqual({ deviceRecords: [], oauthRecords: [] });
   });
 });

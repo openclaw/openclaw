@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { AgentSelectionRequiredError, listAgentIds } from "../../agents/agent-scope-config.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import {
   classifySessionKeyShape,
   normalizeAgentId,
@@ -369,6 +370,7 @@ async function persistExpectedSessionTranscriptTurn(
       return result;
     }
   }
+  using phase = observeDiagnosticsTimelinePhases("persist.transcript.target");
   const onCommittedSource = captureSessionTranscriptSourcePublication({
     ...scope,
     sessionId: expectedSessionId,
@@ -385,6 +387,7 @@ async function persistExpectedSessionTranscriptTurn(
     sessionKey: ownerScope.sessionKey,
     sessionTarget: ownerScope,
   });
+  phase.mark("persist.transcript.commit");
   const turn = await runWithOwnedSessionTranscriptWrite(
     {
       sessionFile: target.sessionKey,
@@ -442,6 +445,7 @@ async function persistExpectedSessionTranscriptTurn(
 
   // The requested key remains the caller's live update route; the resolved
   // target above is the distinct physical SQLite owner.
+  phase.mark("persist.transcript.publication");
   await publishTranscriptTurnUpdate({
     target:
       requestedSessionKey === target.sessionKey

@@ -162,6 +162,11 @@ function ChatFooterContent(
               props={{
                 approval: input.props.inlineApproval!,
                 sourceSession: input.frame.approvalSourceSession,
+                nodeDisplayName: input.props.approvalNodeNames?.get(
+                  input.props.inlineApproval!.request.nodeId ?? "",
+                ),
+                pendingCount: input.props.approvalPendingCount,
+                onOpenPending: input.props.onOpenPendingApprovals,
                 busy: input.props.approvalBusy === true,
                 connected: input.props.connected,
                 canGrant: input.props.approvalCanGrant,
@@ -299,6 +304,11 @@ function ChatComposerView(input: ChatViewInput) {
                 props={{
                   approval: input.props.inlineApproval!,
                   sourceSession: input.frame.approvalSourceSession,
+                  nodeDisplayName: input.props.approvalNodeNames?.get(
+                    input.props.inlineApproval!.request.nodeId ?? "",
+                  ),
+                  pendingCount: input.props.approvalPendingCount,
+                  onOpenPending: input.props.onOpenPendingApprovals,
                   busy: input.props.approvalBusy ?? false,
                   connected: input.props.connected,
                   canGrant: input.props.approvalCanGrant,
@@ -503,6 +513,8 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
   return (
     <section
       class={["chat", { "chat--bubbles": input.props.chatBubbleMode }]}
+      // Person references resolve session-scoped people for callers without directory access.
+      data-chat-session-key={input.props.sessionKey}
       style={
         input.props.chatMessageMaxWidth
           ? {

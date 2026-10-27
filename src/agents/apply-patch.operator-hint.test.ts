@@ -36,7 +36,8 @@ async function captureFailure(tool: PatchTool, input: string): Promise<unknown> 
 }
 
 function expectFailure(error: unknown, message: string | RegExp, hint?: string) {
-  const expected = typeof message === "string" ? message : expect.stringMatching(message);
+  const expected =
+    typeof message === "string" ? expect.stringContaining(message) : expect.stringMatching(message);
   expect(error).toHaveProperty("message", expected);
   if (hint) {
     expect(readToolOperatorHint(error)).toContain(hint);
@@ -102,6 +103,7 @@ it.each(["host path", "bridge", "declared mapping"] as const)(
     });
     const error = await captureFailure(tool, addFilePatch("escaped.md"));
     expect(isHostRootEscapeError(error)).toBe(boundary !== "bridge");
+    expect(error).not.toMatchObject({ message: expect.stringContaining("sessions_spawn") });
     if (boundary === "bridge") {
       expectFailure(error, /Path escapes sandbox root/);
     } else {

@@ -318,20 +318,19 @@ describe("Control UI performance budgets", () => {
 
   it("bounds stylesheet growth at the fixed CSS ceilings", () => {
     const { distDir, writeAsset } = createStartupFixture();
+    const base = collectMetrics(distDir);
+    const raw = CONTROL_UI_PERFORMANCE_BUDGETS.totalCssRawBytes - base.total.css.rawBytes;
+    const gzip = CONTROL_UI_PERFORMANCE_BUDGETS.totalCssGzipBytes - base.total.css.gzipBytes;
     for (let index = 0; index < 6; index++) {
       writeAsset(
         "css-" + index + ".css",
-        index === 0 ? 265_570 : 265_567,
-        index === 0 ? 50_422 : 50_418,
+        Math.floor(raw / 6) + (index < raw % 6 ? 1 : 0),
+        Math.floor(gzip / 6) + (index < gzip % 6 ? 1 : 0),
       );
     }
-    const base = collectMetrics(distDir);
-    const headerRaw = CONTROL_UI_PERFORMANCE_BUDGETS.totalCssRawBytes - base.total.css.rawBytes;
-    const headerGzip = CONTROL_UI_PERFORMANCE_BUDGETS.totalCssGzipBytes - base.total.css.gzipBytes;
-    writeAsset("mobile-header.css", headerRaw, headerGzip);
     const accepted = collectMetrics(distDir);
     expect(evaluateBudgets(accepted, undefined, null, 512, base)).toEqual([]);
-    writeAsset("mobile-header.css", headerRaw + 1, headerGzip + 1);
+    writeAsset("overflow.css", 1, 1);
     expect(evaluateBudgets(collectMetrics(distDir), undefined, null, 512, base)).toEqual([
       expect.objectContaining({ metric: "total CSS gzip" }),
       expect.objectContaining({ metric: "total CSS raw" }),

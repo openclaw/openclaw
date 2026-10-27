@@ -5,6 +5,10 @@ import { requestCloudWorkerStop } from "../../components/cloud-worker-stop.runti
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import {
+  confirmWithBoundAutomations,
+  withBoundAutomationNotice,
+} from "../../components/session-automation-confirm.ts";
+import {
   formatBatchSessionRemovalError,
   withSessionWorkspaceRecovery,
 } from "../../components/session-workspace-recovery.runtime.ts";
@@ -136,13 +140,48 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
         : "sessionsView.deleteSelectedConfirm",
       { count: String(rows.length) },
     );
-    if (
-      !(await confirmMutation(message, { signal: scope.signal })) ||
-      !isRequestScopeCurrent(scope)
-    ) {
+    if (!(await confirmDelete(message, rows, scope)) || !isRequestScopeCurrent(scope)) {
       return;
     }
     return deleteSessions(rows.filter((row) => state.selectedSessions.get(row.key) === row));
+  }
+
+  // Selections keep captured row copies across same-incarnation refreshes;
+  // automation facts come from the roster row for that incarnation when present.
+  function currentAutomationFlag(row: SessionDeleteRow): boolean | undefined {
+    const current = state.result?.sessions.find(
+      (entry) => entry.key === row.key && entry.sessionId === row.sessionId,
+    );
+    return (current ?? row).hasAutomation;
+  }
+
+  // Bound automations turn the delete confirm into an explicit pause warning.
+  function confirmDelete(
+    message: string,
+    rows: readonly SessionDeleteRow[],
+    scope: SessionsPageRequestScope,
+  ) {
+    const options = {
+      message,
+      confirmLabel: t("common.delete"),
+      danger: true,
+      signal: scope.signal,
+    };
+    return confirmWithBoundAutomations(
+      {
+        action: "delete",
+        sessions: rows.map((row) => ({
+          key: row.key,
+          agentId: sessionAgentId(row.key, scope.context),
+          label: normalizeOptionalString(row.label) ?? row.key,
+          hasAutomation: currentAutomationFlag(row),
+        })),
+        gateway: scope.gateway,
+        signal: scope.signal,
+      },
+      (notice) => showConfirmDialog(notice ? withBoundAutomationNotice(options, notice) : options),
+      Boolean,
+    );
   }
 
   function confirmMutation(
@@ -281,9 +320,11 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
     const scope = captureRequestScope({ allowDeferred: true });
     if (
       !scope ||
-      !(await confirmMutation(t("sessionsView.deleteSessionConfirm", { session: label }), {
-        signal: scope.signal,
-      })) ||
+      !(await confirmDelete(
+        t("sessionsView.deleteSessionConfirm", { session: label }),
+        [row],
+        scope,
+      )) ||
       !isRequestScopeCurrent(scope)
     ) {
       return;

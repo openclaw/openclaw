@@ -585,11 +585,10 @@ export function projectChatDisplayMessagesWithState(
       }
     }
   }
-  const sanitizedMessages = toProjectedMessages(
-    sanitizeChatHistoryMessages(projectedErrors, Number.MAX_SAFE_INTEGER, {
-      includeCommentaryFallbacks: options?.includeCommentaryFallbacks,
-    }),
-  );
+  // Recovery already admitted records and consumed assistant display content.
+  const sanitizedMessages = sanitizeChatHistoryMessages(projectedErrors, Number.MAX_SAFE_INTEGER, {
+    includeCommentaryFallbacks: options?.includeCommentaryFallbacks,
+  });
   const commentaryFallbacksObserved =
     options?.includeCommentaryFallbacks === true &&
     sanitizedMessages.some(
@@ -608,7 +607,7 @@ export function projectChatDisplayMessagesWithState(
     mergeTtsSupplementMessages(filtered.messages),
     options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
     { toolResultMaxChars: options?.toolResultMaxChars },
-  ) as Array<Record<string, unknown>>;
+  );
   const result: ChatDisplayProjectionResult = {
     activity,
     messages: projectCurrentUserProfileAvatars(

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DaemonStatus } from "../cli/daemon-cli/status.gather.js";
 import type { GatewayBindMode } from "../config/types.gateway.js";
 import { ExitError } from "../runtime.js";
+import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
 import { dashboardCommand } from "./dashboard.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -256,12 +257,6 @@ function mockAliasOwnership(host: string, loopbackPid = 4242) {
     ],
     hints: [],
   });
-}
-
-function expectNoCalls(...mocksToCheck: unknown[]) {
-  for (const mock of mocksToCheck) {
-    expect(mock).not.toHaveBeenCalled();
-  }
 }
 
 function expectNoCredentials() {

@@ -11,11 +11,7 @@ import {
   type SandboxContainerEngine,
   type SandboxContainerEngineTarget,
 } from "./container-engine.js";
-import {
-  containerState,
-  readContainerLabel,
-  recordedPodmanContainerState,
-} from "./container-inspect.js";
+import { containerState, recordedPodmanContainerState } from "./container-inspect.js";
 import {
   admitSandboxContainerSource,
   bindSandboxContainerSource,
@@ -230,38 +226,20 @@ async function ensureSandboxContainerLifecycle(
     Boolean(params.cfg.docker.setupCommand?.trim()) ||
     existingRegistryEntry?.runtimeState === "pending";
   const state = await containerState(engine, containerName, { strict: needsSetupReservation });
-  let containerId = "";
-  let readOnlyRoot = false;
-  if (state.exists) {
-    const identity = await execContainer(
-      engine,
-      ["inspect", "--format", "{{.Id}} {{.HostConfig.ReadonlyRootfs}}", containerName],
-      {
-        signal: AbortSignal.timeout(5_000),
-      },
-    );
-    const [id, rootReadOnly] = identity.stdout.trim().split(/\s+/u);
-    containerId = id ?? "";
-    readOnlyRoot = rootReadOnly === "true";
-    if (!/^[a-f0-9]{64}$/u.test(containerId)) {
-      throw new Error("Container inspect did not return an immutable container ID.");
-    }
-  }
+  let containerId = state.exists ? state.id : "";
+  const readOnlyRoot = state.exists && state.readOnlyRoot;
   let hasContainer = state.exists;
   let running = state.running;
   let currentHash: string | null = null;
   let hashMismatch = false;
   const registryEntry = existingRegistryEntry;
-  if (hasContainer) {
+  if (state.exists) {
     if (registryEntry?.runtimeState === "pending") {
       throw new Error(
         `Sandbox ${containerName} setup did not complete. Inspect the retained container and preserve needed data before explicitly recreating it.`,
       );
     }
-    currentHash = await readContainerLabel(engine, containerName, "openclaw.configHash");
-    if (!currentHash) {
-      currentHash = registryEntry?.configHash ?? null;
-    }
+    currentHash = state.configHash ?? registryEntry?.configHash ?? null;
     hashMismatch = !currentHash || currentHash !== expectedHash;
     if (hashMismatch) {
       const lastUsedAtMs = registryEntry?.lastUsedAtMs;

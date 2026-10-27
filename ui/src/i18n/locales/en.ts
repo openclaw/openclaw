@@ -904,7 +904,7 @@ const startupEnglish = {
     agentPendingOne: "{count} pending approval",
     agentPending: "{count} pending approvals",
 
-    reviewOnly: "Review only. Sign in with approval access to record a decision.",
+    reviewOnly: "You don’t have permission to approve.",
 
     labels: {},
   },
@@ -1231,6 +1231,13 @@ const startupEnglish = {
       running: "Running sessions",
       total: "Total sessions",
       name: "Name",
+    },
+    menu: {
+      label: "Actions for {name}",
+      pin: "Pin to sidebar",
+      unpin: "Unpin from sidebar",
+      openNewTab: "Open activity in new tab",
+      copyLink: "Copy activity link",
     },
     active: "Active",
     onlineActive: "Online · Active",
@@ -1601,7 +1608,7 @@ const startupEnglish = {
       preparingCloudEnvironment: "Preparing cloud environment…",
       savingSnapshot: "Saving snapshot…",
       preparingContext: "Preparing this turn…",
-      waitingForTurn: "Waiting for turn to start…",
+      waitingForTurn: "Waiting for turn to start",
       memoryFlushing: "Saving conversation memory…",
       startingModel: "Waiting for a response",
       waitingForLocalModel: "Waiting for the local model to respond",

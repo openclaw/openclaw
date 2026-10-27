@@ -237,7 +237,9 @@ redacted embedding-bootstrap reason in `debug.embeddingBootstrap` even when
 there are no matches.
 
 A failed local embedding request preserves keyword access to a matching index
-and records the degraded provider in memory status and Gateway logs. A real model
+and records the degraded provider in memory status and Gateway logs. A query
+embedding that comes back as all zeros skips vector recall for that search and
+is reported in the Gateway log, so keyword-only results never pass silently. A real model
 or index-configuration mismatch still pauses search instead of serving
 mismatched data.
 

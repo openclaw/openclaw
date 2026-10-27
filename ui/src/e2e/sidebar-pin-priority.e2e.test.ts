@@ -25,6 +25,7 @@ suite.define(() => {
         { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), entries },
       );
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         awaitInitialRoster: false,
         sessionKey: selected.key,
         sessions: [selected, ...pins],

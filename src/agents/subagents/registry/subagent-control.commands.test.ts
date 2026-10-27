@@ -28,6 +28,7 @@ import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
+import { killSessionSubagentRuns } from "./subagent-control-kill.js";
 import * as killSession from "./subagent-control-session.js";
 import { createControlRunFixture } from "./subagent-control.fixtures.test-support.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
@@ -149,6 +150,7 @@ it.each([
   "gateway",
   "gateway-error",
   "channel",
+  "lifecycle",
   "nested",
   "preaccept-revoked",
   "postaccept-revoked",
@@ -334,6 +336,14 @@ it.each([
           requesterAgentId: "main",
         });
         expect(result).toEqual({ stopped: 0, failed: 0, execAborted: true });
+        execAborted = result.execAborted === true;
+      } else if (selection === "lifecycle") {
+        const result = await killSessionSubagentRuns({
+          cfg: getRuntimeConfig(),
+          sessionKey: requesterSessionKey,
+          agentId: "main",
+        });
+        expect(result).toMatchObject({ status: "ok", killed: 0, execAborted: true });
         execAborted = result.execAborted === true;
       } else if (selection === "admin-root") {
         const result = await killSubagentRunAdmin({

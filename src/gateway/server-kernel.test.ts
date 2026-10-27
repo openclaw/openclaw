@@ -16,6 +16,7 @@ import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { expectCallCount as expectCalls } from "../test-utils/mock-call-assertions.js";
 import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import { closeKernelFixture, createKernelFixture } from "./server-kernel.fixture-test-support.js";
@@ -28,11 +29,6 @@ import { expectCoreAgentDatabaseReadiness } from "./server-startup-readiness.tes
 import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { withPreparedSessionEventRow } from "./session-event-prepared-row.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
-function expectCalls(count: number, ...mocks: Array<(...args: never[]) => unknown>) {
-  for (const mock of mocks) {
-    expect(mock).toHaveBeenCalledTimes(count);
-  }
-}
 
 function idleSidecar() {
   return { stop: vi.fn(async () => {}) };

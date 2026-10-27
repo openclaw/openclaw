@@ -38,6 +38,7 @@ suite.define(() => {
     };
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         sessionKey: workKey,
         deferredMethods: ["chat.history"],
         methodResponses: { "sessions.list": sessionsListResponse([workspace, report]) },

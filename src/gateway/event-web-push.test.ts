@@ -17,6 +17,12 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { HumanMentionWebPush } from "./event-web-push.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
+import { GatewayClientRegistry } from "./server/client-registry.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
+import {
+  createSessionViewerPresenceDeclarations,
+  type SessionViewerPresenceDeclarations,
+} from "./session-viewer-presence.js";
 
 const mocks = vi.hoisted(() => ({
   pairing: vi.fn(),
@@ -171,6 +177,41 @@ function setRecipients(...subscriptions: BoundWebPushSubscription[]) {
 }
 
 const researchContext = { agentId: "research", sessionKeys: ["agent:research:thread.1"] };
+
+type Viewers = {
+  declarations: SessionViewerPresenceDeclarations;
+  view: (deviceId: string | undefined, sessionKeys?: readonly string[]) => GatewayWsClient;
+};
+
+function createViewers(): Viewers {
+  const clients = new GatewayClientRegistry();
+  const declarations = createSessionViewerPresenceDeclarations({
+    clients,
+    publishPresence: () => {},
+  });
+  const view: Viewers["view"] = (deviceId, sessionKeys = researchContext.sessionKeys) => {
+    const client: GatewayWsClient = {
+      connId: `conn-${deviceId ?? "anonymous"}`,
+      usesSharedGatewayAuth: false,
+      socket: { readyState: 1 } as GatewayWsClient["socket"],
+      connect: {
+        minProtocol: 1,
+        maxProtocol: 1,
+        role: "operator",
+        client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
+        ...(deviceId
+          ? {
+              device: { id: deviceId, publicKey: "key", signature: "sig", signedAt: 1, nonce: "n" },
+            }
+          : {}),
+      },
+    };
+    clients.add(client);
+    declarations.replace(client.connId, sessionKeys);
+    return client;
+  };
+  return { declarations, view };
+}
 
 function prepareSender() {
   const preparation = createDeferred<typeof mocks.send>();
@@ -340,6 +381,64 @@ describe("event Web Push classification", () => {
       url: `${path}#gatewayUrl=wss%3A%2F%2Fgateway.example.test%2Foperator`,
     });
   });
+
+  it.each<[string, string, (viewers: Viewers) => unknown, string[]]>([
+    ["the viewing device", "chat", ({ view }) => view("phone"), ["desktop"]],
+    ["no declaration", "chat", () => {}, ["phone", "desktop"]],
+    [
+      "a hidden document",
+      "chat",
+      ({ view, declarations }) => declarations.replace(view("phone").connId, []),
+      ["phone", "desktop"],
+    ],
+    [
+      "another session",
+      "chat",
+      ({ view }) => view("phone", ["agent:research:other"]),
+      ["phone", "desktop"],
+    ],
+    [
+      "a closed connection",
+      "chat",
+      ({ view }) => (view("phone").socket = { readyState: 3 } as GatewayWsClient["socket"]),
+      ["phone", "desktop"],
+    ],
+    [
+      "an invalidated connection",
+      "chat",
+      ({ view }) => (view("phone").invalidated = true),
+      ["phone", "desktop"],
+    ],
+    [
+      "a disconnect",
+      "chat",
+      ({ view, declarations }) => declarations.unsubscribe(view("phone").connId),
+      ["phone", "desktop"],
+    ],
+    ["no device identity", "chat", ({ view }) => view(undefined), ["phone", "desktop"]],
+    ["a question", "question.requested", ({ view }) => view("phone"), ["phone", "desktop"]],
+  ])(
+    "suppresses only the device viewing a finished session (%s)",
+    async (_case, event, arrange, expected) => {
+      const scopes = ["operator.read", "operator.questions"];
+      setSubscriptions(makeSubscription("phone"), makeSubscription("desktop"));
+      setPaired(pairedOperator("phone", scopes), pairedOperator("desktop", scopes));
+      const viewers = createViewers();
+      arrange(viewers);
+
+      createEventWebPushDelivery(() => ({}), viewers.declarations).handleEvent(
+        event,
+        { state: "final", runId: "viewed-run", id: "question-1" },
+        researchContext,
+      );
+
+      await authorityCompleted.promise;
+      const sent = mocks.send.mock.calls.flatMap(([call]) =>
+        call.subscriptions.map(({ deviceId }: BoundWebPushSubscription) => deviceId),
+      );
+      expect(sent).toEqual(expected);
+    },
+  );
 
   it("does not treat injected transcript updates as agent completion", async () => {
     finishAgent(undefined, {

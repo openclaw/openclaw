@@ -91,6 +91,22 @@ function captureInline(facts: unknown) {
   return captured;
 }
 
+it("finishes settled admissions without traversing empty pending decisions", () => {
+  const admission = admissionFixture();
+  admission.port.postMessage({ kind: "native-settlement", settlement: { kind: "completed" } }, []);
+  const iterate = vi.spyOn(Set.prototype, Symbol.iterator);
+  try {
+    admission.finish();
+    admission.finish();
+    expect(iterate).not.toHaveBeenCalled();
+  } finally {
+    iterate.mockRestore();
+  }
+  expect(admission.settlement).toEqual({ kind: "completed" });
+  expect(admission.failure).toBeUndefined();
+  expect(() => admission.observeRequests(() => {})).toThrow("closed");
+});
+
 it("preserves nested finish order and error precedence on repeated calls", () => {
   const admission = createAdmission((_request, grant) => grant());
   const finish = admission.finish.bind(admission);
@@ -197,6 +213,53 @@ it.each([
   expect(observed).toEqual([{ stage: "transaction", facts: undefined }]);
   expect(admission).toMatchObject({ committed: undefined, settlement: undefined });
 });
+
+it.each(["grant", "preparation-fails", "closed", "revoked"] as const)(
+  "keeps asynchronous custody preparation pending until its final %s decision",
+  async (ending) => {
+    const prepared = createDeferredCore();
+    let current = true;
+    const effect = vi.fn();
+    const admission = createAdmission(
+      (_request, grant) => {
+        if (!current) {
+          throw new Error("Original owner changed");
+        }
+        grant(effect);
+      },
+      undefined,
+      async () => {
+        await prepared.promise;
+      },
+    );
+    const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+    admission.port.postMessage({ stage: "transaction", decision: decision.buffer }, []);
+    admission.service();
+    try {
+      expect(Atomics.load(decision, 0)).toBe(0);
+      expect(effect).not.toHaveBeenCalled();
+      if (ending === "closed") {
+        admission.finish();
+      } else if (ending === "revoked") {
+        current = false;
+      }
+      if (ending === "preparation-fails") {
+        prepared.reject(new Error("Physical owner changed"));
+      } else {
+        prepared.resolve();
+      }
+      await Atomics.waitAsync(decision, 0, 0, 10_000).value;
+      expect(Atomics.load(decision, 0)).toBe(ending === "grant" ? 1 : 2);
+      expect(effect).toHaveBeenCalledTimes(ending === "grant" ? 1 : 0);
+      if (ending !== "grant") {
+        expect(admission.failure).toBeInstanceOf(Error);
+      }
+    } finally {
+      prepared.resolve();
+      admission.finish();
+    }
+  },
+);
 
 it("rechecks database ownership after a worker request crosses the message port", () => {
   const root = tempDirs.make("openclaw-worker-admission-maintenance-");
