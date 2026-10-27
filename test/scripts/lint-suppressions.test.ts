@@ -292,6 +292,8 @@ describe("production lint suppressions", () => {
         "src/gateway/session-event-projection.ts|typescript/prefer-for-of|1",
         // Event field ordering sorts only the freshly filtered, audience-private key array.
         "src/gateway/session-event-projection.ts|unicorn/no-array-sort|1",
+        // Sharing keys sort the private alias spread without copying it a second time.
+        "src/gateway/session-sharing-read.ts|unicorn/no-array-sort|1",
         "src/gateway/session-swarm-summary.ts|unicorn/no-array-sort|2",
         // Node worker ports do not accept a browser target origin.
         "src/gateway/system-ca-warmup.worker.ts|unicorn/require-post-message-target-origin|1",
