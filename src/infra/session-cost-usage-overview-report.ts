@@ -4,7 +4,7 @@ import {
   type UsageModelCohortQuery,
   type UsageModelCohorts,
 } from "../shared/usage-model-cohorts.js";
-import { buildUsageOverview } from "../shared/usage-overview.js";
+import { buildUsageOverview, compactUsageOverviewSession } from "../shared/usage-overview.js";
 import type {
   SessionUsageEntry,
   UsageOverviewOptions,
@@ -36,7 +36,7 @@ export type UsageOverviewTask =
   | { kind: "prepare"; input: UsageOverviewReportInput }
   | {
       kind: "cohorts";
-      input: UsageModelCohortQuery;
+      input: UsageModelCohortQuery & { rows: SessionUsageEntry[] };
       options: UsageOverviewOptions;
       dayBucket: UsageDailyBucket;
     };
@@ -65,6 +65,30 @@ function expandUsageOverviewRows(input: UsageOverviewReportInput): SessionUsageE
   });
 }
 
+/** Decode only the requested page from the snapshot; never retain another population. */
+export function readUsageOverviewPage(input: UsageOverviewReportInput): SessionUsageEntry[] {
+  const rows = input.rows.map(({ usageRef: _usageRef, ...row }) => row);
+  input.packed.forEach(({ batch, refreshing }, batchIndex) => {
+    const positions: number[] = [];
+    const indices: number[] = [];
+    input.rows.forEach(({ usageRef }, index) => {
+      if (usageRef?.[0] === batchIndex) {
+        positions.push(index);
+        indices.push(usageRef[1]);
+      }
+    });
+    const summaries = readUsageOverviewBatch(batch, refreshing, indices);
+    positions.forEach((position, index) => {
+      const row = rows[position]!;
+      const usage = summaries[index]!;
+      if (usage) usage.sessionId = row.sessionId;
+      row.usage = usage;
+    });
+  });
+  const days = new Set<string>();
+  return rows.map((row) => compactUsageOverviewSession(row, days));
+}
+
 export function buildUsageOverviewReport(input: UsageOverviewReportInput): UsageOverviewSlice {
   return buildUsageOverview({
     rows: expandUsageOverviewRows(input),
@@ -85,7 +109,7 @@ export function runUsageOverviewTask(task: UsageOverviewTask): UsageOverviewTask
     kind: "report",
     value:
       task.kind === "cohorts"
-        ? buildUsageModelCohortReport(task.input, task.options, task.dayBucket)
+        ? buildUsageModelCohortReport(task.input, task.options, task.dayBucket, task.input.rows)
         : buildUsageOverviewReport(task.input),
   };
 }

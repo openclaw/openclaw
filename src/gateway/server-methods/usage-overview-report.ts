@@ -1,6 +1,8 @@
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
+import { readUsageOverviewSortValue } from "../../infra/session-cost-usage-overview-batch.js";
 import {
   buildUsageOverviewReport,
+  readUsageOverviewPage,
   type UsageOverviewPackedUsage,
   type UsageOverviewReportInput,
   type UsageOverviewTask,
@@ -13,6 +15,7 @@ import {
   selectUsageModelCohorts,
   type UsageModelCohorts,
 } from "../../shared/usage-model-cohorts.js";
+import { usageOverviewPage } from "../../shared/usage-table-page.js";
 import type {
   SessionUsageEntry,
   UsageOverviewOptions,
@@ -158,23 +161,54 @@ export function createUsageOverviewReporter(params: {
           };
         } else {
           const prepared = usage.prepared;
-          const query =
+          const selection =
             prepared?.members === members
               ? selectUsageModelCohorts(prepared.cohorts, options)
               : undefined;
-          const task: UsageOverviewTask = query
-            ? { kind: "cohorts", input: query, options, dayBucket }
-            : {
-                kind: "report",
-                input: usageOverviewReportInput({ rows, usage, options, dayBucket }),
-              };
+          let task: UsageOverviewTask;
+          if (selection) {
+            const { indices, ...query } = selection;
+            const page = usageOverviewPage(
+              indices.map((index) => rows[index]!),
+              options,
+              options.sort && options.sort !== "recent"
+                ? (row) => {
+                    const ref = usage.refs.get(usageOverviewRowKey(row));
+                    return ref
+                      ? readUsageOverviewSortValue(
+                          usage.packed[ref[0]]!.batch,
+                          ref[1],
+                          options.sort,
+                        )
+                      : undefined;
+                  }
+                : undefined,
+            );
+            task = {
+              kind: "cohorts",
+              input: {
+                ...query,
+                rows: readUsageOverviewPage(
+                  usageOverviewReportInput({ rows: page, usage, options, dayBucket }),
+                ),
+              },
+              options,
+              dayBucket,
+            };
+          } else {
+            task = {
+              kind: "report",
+              input: usageOverviewReportInput({ rows, usage, options, dayBucket }),
+            };
+          }
           report = {
             members,
             rows,
-            cohort: Boolean(query),
+            cohort: Boolean(selection),
             slice: pool
               .run(task, {
                 signal: getAsyncWorkSignal(),
+                // Admission conservatively charges the request snapshot retained until completion.
                 inputBytes: usageOverviewInputBytes(usage, rows.length),
               })
               .then((result) => {

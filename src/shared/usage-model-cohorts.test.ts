@@ -1,13 +1,27 @@
 import { expect, it } from "vitest";
+import {
+  createUsageOverviewBatchBuilder,
+  readUsageOverviewBatch,
+  readUsageOverviewSortValue,
+} from "../infra/session-cost-usage-overview-batch.js";
+import {
+  readUsageOverviewPage,
+  runUsageOverviewTask,
+  type UsageOverviewReportInput,
+} from "../infra/session-cost-usage-overview-report.js";
+import { createUsageOverviewFold } from "../infra/session-cost-usage-quarters-fold.js";
+import { createUsageQuarterRange } from "../infra/session-cost-usage-quarters.js";
 import { createEmptyCostUsageTotals } from "../infra/session-cost-usage-totals.js";
 import type { SessionCostSummary, UsageDailyBucket } from "../infra/session-cost-usage.types.js";
+import { createUsageCalendar } from "./usage-calendar.js";
 import {
   buildUsageModelCohortReport,
   prepareUsageModelCohorts,
   selectUsageModelCohorts,
   type UsageModelCohorts,
 } from "./usage-model-cohorts.js";
-import { buildUsageOverview } from "./usage-overview.js";
+import { buildUsageOverview, compactUsageOverviewSession } from "./usage-overview.js";
+import { usageOverviewPage } from "./usage-table-page.js";
 import type { SessionUsageEntry, UsageOverviewOptions } from "./usage-types.js";
 
 const utc: UsageDailyBucket = { mode: "utc-offset", utcOffsetMinutes: 0 };
@@ -71,13 +85,19 @@ function row(
 }
 
 function report(
+  rows: SessionUsageEntry[],
   prepared: UsageModelCohorts,
   options: UsageOverviewOptions = {},
   dayBucket: UsageDailyBucket = utc,
 ) {
   const selected = selectUsageModelCohorts(prepared, options);
   if (!selected) throw new Error("Expected model-only cohort query");
-  return buildUsageModelCohortReport(selected, options, dayBucket);
+  const days = new Set<string>();
+  const page = usageOverviewPage(
+    selected.indices.map((index) => rows[index]!),
+    options,
+  ).map((entry) => compactUsageOverviewSession(entry, days));
+  return buildUsageModelCohortReport(selected, options, dayBucket, page);
 }
 
 it("counts whole multi-model sessions once across substring and alternative model filters", () => {
@@ -95,7 +115,7 @@ it("counts whole multi-model sessions once across substring and alternative mode
     ["model:missing", 0, 0],
     ["", 150, 3],
   ] as const) {
-    const result = report(prepared, { query });
+    const result = report(rows, prepared, { query });
     expect(result.totals.totalTokens).toBe(expectedTokens);
     expect(result.overview.selectedSessionCount).toBe(expectedSessions);
     expect(result.overview.filterOptions.model).toEqual(["Alpha", "Beta"]);
@@ -138,7 +158,7 @@ it("preserves tied order and first-selected metadata when cohorts interleave", (
   rows[2]!.createdActor = { type: "human", source: "channel", id: "first" };
   rows[3]!.createdActor = { type: "human", source: "channel", id: "later" };
   const options = { query: "model:A model:B", sort: "tokens", limit: 2 } as const;
-  const result = report(prepareUsageModelCohorts(rows, utc), options);
+  const result = report(rows, prepareUsageModelCohorts(rows, utc), options);
   expect(result.sessions.map(({ key }) => key)).toEqual(["a-first", "b"]);
   expect(result.aggregates.tools.tools.map(({ name }) => name)).toEqual(["first", "later"]);
   expect(result).toEqual(buildUsageOverview({ rows, options, dayBucket: utc }));
@@ -170,7 +190,7 @@ it("merges daily, hourly, creator, latency and unavailable-cost facets without c
         limit: 2,
         offset: 1,
       } as const;
-      const result = report(prepared, options, dayBucket);
+      const result = report(rows, prepared, options, dayBucket);
       expect(result.totals.totalTokens).toBe(50);
       expect(result.totals.usageReport).toEqual({ state: "unavailable" });
       expect(result.aggregates.latency?.avgMs).toBe(20);
@@ -197,25 +217,114 @@ it("leaves day, hour, session, recent and non-model predicates on the general pa
     expect(selectUsageModelCohorts(prepared, options)).toBeUndefined();
 });
 
-it("does not revisit original session usage when a prepared model filter changes", () => {
+it("reads only the returned page's usage after preparing a model filter", () => {
   const rows = Array.from({ length: 288 }, (_, index) =>
     row(`row-${index}`, { [`model-${index % 24}`]: 2 }),
   );
-  let reads = 0;
+  const reads = new Set<string>();
   for (const entry of rows) {
     const usage = entry.usage;
     Object.defineProperty(entry, "usage", {
       get: () => {
-        reads++;
+        reads.add(entry.key);
         return usage;
       },
     });
   }
   const prepared = prepareUsageModelCohorts(rows, utc);
-  expect(reads).toBeGreaterThan(0);
-  reads = 0;
-  const result = report(prepared, { query: "model:model-23", limit: 5 });
+  expect(reads.size).toBeGreaterThan(0);
+  reads.clear();
+  const result = report(rows, prepared, { query: "model:model-23", limit: 5 });
   expect(result.totals.totalTokens).toBe(24);
   expect(result.sessions).toHaveLength(5);
-  expect(reads).toBe(0);
+  expect(reads).toEqual(new Set(result.sessions.map((entry) => entry.key)));
+  reads.clear();
+  expect(report(rows, prepared, { limit: 0 }).sessions).toEqual([]);
+  expect(reads.size).toBe(0);
+  const largerPage = report(rows, prepared, { limit: 80, offset: 1 });
+  expect(largerPage.sessions).toHaveLength(80);
+  expect(largerPage.sessions[0]?.key).toBe("row-1");
+  expect(reads).toEqual(new Set(largerPage.sessions.map((entry) => entry.key)));
+});
+
+it("sorts packed cohort pages without losing sparse, stale, or missing-cost metadata", () => {
+  const source: SessionUsageEntry[] = [
+    row("a-first", { Alpha: 10 }),
+    row("b", { Beta: 20 }),
+    row(
+      "a-last",
+      { Alpha: 30 },
+      {
+        usageReport: { state: "unavailable" },
+        missingCostEntries: 1,
+        missingCostByModel: { "synthetic/Alpha": 1 },
+      },
+    ),
+    { key: "pending", model: "Alpha", usage: null, computing: true },
+  ];
+  const batchBuilder = createUsageOverviewBatchBuilder();
+  const fold = createUsageOverviewFold(
+    createUsageQuarterRange({ calendar: createUsageCalendar(utc) }),
+  );
+  source.forEach((entry, index) => {
+    const usage = entry.usage;
+    if (!usage) {
+      batchBuilder.addEmpty();
+      return;
+    }
+    fold.addInstance({ computedAt: 30, ...(index === 2 ? { staleSince: 20 } : {}) });
+    fold.addUntimestamped({
+      totals: usage,
+      messageCounts: usage.messageCounts!,
+      models: usage.modelUsage!,
+      tools: usage.toolUsage!.tools,
+    });
+    fold.finishInto(batchBuilder);
+  });
+  const batch = batchBuilder.finish();
+  const input: UsageOverviewReportInput = {
+    packed: [{ batch, refreshing: true }],
+    rows: source.map((entry, index): UsageOverviewReportInput["rows"][number] => ({
+      ...entry,
+      usage: null,
+      usageRef: [0, index],
+    })),
+    options: {},
+    dayBucket: utc,
+  };
+  const prepared = runUsageOverviewTask({ kind: "prepare", input });
+  if (prepared.kind !== "prepared") throw new Error("Expected prepared cohorts");
+  const selectedUsage = readUsageOverviewBatch(batch, true, [2, 3, 0]);
+  expect(selectedUsage.map((usage) => usage?.totalTokens ?? null)).toEqual([30, null, 10]);
+  expect(selectedUsage[0]).toMatchObject({
+    computedAt: 30,
+    staleSince: 20,
+    refreshing: true,
+    usageReport: { state: "unavailable" },
+    missingCostEntries: 1,
+    missingCostByModel: { "synthetic/Alpha": 1 },
+  });
+  const fullUsage = readUsageOverviewBatch(batch, true);
+  const fullRows = source.map((entry, index) => ({ ...entry, usage: fullUsage[index]! }));
+  for (const sort of ["tokens", "cost", "messages", "errors", "recent"] as const) {
+    for (const sortDirection of ["asc", "desc"] as const) {
+      const options = { query: "model:Alpha", sort, sortDirection, limit: 2, offset: 1 };
+      const selection = selectUsageModelCohorts(prepared.value, options)!;
+      const { indices, ...query } = selection;
+      const pageRows = usageOverviewPage(
+        indices.map((index) => input.rows[index]!),
+        options,
+        (entry) => readUsageOverviewSortValue(batch, input.rows.indexOf(entry), sort),
+      );
+      const page = readUsageOverviewPage({ ...input, options, rows: pageRows });
+      const result = runUsageOverviewTask({
+        kind: "cohorts",
+        input: { ...query, rows: page },
+        options,
+        dayBucket: utc,
+      });
+      if (result.kind !== "report") throw new Error("Expected cohort report");
+      expect(result.value).toEqual(buildUsageOverview({ rows: fullRows, options, dayBucket: utc }));
+    }
+  }
 });

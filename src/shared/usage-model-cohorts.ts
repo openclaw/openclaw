@@ -6,12 +6,7 @@ import {
   usageDailyModelIdentity,
   usageModelIdentity,
 } from "./usage-aggregates.js";
-import {
-  buildUsageOverview,
-  compactUsageOverviewSession,
-  getSessionModels,
-  selectUsageOverviewPage,
-} from "./usage-overview.js";
+import { buildUsageOverview, getSessionModels } from "./usage-overview.js";
 import { extractQueryTerms } from "./usage-query.js";
 import type {
   SessionUsageEntry,
@@ -32,14 +27,13 @@ type Cohort = {
 
 /** Retained only by the existing scoped, revision-bound Usage snapshot cache. */
 export type UsageModelCohorts = {
-  rows: SessionUsageEntry[];
+  sessionCount: number;
   cohorts: Cohort[];
   filterOptions: SessionsUsageOverview["filterOptions"];
 };
 
 export type UsageModelCohortQuery = {
   cohorts: Cohort[];
-  rows: SessionUsageEntry[];
   filterOptions: SessionsUsageOverview["filterOptions"];
   unfilteredSessionCount: number;
   order: AggregateOrder;
@@ -100,9 +94,8 @@ export function prepareUsageModelCohorts(
       ...new Set(cohorts.flatMap(({ report }) => report.overview.filterOptions[key])),
     ].toSorted();
   }
-  const days = new Set<string>();
   return {
-    rows: rows.map((row) => compactUsageOverviewSession(row, days)),
+    sessionCount: rows.length,
     cohorts,
     filterOptions,
   };
@@ -112,7 +105,7 @@ export function prepareUsageModelCohorts(
 export function selectUsageModelCohorts(
   prepared: UsageModelCohorts,
   options: UsageOverviewOptions,
-): UsageModelCohortQuery | undefined {
+): (UsageModelCohortQuery & { indices: number[] }) | undefined {
   if (
     options.selectedDays?.length ||
     options.selectedHours?.length ||
@@ -147,9 +140,9 @@ export function selectUsageModelCohorts(
   }
   return {
     cohorts: selected,
-    rows: indices.map((index) => prepared.rows[index]!),
+    indices,
     filterOptions: prepared.filterOptions,
-    unfilteredSessionCount: prepared.rows.length,
+    unfilteredSessionCount: prepared.sessionCount,
     order,
   };
 }
@@ -197,6 +190,7 @@ export function buildUsageModelCohortReport(
   query: UsageModelCohortQuery,
   options: UsageOverviewOptions,
   dayBucket: UsageDailyBucket,
+  page: SessionUsageEntry[],
 ): UsageOverviewSlice {
   const accumulator = createUsageAggregateAccumulator();
   const overview = buildUsageOverview({ rows: [], options, dayBucket }).overview;
@@ -268,10 +262,6 @@ export function buildUsageModelCohortReport(
     totals: accumulator.totals,
     aggregates,
     overview,
-    sessions: selectUsageOverviewPage({
-      rows: query.rows,
-      options: { ...options, query: "" },
-      dayBucket,
-    }),
+    sessions: page,
   };
 }

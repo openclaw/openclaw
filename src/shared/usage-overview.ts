@@ -3,18 +3,21 @@ import {
   addCostUsageTotals,
   createEmptyCostUsageTotals,
 } from "../infra/session-cost-usage-totals.js";
-import type { CostUsageTotals, UsageDailyBucket } from "../infra/session-cost-usage.types.js";
+import type { UsageDailyBucket } from "../infra/session-cost-usage.types.js";
 import { createUsageAggregateAccumulator } from "./usage-aggregates.js";
 import { createUsageCalendar, type UsageCalendar } from "./usage-calendar.js";
 import { extractQueryTerms } from "./usage-query.js";
+import {
+  sessionRowTotals,
+  USAGE_OVERVIEW_PAGE_SIZE,
+  usageOverviewPage,
+} from "./usage-table-page.js";
 import type {
   SessionUsageEntry,
   SessionsUsageOverview,
   UsageOverviewOptions,
   UsageOverviewSlice,
 } from "./usage-types.js";
-
-const PAGE_SIZE = 50;
 
 function matchesGlob(value: string, pattern: string): boolean {
   const text = value.toLowerCase();
@@ -367,58 +370,6 @@ function touchesHours(session: SessionUsageEntry, hours: Set<number>, calendar: 
   return touches;
 }
 
-function sessionRowTotals(session: SessionUsageEntry, days: ReadonlySet<string>): CostUsageTotals {
-  const usage = session.usage;
-  if (!days.size || !usage?.dailyBreakdown?.length) {
-    return usage ?? createEmptyCostUsageTotals();
-  }
-  const totals = createEmptyCostUsageTotals();
-  for (const day of usage.dailyBreakdown) {
-    if (days.has(day.date)) {
-      addCostUsageTotals(totals, { ...day, totalTokens: day.tokens, totalCost: day.cost });
-    }
-  }
-  return totals;
-}
-
-function compareUsageOverviewSessions(options: UsageOverviewOptions) {
-  if (options.recentKeys) {
-    const recentKeys = options.recentKeys;
-    return (a: SessionUsageEntry, b: SessionUsageEntry) =>
-      recentKeys.indexOf(a.key) - recentKeys.indexOf(b.key);
-  }
-  const days = new Set(options.selectedDays);
-  const rowTotals = new Map<SessionUsageEntry, ReturnType<typeof sessionRowTotals>>();
-  const totals = (entry: SessionUsageEntry) => {
-    let result = rowTotals.get(entry);
-    if (!result) {
-      result = sessionRowTotals(entry, days);
-      rowTotals.set(entry, result);
-    }
-    return result;
-  };
-  const value = (entry: SessionUsageEntry) => {
-    switch (options.sort) {
-      case "tokens":
-        return totals(entry).totalTokens;
-      case "cost":
-        return totals(entry).totalCost;
-      case "messages":
-        return entry.usage?.messageCounts?.total ?? 0;
-      case "errors":
-        return entry.usage?.messageCounts?.errors ?? 0;
-      default:
-        return entry.updatedAt ?? 0;
-    }
-  };
-  const direction = options.sortDirection === "asc" ? -1 : 1;
-  return (a: SessionUsageEntry, b: SessionUsageEntry) =>
-    direction *
-    (value(b) - value(a) ||
-      (b.updatedAt ?? 0) - (a.updatedAt ?? 0) ||
-      (a.label || a.key).localeCompare(b.label || b.key));
-}
-
 export function compactUsageOverviewSession(
   session: SessionUsageEntry,
   days: ReadonlySet<string>,
@@ -481,13 +432,6 @@ function selectUsageOverviewSessions(
   const recent = options.recentKeys === undefined ? undefined : new Set(options.recentKeys);
   const roster = recent ? matched.filter((session) => recent.has(session.key)) : matched;
   return { days, queried, matched, selected, scoped, roster };
-}
-
-function usageOverviewPage(roster: SessionUsageEntry[], options: UsageOverviewOptions) {
-  if (options.limit === 0) return [];
-  return roster
-    .toSorted(compareUsageOverviewSessions(options))
-    .slice(options.offset ?? 0, (options.offset ?? 0) + (options.limit ?? PAGE_SIZE));
 }
 
 /** Selects rows for context hydration without calculating the full report twice. */
@@ -589,7 +533,7 @@ export function buildUsageOverview(params: {
     tableSessionCount: matched.length,
     tableTotals: { tokens: 0, cost: 0, errors: 0 },
     offset: options.offset ?? 0,
-    limit: options.limit ?? PAGE_SIZE,
+    limit: options.limit ?? USAGE_OVERVIEW_PAGE_SIZE,
     queryWarnings: queried.warnings,
     hourTokens: Array.from({ length: 24 }, () => 0),
     weekdayTokens: Array.from({ length: 7 }, () => 0),
