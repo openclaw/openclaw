@@ -92,6 +92,8 @@ describe("Agents tools catalog read", () => {
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise);
     const view = await mountCatalog(read, "files");
+    const profileButton = () =>
+      view.container.querySelector<HTMLButtonElement>(".agent-tools-buttons button");
     expect(view.catalogCalls()).toHaveLength(0);
 
     view.setPanel("tools");
@@ -106,9 +108,7 @@ describe("Agents tools catalog read", () => {
     expect(
       view.container.querySelector('.settings-loading-skeleton[aria-busy="true"]'),
     ).not.toBeNull();
-    expect(
-      view.container.querySelector<HTMLButtonElement>(".agent-tools-buttons button")?.disabled,
-    ).toBe(true);
+    expect(profileButton()?.disabled).toBe(true);
     const identityHost = view.container.querySelector("openclaw-github-identity");
     expect(identityHost).not.toBeNull();
 
@@ -118,9 +118,7 @@ describe("Agents tools catalog read", () => {
         "Could not load runtime tool catalog. Showing built-in fallback list instead.",
       ),
     );
-    expect(
-      view.container.querySelector<HTMLButtonElement>(".agent-tools-buttons button")?.disabled,
-    ).toBe(false);
+    expect(profileButton()?.disabled).toBe(false);
     expect(view.container.querySelector(".agent-tools-group")).not.toBeNull();
     expect(view.container.querySelector("openclaw-github-identity")).toBe(identityHost);
 
@@ -147,9 +145,7 @@ describe("Agents tools catalog read", () => {
       expect(
         view.container.querySelector('.settings-loading-skeleton[aria-busy="true"]'),
       ).not.toBeNull();
-      expect(
-        view.container.querySelector<HTMLButtonElement>(".agent-tools-buttons button")?.disabled,
-      ).toBe(true);
+      expect(profileButton()?.disabled).toBe(true);
     });
     expect(view.container.querySelector("openclaw-github-identity")).toBe(identityHost);
     second.resolve(createReadToolCatalog("main", "read"));
