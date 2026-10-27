@@ -60,7 +60,7 @@ describe("resolveSlackEnterpriseUserTeamId", () => {
       .mockResolvedValueOnce({ ok: true, teams: [{ id: "T11111111" }] });
 
     expect(await resolveSlackEnterpriseUserTeamId({ cfg, userId })).toBe("T11111111");
-    expect(createClient).toHaveBeenCalledExactlyOnceWith("sending-fixture");
+    expect(createClient).toHaveBeenCalledExactlyOnceWith("sending-fixture", undefined, undefined);
     expect(usersInfo).toHaveBeenCalledExactlyOnceWith({ user: userId });
     expect(teamsList.mock.calls).toEqual([
       [{ limit: 1000, cursor: undefined }],
