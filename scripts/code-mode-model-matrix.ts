@@ -734,7 +734,7 @@ async function buildCellWaves(options: CodeModeMatrixOptions): Promise<MatrixCel
         model: row.model,
         task: parseTask(row.task),
         repetition: row.repetition,
-        firstMode: row.firstMode,
+        firstMode: row.firstMode === "direct" ? "direct" : pairedMode,
       };
     });
   } else {

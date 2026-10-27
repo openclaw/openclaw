@@ -39,8 +39,8 @@ it.each([
   ["preferred", false, false],
   ["capable", false, true],
   ["capable", true, false],
-  [null, false, true],
-  [null, true, false],
+  ["unflagged", false, true],
+  ["unflagged", true, false],
 ] as const)(
   "checks Gateway auto against selected tier %s, active=%s",
   (tier, active, engagement) => {
@@ -58,11 +58,11 @@ it.each([
 
 it.each([
   ["preferred", "preferred", true, true],
-  ["preferred", null, false, false],
+  ["preferred", "unflagged", false, false],
   ["preferred", "capable", false, false],
   ["preferred", "preferred", false, false],
   ["capable", "capable", false, true],
-  ["unflagged", null, false, true],
+  ["unflagged", "unflagged", false, true],
 ] as const)(
   "binds independent auto expectation %s to observed tier %s, active=%s",
   (expectedAutoTier, tier, active, engagement) => {
@@ -81,6 +81,7 @@ it.each([
 
 it.each([
   { modelCodeMode: undefined },
+  { modelCodeMode: null },
   { modelCodeMode: "unknown" },
   { modelProvider: undefined },
   { modelId: undefined },

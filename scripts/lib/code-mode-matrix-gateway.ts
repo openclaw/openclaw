@@ -116,7 +116,7 @@ export function parseGatewayMatrixActivationDiagnostic(line: string) {
     fallbackActive: value.fallbackActive,
     ...(typeof value.modelProvider === "string" ? { modelProvider: value.modelProvider } : {}),
     ...(typeof value.modelId === "string" ? { modelId: value.modelId } : {}),
-    ...(value.modelCodeMode === null ||
+    ...(value.modelCodeMode === "unflagged" ||
     value.modelCodeMode === "preferred" ||
     value.modelCodeMode === "capable"
       ? { modelCodeMode: value.modelCodeMode }
@@ -169,7 +169,7 @@ export function evaluateGatewayMatrixActivation(params: {
         (entry) =>
           (params.expectedEnabled !== "auto" ||
             params.expectedAutoTier === undefined ||
-            (entry.modelCodeMode ?? "unflagged") === params.expectedAutoTier) &&
+            entry.modelCodeMode === params.expectedAutoTier) &&
           entry.active ===
             (params.expectedEnabled === "auto"
               ? entry.modelCodeMode === "preferred"
@@ -1904,7 +1904,7 @@ export async function runGatewayMatrixCell(
     },
   };
   await write("evidence.json", {
-    codeModeConfigured: Object.hasOwn(cfg.tools ?? {}, "codeMode"),
+    codeModeConfigured: record(cfg) && record(cfg.tools) && Object.hasOwn(cfg.tools, "codeMode"),
     expectedAutoTier: params.expectedAutoTier ?? null,
     gateway,
     task,

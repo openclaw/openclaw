@@ -355,7 +355,7 @@ if (process.argv.includes("call")) {
     console.log("code-mode diagnostic " + JSON.stringify({ boundary: "activation", runId: responseId,
       active: fixtureData.autoTier ? fixtureData.autoTier === "preferred" : fixtureData.wrongActivation ? false : config.tools.codeMode.enabled,
       ...(fixtureData.autoTier ? { modelProvider: "openai", modelId: "gpt-5.6-sol",
-        modelCodeMode: fixtureData.autoTier === "unflagged" ? null : fixtureData.autoTier } : {}),
+        modelCodeMode: fixtureData.autoTier } : {}),
       toolsEnabled: true, toolsDisabled: false, rawRun: false, fallbackActive: false, allowlist: "unset" }));
     if (fixtureData.modelError) {
       emit({ role: "assistant", provider: "openai", model: "gpt-5.6-sol", stopReason: "error", errorMessage: fixtureData.modelError, content: [] });
@@ -397,11 +397,11 @@ if (process.argv.includes("call")) {
 `;
 
 it.each([
-  ["node", undefined, false, false],
-  ["quickjs", undefined, false, false],
-  ["node", "The model does not exist or is not available", false, false],
-  ["node", undefined, true, false],
-  ["node", undefined, true, true],
+  ["node", undefined, false, false, undefined],
+  ["quickjs", undefined, false, false, undefined],
+  ["node", "The model does not exist or is not available", false, false, undefined],
+  ["node", undefined, true, false, undefined],
+  ["node", undefined, true, true, undefined],
   ["node", undefined, false, false, "preferred"],
   ["node", undefined, false, false, "capable"],
   ["node", undefined, false, false, "unflagged"],
