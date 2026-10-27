@@ -129,6 +129,11 @@ baseline/baseline results are the same-host control. Record host load and judge
 noisy wall times with CPU and work counts. A clean median regression is at most
 5% with no worse p95; any 20% regression requires investigation.
 
+Use `--warm-cpu 1` or `--warm-cpu 4` to select one CPU rate for an ordinary warm
+run. Both models and RTT settings remain measured; for example, `--pairs 10
+--warm-cpu 1` records 120 filter observations plus 12 setup observations. The
+selector is rejected with the specialized smoke, cold, or attribution modes.
+
 Outputs include actual RPC latency/bytes, Gateway process and main-thread CPU,
 Chromium thread-tick task/script/layout/style CPU for non-navigation actions,
 whole-renderer process CPU,
@@ -178,6 +183,16 @@ The resource capture forces main-isolate GC after timing; worker heaps are cache
 samples with their original coverage and age, not forced-GC retained memory.
 This single triple screens cold backend behavior. It does not qualify browser
 readiness or establish repeated cold performance.
+
+For repeated fresh-process backend reads, use `--cold-backend --cold-pairs 20`.
+Each role seeds once and snapshots its synthetic state after its seed writers
+exit, before any compiled Gateway opens it. Between triples, all Gateway process
+trees stop before the snapshot is restored at the same absolute path; each role
+keeps its port and token. File bytes and symlink targets are checked after each
+restore. Every sample starts a fresh compiled process with the pristine report
+state, and output files retain the pair number. This does not flush the operating
+system's file cache or measure cold-storage I/O. Omitting `--cold-pairs` keeps the
+single-triple behavior; `--pairs` still controls only warm filter repetitions.
 
 For attribution, add `--diagnostic`. It runs only 1× at localhost and 100 ms RTT,
 prepares the normal page, runs an untraced model00/model01 pair, then traces

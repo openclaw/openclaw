@@ -2,8 +2,8 @@
 import assert from "node:assert/strict";
 import { execFileSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { closeSync, openSync, writeSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { closeSync, constants, openSync, writeSync } from "node:fs";
+import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -57,10 +57,12 @@ const { values } = parseArgs({
     ui: { type: "string" },
     out: { type: "string" },
     pairs: { type: "string", default: "20" },
+    "warm-cpu": { type: "string" },
     sessions: { type: "string", default: "12000" },
     smoke: { type: "boolean", default: false },
     cold: { type: "boolean", default: false },
     "cold-backend": { type: "boolean", default: false },
+    "cold-pairs": { type: "string" },
     diagnostic: { type: "boolean", default: false },
     structure: { type: "boolean", default: false },
     help: { type: "boolean", default: false },
@@ -68,7 +70,7 @@ const { values } = parseArgs({
 });
 if (values.help) {
   console.log(
-    "Usage: node --import ./scripts/tsx.mjs scripts/bench-usage-gateway.ts --base <checkout> --head <checkout> --ui <frozen-build> --out <new-directory> [--sessions 12000] [--pairs 20] [--smoke | --cold | --cold-backend | --diagnostic | --structure]",
+    "Usage: node --import ./scripts/tsx.mjs scripts/bench-usage-gateway.ts --base <checkout> --head <checkout> --ui <frozen-build> --out <new-directory> [--sessions 12000] [--pairs 20] [--warm-cpu 1|4] [--smoke | --cold | --cold-backend [--cold-pairs 20] | --diagnostic | --structure]",
   );
   process.exit(0);
 }
@@ -97,6 +99,21 @@ const helperHashes = async () =>
   );
 const pairs = Number(values.pairs);
 const population = Number(values.sessions);
+const warmCpu = values["warm-cpu"] === undefined ? undefined : Number(values["warm-cpu"]);
+if (warmCpu !== undefined) {
+  assert(values["warm-cpu"] === "1" || values["warm-cpu"] === "4", "--warm-cpu must be 1 or 4");
+  assert(
+    ![values.smoke, values.cold, values["cold-backend"], values.diagnostic, values.structure].some(
+      Boolean,
+    ),
+    "--warm-cpu only selects ordinary warm filter runs",
+  );
+}
+const coldPairs = values["cold-pairs"] === undefined ? undefined : Number(values["cold-pairs"]);
+if (coldPairs !== undefined) {
+  assert(values["cold-backend"], "--cold-pairs requires --cold-backend");
+  assert(Number.isInteger(coldPairs) && coldPairs > 0, "--cold-pairs must be positive");
+}
 assert(Number.isInteger(pairs) && pairs > 0);
 assert(Number.isInteger(population) && population > 0);
 assert(
@@ -131,6 +148,15 @@ type PageEntry = {
   finishStructure?: () => Promise<unknown>;
 };
 const owners: Owner[] = [];
+type ColdFixture = {
+  fixture: UsageBenchFixture;
+  token: string;
+  claim: Awaited<ReturnType<typeof acquireGatewayE2ePortBlock>>;
+  pristine: string;
+  identity: Awaited<ReturnType<typeof hashInstall>>;
+  available: boolean;
+};
+const coldFixtures = new Map<string, ColdFixture>();
 const fixtureTokens: string[] = [];
 const samples: Array<
   Record<string, unknown> & { browserResources?: ReturnType<typeof browserResources> }
@@ -196,11 +222,16 @@ async function inspectBuild(root: string) {
   return { root, source, entry, buildInfo, files, preloads, dist: await hashInstall(dist) };
 }
 
-async function start(root: string, role: string): Promise<Owner> {
-  const directory = path.join(out, role);
+async function start(root: string, role: string, coldPair?: number): Promise<Owner> {
+  const retained = coldFixtures.get(role);
+  if (retained) {
+    assert(retained.available, `${role} previous Gateway must drain before restoration`);
+    retained.available = false;
+  }
+  const directory = path.join(out, coldPair === undefined ? role : `${role}-${coldPair + 1}`);
   await mkdir(directory);
   const setup = path.join(directory, "setup.json");
-  const token = randomUUID();
+  const token = retained?.token ?? randomUUID();
   fixtureTokens.push(token);
   const log = openSync(path.join(directory, "gateway.log"), "wx");
   const output = [0, 1].map(() =>
@@ -224,8 +255,8 @@ async function start(root: string, role: string): Promise<Owner> {
     }
   };
   const abort = new AbortController();
-  let claim: Awaited<ReturnType<typeof acquireGatewayE2ePortBlock>> | undefined;
-  let fixture: UsageBenchFixture | undefined;
+  let claim: Awaited<ReturnType<typeof acquireGatewayE2ePortBlock>> | undefined = retained?.claim;
+  let fixture: UsageBenchFixture | undefined = retained?.fixture;
   let run: Promise<number> | undefined;
   const cleanup = async () => {
     abort.abort();
@@ -245,63 +276,115 @@ async function start(root: string, role: string): Promise<Owner> {
       if (joined) {
         try {
           closeLog();
-          if (fixture) {
+          const coldFixture = coldFixtures.get(role);
+          if (coldFixture) {
+            coldFixture.available = true;
+          } else if (fixture) {
             await rm(fixture.root, { recursive: true, force: true });
           }
         } finally {
-          await claim?.release();
+          if (!coldFixtures.has(role)) {
+            await claim?.release();
+          }
         }
       }
     }
   };
   try {
-    claim = await acquireGatewayE2ePortBlock();
-    await writeFile(setup, JSON.stringify({ uiRoot: ui, sessions: population, port: claim.port }));
-    const seeded = Promise.withResolvers<UsageBenchFixture>();
-    const seedStarted = performance.now();
-    run = runManagedCommand({
-      bin: process.execPath,
-      cwd: path.dirname(tooling),
-      args: [
-        "--import",
-        path.join(tooling, "tsx.mjs"),
-        path.join(tooling, "lib/usage-bench-child.ts"),
+    let seedMs = 0;
+    if (retained) {
+      // This root is only the owned synthetic fixture. Absolute config paths stay unchanged.
+      await rm(retained.fixture.root, { recursive: true, force: true });
+      await cp(retained.pristine, retained.fixture.root, {
+        recursive: true,
+        preserveTimestamps: true,
+        verbatimSymlinks: true,
+        errorOnExist: true,
+        force: false,
+        mode: constants.COPYFILE_FICLONE,
+      });
+      assert.deepEqual(await hashInstall(retained.fixture.root), retained.identity);
+    } else {
+      claim = await acquireGatewayE2ePortBlock();
+      await writeFile(
         setup,
-      ],
-      env: {
-        ...createGatewayBenchEnv(directory, "", { startupTrace: false }),
-        TMPDIR: directory,
-        NODE_DISABLE_COMPILE_CACHE: "1",
-        OPENCLAW_USAGE_BENCH_TOKEN: token,
-      },
-      stdio: ["ignore", "pipe", "pipe", "ipc"],
-      timeoutMs: 30 * 60_000,
-      signal: abort.signal,
-      requireProcessTreeExit: true,
-      onReady(child) {
-        child.stdout!.on("data", output[0]!.write);
-        child.stderr!.on("data", output[1]!.write);
-        child.on("message", (message) => {
-          if (
-            typeof message === "object" &&
-            message !== null &&
-            "channel" in message &&
-            message.channel === "usage-volume-fixture" &&
-            "action" in message &&
-            message.action === "seeded"
-          ) {
-            seeded.resolve(message as UsageBenchFixture);
-          }
+        JSON.stringify({ uiRoot: ui, sessions: population, port: claim.port }),
+      );
+      const seeded = Promise.withResolvers<UsageBenchFixture>();
+      const seedStarted = performance.now();
+      run = runManagedCommand({
+        bin: process.execPath,
+        cwd: path.dirname(tooling),
+        args: [
+          "--import",
+          path.join(tooling, "tsx.mjs"),
+          path.join(tooling, "lib/usage-bench-child.ts"),
+          setup,
+        ],
+        env: {
+          ...createGatewayBenchEnv(directory, "", { startupTrace: false }),
+          TMPDIR: directory,
+          NODE_DISABLE_COMPILE_CACHE: "1",
+          OPENCLAW_USAGE_BENCH_TOKEN: token,
+        },
+        stdio: ["ignore", "pipe", "pipe", "ipc"],
+        timeoutMs: 30 * 60_000,
+        signal: abort.signal,
+        requireProcessTreeExit: true,
+        onReady(child) {
+          child.stdout!.on("data", output[0]!.write);
+          child.stderr!.on("data", output[1]!.write);
+          child.on("message", (message) => {
+            if (
+              typeof message === "object" &&
+              message !== null &&
+              "channel" in message &&
+              message.channel === "usage-volume-fixture" &&
+              "action" in message &&
+              message.action === "seeded"
+            ) {
+              seeded.resolve(message as UsageBenchFixture);
+            }
+          });
+        },
+      });
+      void run.then(
+        (code) => seeded.reject(new Error(`${role} seed exited before handoff: ${code}`)),
+        seeded.reject,
+      );
+      fixture = await seeded.promise;
+      assert.equal(await run, 0, `${role} seed process and writers joined`);
+      seedMs = performance.now() - seedStarted;
+      if (coldPair !== undefined) {
+        const pristine = path.join(out, `${role}-pristine`);
+        const identity = await hashInstall(fixture.root);
+        coldFixtures.set(role, { fixture, token, claim, pristine, identity, available: false });
+        // Seed writers have joined; no compiled Gateway has opened these files yet.
+        await cp(fixture.root, pristine, {
+          recursive: true,
+          preserveTimestamps: true,
+          verbatimSymlinks: true,
+          errorOnExist: true,
+          force: false,
+          mode: constants.COPYFILE_FICLONE,
         });
-      },
-    });
-    void run.then(
-      (code) => seeded.reject(new Error(`${role} seed exited before handoff: ${code}`)),
-      seeded.reject,
-    );
-    fixture = await seeded.promise;
-    assert.equal(await run, 0, `${role} seed process and writers joined`);
-    const seedMs = performance.now() - seedStarted;
+        assert.deepEqual(await hashInstall(pristine), identity);
+        await writeFile(
+          path.join(out, `${role}-pristine.json`),
+          JSON.stringify(
+            {
+              root: fixture.root,
+              pristine,
+              identity,
+              seedMs,
+            },
+            null,
+            2,
+          ),
+        );
+      }
+    }
+    assert(fixture && claim);
     await writeFile(path.join(directory, "fixture.json"), JSON.stringify(fixture, null, 2));
     const entry = buildRoots.get(root)!.entry;
     const stopPreload = pathToFileURL(
@@ -835,126 +918,135 @@ try {
     assert.equal(Intl.DateTimeFormat().resolvedOptions().timeZone, "UTC");
     assert.equal(new Date().getTimezoneOffset(), 0);
   }
-  for (const [role, root] of [
-    ["base-a", base],
-    ["head", head],
-    ["base-b", base],
-  ] as const) {
-    owners.push(await start(root, role));
-  }
-  if (values["cold-backend"]) {
-    const [
-      { GatewayClient },
-      { generateStoredDeviceIdentity },
-      { requestSessionUsage },
-      { DEFAULT_USAGE_SESSION_SORT },
-    ] = await Promise.all([
-      import("../src/gateway/client.ts"),
-      import("../src/infra/device-identity-material.ts"),
-      import("../ui/src/lib/sessions/usage.ts"),
-      import("../ui/src/pages/usage/helpers.ts"),
-    ]);
-    for (const owner of owners) {
-      const url = `ws://127.0.0.1:${owner.ready.port}`;
-      const connected = Promise.withResolvers<void>();
-      const connectionTimer = setTimeout(
-        () => connected.reject(new Error(`${owner.role} cold client connection timed out`)),
-        30_000,
-      );
-      const peer = new GatewayClient({
-        url,
-        origin: `http://127.0.0.1:${owner.ready.port}`,
-        token: owner.ready.token,
-        clientName: "openclaw-control-ui",
-        mode: "webchat",
-        platform: "MacIntel",
-        // Match Control UI scopes; the ephemeral device never uses saved credentials.
-        scopes: [
-          "operator.admin",
-          "operator.read",
-          "operator.write",
-          "operator.approvals",
-          "operator.questions",
-          "operator.pairing",
-        ],
-        deviceIdentity: generateStoredDeviceIdentity(),
-        deviceAuthScope: gatewayOriginScope(url),
-        sharedStateMode: "read-only",
-        requestTimeoutMs: 60_000,
-        onHelloOk: () => connected.resolve(),
-        onConnectError: connected.reject,
-      });
-      try {
-        peer.start();
-        await connected.promise;
-        clearTimeout(connectionTimer);
-        assert.deepEqual(await owner.snapshot(), [], "No Usage aggregation before the first RPC");
-        const query = {
-          startDate: owner.ready.startDate,
-          endDate: owner.ready.endDate,
-          scope: "family" as const,
-          timeZone: "local" as const,
-          ...DEFAULT_USAGE_SESSION_SORT,
-        };
-        const before = await readGatewayCpuUsage(owner.child, { includeWorkers: true });
-        const started = performance.now();
-        const requests: Array<{ method: string; params: unknown }> = [];
-        const response = await requestSessionUsage(
-          {
-            request<T>(
-              method: string,
-              params: unknown,
-              options?: Parameters<typeof peer.request>[2],
-            ) {
-              requests.push({ method, params });
-              return peer.request<T>(method, params, options);
-            },
-          },
-          query,
-          {
-            projection: "overview",
-            signal: AbortSignal.timeout(60_000),
-          },
+  for (let coldPair = 0; coldPair < (coldPairs ?? 1); coldPair++) {
+    for (const [role, root] of [
+      ["base-a", base],
+      ["head", head],
+      ["base-b", base],
+    ] as const) {
+      owners.push(await start(root, role, coldPairs === undefined ? undefined : coldPair));
+    }
+    if (values["cold-backend"]) {
+      const [
+        { GatewayClient },
+        { generateStoredDeviceIdentity },
+        { requestSessionUsage },
+        { DEFAULT_USAGE_SESSION_SORT },
+      ] = await Promise.all([
+        import("../src/gateway/client.ts"),
+        import("../src/infra/device-identity-material.ts"),
+        import("../ui/src/lib/sessions/usage.ts"),
+        import("../ui/src/pages/usage/helpers.ts"),
+      ]);
+      for (const owner of owners) {
+        const url = `ws://127.0.0.1:${owner.ready.port}`;
+        const connected = Promise.withResolvers<void>();
+        const connectionTimer = setTimeout(
+          () => connected.reject(new Error(`${owner.role} cold client connection timed out`)),
+          30_000,
         );
-        const finished = performance.now();
-        const after = await readGatewayCpuUsage(owner.child, { includeWorkers: true });
-        assert.equal(requests.length, 1, "Exactly one cold Usage RPC");
-        assert.equal(response.partial, undefined, "Complete first full-range response");
-        assert.equal(response.overview?.total, population);
-        assert.equal(response.totals.totalTokens, owner.ready.allTokens);
-        const dispatches = await owner.snapshot();
-        assert(dispatches.length > 0, "First request aggregated the cold snapshot");
-        const resourcesFile = `${owner.role}-cold-backend-resources.json`;
-        await writeFile(
-          path.join(out, resourcesFile),
-          JSON.stringify(
-            await readGatewayResources(owner.child, {
-              includeWorkers: true,
-              collectGarbage: true,
-            }),
-            null,
-            2,
-          ),
-        );
-        samples.push({
-          role: owner.role,
-          phase: "first-full-range-rpc",
-          cpu: 1,
-          rtt: 0,
-          query,
-          requests,
-          wallMs: finished - started,
-          actionInterval: { startedMs: started, finishedMs: finished },
-          gatewayCpu: measureGatewayCpuUsage(before, after),
-          gatewayCpuSnapshots: { before, after },
-          dispatches,
-          response,
-          resourcesFile,
-          load: os.loadavg(),
+        const peer = new GatewayClient({
+          url,
+          origin: `http://127.0.0.1:${owner.ready.port}`,
+          token: owner.ready.token,
+          clientName: "openclaw-control-ui",
+          mode: "webchat",
+          platform: "MacIntel",
+          // Match Control UI scopes; the ephemeral device never uses saved credentials.
+          scopes: [
+            "operator.admin",
+            "operator.read",
+            "operator.write",
+            "operator.approvals",
+            "operator.questions",
+            "operator.pairing",
+          ],
+          deviceIdentity: generateStoredDeviceIdentity(),
+          deviceAuthScope: gatewayOriginScope(url),
+          sharedStateMode: "read-only",
+          requestTimeoutMs: 60_000,
+          onHelloOk: () => connected.resolve(),
+          onConnectError: connected.reject,
         });
-      } finally {
-        clearTimeout(connectionTimer);
-        await peer.stopAndWait();
+        try {
+          peer.start();
+          await connected.promise;
+          clearTimeout(connectionTimer);
+          assert.deepEqual(await owner.snapshot(), [], "No Usage aggregation before the first RPC");
+          const query = {
+            startDate: owner.ready.startDate,
+            endDate: owner.ready.endDate,
+            scope: "family" as const,
+            timeZone: "local" as const,
+            ...DEFAULT_USAGE_SESSION_SORT,
+          };
+          const before = await readGatewayCpuUsage(owner.child, { includeWorkers: true });
+          const started = performance.now();
+          const requests: Array<{ method: string; params: unknown }> = [];
+          const response = await requestSessionUsage(
+            {
+              request<T>(
+                method: string,
+                params: unknown,
+                options?: Parameters<typeof peer.request>[2],
+              ) {
+                requests.push({ method, params });
+                return peer.request<T>(method, params, options);
+              },
+            },
+            query,
+            {
+              projection: "overview",
+              signal: AbortSignal.timeout(60_000),
+            },
+          );
+          const finished = performance.now();
+          const after = await readGatewayCpuUsage(owner.child, { includeWorkers: true });
+          assert.equal(requests.length, 1, "Exactly one cold Usage RPC");
+          assert.equal(response.partial, undefined, "Complete first full-range response");
+          assert.equal(response.overview?.total, population);
+          assert.equal(response.totals.totalTokens, owner.ready.allTokens);
+          const dispatches = await owner.snapshot();
+          assert(dispatches.length > 0, "First request aggregated the cold snapshot");
+          const resourcesFile = `${owner.role}${coldPairs === undefined ? "" : `-${coldPair + 1}`}-cold-backend-resources.json`;
+          await writeFile(
+            path.join(out, resourcesFile),
+            JSON.stringify(
+              await readGatewayResources(owner.child, {
+                includeWorkers: true,
+                collectGarbage: true,
+              }),
+              null,
+              2,
+            ),
+          );
+          samples.push({
+            role: owner.role,
+            phase: "first-full-range-rpc",
+            ...(coldPairs === undefined ? {} : { coldPair: coldPair + 1 }),
+            cpu: 1,
+            rtt: 0,
+            query,
+            requests,
+            wallMs: finished - started,
+            actionInterval: { startedMs: started, finishedMs: finished },
+            gatewayCpu: measureGatewayCpuUsage(before, after),
+            gatewayCpuSnapshots: { before, after },
+            dispatches,
+            response,
+            resourcesFile,
+            load: os.loadavg(),
+          });
+        } finally {
+          clearTimeout(connectionTimer);
+          await peer.stopAndWait();
+        }
+      }
+    }
+    if (coldPairs !== undefined) {
+      while (owners.length) {
+        await owners.at(-1)!.close();
+        owners.pop();
       }
     }
   }
@@ -964,7 +1056,9 @@ try {
       ? [1]
       : values.smoke
         ? [4]
-        : [1, 4]) {
+        : warmCpu === undefined
+          ? [1, 4]
+          : [warmCpu]) {
     for (const rtt of values.cold || values.structure ? [0] : [0, 100]) {
       const pages: PageEntry[] = [];
       try {
@@ -1334,6 +1428,19 @@ try {
       failures.push(`${owner.role} cleanup: ${errorText(error)}`);
     }
   }
+  for (const [role, retained] of coldFixtures) {
+    if (!retained.available) {
+      failures.push(`${role} fixture retained: previous process tree did not drain`);
+      continue;
+    }
+    try {
+      await rm(retained.fixture.root, { recursive: true, force: true });
+      await rm(retained.pristine, { recursive: true, force: true });
+      await retained.claim.release();
+    } catch (error) {
+      failures.push(`${role} cold fixture cleanup: ${errorText(error)}`);
+    }
+  }
   try {
     assert.deepEqual(
       await helperHashes(),
@@ -1369,7 +1476,9 @@ try {
         browserResourceSamples: samples.filter((sample) => sample.browserResources?.complete)
           .length,
         mode: values["cold-backend"]
-          ? "fresh-backend-cold-triple"
+          ? coldPairs === undefined
+            ? "fresh-backend-cold-triple"
+            : "restored-backend-cold-pairs"
           : values.structure
             ? "structural-attribution-only"
             : values.cold
@@ -1377,6 +1486,8 @@ try {
               : values.diagnostic
                 ? "attribution-only"
                 : "warm",
+        coldPairs: coldPairs ?? null,
+        ...(warmCpu === undefined ? {} : { warmCpu }),
         pairsPerQuery:
           values.cold || values["cold-backend"]
             ? 0
@@ -1390,7 +1501,7 @@ try {
             ? []
             : ["model:fixture-model-00-end", "model:fixture-model-01-end"],
         limitations: values["cold-backend"]
-          ? "Backend-only at native CPU and localhost: the first sessions.usage RPC requests the full 180 days with the browser's specific-UTC date mode and ordinary overview/sort options; no preceding browser/default-range request. One fresh triple, fixed A/H/C order, not repeated qualification. Worker CPU snapshots include newly observed or retired workers without claiming complete interval coverage. Resources follow the response with main-only forced GC and asynchronously cached worker heaps. No browser measurements."
+          ? `Backend-only at native CPU and localhost: the first sessions.usage RPC requests the full 180 days with the browser's specific-UTC date mode and ordinary overview/sort options; no preceding browser/default-range request. ${coldPairs === undefined ? "One fresh triple, fixed A/H/C order, not repeated qualification." : `${coldPairs} serial A/H/C triples; seed-once pristine snapshots restored at the exact original absolute path only after process-tree drain. Every role keeps its port/token and launches a fresh compiled process per triple. File bytes and symlink targets match the pre-Gateway snapshot; filesystem cache is not cold.`} Worker CPU snapshots include newly observed or retired workers without claiming complete interval coverage. Resources follow the response with main-only forced GC and asynchronously cached worker heaps. No browser measurements.`
           : values.structure
             ? "Structural attribution only, native CPU and localhost. Each role warms model00/model01, traces a natural model00 return, resets model01 outside the traced action, then traces a model00 return after forced browser GC. The second trace has forced-GC heap/DOM counters before and after, outside timing. Passive mutation counts and local node IDs contain no DOM text or attributes; metadata-only wire records contain no payloads. Instrumented timing is not acceptance evidence. Preserve earlier warm and cold regressions."
             : "Backend runs at native CPU; 1x/4x applies only to Chromium. Non-navigation browser metrics use threadTicks; default-readiness document CPU is unavailable because navigation resets those counters. Each role owns an isolated browser. Whole-renderer CPU and RSS probes bracket each action; their recorded bounds include collection overhead outside wall/main-thread intervals. Heap and RSS are sampled endpoints, not retained heap, peaks, or GPU memory. Same frozen UI for all roles. Population has one/two actual turns per session spread over180days. Durable source seeding and compiled startup recorded separately; no source server or report prewarming. Setup logs retained. No provider calls. " +
