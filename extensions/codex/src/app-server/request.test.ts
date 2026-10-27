@@ -560,35 +560,32 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     expectFailure("client-request", "deadline-observed");
   });
 
-  it.each([300_100])(
-    "reads usage and account identity across a %i ms wall-clock jump",
-    async (wallJumpMs) => {
-      vi.useFakeTimers({ toFake: ["Date"] });
-      const request = vi.fn(async (method: string) => {
-        if (method === "account/rateLimits/read") {
-          vi.setSystemTime(Date.now() + wallJumpMs);
-          return { rateLimitsByLimitId: { codex: { limitId: "codex" } } };
-        }
-        return {
-          account: { type: "chatgpt", email: "codex-account@example.com" },
-        };
-      });
-      const { closeAndWait } = isolatedClient(request);
+  it("reads usage and account identity across a wall-clock jump", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const request = vi.fn(async (method: string) => {
+      if (method === "account/rateLimits/read") {
+        vi.setSystemTime(Date.now() + 300_100);
+        return { rateLimitsByLimitId: { codex: { limitId: "codex" } } };
+      }
+      return {
+        account: { type: "chatgpt", email: "codex-account@example.com" },
+      };
+    });
+    const { closeAndWait } = isolatedClient(request);
 
-      await expect(
-        readCodexAppServerUsage({
-          timeoutMs: 3_500,
-          authProfileId: "openai:test",
-        }),
-      ).resolves.toEqual({
-        rateLimits: { rateLimitsByLimitId: { codex: { limitId: "codex" } } },
-        accountEmail: "codex-account@example.com",
-      });
-      expect(shared.isolated.mock.calls[0]?.[0].authProfileId).toBe("openai:test");
-      expect(shared.isolated).toHaveBeenCalledOnce();
-      expect(closeAndWait).toHaveBeenCalledWith({ exitTimeoutMs: 300, forceKillDelayMs: 200 });
-    },
-  );
+    await expect(
+      readCodexAppServerUsage({
+        timeoutMs: 3_500,
+        authProfileId: "openai:test",
+      }),
+    ).resolves.toEqual({
+      rateLimits: { rateLimitsByLimitId: { codex: { limitId: "codex" } } },
+      accountEmail: "codex-account@example.com",
+    });
+    expect(shared.isolated.mock.calls[0]?.[0].authProfileId).toBe("openai:test");
+    expect(shared.isolated).toHaveBeenCalledOnce();
+    expect(closeAndWait).toHaveBeenCalledWith({ exitTimeoutMs: 300, forceKillDelayMs: 200 });
+  });
 
   it("guards isolated usage startup before login when request authority is revoked", async () => {
     const login = vi.fn();
