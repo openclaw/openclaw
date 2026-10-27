@@ -75,7 +75,7 @@ function supervisedBinding(threadId: string) {
     preserveNativeModel: true,
     conversationSourceTransferComplete: true,
     historyCoveredThrough: new Date().toISOString(),
-  };
+  } satisfies Parameters<typeof writeCodexAppServerBinding>[1];
 }
 
 const supervised = { omitHomeScope: true, supervision: true };

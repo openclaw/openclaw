@@ -54,8 +54,8 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function element<T extends HTMLElement = HTMLElement>(root: ParentNode, selector: string): T {
-  return expectDefined(root.querySelector<T>(selector), selector);
+function element(root: ParentNode, selector: string): HTMLElement {
+  return expectDefined(root.querySelector<HTMLElement>(selector), selector);
 }
 
 function objectSchema(properties: Record<string, object>) {
@@ -93,7 +93,7 @@ function animationFrames() {
   vi.spyOn(window, "cancelAnimationFrame").mockImplementation((frame) => frames.delete(frame));
   return {
     frames,
-    run() {
+    run(this: void) {
       const pending = [...frames.values()];
       frames.clear();
       for (const frame of pending) {
@@ -407,11 +407,12 @@ describe("ConfigPage model catalog lifecycle", () => {
   });
 
   function observerModels(view: ReturnType<typeof mountConfigPage>) {
-    const picker = element<
-      HTMLElement & {
-        params: { options: Array<{ value: string; label: string }> };
-      }
-    >(view.page, "#settings-appearance-sidebar openclaw-select-picker");
+    const picker = expectDefined(
+      view.page.querySelector<
+        HTMLElement & { params: { options: Array<{ value: string; label: string }> } }
+      >("#settings-appearance-sidebar openclaw-select-picker"),
+      "model picker",
+    );
     return picker.params.options.slice(2).map(({ value, label }) => ({ value, label }));
   }
 
@@ -688,7 +689,7 @@ it("keeps Messages default and opens capture with a collapsed schema editor insi
       return panel;
     });
     flush();
-    const advanced = element<HTMLDetailsElement>(capture, "details");
+    const advanced = expectDefined(capture.querySelector<HTMLDetailsElement>("details"), "details");
     expect(advanced.open).toBe(false);
     expect(advanced.querySelector("#config-section-transcripts")).not.toBeNull();
     const toggle = capture.querySelector<HTMLInputElement>(".settings-toggle__input")!;

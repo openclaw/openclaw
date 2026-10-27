@@ -1,7 +1,16 @@
 // Resolver ownership ends before delivery-only after-clear work.
 import { AsyncResource } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { createEnteredGate as createGate } from "../../agents/entered-gate.test-support.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
@@ -273,7 +282,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
     ["final", "delivered", "reply:final_delivered"],
     ["final", "failed", "reply:final_delivered"],
   ])("renews %s finalization only for its %s receipt", async (kind, outcome, event) => {
-    let observed: ReturnType<typeof vi.spyOn>;
+    let observed: MockInstance<Operation["watchdog"]["progress"]>;
     const dispatcher = createReplyDispatcher({
       beforeDeliver: async (payload) => (outcome === "cancelled" ? null : payload),
       deliver: async () => {
