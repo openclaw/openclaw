@@ -16,8 +16,13 @@ import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import type { NodeWorkerWorkspaceRetainEntry } from "../../worker/node-workspace-retain-protocol.js";
+import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
-import type { WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
+import {
+  WorkerTunnelOwnerDisconnectedError,
+  type WorkerWorkspaceTunnelHandle,
+} from "./tunnel-contract.js";
+import { WorkerWorkspaceReconciliationError } from "./worker-turn-failure.js";
 import {
   ENVIRONMENT_ID,
   MANIFEST_REF,
@@ -36,14 +41,19 @@ import {
   turn,
 } from "./worker-turn-launcher.test-support.js";
 import { withWorkerTurnTranscriptDatabase } from "./worker-turn-transcript-target.js";
+import { prepareLocalWorkspaceReconciliation } from "./workspace-local-reconciliation.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import {
   executeRemoteExecTurn as executeRemoteExecTurnCore,
   reconcileWorkspaceAfterTurn as reconcileWorkspaceAfterTurnCore,
+  recoverWorkspaceBeforeTurn,
 } from "./workspace-result-finalize.js";
-import { workerWorkspaceResultStaging } from "./workspace-result-staging.js";
+import {
+  withStagedWorkerWorkspaceResult,
+  workerWorkspaceResultStaging,
+} from "./workspace-result-staging.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
 function workspaceTunnel(
@@ -61,25 +71,52 @@ function workspaceTunnel(
   };
 }
 
-function claimLocalTurn(runId: string) {
+async function initializeRepository(
+  directory: string,
+  git = (args: string[]) => requireGit(directory, args),
+) {
+  await git(["init", "--quiet"]);
+  await git(["add", "."]);
+  await git(["config", "user.name", "Fixture"]);
+  await git(["config", "user.email", "fixture@example.invalid"]);
+  await git(["commit", "--quiet", "--allow-empty", "--no-gpg-sign", "-m", "base"]);
+  const baseCommit = await git(["rev-parse", "HEAD"]);
+  const capture = (source = directory) => captureWorkspaceManifest({ root: source, baseCommit });
+  return { baseCommit, capture, base: await capture() };
+}
+
+function claimTurn(runId: string, kind: "local" | "worker") {
   return placements.claimTurn({
     ...sessionTarget,
-    owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
+    owner:
+      kind === "local"
+        ? { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH }
+        : { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
     claimId: runId,
     runId,
   });
 }
+
+const transcriptControls = (claim: WorkerSessionTurnClaim) => ({
+  assertCurrent() {},
+  prepareAuthority: () => placements.prepareTurnClaimAuthority(claim),
+});
 
 function reconcileWorkspaceAfterTurn(
   params: Parameters<typeof reconcileWorkspaceAfterTurnCore>[0],
 ) {
   return withWorkerTurnTranscriptDatabase(
     { ...params.transcriptTarget, sessionTarget: params.transcriptTarget },
-    {
-      assertCurrent() {},
-      prepareAuthority: () => params.placements.prepareTurnClaimAuthority(params.turnClaim),
-    },
+    transcriptControls(params.turnClaim),
     (transcriptTarget) => reconcileWorkspaceAfterTurnCore({ ...params, transcriptTarget }),
+  );
+}
+
+function recoverWorkspaceBeforeTurnInDatabase(
+  params: Parameters<typeof recoverWorkspaceBeforeTurn>[0],
+) {
+  return withWorkerTurnTranscriptDatabase(params.turn, transcriptControls(params.turnClaim), () =>
+    recoverWorkspaceBeforeTurn(params),
   );
 }
 
@@ -92,6 +129,117 @@ async function activePlacement(remote?: string) {
   return placement;
 }
 
+async function beforeTurnFixture(
+  quiesceWorkspace?: WorkerWorkspaceTunnelHandle["quiesceWorkspace"],
+) {
+  const local = path.join(root, "gateway");
+  const remote = path.join(root, "worker");
+  await Promise.all(
+    [local, remote].map(async (directory) => {
+      await fs.mkdir(directory);
+      await fs.writeFile(path.join(directory, "prior.txt"), "base\n");
+      await fs.writeFile(path.join(directory, "worker.txt"), "base\n");
+    }),
+  );
+  const { capture, base } = await initializeRepository(local);
+  const manifests = new Map([[base.manifestRef, base.manifest]]);
+  let failPublication = false;
+  const quiesce = vi.fn(
+    quiesceWorkspace ?? (async () => ({ assertActive: async () => {}, resume: async () => {} })),
+  );
+  const reconcile = vi.fn(async (request) => {
+    if (request.source.kind !== "local") {
+      throw new Error("expected local source");
+    }
+    const previous = manifests.get(request.baseManifestRef);
+    if (!previous) {
+      throw new Error("missing accepted manifest");
+    }
+    const current = await capture(remote);
+    let remoteRef = current.manifestRef;
+    const accept = await prepareLocalWorkspaceReconciliation({
+      request: { ...request.source, localPath: local, ...request },
+      hashMemo: new Map(),
+    });
+    return accept({
+      stagingRoot: remote,
+      base: previous,
+      current: current.manifest,
+      baseRaw: serializeWorkerWorkspaceManifest(previous),
+      currentRaw: serializeWorkerWorkspaceManifest(current.manifest),
+      currentManifestRef: current.manifestRef,
+      manifestRef: () => remoteRef,
+      verifyStable: async () => {
+        expect((await capture(remote)).manifestRef).toBe(remoteRef);
+      },
+      publishAcceptedManifest: async (accepted) => {
+        if (failPublication) {
+          throw new Error("fixture publication interrupted");
+        }
+        for (const entry of accepted.manifest.entries) {
+          await fs.mkdir(path.dirname(path.join(remote, entry.path)), { recursive: true });
+          await fs.copyFile(path.join(local, entry.path), path.join(remote, entry.path));
+        }
+        manifests.set(accepted.manifestRef, accepted.manifest);
+        remoteRef = accepted.manifestRef;
+      },
+    });
+  });
+  const tunnel = workspaceTunnel({
+    quiesceWorkspace: quiesce,
+    reconcileWorkspace: reconcile,
+  });
+  await seedActivePlacement("worker-turn", remote, base.manifestRef);
+  const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
+  const remotePath = (entry: string) => path.join(remote, entry);
+  const claimWorker = (id: string) => claimTurn(id, "worker");
+  const execute = async (claim: WorkerSessionTurnClaim, before: boolean, signal?: AbortSignal) => {
+    const placement = placements.get(SESSION_ID);
+    if (placement?.state !== "active") {
+      throw new Error("expected active placement");
+    }
+    const input = turn(claim.runId);
+    const params = {
+      placement,
+      placements,
+      turnClaim: claim,
+      workspaceOperations,
+      workspace: { kind: "local" as const, path: local },
+    };
+    if (before) {
+      return recoverWorkspaceBeforeTurnInDatabase({ ...params, turn: input, tunnel, signal });
+    }
+    await placements.markWorkspaceResultPending(claim);
+    return reconcileWorkspaceAfterTurn({ ...params, tunnel, transcriptTarget: sessionTarget });
+  };
+  return {
+    local,
+    remotePath,
+    readRemote: (entry: string) => fs.readFile(remotePath(entry), "utf8"),
+    workspaceOperations,
+    quiesce,
+    reconcile,
+    claim: claimWorker,
+    execute,
+    interruptPublication: () => {
+      failPublication = true;
+    },
+    stage: async () => {
+      await fs.mkdir(path.join(local, "incoming"));
+      await fs.writeFile(path.join(local, "incoming/file.txt"), "Gateway input\n");
+      await fs.writeFile(path.join(local, "unselected.txt"), "Gateway only\n");
+      await requireGit(local, ["add", "--", "incoming/file.txt"]);
+    },
+  };
+}
+
+async function expectRecoveryRequested(claim: WorkerSessionTurnClaim) {
+  expect(placements.validateTurnClaim(claim)).toBe(true);
+  const [pending] = await placements.listPendingWorkspaceResultsAsync();
+  expect(pending).toMatchObject({ claimId: claim.claimId, workspaceAcceptedAtMs: null });
+  expect(pending?.recoveryRequestedAtMs).toEqual(expect.any(Number));
+}
+
 vi.mock("../../node-host/node-worker-transfer-client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../node-host/node-worker-transfer-client.js")>()),
   runNodeWorkerWorkspaceTransfer: vi.fn(),
@@ -99,6 +247,125 @@ vi.mock("../../node-host/node-worker-transfer-client.js", async (importOriginal)
 
 beforeEach(setupWorkerTurnLauncherTest);
 afterEach(cleanupWorkerTurnLauncherTest);
+
+it.each(["prior", "incoming"] as const)(
+  "refreshes staged input before execution while preserving %s conflicts and tool admission",
+  async (conflict) => {
+    const f = await beforeTurnFixture();
+    if (conflict === "prior") {
+      await fs.writeFile(path.join(f.local, "prior.txt"), "Gateway conflict\n");
+      await fs.writeFile(f.remotePath("prior.txt"), "worker conflict\n");
+    }
+    await f.execute(await f.claim("previous-turn"), false);
+    const previousConflict = placements.get(SESSION_ID)?.workspaceResultConflict;
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
+    await f.stage();
+    await fs.writeFile(f.remotePath("worker.txt"), "independent worker edit\n");
+    if (conflict === "incoming") {
+      await fs.mkdir(f.remotePath("incoming"));
+      await fs.writeFile(f.remotePath("incoming/file.txt"), "worker conflict\n");
+    }
+    const claim = await f.claim("next-turn");
+    await placements.authorizeWorkerTurnTools(claim, ["exec"]);
+    await f.execute(claim, true);
+    expect(await f.readRemote("incoming/file.txt")).toBe("Gateway input\n");
+    expect(await f.readRemote("worker.txt")).toBe("independent worker edit\n");
+    await expect(fs.stat(f.remotePath("unselected.txt"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(placements.validateTurnClaim(claim)).toBe(true);
+    expect(placements.isWorkerTurnToolAuthorized(claim, "exec")).toBe(true);
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
+    const retained = placements.get(SESSION_ID)?.workspaceResultConflict;
+    expect(retained?.paths).toEqual([conflict === "prior" ? "prior.txt" : "incoming/file.txt"]);
+    if (conflict === "prior") {
+      expect(retained).toEqual(previousConflict);
+    }
+    const conflictText = await withStagedWorkerWorkspaceResult(
+      { root: f.local, stagedResultRef: retained!.stagedResultRef },
+      ({ stagingRoot }) => fs.readFile(path.join(stagingRoot, retained!.paths[0]!), "utf8"),
+    );
+    expect(conflictText).toBe("worker conflict\n");
+    await f.execute(claim, false);
+    expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
+  },
+);
+
+it("retains recovery custody when input publication fails before execution", async () => {
+  const f = await beforeTurnFixture();
+  await f.execute(await f.claim("previous-turn"), false);
+  await f.stage();
+  const claim = await f.claim("interrupted-input");
+  f.interruptPublication();
+  await expect(f.execute(claim, true)).rejects.toThrow("fixture publication interrupted");
+  await expectRecoveryRequested(claim);
+  await expect(fs.stat(f.remotePath("incoming/file.txt"))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+});
+
+it("preserves an exact queued cancellation after handing recovery custody off", async () => {
+  const f = await beforeTurnFixture();
+  const blockerEntered = createDeferred();
+  const releaseBlocker = createDeferred();
+  const blocker = f.workspaceOperations.run(ENVIRONMENT_ID, async () => {
+    blockerEntered.resolve();
+    await releaseBlocker.promise;
+  });
+  await blockerEntered.promise;
+  const queued = createDeferred();
+  const run = f.workspaceOperations.run.bind(f.workspaceOperations);
+  f.workspaceOperations.run = (...args) => {
+    queued.resolve();
+    return run(...args);
+  };
+  const claim = await f.claim("queued-input");
+  const controller = new AbortController();
+  const recovery = f.execute(claim, true, controller.signal);
+  await awaitGateBeforeSettlement(queued.promise, recovery, "settled before queue");
+  controller.abort(new DOMException("turn stopped", "AbortError"));
+  await expect(recovery).rejects.toBe(controller.signal.reason);
+  expect([f.quiesce.mock.calls.length, f.reconcile.mock.calls.length]).toEqual([0, 0]);
+  await expectRecoveryRequested(claim);
+  releaseBlocker.resolve();
+  await Promise.all([blocker, f.workspaceOperations.run(ENVIRONMENT_ID, async () => {})]);
+});
+
+it("retains an entered workspace failure after cancellation until the mutation settles", async () => {
+  const mutationEntered = createDeferred();
+  const releaseMutation = createDeferred();
+  const workspaceFailure = new Error("workspace transport failed");
+  const f = await beforeTurnFixture(async () => {
+    mutationEntered.resolve();
+    await releaseMutation.promise;
+    throw workspaceFailure;
+  });
+  const claim = await f.claim("entered-input");
+  const controller = new AbortController();
+  const recovery = f.execute(claim, true, controller.signal);
+  await awaitGateBeforeSettlement(mutationEntered.promise, recovery, "settled before mutation");
+  controller.abort();
+  releaseMutation.resolve();
+  await expect(recovery).rejects.toBeInstanceOf(WorkerWorkspaceReconciliationError);
+  await expect(recovery).rejects.toMatchObject({
+    cause: { name: "WorkerWorkspaceReconciliationError", cause: workspaceFailure },
+  });
+  expect([f.quiesce.mock.calls.length, f.reconcile.mock.calls.length]).toEqual([1, 0]);
+  await expectRecoveryRequested(claim);
+});
+
+it("classifies an offline node during input refresh while retaining recovery custody", async () => {
+  const f = await beforeTurnFixture(async () => {
+    throw new WorkerTunnelOwnerDisconnectedError();
+  });
+  const claim = await f.claim("offline-input");
+  await expect(f.execute(claim, true)).rejects.toMatchObject({
+    name: "WorkerRunnerUnavailableError",
+    code: "runner-offline",
+  });
+  await expectRecoveryRequested(claim);
+});
 
 it.each(
   (["prior", "report"] as const).flatMap((phase) =>
@@ -112,7 +379,7 @@ it.each(
   );
   const before = source.getPersistedEntries();
   const beforeRows = readWorkerTurnTranscriptStorageRows();
-  const claim = await claimLocalTurn(`hydrate-${phase}-${change}`);
+  const claim = await claimTurn(`hydrate-${phase}-${change}`, "local");
   await placements.markWorkspaceResultPending(claim);
   const entered = createDeferred();
   const release = createDeferred();
@@ -240,7 +507,7 @@ it("reports cleanup failure and reclaims the inputs before the next turn without
     input: Parameters<typeof executeRemoteExecTurnCore>[0]["turn"],
     runLocal: Parameters<typeof executeRemoteExecTurnCore>[0]["runLocal"],
   ) => {
-    const turnClaim = await claimLocalTurn(input.runId);
+    const turnClaim = await claimTurn(input.runId, "local");
     return withWorkerTurnTranscriptDatabase(
       input,
       {
@@ -286,23 +553,9 @@ it.each([1, 2])(
     await fs.mkdir(repository);
     await fs.mkdir(payload);
     const git = (cwd: string, ...args: string[]) => requireGit(cwd, args, { timeoutMs: 10_000 });
-    await git(repository, "init", "--quiet");
-    await git(
-      repository,
-      "-c",
-      "user.name=Workspace Test",
-      "-c",
-      "user.email=workspace@example.invalid",
-      "-c",
-      "commit.gpgsign=false",
-      "commit",
-      "--quiet",
-      "--allow-empty",
-      "-m",
-      "base",
+    const { baseCommit, base } = await initializeRepository(repository, (args) =>
+      git(repository, ...args),
     );
-    const baseCommit = await git(repository, "rev-parse", "HEAD");
-    const base = await captureWorkspaceManifest({ root: repository, baseCommit });
     const bytes = Buffer.from("worker result\n\0binary\xff", "latin1");
     await fs.writeFile(path.join(payload, "result.bin"), bytes);
     const current = await captureWorkspaceManifest({ root: payload, baseCommit });

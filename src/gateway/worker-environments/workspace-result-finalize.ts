@@ -346,6 +346,11 @@ export async function reconcileWorkspaceAfterTurn(params: {
       params.beforeTurnSignal,
     );
   } catch (error) {
+    if (params.beforeTurnSignal?.aborted && error === params.beforeTurnSignal.reason) {
+      // The outer pre-turn owner still hands off its pending recovery fence before
+      // returning this intentional cancellation to the caller.
+      throw error;
+    }
     await createWorkerWorkspaceConflictTranscriptHandlers(transcriptTarget, assertResultCurrent)
       .reportFailure(workspaceError(error))
       .catch(() => undefined);
