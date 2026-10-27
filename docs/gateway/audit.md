@@ -495,7 +495,7 @@ what was recorded, not as proof of what happened:
   An idle writer collects neighboring events for a fixed 5 ms window before submitting
   up to 32 queued items in one transaction, preserving FIFO order. Later events do
   not extend that window. Already-queued work drains after an in-flight write
-  without another window; maintenance and shutdown also skip starting a new window.
+  without another window; maintenance and shutdown flush an existing window immediately.
   Per-item savepoints isolate rejected records; successful items are
   acknowledged to the queue only after the shared commit. Queue acceptance itself
   still does not acknowledge persistence. Lock contention retains the unprocessed suffix;

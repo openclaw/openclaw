@@ -102,7 +102,7 @@ async function advanceDispatch() {
 }
 
 describe("audit writer async settlement", () => {
-  it("coalesces neighboring turns without extending the first event's flush deadline", async () => {
+  it.each([false, true])("coalesces neighboring turns (early shutdown: %s)", async (stopEarly) => {
     const requests = mockEventRequests(async () => ({ status: "settled" }));
     const writer = startWriter();
     try {
@@ -114,9 +114,12 @@ describe("audit writer async settlement", () => {
         await vi.advanceTimersByTimeAsync(1);
       }
       expect(requests).toEqual([]);
-      await vi.advanceTimersByTimeAsync(2);
+      if (stopEarly) {
+        void writer.stop();
+      }
+      await vi.advanceTimersByTimeAsync(stopEarly ? 0 : 2);
       expect(requests).toEqual(["first", "second", "third"]);
-      expect(execute).toHaveBeenCalledTimes(1);
+      expect(execute).toHaveBeenCalledTimes(stopEarly ? 2 : 1);
     } finally {
       await stopWriter(writer);
     }

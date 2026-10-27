@@ -68,7 +68,8 @@ export function createAuditEventWriter(options: {
   let draining = false;
   let shutdownExpired = false;
   let maintenancePending = true;
-  let scheduled: ReturnType<typeof setTimeout> | undefined;
+  let scheduled: ReturnType<typeof setImmediate> | undefined;
+  let batchTimer: ReturnType<typeof setTimeout> | undefined;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let retryAttempt = 0;
   let retryDelayMs = 0;
@@ -188,11 +189,26 @@ export function createAuditEventWriter(options: {
       }
       return;
     }
-    scheduled = setTimeout(() => {
-      void drainOne();
-    }, delayMs);
-    if (!stopped) {
-      scheduled.unref?.();
+    if (batchTimer) {
+      if (delayMs > 0) {
+        return;
+      }
+      clearTimeout(batchTimer);
+      batchTimer = undefined;
+    }
+    if (delayMs > 0) {
+      batchTimer = setTimeout(() => {
+        batchTimer = undefined;
+        void drainOne();
+      }, delayMs);
+      batchTimer.unref?.();
+    } else {
+      scheduled = setImmediate(() => {
+        void drainOne();
+      });
+      if (!stopped) {
+        scheduled.unref?.();
+      }
     }
   };
   const scheduleRetry = () => {
@@ -338,8 +354,12 @@ export function createAuditEventWriter(options: {
           queue.length = 0;
           pendingRows = 0;
           if (scheduled) {
-            clearTimeout(scheduled);
+            clearImmediate(scheduled);
             scheduled = undefined;
+          }
+          if (batchTimer) {
+            clearTimeout(batchTimer);
+            batchTimer = undefined;
           }
           if (retryTimer) {
             clearTimeout(retryTimer);
