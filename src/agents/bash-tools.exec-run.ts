@@ -29,6 +29,7 @@ import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import { ExecProcessPreflightError } from "./bash-tools.exec-launch.js";
+import { execOutputLogDetails, execOutputLogNote } from "./bash-tools.exec-output-log.js";
 import {
   buildExecRuntimeErrorOutcome,
   EXEC_MANUAL_COLLECTION_FOLLOW_UP,
@@ -75,6 +76,7 @@ import { resolveStoredSubagentCapabilities } from "./subagents/spawn/subagent-ca
 import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AgentToolWithMeta } from "./tools/common.js";
+import { ToolInputError } from "./tools/common.js";
 import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 type GatewayApprovalResult = Awaited<ReturnType<typeof processGatewayAllowlist>>;
@@ -287,6 +289,9 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         );
       }
       const host = resolveExecHost(params, defaults);
+      if (params.saveOutput && host !== "gateway") {
+        throw new ToolInputError("exec saveOutput is supported only for host=gateway");
+      }
       const foregroundFallbackWarning =
         (host === "node" || !backgroundAvailable) &&
         (params.background === true || typeof params.yieldMs === "number")
@@ -518,6 +523,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
             maxOutput: DEFAULT_MAX_OUTPUT,
             pendingMaxOutput: DEFAULT_PENDING_MAX_OUTPUT,
             cleanupMs,
+            saveOutput: params.saveOutput,
             processContinuationAvailable: allowBackground,
           });
           const immediateResult = gatewayApproval.pendingResult ?? gatewayApproval.deniedResult;
@@ -557,6 +563,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         assertSourceActive();
         run = await runExecProcess({
           command: params.command,
+          saveOutput: params.saveOutput,
           execCommand: execCommandOverride,
           workdir,
           env,
@@ -708,14 +715,14 @@ export function createExecTool(defaults?: ExecToolDefaults) {
                 outcome: completed.outcome,
                 cwd: run.session.cwd,
                 warningText: getWarningText(),
-                aggregateOutputDropped:
-                  run.session.totalOutputChars > run.session.aggregated.length,
+                discardedOutputChars: run.session.totalOutputChars - run.session.aggregated.length,
+                outputLog: run.session.outputLog,
               })
             : {
                 content: [
                   {
                     type: "text",
-                    text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
+                    text: `${execOutputLogNote(run.session.outputLog)}${getWarningText()}Command still running (session ${run.session.id}, pid ${
                       run.session.pid ?? "n/a"
                     }). ${followUp}`,
                   },
@@ -730,6 +737,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
                   tail: run.session.tail,
                   // Structured callers receive details without the visible content.
                   followUp,
+                  ...execOutputLogDetails(run.session.outputLog),
                 },
               },
           approvalReview,

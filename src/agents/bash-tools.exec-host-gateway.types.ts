@@ -10,6 +10,7 @@ import type {
 import type { AgentToolResult } from "./runtime/index.js";
 
 export type ProcessGatewayAllowlistParams = ExecHostCommandParams & {
+  saveOutput?: boolean;
   workdir: string;
   secretEgressBindings?: readonly SecretEgressSentinelBinding[];
   githubProfileDir?: string;
