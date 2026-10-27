@@ -1,4 +1,9 @@
 import {
+  ReplyRunLifecycleAdmissionBlockedError,
+  type SessionControllerMailboxClaim,
+} from "../../sessions/session-controller.contracts.js";
+import { deferSessionControllerClaimBeforeExecution } from "../../sessions/session-controller.mailbox-claim.js";
+import {
   claimSessionControllerTask,
   releaseSessionControllerClaim,
 } from "../../sessions/session-controller.mailbox.js";
@@ -6,6 +11,24 @@ import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-
 import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.prepare-operation.js";
 import { readReplySourceInput } from "./reply-source-binding.js";
 import { resolveReplyTurnKind } from "./reply-turn-kind.js";
+
+/** Release only a proven pre-execution refusal while preserving its exact source and FIFO order. */
+export async function deferLifecycleBlockedDispatchClaim(
+  error: unknown,
+  claim: SessionControllerMailboxClaim | undefined,
+): Promise<ReplyRunLifecycleAdmissionBlockedError | undefined> {
+  if (
+    !(error instanceof ReplyRunLifecycleAdmissionBlockedError) ||
+    !claim ||
+    claim.operation ||
+    !deferSessionControllerClaimBeforeExecution(claim)
+  ) {
+    return undefined;
+  }
+  releaseSessionControllerClaim(claim);
+  await claim.settlement.promise;
+  return error;
+}
 
 /** Acquires the dispatch-phase reply operation, or returns the refused dispatch result. */
 export async function acquireDispatchTurn(state: PrepareDispatchOperationReadyState) {
