@@ -5,6 +5,7 @@ import type {
   Message,
   Model,
   ModelThinkingLevel,
+  PreparedSystemPrompt,
   SimpleStreamOptions,
   StreamFn as LlmStreamFn,
   TextContent,
@@ -530,6 +531,7 @@ export interface AgentTool<
 export interface AgentContext {
   /** System prompt included with the request. */
   systemPrompt: string;
+  preparedSystemPrompt?: PreparedSystemPrompt;
   /** Transcript visible to the model. */
   messages: AgentMessage[];
   /** Tools available for this run. */

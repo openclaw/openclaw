@@ -348,8 +348,11 @@ export async function listSessionWorkspaceFiles(
     if (!resolved) {
       return undefined;
     }
-    const stat = await statWorkspacePath(readRoot, browserPath, assertCurrent);
-    if (!stat?.isDirectory) {
+    // Local roots are admitted directories; listing rechecks their identity.
+    if (
+      (browserPath || !workspaceRoot || "access" in workspaceRoot) &&
+      !(await statWorkspacePath(readRoot, browserPath, assertCurrent))?.isDirectory
+    ) {
       return undefined;
     }
     const dirents = await listWorkspacePath(readRoot, browserPath, assertCurrent);

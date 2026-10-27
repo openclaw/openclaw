@@ -59,7 +59,7 @@ export interface ShellGatewayHost {
   readonly outboxStoreImport: { load: () => Promise<unknown> };
   readonly shellNavigation: Pick<
     ShellNavigationCapability,
-    "recoverDeletedActiveSession" | "selectChatSession"
+    "recoverDeletedActiveSession" | "selectChatSession" | "synchronizeSessionUrl"
   >;
   invalidate(): void;
 }
@@ -99,6 +99,7 @@ export class ShellGatewayOwner {
       }
       this.observeDeletedSessions(sessions.state);
       this.host.shellNavigation.recoverDeletedActiveSession();
+      this.host.shellNavigation.synchronizeSessionUrl();
       synchronizeTitle();
     };
     synchronize();

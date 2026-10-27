@@ -300,7 +300,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
   });
 
   describe("Gateway fixture contracts", () => {
-    // These RPC contracts share one mounted preview; UI flows keep fresh pages.
+    // These Gateway contracts share one mounted preview; other UI flows keep fresh pages.
     let page: Page;
 
     beforeAll(async () => {
@@ -346,6 +346,20 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           ]),
         },
       ]);
+    });
+
+    it("keeps the main preview run active when hydrating canonical session metadata", async () => {
+      expect(
+        await requestPreviewGateway(page, [
+          { method: "chat.startup", params: { sessionKey: "agent:main:main" } },
+        ]),
+      ).toMatchObject([
+        {
+          sessionInfo: { hasActiveRun: true, status: "running", activeRunIds: ["mock-plan-run"] },
+          inFlightRun: { runId: "mock-plan-run" },
+        },
+      ]);
+      await page.getByRole("button", { name: "Stop generating" }).waitFor();
     });
 
     it("serves preview session agent:main:tax-research through both chat entry points", async () => {
@@ -397,12 +411,9 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         },
       });
     });
-  });
 
-  it(
-    "keeps renamed preview groups authoritative across reads and reloads",
-    withFixturePage(async (page) => {
-      await openPreviewChat(page);
+    // Keep the mutating group contract last on this shared page.
+    it("keeps renamed preview groups authoritative across reads and reloads", async () => {
       await requestPreviewGateway(page, [
         { method: "sessions.groups.rename", params: { name: "Research", to: "Reviewed" } },
       ]);
@@ -415,26 +426,8 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           { groups: [{ name: "Reviewed", position: 0 }], sectionOrder: [] },
         ]);
       }
-    }),
-  );
-
-  it(
-    "keeps the main preview run active when hydrating canonical session metadata",
-    withFixturePage(async (page) => {
-      await openPreviewChat(page);
-      expect(
-        await requestPreviewGateway(page, [
-          { method: "chat.startup", params: { sessionKey: "agent:main:main" } },
-        ]),
-      ).toMatchObject([
-        {
-          sessionInfo: { hasActiveRun: true, status: "running", activeRunIds: ["mock-plan-run"] },
-          inFlightRun: { runId: "mock-plan-run" },
-        },
-      ]);
-      await page.getByRole("button", { name: "Stop generating" }).waitFor();
-    }),
-  );
+    });
+  });
 
   it("keeps synthetic avatar requests on the preview origin across reloads", async () => {
     const {
@@ -704,6 +697,34 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           .toEqual({ theme: mode, themeMode: mode });
 
         await openWidgetMenu(page);
+        if (mode === "light") {
+          const presentation = await page
+            .locator(".board-widget__menu-panel:popover-open .board-widget__menu-danger")
+            .evaluate((action) => {
+              const menu = action.parentElement;
+              const move = menu?.querySelector('[role="menuitem"][data-value^="move:"]');
+              const preset = menu?.querySelector(".board-widget__preset");
+              const icon = action.querySelector(".board-widget__menu-icon");
+              if (!(move instanceof HTMLElement) || !(preset instanceof HTMLElement)) {
+                throw new Error("board fixture menu did not expose move and resize options");
+              }
+              return {
+                actionFontSize: getComputedStyle(action).fontSize,
+                actionText: action.textContent?.trim(),
+                iconHidden: icon?.getAttribute("aria-hidden"),
+                iconSvg: Boolean(icon?.querySelector("svg")),
+                moveFontSize: getComputedStyle(move).fontSize,
+                presetFontSize: getComputedStyle(preset).fontSize,
+              };
+            });
+          expect(presentation).toMatchObject({
+            actionText: "Delete",
+            actionFontSize: presentation.presetFontSize,
+            moveFontSize: presentation.presetFontSize,
+            iconHidden: "true",
+            iconSvg: true,
+          });
+        }
         const colors = await page.evaluate(resolveRenderedColors, await readMenuColors(page));
         expect(colorContrast(colors.foreground!, colors.background!)).toBeGreaterThanOrEqual(4.5);
 
@@ -743,40 +764,6 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         await context.close();
       }
     },
-  );
-
-  it(
-    "renders consistent menu options with a leading trash icon",
-    withFixturePage(async (page) => {
-      await page.goto(fixtureServer.url, { waitUntil: "domcontentloaded" });
-      await openWidgetMenu(page);
-      const presentation = await page
-        .locator(".board-widget__menu-panel:popover-open .board-widget__menu-danger")
-        .evaluate((action) => {
-          const menu = action.parentElement;
-          const move = menu?.querySelector('[role="menuitem"][data-value^="move:"]');
-          const preset = menu?.querySelector(".board-widget__preset");
-          const icon = action.querySelector(".board-widget__menu-icon");
-          if (!(move instanceof HTMLElement) || !(preset instanceof HTMLElement)) {
-            throw new Error("board fixture menu did not expose move and resize options");
-          }
-          return {
-            actionFontSize: getComputedStyle(action).fontSize,
-            actionText: action.textContent?.trim(),
-            iconHidden: icon?.getAttribute("aria-hidden"),
-            iconSvg: Boolean(icon?.querySelector("svg")),
-            moveFontSize: getComputedStyle(move).fontSize,
-            presetFontSize: getComputedStyle(preset).fontSize,
-          };
-        });
-      expect(presentation).toMatchObject({
-        actionText: "Delete",
-        actionFontSize: presentation.presetFontSize,
-        moveFontSize: presentation.presetFontSize,
-        iconHidden: "true",
-        iconSvg: true,
-      });
-    }),
   );
 
   it(

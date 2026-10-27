@@ -33,6 +33,7 @@ import {
   type EngineMetrics,
 } from "./lib/control-ui-engine-metrics.ts";
 import { createEnginePluginMemoryScenarios } from "./lib/control-ui-engine-plugin-memory-scenarios.ts";
+import { createEngineStyleScenarios } from "./lib/control-ui-engine-style-scenarios.ts";
 import { frames } from "./lib/control-ui-interaction-navigation.ts";
 import {
   createScenarioFixture,
@@ -43,12 +44,19 @@ import {
   type InteractionEvidence,
 } from "./lib/control-ui-interaction-scenarios.ts";
 import { installControlUiResourceCounts } from "./lib/control-ui-resource-counts.ts";
+import {
+  createWorkboardResourceFixture,
+  prepareWorkboardResourceSource,
+} from "./lib/control-ui-workboard-resource-fixture.ts";
 
 const { values } = parseArgs({
   options: {
     "bundle-dir": { type: "string", default: "dist/control-ui" },
     "compare-bundle-dir": { type: "string" },
     "control-bundle-dir": { type: "string" },
+    "source-root": { type: "string", default: "." },
+    "compare-source-root": { type: "string" },
+    "control-source-root": { type: "string" },
     output: { type: "string", default: ".artifacts/control-ui-engines" },
     engines: { type: "string", default: "chromium,webkit" },
     viewport: { type: "string", default: "both" },
@@ -89,10 +97,20 @@ const directories = [
   values["compare-bundle-dir"],
   values["control-bundle-dir"],
 ].filter((directory): directory is string => Boolean(directory));
+const sourceRoots = [
+  values["source-root"],
+  values["compare-source-root"],
+  values["control-source-root"],
+];
+const needsWorkboard = values.steps?.split(",").some((id) => id.startsWith("workboard-"));
+if (needsWorkboard && directories.some((_, index) => !sourceRoots[index])) {
+  throw new Error("Workboard comparisons require a source root for each bundle");
+}
 const servers: Array<{
   directory: string;
   build: { buildId: string; version: string };
   sha256: string;
+  workboardSource?: Awaited<ReturnType<typeof prepareWorkboardResourceSource>>;
   server: Awaited<ReturnType<typeof startControlUiBenchGatewayServer>>;
 }> = [];
 const browsers = new Map<ControlUiEngine, Browser>();
@@ -174,7 +192,7 @@ const observations: Observation[] = [];
 const writeJson = (name: string, value: unknown) =>
   writeFile(path.join(artifactDir, name), JSON.stringify(value, null, 2));
 try {
-  for (const directory of directories) {
+  for (const [index, directory] of directories.entries()) {
     const resolved = path.resolve(directory);
     const html = await readFile(path.join(resolved, "index.html"), "utf8");
     const raw = html.match(
@@ -192,6 +210,9 @@ try {
       directory: resolved,
       build,
       sha256: createHash("sha256").update(html).digest("hex"),
+      workboardSource: needsWorkboard
+        ? await prepareWorkboardResourceSource(sourceRoots[index]!)
+        : undefined,
       server: await startControlUiBenchGatewayServer(resolved),
     });
   }
@@ -202,6 +223,7 @@ try {
   const catalog: EngineScenario[] = [
     ...createEngineBootScenarios(servers[0]!.server.baseUrl),
     ...createEngineActionScenarios(),
+    ...createEngineStyleScenarios(),
     ...createEngineMemoryScenarios(),
     ...createEnginePluginMemoryScenarios(),
     ...interactionScenarios.filter(
@@ -248,7 +270,12 @@ try {
     browsers: Object.fromEntries(
       [...browsers].map(([engine, browser]) => [engine, browser.version()]),
     ),
-    bundles: servers.map(({ directory, build, sha256 }) => ({ directory, build, sha256 })),
+    bundles: servers.map(({ directory, build, sha256, workboardSource }) => ({
+      directory,
+      build,
+      sha256,
+      workboardSource,
+    })),
     host: { platform: os.platform(), arch: os.arch(), cpus: os.cpus().length, load: os.loadavg() },
     pairs,
     viewports,
@@ -367,11 +394,14 @@ try {
                   gatewayUrl: controlUiBundledGatewayUrl(slot.server.baseUrl),
                 },
               );
-              const fixture = createScenarioFixture(
-                slot.build.buildId,
-                slot.build.version,
-                scenario,
-              );
+              const fixture: ReturnType<typeof createScenarioFixture> = scenario.fixture
+                ?.workboardResources
+                ? createWorkboardResourceFixture(
+                    slot.build.buildId,
+                    slot.build.version,
+                    slot.workboardSource!.root,
+                  )
+                : createScenarioFixture(slot.build.buildId, slot.build.version, scenario);
               // Keep document and mocked bootstrap capabilities identical;
               // the app correctly reloads when these disagree.
               slot.server.setTerminalEnabled(fixture.terminalEnabled ?? false);

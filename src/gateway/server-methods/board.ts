@@ -56,7 +56,6 @@ import {
 } from "../mcp-app-operations.js";
 import { mintMcpAppViewFromTranscript } from "../mcp-app-reconstruction.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
-import { sessionObserverScopeKey } from "../session-observer-model.js";
 import { resolveRequestedSessionStoreTarget } from "../session-store-key.js";
 import {
   defineBoardMethod,
@@ -83,6 +82,7 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
       const { snapshot, htmlViewMetadata } =
         await store.getSnapshotWithHtmlViewMetadata(boardSession);
       authority.assertActive();
+      const projectedSnapshot = projectBoardSnapshot(snapshot, boardSession.agentId);
       let sandboxPort = context.getMcpAppSandboxPort?.();
       let sandboxOrigin: string | undefined | null = null;
       for (const widget of snapshot.widgets) {
@@ -109,7 +109,7 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
           },
         });
         widget.frameUrl = buildBoardWidgetFrameUrl({
-          sessionKey: sessionObserverScopeKey(snapshot.sessionKey, boardSession.agentId),
+          sessionKey: projectedSnapshot.sessionKey,
           name: widget.name,
           ticket,
         });
@@ -120,9 +120,7 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
         widget.viewTicketTtlMs = BOARD_VIEW_TICKET_TTL_MS;
         widget.viewGeneration = viewMetadata.viewGeneration;
         if (sandboxPort !== undefined) {
-          widget.sandboxUrl = buildBoardWidgetSandboxPath({
-            ...viewMetadata,
-          });
+          widget.sandboxUrl = buildBoardWidgetSandboxPath(viewMetadata);
           if (ingress) {
             widget.sandboxUrl = new URL(widget.sandboxUrl, ingress.sandboxOrigin).href;
           }
@@ -138,7 +136,7 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
         }
       }
       authority.assertActive();
-      respond(true, projectBoardSnapshot(snapshot, boardSession.agentId));
+      respond(true, projectedSnapshot);
     }),
     "board.update": defineBoardMethod(
       "board.update",

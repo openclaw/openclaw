@@ -117,6 +117,8 @@ const repositoryScriptEntries = [
   "scripts/bench-plugin-registration.mts!",
   // The cold-load benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-control-ui-cold-load.ts!",
+  // scripts/perf/warm-reload-proof.md invokes this real-Gateway visual proof loop.
+  "scripts/perf/warm-reload-proof.ts!",
   // scripts/control-ui-retention/README.md invokes this opt-in production census.
   "scripts/control-ui-retention/retention-suite.ts!",
   // #179175 invokes this development-loop benchmark CLI by path.
@@ -169,6 +171,7 @@ const repositoryScriptEntries = [
   "scripts/perf/diagnostic-profile-measure.ts!",
   "scripts/perf/owned-directory-events-measure.ts!",
   "scripts/perf/plugin-gateway-scope-measure.ts!",
+  "scripts/perf/plugin-tool-resolution-measure.ts!",
   // pg-footprint.md and the pool proof commands execute these entries by path.
   "scripts/perf/pg-footprint.ts!",
   "scripts/perf/pg-footprint-preload.mjs!",
@@ -199,6 +202,7 @@ const repositoryScriptEntries = [
   "scripts/perf/approval-replay-burst-measure.ts!",
   "scripts/perf/channels-status-inventory.ts!",
   "scripts/perf/extension-handler-lookup-measure.ts!",
+  "scripts/perf/extension-context-copy-measure.ts!",
   "scripts/perf/knowledge-git-transactions.ts!",
   "scripts/perf/reply-tool-authority-measure.ts!",
   "scripts/perf/select-environment-scale.ts!",
@@ -234,6 +238,7 @@ const repositoryScriptEntries = [
   "scripts/perf/provider-prompt-state-worker-measure.mjs!",
   "scripts/perf/session-diff-metadata-measure.ts!",
   "scripts/perf/session-file-workspace-measure.ts!",
+  "scripts/perf/session-files-list-measure.ts!",
   // The performance guide and transcript driver invoke these tools and preloads by path.
   "scripts/lib/gateway-bench-transport-preload.ts!",
   "scripts/perf/async-store-measure.mjs!",
@@ -386,6 +391,7 @@ const repositoryScriptEntries = [
   "scripts/perf/agent-roster-ids-measure.ts!",
   "scripts/perf/agent-roster-validation-measure.mjs!",
   "scripts/perf/attempt-abort-retention.ts!",
+  "scripts/perf/board-get-measure.mjs!",
   "scripts/perf/board-layout-measure.mjs!",
   "scripts/perf/channel-run-admission-measure.mjs!",
   "scripts/perf/chat-history-param-validation-measure.mjs!",
@@ -452,6 +458,7 @@ const repositoryScriptEntries = [
   "scripts/perf/worker-request-diagnostics-measure.ts!",
   "scripts/perf/worker-transcript-batch-measure.ts!",
   // Maintained source headers invoke these standalone measurement commands by exact path.
+  "scripts/perf/active-node-turn-prepare-measure.ts!",
   "scripts/perf/agent-fresh-array-copy-measure.ts!",
   "scripts/perf/agent-object-copy-measure.ts!",
   "scripts/perf/agent-stream-update-measure.ts!",
@@ -480,11 +487,14 @@ const repositoryScriptEntries = [
   "scripts/perf/reef-device-sign-measure.ts!",
   "scripts/perf/session-actor-admission-measure.ts!",
   "scripts/perf/session-pin-policy-measure.ts!",
+  "scripts/perf/session-prompt-begin-measure.ts!",
   "scripts/perf/session-store-target-inventory-measure.ts!",
+  "scripts/perf/session-discovery-payload-measure.mjs!",
   "scripts/perf/state-read-transport-bench.ts!",
   "scripts/perf/subagent-run-retention-gateway.ts!",
   "scripts/perf/subagent-run-retention-measure.ts!",
   "scripts/perf/subagent-runtime-registry-measure.ts!",
+  "scripts/perf/transcript-payload-prepare-measure.ts!",
   "scripts/perf/transcript-resident-hydration-measure.ts!",
   "scripts/perf/worker-task-input-measure.mjs!",
   "scripts/perf/worktree-provisioning-gateway-measure.ts!",
@@ -550,6 +560,7 @@ const repositoryScriptEntries = [
   "scripts/perf/placement-identity-recovery-bench.ts!",
   "scripts/perf/provider-tool-normalization-measure.ts!",
   "scripts/perf/session-entry-patch-prepare-measure.ts!",
+  "scripts/perf/session-patch-label-owner-measure.ts!",
   "scripts/perf/session-event-audience-measure.ts!",
   "scripts/perf/transcript-snapshot-copy-measure.ts!",
   "scripts/perf/turn-start-phases.ts!",

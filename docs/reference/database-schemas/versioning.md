@@ -202,6 +202,15 @@ their complete manifest format. This is a shared-state change only: the agent
 schema version is unchanged. Older checkpoint writers require the verified
 pre-upgrade backup for rollback.
 
+Shared-state [schema 35](/reference/database-schemas/state-schema-history#state-schema-35)
+replaces per-worktree node storage with shared content-addressed trees and source
+path sets. Its migration is DDL only; the existing reconciliation owner converts
+individual projections online and preserves pending checkpoints. Although the
+added columns are nullable, older writers would advance only the retired rows
+and leave accepted roots stale. They therefore must refuse schema 35. Rollback
+requires the verified pre-upgrade backup and matching build; the agent schema
+version is unchanged.
+
 State schemas 32–33 and agent schemas 34–35 correct PostgreSQL index ordering;
 agent schema 36 adds indexed memory keyword path candidates. With writers
 stopped, `openclaw doctor --fix` backs up older stores and applies consecutive

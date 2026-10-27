@@ -427,7 +427,7 @@ export function resolveChangedNodeTestTargets(
 ): string[] {
   const cwd = options.cwd ?? process.cwd();
   const paths = changedPaths.filter((file) => !isIndependentlyCheckedDocumentation(file, cwd));
-  const policyTargets = resolvePolicyTestTargets(changedPaths, { cwd });
+  const policyTargets = resolvePolicyTestTargets(changedPaths, { cwd, baseRef: options.baseRef });
   const aggressive = options.selectionMode === "aggressive";
   const smoke = aggressive ? AGGRESSIVE_PR_SMOKE_TEST_FILES : PR_SMOKE_TEST_FILES;
   const selections: { rule: string; input: string; targets: string[] }[] = [];
