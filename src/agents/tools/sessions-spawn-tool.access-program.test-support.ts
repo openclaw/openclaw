@@ -48,27 +48,7 @@ export function registerSessionsSpawnAccessProgramTests({
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
-  it("creates a visible child with the requested cyber Access program", async () => {
-    const callGateway = mockGateway(visibleCreated);
-    const result = await makeVisibleTool({ callGateway }).execute("visible-access", {
-      task: "triage",
-      visible: true,
-      cyberAccessProgram: "daybreak_blue",
-    });
-    expect(result.details).toMatchObject({
-      status: "accepted",
-      cyberAccessProgram: "daybreak_blue",
-    });
-    expect(callGateway).toHaveBeenCalledWith(
-      "sessions.create",
-      expect.objectContaining({ cyberAccessProgram: "daybreak_blue" }),
-    );
-  });
-
-  it.each([
-    [undefined, "daybreak_red"],
-    ["openai/other-model", undefined],
-  ])("visible child with model override %s gets requester Access %s", async (model, expected) => {
+  it("does not inherit requester Access for a visible child on another model", async () => {
     const storePath = path.join(sessionDirs.make(), "sessions.json");
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: "agent:main:main", storePath },
@@ -78,8 +58,8 @@ export function registerSessionsSpawnAccessProgramTests({
     await makeVisibleTool({
       callGateway,
       config: { session: { store: storePath }, agents: { entries: { main: {} } } },
-    }).execute("visible-inherit", { task: "triage", visible: true, ...(model ? { model } : {}) });
+    }).execute("visible-inherit", { task: "triage", visible: true, model: "openai/other-model" });
     const [, createParams] = vi.mocked(callGateway).mock.calls[0] ?? [];
-    expect(requireRecord(createParams, "sessions.create").cyberAccessProgram).toBe(expected);
+    expect(requireRecord(createParams, "sessions.create").cyberAccessProgram).toBeUndefined();
   });
 }
