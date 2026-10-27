@@ -1,6 +1,7 @@
 {
   "id": "knowledge",
   "kind": "memory",
+  "categories": ["memory"],
   "name": "Knowledge",
   "description": "Evidence-backed knowledge, inspectable in OpenClaw.",
   "version": "0.1.0",
