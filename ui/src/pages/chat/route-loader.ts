@@ -529,7 +529,16 @@ export async function loadChatRoute(
       ? { kind: "unique" as const, session: localRow, isCurrent: isResolutionSourceCurrent }
       : await resolveShortSessionReference(context, target, routeLocation, signal);
   if (resolution.kind === "prepared") {
-    const canonicalLocationReady = resolution.resolution
+    const data: Extract<ChatRouteData, { kind: "session" }> = {
+      kind: "session",
+      sessionKey: resolution.session.key,
+      agentId: resolution.session.agentId,
+      face,
+      routeLoadingSkeleton: true,
+      ...(target.shortId.length > 8 ? { shortId: target.shortId } : {}),
+      canonicalLocationSource: routeLocation,
+    };
+    data.canonicalLocationReady = resolution.resolution
       .then((resolved) => {
         if (
           !resolution.isCurrent() ||
@@ -547,20 +556,16 @@ export async function loadChatRoute(
           preferenceDerived: false,
           shortId: target.shortId,
         });
-        // A successful no-op confirmation still releases provisional route admission.
-        return canonical ? (canonical.canonicalLocation ?? routeLocation) : null;
+        const confirmedLocation = canonical ? (canonical.canonicalLocation ?? routeLocation) : null;
+        if (confirmedLocation) {
+          // The shell observes completion when the page republishes this route.
+          data.canonicalLocation = confirmedLocation;
+          delete data.canonicalLocationReady;
+        }
+        return confirmedLocation;
       })
       .catch(() => null);
-    return {
-      kind: "session",
-      sessionKey: resolution.session.key,
-      agentId: resolution.session.agentId,
-      face,
-      routeLoadingSkeleton: true,
-      ...(target.shortId.length > 8 ? { shortId: target.shortId } : {}),
-      canonicalLocationReady,
-      canonicalLocationSource: routeLocation,
-    };
+    return data;
   }
   if (resolution.kind === "not-found") {
     if (revalidatedResolution) {
