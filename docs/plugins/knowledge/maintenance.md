@@ -105,19 +105,30 @@ an unsupported guess.
 
 ## Agent review
 
-Relink leaves claims that name no page, or more than one. An operator can hand
-those to an agent: set `maintenance.reviewJobId` to an automation whose agent
-turn follows the `knowledge-unlinked-claims` skill. After a pass that leaves
-private claims with no linked page and no source page, whichever tool saved
-them, maintenance queues that automation once. It
-does not queue it when nothing is left, and a disabled automation does not run.
-The last pass reports the review's outcome (`enqueued`, `not_needed`, `skipped`,
-`unavailable`, or `failed`) and how many claims were left.
+Relink leaves claims that name no page, or more than one. An agent review
+handles them: an automation whose agent turn follows the
+`knowledge-unlinked-claims` skill. After a pass that leaves private claims with
+no linked page and no source page, whichever tool saved them, maintenance
+queues that automation once. It does not queue it when nothing is left, and a
+disabled automation does not run. The last pass reports the review's job ID,
+outcome (`enqueued`, `not_needed`, `skipped`, `unavailable`, or `failed`), and
+how many claims were left.
 
-The review edits private knowledge, so the automation must run in a session
-with the owner's private access: a kept worker spawned from the owner's direct
-conversation. The skill's "Setting up the scheduled review" section gives the
-steps. Conversation partitions are not reviewed.
+Maintenance picks the automation in this order:
+
+1. `maintenance.reviewJobId`, when set.
+2. Otherwise, the automation with declaration key
+   `knowledge:scribe:unlinked-review`, which the **Review unlinked claims**
+   scribe creates for itself. An enabled job is preferred; a paused one is
+   reported as `skipped`.
+
+With neither, the pass reports no review.
+
+The review edits private knowledge, so its automation must run in a session
+with the owner's private access. Start the **Review unlinked claims** scribe
+from the Knowledge page's Scribes tab, or send its setup message from a new
+conversation in the owner's direct chat. The skill's "Scribe setup" section
+gives the steps. Conversation partitions are not reviewed.
 
 The `knowledge-unlinked-claims` skill is the agent workflow for the claims relink
 leaves unlinked. It chooses subject pages with judgment, creates pages for
