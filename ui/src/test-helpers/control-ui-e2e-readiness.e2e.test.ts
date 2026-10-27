@@ -219,7 +219,7 @@ suite.define(() => {
         if (offline) {
           await gateway.setOnline(false);
           await page
-            .locator(".sidebar-shell__footer .gateway-status")
+            .locator(".sidebar-shell__connection .gateway-status")
             .getByText("Reconnecting…", { exact: true })
             .waitFor();
         }

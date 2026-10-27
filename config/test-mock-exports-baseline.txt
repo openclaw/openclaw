@@ -415,7 +415,6 @@
 ["extensions/google/provider-discovery.import-guard.test.ts","./vertex-adc.js","58ba3647089beaba044598bf0b7344523afc1fe836dbc7fc1bc17a8200118379",1]
 ["extensions/google/provider-discovery.import-guard.test.ts","openclaw/plugin-sdk/provider-catalog-live-runtime","3c6c222166c25676c21472d661d204fdee4fbb0f8a79897d602cefd4089297a4",1]
 ["extensions/google/provider-policy-api.test.ts","openclaw/plugin-sdk/provider-stream-shared","0f45b4631145bdd884cba250956d71fe2abde974702c3df9afd2e85dc2882278",1]
-["extensions/google/provider-registration.test.ts","./transport-stream.js","1a57fc744fb595a886704c543302a28a0f35d1a943bc112519762d7d540fbc9f",1]
 ["extensions/google/realtime-voice-lazy.test.ts","./realtime-voice-provider.js","63ea60b868e0acecc7a96ddf26136057c8a319c356cb39a81aee796c00389e67",1]
 ["extensions/google/realtime-voice-meeting.test.ts","./google-genai-runtime.js","5774ec0934f225557d670fa1c4b73e5a25c0ffb3872ae1c1980db7737238b2c9",1]
 ["extensions/google/realtime-voice-provider.test.ts","./google-genai-runtime.js","8053ece490048742780b051aedce29ebd3043cc78faf387b072123ff58274087",1]
