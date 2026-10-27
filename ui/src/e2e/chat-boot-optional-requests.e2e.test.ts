@@ -40,6 +40,8 @@ suite.define(() => {
         };
         const gateway = await installMockGateway(page, {
           sessionKey,
+          // The final rejection must require login, not recover with a paired-browser token.
+          deviceToken: null,
           deferredMethods: ["connect"],
           historyMessages: [initialMessage],
         });
