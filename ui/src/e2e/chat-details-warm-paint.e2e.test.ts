@@ -156,15 +156,27 @@ suite.define(() => {
         expect(await refresh.getAttribute("aria-disabled")).toBe("true");
         expect(await refresh.getAttribute("disabled")).toBeNull();
         expect(await controlAppearance()).toEqual(liveAppearance);
+        const chatUrl = page.url();
+        const inputGeometry =
+          ".chat-pane-cache__pane--active .chat-details " +
+          ":is([data-details-group=automations] > .chat-details-desktop-section__body, " +
+          ".task-progress-details__refresh, .chat-summary__automation, .chat-summary__automation-more)";
         const retainedRefresh = await refresh.elementHandle();
+        // Forced clicks skip stability and hit-target checks during disclosure motion.
+        await refresh.scrollIntoViewIfNeeded();
+        await waitForLayoutSettled(page, inputGeometry);
         await refresh.click({ force: true });
         await refresh.press("Enter");
         await refresh.press("Space");
+        expect(page.url()).toBe(chatUrl);
         expect(await gateway.getRequests("progressCard.refresh")).toHaveLength(0);
         expect(await more.getAttribute("aria-disabled")).toBe("true");
         expect(await more.getAttribute("disabled")).toBeNull();
+        await more.scrollIntoViewIfNeeded();
+        await waitForLayoutSettled(page, inputGeometry);
         await more.click({ force: true });
         await more.press("Enter");
+        expect(page.url()).toBe(chatUrl);
         expect(await gateway.getRequests("cron.list")).toHaveLength(0);
         expect(await people.locator(".chat-details-people__preview-avatar").count()).toBe(1);
         expect(await details.locator("openclaw-panel-loading-skeleton").count()).toBe(0);

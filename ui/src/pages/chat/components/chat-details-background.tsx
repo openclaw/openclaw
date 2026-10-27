@@ -4,6 +4,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import { projectDetailsSubagents } from "../chat-details-snapshot.ts";
 import {
   listSubagents,
@@ -210,8 +211,10 @@ export function ChatDetailsBackground(
   const liveSummary = createMemo(() =>
     desktopPresentation() &&
     props.details.subagentSessionsHydrated &&
-    props.details.subagentSessions?.length
-      ? props.details.selectedSession && projectDetailsSubagents(collection())
+    props.details.subagentSessions?.some((row) =>
+      areUiSessionKeysEquivalent(row.key, props.details.selectedSession?.key),
+    )
+      ? projectDetailsSubagents(collection())
       : undefined,
   );
   const summary = () =>

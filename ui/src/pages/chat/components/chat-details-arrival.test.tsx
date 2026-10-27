@@ -287,6 +287,20 @@ it("retains cached Subagents until the roster observes its parent, then adopts n
   flush();
   expect(view.group("subagents")?.textContent).toContain("Review");
   expect(remember).not.toHaveBeenCalled();
+  view.update({
+    subagentSessions: [
+      {
+        key: "agent:main:subagent:partial",
+        kind: "direct",
+        derivedTitle: "Partial child",
+        parentSessionKey: view.initial.sessionKey,
+      },
+    ],
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+  expect(view.group("subagents")?.textContent).toContain("Review");
+  expect(remember).not.toHaveBeenCalled();
   view.update({ subagentSessions: [{ key: view.initial.sessionKey, kind: "direct" }] });
   await vi.advanceTimersByTimeAsync(0);
   flush();

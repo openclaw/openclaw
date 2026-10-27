@@ -457,7 +457,7 @@ describe("persistent chat session snapshots", () => {
 
   it.each(["direct", "prewarmed"])("discards the previous projection (%s)", async (mode) => {
     await persist(writer, sessionKey, snapshot("current"));
-    await putRawRecord(envelope(sessionKey, snapshot("old"), 5));
+    await putRawRecord(envelope(sessionKey, snapshot("old"), 6));
     if (mode === "prewarmed") {
       void prewarmChatSnapshot(sessionKey);
     }
