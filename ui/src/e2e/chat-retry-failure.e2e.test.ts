@@ -79,7 +79,7 @@ suite.define(() => {
           "[System] Continue the interrupted turn.",
           now - 1,
           ["restart-recovery-input", 3, successorRunId],
-          { provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" } },
+          { provenance: { kind: "internal_system", sourceTool: "system-event" } },
         ),
         message("assistant", textContent("The review is complete."), now, [
           "restart-final",

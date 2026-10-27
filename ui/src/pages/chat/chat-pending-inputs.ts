@@ -26,12 +26,11 @@ import {
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { projectChatSystemNotice } from "./chat-system-notice.ts";
-import { buildMessageItems, messageMatchesSearchQuery } from "./chat-thread-items.ts";
+import { buildMessageItems } from "./chat-thread-items.ts";
 import {
   getChatSessionProjection,
   readChatSessionProjectionScope,
   reconcileChatInputCustody,
-  selectChatInputDisplay,
 } from "./history-merge.ts";
 import type { PendingInputStatus } from "./system-notice-kinds.ts";
 
@@ -113,7 +112,7 @@ function describePendingInputPreview(message: unknown): string {
 function isDismissablePendingInput(input: ChatPendingInputsPage["items"][number]): boolean {
   return (
     !input.queued &&
-    (input.state === "interrupted" || input.state === "cancelled") &&
+    input.state === "cancelled" &&
     asNullableRecord(input.message)?.display !== false
   );
 }
@@ -130,8 +129,11 @@ export function buildPendingInputItems(
   // Custody records stay outside active-run ordering until the writer promotes them.
   const items: ChatItem[] = [];
   for (const input of inputs) {
-    let pendingStatus: PendingInputStatus =
-      input.state === "queued" || input.state === "cancelled" ? input.state : "interrupted";
+    // Legacy interrupted custody is retained in storage but has no presentation.
+    if (input.state !== "queued" && input.state !== "cancelled") {
+      continue;
+    }
+    let pendingStatus: PendingInputStatus = input.state;
     if (
       input.state === "queued" &&
       input.runId &&
@@ -142,7 +144,6 @@ export function buildPendingInputItems(
     const retired = isDismissablePendingInput(input)
       ? {
           id: input.id,
-          status: input.state === "interrupted" ? ("interrupted" as const) : ("cancelled" as const),
           preview: describePendingInputPreview(input.message),
         }
       : undefined;
@@ -399,25 +400,6 @@ async function requestPendingInputPage(
 
 export function loadChatPendingInputs(state: ChatState, before?: number): Promise<void> {
   return requestPendingInputPage(state, before, "navigation");
-}
-
-/** Use the transcript's identity, notice, and search projections, not raw custody. */
-export function listDismissablePendingInputIds(
-  view: ChatPendingInputView,
-  messages: readonly unknown[],
-  search: Readonly<{ open: boolean; query: string }>,
-): string[] {
-  return selectChatInputDisplay(messages, [], view.page.items).pendingInputs.flatMap((input) =>
-    !isPendingInputDismissHidden(view, input.id) &&
-    (!search.open ||
-      !search.query.trim() ||
-      messageMatchesSearchQuery(input.message, search.query)) &&
-    buildPendingInputItems([input]).some(
-      (item) => item.kind === "notice" && item.retiredPendingInput,
-    )
-      ? [input.id]
-      : [],
-  );
 }
 
 /** Hide the selected retired inputs at once, then keep or restore them by the Gateway outcome. */

@@ -108,7 +108,7 @@ function chatConnectionPendingReason(host: Pick<ChatHost, "client" | "connected"
     : null;
 }
 
-// Hello permits RPCs before account recovery has claimed any retained first turn.
+// Sending waits for the authenticated outbox scope and locally owned session creation.
 // Renderers show loading only for these transient holds, never terminal expiry.
 export function chatSendPendingReason(
   host: Pick<ChatHost, "client" | "connected" | "hasPendingInitialTurn">,
