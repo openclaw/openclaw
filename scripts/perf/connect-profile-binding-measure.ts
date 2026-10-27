@@ -56,7 +56,7 @@ const { resolveCanonicalCachedGitHubIdentity: resolveIdentity } =
   await import("../../src/state/user-profile-reads.ts");
 hooks.deregister();
 assert(replaced, "Requested profile owner was not loaded");
-const { syncGitHubIdentity } = await import("../../src/state/user-profile-writes.worker.js");
+const { syncCanonicalGitHubIdentity } = await import("../../src/state/user-profile-writes.js");
 const { prepareUserProfileCatalog } = await import("../../src/state/user-profile-list.js");
 const { closeOpenClawStateDatabaseAsync } = await import("../../src/state/openclaw-state-db.js");
 const { drainGlobalSingletonLifecycleState } = await import("../../src/shared/global-singleton.js");
@@ -69,18 +69,23 @@ function sampledBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
   return node.selfSize + node.children.reduce((total, child) => total + sampledBytes(child), 0);
 }
 try {
-  const users = Array.from({ length: userCount }, (_, index) => {
+  const users = [];
+  for (let index = 0; index < userCount; index++) {
     const accountId = index + 1;
     const email = `synthetic-${index}@example.test`;
-    const profile = syncGitHubIdentity(
+    const profile = await syncCanonicalGitHubIdentity(
       {
         identity: { accountId, login: `synthetic-${index}` },
         authenticationAlias: { kind: "email", email },
       },
       options,
     );
-    return { binding: { accountId, email }, profileId: profile.id, updatedAt: profile.updatedAt };
-  });
+    users.push({
+      binding: { accountId, email },
+      profileId: profile.id,
+      updatedAt: profile.updatedAt,
+    });
+  }
   catalog = await prepareUserProfileCatalog(options);
   async function lookup(index: number) {
     const user = users[index % users.length]!;
