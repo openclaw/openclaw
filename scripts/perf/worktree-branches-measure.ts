@@ -126,6 +126,7 @@ try {
                 args.every((arg) => typeof arg === "string"),
             );
             const command = args.includes("for-each-ref") ? "for-each-ref" : args[0];
+            assert(command, "Git command must be nonempty");
             commands[command] = (commands[command] ?? 0) + 1;
             const { stdout, stderr } = await nativeGit("git", [...gitArgs, ...args], {
               cwd,
