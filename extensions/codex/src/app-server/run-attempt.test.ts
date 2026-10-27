@@ -1381,12 +1381,12 @@ describe("runCodexAppServerAttempt", () => {
       "features.code_mode": false,
       "features.code_mode_only": false,
     });
-    expect(startParams?.config?.apps?.["_default"]).toEqual({
+    expect(startParams?.config?.apps).toHaveProperty("_default", {
       enabled: false,
       destructive_enabled: false,
       open_world_enabled: false,
     });
-    expect(startParams?.config?.apps?.["google-calendar-app"]?.enabled).toBeUndefined();
+    expect(startParams?.config?.apps).not.toHaveProperty(["google-calendar-app", "enabled"]);
     expect(requestMethods(harness.requests)).not.toContain("app/installed");
     expect(requestMethods(harness.requests)).not.toContain("app/read");
   });
