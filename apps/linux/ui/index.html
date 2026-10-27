@@ -262,9 +262,10 @@
         </div>
 
         <div id="install-controls" class="controls hidden">
-          <label for="channel">Release channel</label>
+          <p id="bundled-install" class="hint hidden"></p>
+          <label id="channel-label" for="channel">Release channel</label>
           <div class="control-row">
-            <div class="select-field channel-field">
+            <div id="channel-field" class="select-field channel-field">
               <select id="channel">
                 <option value="stable">Stable</option>
                 <option value="beta">Beta</option>

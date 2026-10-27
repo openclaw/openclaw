@@ -61,6 +61,27 @@ pub enum InstallChannel {
 }
 
 impl InstallChannel {
+    pub(crate) fn for_build(
+        release_build: bool,
+        runtime: Option<crate::runtime_action::RuntimeFlavor>,
+    ) -> Self {
+        if release_build || runtime.is_some() {
+            Self::Stable
+        } else {
+            Self::Dev
+        }
+    }
+
+    pub(crate) fn require_available(
+        self,
+        runtime: Option<crate::runtime_action::RuntimeFlavor>,
+    ) -> Result<(), String> {
+        if runtime.is_some() && !matches!(self, Self::Stable) {
+            return Err("This app installs its bundled OpenClaw runtime. Beta and Development channels are unavailable; update the desktop app to change versions.".into());
+        }
+        Ok(())
+    }
+
     fn version(self) -> &'static str {
         match self {
             Self::Stable => "latest",
@@ -327,6 +348,46 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     use super::managed_launcher_absent;
     use super::prepare_package_root;
+    use super::InstallChannel;
+    use crate::runtime_action::RuntimeFlavor;
+
+    #[test]
+    fn bundled_installs_reject_other_channels_and_default_to_the_bundle() {
+        for runtime in [Some(RuntimeFlavor::Jit), Some(RuntimeFlavor::Aot)] {
+            for release_build in [false, true] {
+                assert!(matches!(
+                    InstallChannel::for_build(release_build, runtime),
+                    InstallChannel::Stable
+                ));
+            }
+            assert!(InstallChannel::Stable.require_available(runtime).is_ok());
+            for channel in [InstallChannel::Beta, InstallChannel::Dev] {
+                assert!(channel
+                    .require_available(runtime)
+                    .unwrap_err()
+                    .contains("update the desktop app"));
+            }
+        }
+    }
+
+    #[test]
+    fn builds_without_a_bundle_keep_the_channel_choices() {
+        assert!(matches!(
+            InstallChannel::for_build(true, None),
+            InstallChannel::Stable
+        ));
+        assert!(matches!(
+            InstallChannel::for_build(false, None),
+            InstallChannel::Dev
+        ));
+        for channel in [
+            InstallChannel::Stable,
+            InstallChannel::Beta,
+            InstallChannel::Dev,
+        ] {
+            assert!(channel.require_available(None).is_ok());
+        }
+    }
 
     #[test]
     fn private_package_root_prevents_ancestor_selection_and_preserves_retry_metadata() {

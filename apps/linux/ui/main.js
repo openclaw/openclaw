@@ -7,6 +7,9 @@ const elements = {
   activityLabel: document.querySelector("#activity-label"),
   actionControls: document.querySelector("#action-controls"),
   channel: document.querySelector("#channel"),
+  channelLabel: document.querySelector("#channel-label"),
+  channelField: document.querySelector("#channel-field"),
+  bundledInstall: document.querySelector("#bundled-install"),
   connectionChoices: document.querySelector("#connection-choices"),
   connectionLocal: document.querySelector("#connection-local"),
   connectionRemote: document.querySelector("#connection-remote"),
@@ -77,6 +80,11 @@ function show(element, visible) {
   element.classList.toggle("hidden", !visible);
 }
 
+function bundledRuntimeLabel() {
+  return firstRunBuild?.runtimeFlavor === "jit" ? "JIT"
+    : firstRunBuild?.runtimeFlavor === "aot" ? "AOT (experimental)" : null;
+}
+
 function render({
   activity = null,
   description,
@@ -93,8 +101,16 @@ function render({
   if (activity) {
     elements.activityLabel.textContent = activity;
   }
-  elements.installHint.textContent =
-    firstRunBuild?.platform === "freebsd"
+  const bundled = bundledRuntimeLabel();
+  elements.installButton.textContent = bundled ? "Install bundled OpenClaw" : "Install OpenClaw";
+  elements.bundledInstall.textContent = bundled
+    ? `Bundled with app v${firstRunBuild.version} · ${bundled}` : "";
+  show(elements.bundledInstall, Boolean(bundled));
+  show(elements.channelLabel, !bundled);
+  show(elements.channelField, !bundled);
+  elements.installHint.textContent = bundled
+    ? "Installs this app's bundled OpenClaw runtime in ~/.openclaw. Update the desktop app to change versions."
+    : firstRunBuild?.platform === "freebsd"
       ? "Installs the CLI in ~/.openclaw using your system Node.js and npm."
       : "Installs OpenClaw and its managed runtime in ~/.openclaw.";
   show(elements.installControls, showInstall);
@@ -301,7 +317,7 @@ async function connect(action) {
     const snapshot = await invoke("bootstrap");
     if (snapshot.phase === "missingCli" || snapshot.phase === "unconfigured") {
       firstRunPhase = snapshot.phase;
-      if (firstRunBuild?.releaseBuild === false) {
+      if (firstRunBuild?.releaseBuild === false && !bundledRuntimeLabel()) {
         elements.channel.value = "dev";
       }
       if (snapshot.setupError) {
@@ -331,8 +347,10 @@ function renderWelcome() {
 
 function renderConnectionChoices(error = null) {
   const freebsd = firstRunBuild?.platform === "freebsd";
+  const bundled = bundledRuntimeLabel();
   elements.localSubtitle.textContent = freebsd
     ? "Connect to a Gateway you start with the FreeBSD service or in a terminal."
+    : bundled ? `Bundled with app v${firstRunBuild.version} · ${bundled}. Installs and starts automatically.`
     : "Private to this computer. Installs and starts automatically.";
   render({
     description: error || (freebsd
@@ -360,6 +378,8 @@ function selectConnection(connection) {
   elements.footerMode.textContent = isRemote ? "REMOTE GATEWAY" : "LOCAL GATEWAY";
   show(elements.remoteDetails, isRemote);
   show(elements.setupContinue, !isRemote && !editingConnection);
+  elements.setupContinue.textContent = bundledRuntimeLabel() && firstRunPhase === "missingCli"
+    ? "Install bundled OpenClaw" : "Continue";
   show(elements.discovery, isRemote);
   if (isRemote) {
     void refreshGateways();
@@ -415,7 +435,7 @@ async function continueLocalSetup() {
     }
     return;
   }
-  if (firstRunBuild?.releaseBuild === false) {
+  if (firstRunBuild?.releaseBuild === false && !bundledRuntimeLabel()) {
     render({
       description:
         firstRunBuild?.platform === "freebsd"
@@ -595,14 +615,16 @@ async function install() {
   render({
     activity: "Installing OpenClaw…",
     description:
-      firstRunBuild?.platform === "freebsd"
+      bundledRuntimeLabel()
+        ? "This app's bundled OpenClaw runtime is being installed in your home directory."
+        : firstRunBuild?.platform === "freebsd"
         ? "Installing the CLI requires a compatible system Node.js and npm. Start the Gateway with the package service or in a terminal after installation."
         : "OpenClaw and its managed runtime are being installed in your home directory.",
     eyebrow: "INSTALLING",
     title: "Preparing your companion",
   });
   try {
-    await invoke("install_cli", { channel: elements.channel.value });
+    await invoke("install_cli", { channel: bundledRuntimeLabel() ? "stable" : elements.channel.value });
     elements.logStatus.textContent = "COMPLETE";
   } catch (error) {
     const message = friendlyError(error);

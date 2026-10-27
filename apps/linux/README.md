@@ -332,6 +332,11 @@ the Control UI's custodian onboarding. Release builds select their matching stab
 version; development builds use their staged source package. Nearby Gateways are
 never joined automatically.
 
+Builds with an embedded JIT or AOT runtime install that bundle. Setup shows the
+app version and runtime flavor instead of a release-channel picker, including
+development builds. Update the desktop app to change its bundled version. Builds
+without an embedded runtime retain the Stable, Beta, and Development choices.
+
 The custodian prepares available AI access and explains what was selected. Its
 **Use a different Gateway**, **Review permissions**, and **Open AI setup** actions
 open Manage Gateways, this computer's permissions, and Model Setup respectively.

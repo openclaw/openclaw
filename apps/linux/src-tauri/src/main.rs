@@ -804,11 +804,10 @@ impl DesktopState {
             let result = if missing_cli {
                 self.install_cli(
                     app,
-                    if is_release_version(&app.package_info().version.to_string()) {
-                        InstallChannel::Stable
-                    } else {
-                        InstallChannel::Dev
-                    },
+                    InstallChannel::for_build(
+                        is_release_version(&app.package_info().version.to_string()),
+                        bundled_runtime::flavor(),
+                    ),
                     selection,
                 )
             } else {
@@ -933,6 +932,7 @@ impl DesktopState {
         if test_profile::enabled() {
             return Err("The isolated AOT test app already includes its runtime. Use Start Gateway to run it.".into());
         }
+        channel.require_available(bundled_runtime::flavor())?;
         let _operation = self
             .inner
             .operation
