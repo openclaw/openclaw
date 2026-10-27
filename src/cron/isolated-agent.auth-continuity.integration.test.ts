@@ -15,8 +15,7 @@ import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-loc
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-// Install the complete host before spies so lazy setup cannot copy them past teardown.
-import "../agents/ai-transport-runtime-host.js";
+import "../agents/ai-transport-runtime-host.js"; // Initialize before spies; lazy setup copies the host.
 import {
   withOpenClawTestState,
   type OpenClawTestState,
