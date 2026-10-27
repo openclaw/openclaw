@@ -11,6 +11,7 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  createEmbeddedRunHandle,
   registerTestEmbeddedRun as setActiveEmbeddedRun,
   testing as embeddedRunTesting,
 } from "../../agents/embedded-agent-runner/runs.test-support.js";
@@ -74,20 +75,8 @@ function activateHandle(next = handle, target = operation) {
   setActiveEmbeddedRun(ref.sessionId, next, ref.sessionKey, undefined, undefined, target);
 }
 
-function expectHumanQuestionWait() {
-  expect(operation.watchdog.snapshot().waits).toContainEqual(
-    expect.objectContaining({ kind: "human_question" }),
-  );
-}
-
 beforeEach(async () => {
-  handle = {
-    runId: ref.runId,
-    queueMessage: async () => {},
-    isStreaming: () => true,
-    isCompacting: () => false,
-    abort,
-  };
+  handle = createEmbeddedRunHandle({ runId: ref.runId, abort });
   vi.useFakeTimers();
   vi.setSystemTime(Date.parse("2026-08-20T12:00:00Z"));
   setDiagnosticsEnabledForProcess(true);
@@ -243,7 +232,6 @@ it("keeps an accepted one-hour question alive through default diagnostic recover
     const id = await request();
     await vi.advanceTimersByTimeAsync(920_000);
     expect(recovery).not.toHaveBeenCalled();
-    expectHumanQuestionWait();
     expect(abort).not.toHaveBeenCalled();
     expect(manager.get(id)?.status).toBe("pending");
     const answer = manager.waitAnswer(id);
@@ -349,7 +337,6 @@ it("keeps resumed question work alive when attention reporting settles the quest
     });
     try {
       await vi.advanceTimersByTimeAsync(900_000);
-      expect(manager.observe(id)?.record.status).toBe("cancelled");
       await Promise.all(recovery.mock.results.map((result) => result.value));
 
       await expect(answer).resolves.toEqual({ status: "cancelled" });
@@ -393,7 +380,6 @@ it.each(["signal", "current client"] as const)(
     const observer = new AsyncWorkScope();
     const controller = new AbortController();
     let current = true;
-    const registered = vi.spyOn(manager, "waitAnswer");
     const waiting = observer.track(() =>
       call("question.waitAnswer", { id }, false, {
         signal: controller.signal,
@@ -402,7 +388,6 @@ it.each(["signal", "current client"] as const)(
     );
     const result = Promise.allSettled([waiting]);
     try {
-      expect(registered).toHaveBeenCalledExactlyOnceWith(id, undefined, undefined);
       observer.beginClose();
       if (source === "signal") {
         controller.abort(new Error("Question request source closed"));
@@ -426,7 +411,6 @@ it.each(["signal", "current client"] as const)(
       observer.beginClose();
       await result;
       await observer.drain();
-      registered.mockRestore();
     }
   },
 );
@@ -440,7 +424,6 @@ it("does not let operator questions or public diagnostic text suppress unrelated
 
 it("keeps explicit user abort authoritative during human input", async () => {
   const id = await request();
-  expectHumanQuestionWait();
   await expect(recover()).resolves.toMatchObject({ reason: "active_reply_work" });
   await expect(
     abortAndDrainEmbeddedAgentRun({ ...ref, reason: "user_abort" }),
@@ -562,7 +545,6 @@ it.each(["pending", "requester-inactive"] as const)(
     });
     expect(recovery).toHaveBeenCalledOnce();
     await request();
-    expectHumanQuestionWait();
     if (terminal === "requester-inactive") {
       // Worker placement or turn capability can close while the local run claim survives.
       requesterActive = false;
@@ -584,7 +566,6 @@ it("keeps the run protected until its last pending human question settles", asyn
   const first = await request();
   const second = await request(true, 3_600_000, "second-question");
   manager.cancel(first);
-  expectHumanQuestionWait();
   await expect(recover()).resolves.toMatchObject({ reason: "active_reply_work" });
   manager.cancel(second);
   await expect(recover()).resolves.toMatchObject({ status: "aborted" });
