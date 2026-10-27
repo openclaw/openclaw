@@ -13,6 +13,7 @@ import { t } from "../lib/reactive/i18n.ts";
 import { createAnchoredOverlay } from "../lib/reactive/overlay-anchor.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { createScrollPosition, createScrollStateRef } from "../lib/reactive/scroll-state.ts";
+import { nativeListener } from "../lib/solid-native-listener.ts";
 import type { OverlayPlacement } from "./overlay-anchor.ts";
 import { createOverlay } from "./overlay-lifecycle.ts";
 import type { OverlayNativeAdapter } from "./overlay-types.ts";
@@ -76,6 +77,9 @@ export function PickerContent<Option extends PickerOption>(props: {
   // A row the pointer highlights is already where the user is looking. Revealing
   // it would scroll a clipped edge row against an in-progress wheel or trackpad scroll.
   let pointerHighlight = false;
+  // The menu's pointer handler can publish selection before the following mouse event.
+  const markPointerHighlight = () => (pointerHighlight = true);
+  const pointerHighlightRef = nativeListener("pointermove", markPointerHighlight, true);
   const [searching, setSearching] = createSignal(false);
   const [query, setQuery] = createSignal("");
   const [keyboard, setKeyboard] = createSignal(false);
@@ -464,7 +468,7 @@ export function PickerContent<Option extends PickerOption>(props: {
         onMouseDown={(event) => event.preventDefault()}
         onMouseMove={() => {
           setKeyboard(false);
-          pointerHighlight = true;
+          markPointerHighlight();
           if (!row.option().disabled) {
             menu.setHighlightedValue(row.option().value);
           }
@@ -599,7 +603,7 @@ export function PickerContent<Option extends PickerOption>(props: {
         </Show>
         {windowSizer()}
         <div
-          ref={[(element) => (list = element), scrollRef]}
+          ref={[(element) => (list = element), scrollRef, pointerHighlightRef]}
           class="picker-select__options"
           role={props.params.groupBy ? undefined : "listbox"}
           id={props.params.groupBy ? undefined : id}

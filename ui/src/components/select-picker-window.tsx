@@ -59,6 +59,13 @@ export default function PickerWindow<Option extends PickerOption>(props: {
     useAnimationFrameWithResizeObserver: true,
     onChange: publish,
   });
+  const [registeredActive, setRegisteredActive] = createSignal<HTMLDivElement>();
+  const measureRow = (element: HTMLDivElement | null) => {
+    virtualizer.measureElement(element);
+    if (element && element === props.target()) {
+      setRegisteredActive(element);
+    }
+  };
   onSettled(() => {
     const { _didMount: mount } = virtualizer;
     return mount();
@@ -93,22 +100,30 @@ export default function PickerWindow<Option extends PickerOption>(props: {
   const height = () =>
     window().source === props.options ? window().height : props.options.length * 32;
   const rows = () => (window().source === props.options ? window().rows : []);
-  const activeMounted = createMemo(() => rows().some((row) => row.option.value === props.active));
+  const activeTarget = createMemo(() => {
+    const registered = registeredActive();
+    const active = props.active;
+    return props.target() ?? (registered?.dataset.value === active ? registered : undefined);
+  });
+  // Row registration admits reveal after DOM commit without waiting for a WebKit frame.
   createScrollPosition(
-    () => ({
-      reveal: activeMounted()
-        ? {
-            identity: [props.options, props.active],
-            target: () => (props.pointerHighlight() ? undefined : props.target()),
-          }
-        : undefined,
-    }),
-    { region: props.viewport, revealTiming: "animation-frame" },
+    () => {
+      const staticTarget = activeTarget();
+      return {
+        reveal: staticTarget
+          ? {
+              identity: [props.options, props.active, staticTarget],
+              target: () => (props.pointerHighlight() ? undefined : staticTarget),
+            }
+          : undefined,
+      };
+    },
+    { region: props.viewport },
   );
   return (
     <div class="picker-select__window" style={{ height: `${height()}px` }}>
       <For each={rows()} keyed={(row) => row.option.value}>
-        {(row) => props.renderRow(row, virtualizer.measureElement)}
+        {(row) => props.renderRow(row, measureRow)}
       </For>
     </div>
   );
