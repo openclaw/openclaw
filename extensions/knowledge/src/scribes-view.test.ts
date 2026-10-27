@@ -102,6 +102,18 @@ function fixture(world: {
   };
   return { ui, calls, request, create, open, load, render, page, scribesTab };
 }
+const reviewSetup = scribeSetup(
+  "claim-consolidation",
+  "ongoing",
+  { schedule: "45 3 * * 0" },
+  "America/Los_Angeles",
+);
+const reviewSession = {
+  "Scribe · Knowledge Consolidation": {
+    key: "s-review",
+    displayName: "Scribe · Knowledge Consolidation",
+  },
+};
 const buttonNamed = (root: ParentNode, text: string) =>
   [...root.querySelectorAll("button")].find((b) => b.textContent === text)!;
 const flush = () =>
@@ -113,12 +125,7 @@ afterEach(() => document.body.replaceChildren());
 
 it("lists On and Available scribes with honest detection and a tab count", async () => {
   const { render, scribesTab } = fixture({
-    sessions: {
-      "Scribe · Knowledge Consolidation": {
-        key: "s-review",
-        displayName: "Scribe · Knowledge Consolidation",
-      },
-    },
+    sessions: reviewSession,
     jobs: [reviewJob],
   });
   const view = await render();
@@ -327,12 +334,7 @@ it("disables starting without write access", async () => {
 
 it("runs, pauses, turns off and opens an On scribe from its detail", async () => {
   const { render, ui, calls, open, load, page } = fixture({
-    sessions: {
-      "Scribe · Knowledge Consolidation": {
-        key: "s-review",
-        displayName: "Scribe · Knowledge Consolidation",
-      },
-    },
+    sessions: reviewSession,
     jobs: [reviewJob],
   });
   ui.s.scribe = "claim-consolidation";
@@ -366,12 +368,7 @@ it("runs, pauses, turns off and opens an On scribe from its detail", async () =>
 
 it("reports a skipped run that could not complete as failed", async () => {
   const { render, ui } = fixture({
-    sessions: {
-      "Scribe · Knowledge Consolidation": {
-        key: "s-review",
-        displayName: "Scribe · Knowledge Consolidation",
-      },
-    },
+    sessions: reviewSession,
     jobs: [reviewJob],
     runs: [
       {
@@ -462,15 +459,9 @@ it("forces an ongoing scribe's first run once after its setup turn reports on", 
 });
 
 it("tries the first run again on the next load when forcing it failed", async () => {
-  const label = "Scribe · Knowledge Consolidation";
-  const setup = scribeSetup(
-    "claim-consolidation",
-    "ongoing",
-    { schedule: "45 3 * * 0" },
-    "America/Los_Angeles",
-  );
+  const setup = reviewSetup;
   const { render, ui, calls, request } = fixture({
-    sessions: { [label]: { key: "s-review", displayName: label } },
+    sessions: reviewSession,
     jobs: [{ ...reviewJob, id: "job-retry-first", state: {} }],
     history: {
       "s-review": [userText(setupPrompt(setup)), statusLine("on", "On")],
@@ -507,16 +498,10 @@ it("tries the first run again on the next load when forcing it failed", async ()
 });
 
 it("does not force a run after a repair, or for a job that already ran", async () => {
-  const label = "Scribe · Knowledge Consolidation";
-  const setup = scribeSetup(
-    "claim-consolidation",
-    "ongoing",
-    { schedule: "45 3 * * 0" },
-    "America/Los_Angeles",
-  );
+  const setup = reviewSetup;
   const fresh = { ...reviewJob, id: "job-repaired", state: {} };
   const { render, calls } = fixture({
-    sessions: { [label]: { key: "s-review", displayName: label } },
+    sessions: reviewSession,
     jobs: [fresh],
     history: {
       "s-review": [
@@ -528,7 +513,7 @@ it("does not force a run after a repair, or for a job that already ran", async (
   await render();
   expect(calls.some(([method]) => method === "cron.run")).toBe(false);
   const ran = fixture({
-    sessions: { [label]: { key: "s-review", displayName: label } },
+    sessions: reviewSession,
     jobs: [reviewJob],
     history: {
       "s-review": [userText(setupPrompt(setup)), statusLine("on", "On")],
@@ -598,9 +583,8 @@ it("recovers a conversation whose setup never arrived or whose setup turn stoppe
 });
 
 it("shows a Run now the scheduler refused instead of reporting it running", async () => {
-  const label = "Scribe · Knowledge Consolidation";
   const { render, ui, request, load } = fixture({
-    sessions: { [label]: { key: "s-review", displayName: label } },
+    sessions: reviewSession,
     jobs: [reviewJob],
   });
   ui.s.scribe = "claim-consolidation";
