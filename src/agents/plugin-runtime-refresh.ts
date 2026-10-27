@@ -91,8 +91,13 @@ export function captureAgentPluginRuntimeRefresh() {
         throw new Error("Plugin runtime changed. Continue with the refreshed tool catalog.");
       }
     },
+    /**
+     * Rejects calls once the run's own plugins tool changed the runtime. A reload's
+     * handover request does not: the reloading plugin keeps serving this generation
+     * until the turn reaches its step boundary, so admitted steps finish first.
+     */
     assertCurrent: () => {
-      if (owner && (!owner.active || owner.requested)) {
+      if (owner && (!owner.active || (owner.requested && owner.source === "tool"))) {
         throw new Error(
           "Plugin runtime changed. Continue with the refreshed tool catalog; do not repeat completed actions.",
         );

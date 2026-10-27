@@ -121,7 +121,7 @@ describe("plugin turn handover", () => {
     outer();
   });
 
-  it("asks a turn to hand over at its next step while keeping its hold", async () => {
+  it("asks a turn to hand over at its next step while its admitted calls still run", async () => {
     const { registry, instance } = createRegistryWithInstance("swap", true);
     const refresh = createAgentPluginRuntimeRefresh();
     const control = refresh.run(() => {
@@ -137,6 +137,8 @@ describe("plugin turn handover", () => {
     expect(control.isPending()).toBe(true);
     expect(control.requestSource()).toBe("reload");
     expect(instance.retainedWorkCount).toBe(1);
+    // The reloading plugin keeps serving this generation until the step boundary.
+    expect(() => control.assertCurrent()).not.toThrow();
   });
 
   it("lets the run's own tool request win the refresh source", async () => {
@@ -153,6 +155,7 @@ describe("plugin turn handover", () => {
     instance.reserveReplacement();
     await settle();
     expect(control.requestSource()).toBe("tool");
+    expect(() => control.assertCurrent()).toThrow("Plugin runtime changed");
   });
 
   it("continues only a turn that actually stopped at a step boundary", async () => {

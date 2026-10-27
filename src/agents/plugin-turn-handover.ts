@@ -1,21 +1,11 @@
 // Hands running turns to a reloaded plugin at their next step boundary (#182024).
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { collectRegistryInvocationInstances } from "../plugins/plugin-invocation-scope.js";
+import { pluginHandsOverTurns } from "../plugins/plugin-turn-handover-eligibility.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 
 const log = createSubsystemLogger("agents/plugin-turn-handover");
-
-// The retiring generation's manifest decides: a plugin hands turns over only when it
-// declares `reload.turnHandover`. A context engine's logical-turn custody is held by the
-// run entry, outside the step boundary, so its owner keeps today's wait for the turn.
-function handsOverTurns(registries: readonly PluginRegistry[], pluginId: string): boolean {
-  return registries.some(
-    (registry) =>
-      registry.plugins.some((record) => record.id === pluginId && record.turnHandover === true) &&
-      ![...registry.contextEngines.values()].some((entry) => entry.owner === `plugin:${pluginId}`),
-  );
-}
 
 // Every plugin these registries hold that a reload has reserved.
 function reservedPluginIds(registries: readonly PluginRegistry[]): Set<string> {
@@ -55,13 +45,15 @@ export function captureTurnHandoverRequest(
   // Every plugin the reload reserved is still reserved, and every one can hand over.
   const handoverReady = () => {
     const reserved = [...reservedPluginIds(held)];
-    return reserved.length > 0 && reserved.every((pluginId) => handsOverTurns(held, pluginId));
+    return (
+      reserved.length > 0 && reserved.every((pluginId) => pluginHandsOverTurns(held, pluginId))
+    );
   };
   const decide = () => {
     scheduled = false;
     const pendingYields = yields.splice(0);
     const reserved = [...reservedPluginIds(held)];
-    const pinning = reserved.filter((pluginId) => !handsOverTurns(held, pluginId));
+    const pinning = reserved.filter((pluginId) => !pluginHandsOverTurns(held, pluginId));
     if (!reserved.length || pinning.length) {
       if (pinning.length) {
         log.info(`reload of ${pinning.join(", ")} waits for the turn: no reload.turnHandover`);
