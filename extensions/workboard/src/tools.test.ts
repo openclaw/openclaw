@@ -64,6 +64,29 @@ function readPayload(result: unknown): Record<string, unknown> {
 }
 
 describe("workboard tools", () => {
+  it("reuses schemas across turns while binding the current store and claim owner", async () => {
+    const previousStore = createWorkboardSqliteTestStore();
+    const currentStore = createWorkboardSqliteTestStore();
+    const previous = toolSet(previousStore, "previous-owner");
+    for (let turn = 0; turn < 3; turn++) {
+      const ownerId = `owner-${turn}`;
+      const current = toolSet(currentStore, ownerId);
+      for (const [name, tool] of current) {
+        expect(tool.parameters, name).toBe(previous.get(name)?.parameters);
+      }
+      const card = await currentStore.create({ title: `Turn ${turn}` });
+      expect((await runTool(current, "claim", { id: card.id })).card).toMatchObject({
+        metadata: { claim: { ownerId } },
+      });
+      await expect(
+        executeTool(toolSet(currentStore, "previous-owner"), "heartbeat", {
+          id: card.id,
+        }),
+      ).rejects.toThrow(`claimed by ${ownerId}`);
+    }
+    expect(await previousStore.list()).toEqual([]);
+  });
+
   it("passes live invocation authority through the default-on Sessions board factory", async () => {
     const store = createWorkboardSqliteTestStore();
     await startEmptySessionsBoardService(store);
