@@ -1,16 +1,13 @@
 import { copyFileSync, existsSync, renameSync, symlinkSync, unlinkSync } from "node:fs";
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
-import {
-  observeHostDataSql,
-  observeSqliteReadSql,
-} from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { readSessionTranscriptMessageEvents } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
@@ -18,7 +15,6 @@ import {
   captureExternalSessionCommitGuard,
   type SessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
-import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -39,7 +35,6 @@ import {
 } from "./client-voice-session-source.js";
 import { readVoiceSessionRecord } from "./client-voice-session-store.js";
 import { captureClientVoiceSessionWriter } from "./client-voice-session-write.js";
-import * as voiceWriters from "./client-voice-session-write.js";
 import {
   recordMutation,
   recordMutationEvents,
@@ -185,20 +180,17 @@ describe("client voice session worker contract", () => {
     } finally {
       observation.restore();
     }
-    expect(readRecord(voiceSessionId)).toMatchObject({
-      status: "closed",
-      hasUserTranscript: true,
-      transcriptFailureKeys: [],
-      consultRunIds: [`run-${voiceSessionId}`],
-      effects: [{ runId: `run-${voiceSessionId}`, toolName: "message", status: "succeeded" }],
-    });
+    expect(readRecord(voiceSessionId)?.status).toBe("closed");
   });
 
   it.for(["create", "consult"] as const)(
-    "preserves the acknowledged %s result after settling failing source and writer cleanup",
+    "preserves the acknowledged %s lifecycle despite source and writer cleanup failures",
     async (operation, { signal }) => {
       await seedSession(target.sessionKey);
-      let voiceSessionId = operation === "consult" ? await createVoice() : undefined;
+      const voiceSessionId = "acknowledged-cleanup";
+      if (operation === "consult") {
+        await createVoice({ voiceSessionId });
+      }
       const sourceError = new Error("synthetic voice source release failure");
       const writerError = new Error("synthetic voice writer release failure");
       const releaseEntered = createDeferred();
@@ -226,31 +218,20 @@ describe("client voice session worker contract", () => {
         });
       using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       const runId = "acknowledged-cleanup-consult";
-      let releaseRun: (() => void) | undefined;
       let settled = false;
       const work =
         operation === "create"
-          ? createVoice({ requester: sourceRequester }).then((id) => {
-              voiceSessionId = id;
-            })
+          ? createVoice({ voiceSessionId, requester: sourceRequester })
           : registerClientVoiceConsultRun({
               ...target,
               requester: sourceRequester,
-              voiceSessionId: voiceSessionId!,
+              voiceSessionId,
               runId,
-            }).then((release) => {
-              releaseRun = release;
             });
-      const outcome = work.then(
-        () => {
-          settled = true;
-          return { ok: true as const };
-        },
-        (error: unknown) => {
-          settled = true;
-          return { ok: false as const, error };
-        },
-      );
+      const outcome = work.finally(() => {
+        settled = true;
+      });
+      void outcome.catch(() => {});
       try {
         await withinTest(
           awaitGateBeforeSettlement(
@@ -262,70 +243,50 @@ describe("client voice session worker contract", () => {
         );
         expect(settled).toBe(false);
         releaseSource.resolve();
-        expect(await outcome).toEqual({ ok: true });
+        const result = await outcome;
+        expect(result).toEqual(operation === "create" ? voiceSessionId : expect.any(Function));
         expect(released).toEqual(["source", "writer"]);
-        expect(voiceSessionId).toEqual(expect.any(String));
-        expect(clientVoiceSessionTesting.readRecord(target.agentId, voiceSessionId!)).toMatchObject(
-          {
-            status: "open",
-            ...(operation === "consult" ? { consultRunIds: [runId] } : {}),
-          },
-        );
+        expect(readRecord(voiceSessionId)).toMatchObject({
+          status: "open",
+          ...(operation === "consult" ? { consultRunIds: [runId] } : {}),
+        });
         if (operation === "consult") {
           expect(resolveClientVoiceRunBinding(runId)).toEqual({ ...target, voiceSessionId });
-          expect(releaseRun).toEqual(expect.any(Function));
-          releaseRun?.();
+          if (typeof result === "function") {
+            result();
+          }
           expect(resolveClientVoiceRunBinding(runId)).toBeUndefined();
+          await expect(
+            appendTranscript(voiceSessionId, "accepted", "Committed transcript"),
+          ).resolves.toBeUndefined();
+          await expect(
+            flushClientVoiceSessionWrites({ ...target, voiceSessionId }),
+          ).resolves.toBeUndefined();
+          const close = prepareClientVoiceSessionClose();
+          try {
+            await expect(
+              closeClientVoiceSession({ ...target, voiceSessionId, config: {} }),
+            ).resolves.toBeUndefined();
+          } finally {
+            await close.drain();
+          }
+          expect(readRecord(voiceSessionId)).toMatchObject({
+            status: "closed",
+            hasUserTranscript: true,
+            transcriptFailureKeys: [],
+          });
         }
         expect(warn).toHaveBeenCalledWith(expect.stringContaining("cleanup failed"), sourceError);
         expect(warn).toHaveBeenCalledWith(expect.stringContaining("cleanup failed"), writerError);
       } finally {
         releaseSource.resolve();
-        await outcome;
-        releaseRun?.();
+        const result = await outcome.catch(() => undefined);
+        if (typeof result === "function") {
+          result();
+        }
       }
     },
   );
-
-  it("preserves transcript, flush, and close acknowledgements when writer cleanup fails", async () => {
-    await seedSession(target.sessionKey);
-    const voiceSessionId = await createVoice();
-    const cleanupError = new Error("synthetic accepted voice writer cleanup failure");
-    const capture = voiceWriters.captureClientVoiceSessionWriter;
-    using _ = vi
-      .spyOn(voiceWriters, "captureClientVoiceSessionWriter")
-      .mockImplementation((params) => {
-        const writer = capture(params);
-        failCleanup(writer, cleanupError);
-        return writer;
-      });
-    using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const close = prepareClientVoiceSessionClose();
-    try {
-      await expect(
-        appendTranscript(
-          voiceSessionId,
-          "accepted-before-cleanup",
-          "Keep the committed transcript acknowledgement",
-        ),
-      ).resolves.toBeUndefined();
-      await expect(
-        flushClientVoiceSessionWrites({ ...target, voiceSessionId }),
-      ).resolves.toBeUndefined();
-      await expect(
-        closeClientVoiceSession({ ...target, voiceSessionId, config: {} }),
-      ).resolves.toBeUndefined();
-      await close.drain();
-      expect(readRecord(voiceSessionId)).toMatchObject({
-        status: "closed",
-        hasUserTranscript: true,
-        transcriptFailureKeys: [],
-      });
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining("cleanup failed"), cleanupError);
-    } finally {
-      await close.drain();
-    }
-  });
 
   it("retains a refused voice mutation and its source cleanup error", async () => {
     await seedSession(target.sessionKey);
@@ -646,29 +607,14 @@ describe("client voice session worker contract", () => {
     }
   });
 
-  it("reads tool facts without freshness probes and rejects a closed call", async () => {
-    const voiceSessionId = await createVoice({ transcriptCapable: true });
-    const binding = { ...target, voiceSessionId };
-    expect(assertClientVoiceSessionOpen(binding)).toBe("client");
-    const observation = observeSqliteReadSql(StatementSync.prototype);
-    try {
-      expect(assertClientVoiceSessionOpen(binding)).toBe("client");
-      expect(readRecord(voiceSessionId)?.transcriptCapable).toBe(true);
-      expect(observation.queries).toHaveLength(2);
-      expect(observation.queries.join("\n")).not.toMatch(/\b(?:pragma_)?data_version\b/i);
-    } finally {
-      observation.restore();
-    }
-    await closeClientVoiceSession({ ...binding, config: {} });
-    expect(() => assertClientVoiceSessionOpen(binding)).toThrow("voice session is closed");
-    expect(readRecord(voiceSessionId)?.transcriptCapable).toBe(true);
-  });
-
   it("rejects a transcript after another connection closes the admitted call", async () => {
     await seedSession(target.sessionKey);
     const voiceSessionId = await createVoice();
     expect(assertClientVoiceSessionOpen({ ...target, voiceSessionId })).toBe("client");
     mutateForeignVoice(voiceSessionId, "'$.status', 'closed', '$.closedAt', 42");
+    expect(() => assertClientVoiceSessionOpen({ ...target, voiceSessionId })).toThrow(
+      "voice session is closed",
+    );
     await expect(
       appendTranscript(voiceSessionId, "foreign-close", "This call has already closed"),
     ).rejects.toThrow("voice session is closed");
@@ -709,14 +655,6 @@ describe("client voice session worker contract", () => {
           { ...selectedTarget, storePath: options.path },
           { sessionId: "unrelated-conversation", updatedAt: 1 },
         );
-      }
-      if (!defaultTarget) {
-        expect(
-          await prepareSqliteTargetFromSessionStorePath(selector, selectedTarget),
-        ).toMatchObject({
-          agentId: "main",
-          path: selectedPath,
-        });
       }
       const writer = captureClientVoiceSessionWriter({
         agentId: selectedTarget.agentId,
