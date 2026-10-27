@@ -37,6 +37,7 @@ export class ChatPaneHeaderPeople {
     const { session, presence, sessionKey, mentionableUsers } = input;
     const host = input.host;
     const target = { sessionKey };
+    // First-pane hydration admits this record with the transcript before attach.
     const saved = host && readChatSessionSnapshot(host.chatMessagesBySession, host, target);
     const cached = saved?.headerViewers;
     const showOwnerChip = input.ownerCount >= 2 || (session?.participantCount ?? 0) > 0;
@@ -56,7 +57,11 @@ export class ChatPaneHeaderPeople {
           ],
           () =>
             presence === undefined && cached
-              ? cached.users.map((user) => ({ ...user, watchedSessions: [sessionKey] }))
+              ? cached.users.map(({ profileId, ...user }) => ({
+                  ...user,
+                  identity: profileId ? { type: "profile" as const, id: profileId } : undefined,
+                  watchedSessions: [sessionKey],
+                }))
               : projectPresenceViewers(
                   presence,
                   input.selfUser,
@@ -96,7 +101,7 @@ export class ChatPaneHeaderPeople {
           .slice(0, CHAT_HEADER_VIEWER_LIMIT)
           .map(({ id, identity, name, email, avatarUrl }) => ({
             id,
-            identity,
+            profileId: identity?.id,
             name,
             email,
             avatarUrl,
