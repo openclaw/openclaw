@@ -190,7 +190,7 @@ async function executeIdentityTurn(params: {
   turn.queued.run.config = identityProbeConfig;
   turn.queued.run.messageProvider = "telegram";
   turn.queued.run.senderId = params.requesterId ?? "requester-42";
-  let runError: unknown;
+  let runError: Error | undefined;
   state.execute.mockImplementationOnce(async (turnParams: AgentTurnParams) => {
     try {
       await params.run(turnParams);
@@ -201,8 +201,11 @@ async function executeIdentityTurn(params: {
         outcome: { kind: "rejected", payload: { text: "done" } },
       };
     } catch (error) {
-      runError = error;
-      throw error;
+      runError =
+        error instanceof Error
+          ? error
+          : new Error("queued identity test execution failed", { cause: error });
+      throw runError;
     }
   });
   const result = await executeFollowupTurnForTest({
@@ -215,8 +218,8 @@ async function executeIdentityTurn(params: {
     onToolResult: async () => {},
     onCompactionNoticePayload: async () => {},
   });
-  if (runError !== undefined) {
-    throw runError instanceof Error ? runError : new Error(String(runError));
+  if (runError) {
+    throw runError;
   }
   return result;
 }
