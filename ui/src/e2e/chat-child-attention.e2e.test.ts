@@ -75,6 +75,9 @@ suite.define(() => {
         );
         await message.waitFor();
         await gateway.waitForRequest("sessions.list", { match: { spawnedBy: parent.key } });
+        await openChatSidePanelType(pane, "Subagents");
+        const panel = pane.locator("openclaw-chat-subagents-panel");
+        await panel.getByText(children[0]!.label!, { exact: true }).waitFor();
         const composer = pane.locator(".agent-chat__input");
         // Capture the same real parent surface before asserting, including on the broken base.
         if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
@@ -104,8 +107,6 @@ suite.define(() => {
           ),
         ).toBe(false);
         await openChatSidePanelType(pane, "Subagents");
-        const panel = pane.locator("openclaw-chat-subagents-panel");
-        await panel.getByText(children[0]!.label!, { exact: true }).waitFor();
         await expect.poll(() => panel.locator("[data-session-key]").count()).toBe(children.length);
         await panel.getByText(children[1]!.label!, { exact: true }).waitFor();
       });
