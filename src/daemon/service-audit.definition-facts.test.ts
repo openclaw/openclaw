@@ -537,22 +537,25 @@ it.each([
     "/other/bin:/usr/bin:/bin",
   ],
   ["opaque launcher", "/old/bin:/usr/bin:/bin", "/new/bin:/usr/bin:/bin", "/old/bin/launcher"],
-])("refuses a macOS runtime refresh with %s", (_name, currentPath, nextPath, executable) => {
-  const findings: ServiceDefinitionDrift[] = [];
-  auditGatewayInstallPreservation(
-    {
-      programArguments: [executable ?? "/old/bin/node", "/opt/openclaw/index.js", "gateway"],
-      environment: { PATH: currentPath },
-    },
-    {
-      programArguments: ["/new/bin/node", "/opt/openclaw/index.js", "gateway"],
-      environment: { PATH: nextPath },
-    },
-    "darwin",
-    findings,
-  );
-  expect(findings).toContainEqual(drift("unknown-edit", "Environment.PATH"));
-});
+])(
+  "refuses a macOS runtime refresh with %s",
+  (_name, currentPath, nextPath, executable = undefined) => {
+    const findings: ServiceDefinitionDrift[] = [];
+    auditGatewayInstallPreservation(
+      {
+        programArguments: [executable ?? "/old/bin/node", "/opt/openclaw/index.js", "gateway"],
+        environment: { PATH: currentPath },
+      },
+      {
+        programArguments: ["/new/bin/node", "/opt/openclaw/index.js", "gateway"],
+        environment: { PATH: nextPath },
+      },
+      "darwin",
+      findings,
+    );
+    expect(findings).toContainEqual(drift("unknown-edit", "Environment.PATH"));
+  },
+);
 
 it.each([
   { platform: "darwin", value: "/operator-private/ca.pem", replacement: undefined },

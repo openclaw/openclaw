@@ -2,7 +2,7 @@ import { WAMessageStubType } from "baileys";
 import { observeChannelIngressQueueWrite } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerWhatsAppApprovalReactionTarget } from "./approval-reactions.js";
 import {
   createWhatsAppDurableInboundQueue,
@@ -25,7 +25,6 @@ import {
   waitForMessageCalls,
   waitForInboundWorkDrained,
   type InboxOnMessage,
-  type InboxMonitorOptions,
 } from "./monitor-inbox.test-harness.js";
 
 const reactionStores = await vi.hoisted(async () =>
@@ -116,29 +115,8 @@ function expectRead(sock: Awaited<ReturnType<typeof startInboxMonitor>>["sock"],
   ]);
 }
 
-installStreamsInboundMessageHooks();
-const cleanups: Array<() => void | Promise<void>> = [];
-
-async function startDelivery(
-  options: Partial<InboxMonitorOptions> = {},
-  onMessage: ReturnType<typeof vi.fn> = vi.fn(async () => undefined),
-) {
-  const started = await startInboxMonitor(onMessage as InboxOnMessage, options);
-  cleanups.push(() => started.listener.close());
-  return {
-    ...started,
-    onMessage,
-    emit: (...args: Parameters<typeof dmUpsert>) =>
-      started.sock.ev.emit("messages.upsert", dmUpsert(...args)),
-  };
-}
-
 describe("web monitor inbox delivery and dedupe", () => {
-  afterEach(async () => {
-    for (const cleanup of cleanups.splice(0).toReversed()) {
-      await cleanup();
-    }
-  });
+  installStreamsInboundMessageHooks();
   beforeEach(() => {
     reactionStores.forEach((store) => store.clearForTest());
     approvalResolver.mockReset();
@@ -235,22 +213,46 @@ describe("web monitor inbox delivery and dedupe", () => {
   it("delivers inbound text without copying it into diagnostics", async () => {
     setLoggerOverride({ level: "trace" });
     inboundLogRecords.mockClear();
-    const { onMessage, emit } = await startDelivery({}, vi.fn());
+    const onMessage = vi.fn();
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     const body = "private WhatsApp message containing confidential account details";
-    emit(nextMessageId("private-inbound"), body);
-    await waitForInboundWorkDrained();
-    expect(inboundMessage(onMessage).payload.body).toBe(body);
-    expect(inboundLogRecords).toHaveBeenCalled();
-    expect(JSON.stringify(inboundLogRecords.mock.calls)).toContain(`"textLength":${body.length}`);
-    expect(JSON.stringify(inboundLogRecords.mock.calls)).not.toContain(body);
+    try {
+      sock.ev.emit("messages.upsert", dmUpsert(nextMessageId("private-inbound"), body));
+      await waitForInboundWorkDrained();
+
+      expect(inboundMessage(onMessage).payload.body).toBe(body);
+      expect(inboundLogRecords).toHaveBeenCalled();
+      expect(JSON.stringify(inboundLogRecords.mock.calls)).toContain(`"textLength":${body.length}`);
+      expect(JSON.stringify(inboundLogRecords.mock.calls)).not.toContain(body);
+    } finally {
+      await listener.close();
+    }
   });
 
-  it("deduplicates prepared, pending and completed delivery while delaying reads until completion", async () => {
+  it("delivery coordinator delays read receipts until inbound handlers complete", async () => {
     const handlerGate = createDeferred<void>();
-    const { sock, onMessage } = await startDelivery(
-      {},
-      vi.fn(() => handlerGate.promise),
-    );
+    const onMessage = vi.fn(async () => {
+      await handlerGate.promise;
+    });
+
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const messageId = nextMessageId("delayed-read");
+
+    sock.ev.emit("messages.upsert", dmUpsert(messageId));
+    await waitForMessageCalls(onMessage, 1);
+
+    expect(sock.readMessages).not.toHaveBeenCalled();
+    handlerGate.resolve();
+    await vi.waitFor(() => {
+      expectRead(sock, messageId);
+    });
+
+    await listener.close();
+  });
+
+  it("delivery coordinator keeps the first durable delivery when a duplicate arrives", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     const messageId = nextMessageId("dup-prepared");
     const upsert = dmUpsert(messageId, "first");
 
@@ -262,7 +264,45 @@ describe("web monitor inbox delivery and dedupe", () => {
 
     expect(onMessage).toHaveBeenCalledTimes(1);
     expect(inboundMessage(onMessage).payload.body).toBe("first");
-    expect(sock.readMessages).not.toHaveBeenCalled();
+    await listener.close();
+  });
+
+  it("delivery coordinator retries a transient persistence failure through the drain", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
+    const durableInboundQueue = {
+      ...queue,
+      enqueue: vi.fn(queue.enqueue.bind(queue)).mockRejectedValueOnce(new Error("SQLITE_FULL")),
+    };
+
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      durableInboundQueue,
+    });
+    const messageId = nextMessageId("durable-fallback");
+
+    sock.ev.emit("messages.upsert", dmUpsert(messageId));
+    await waitForMessageCalls(onMessage, 1);
+
+    expect(inboundMessage(onMessage).payload.body).toBe("ping");
+    await vi.waitFor(() => {
+      expectRead(sock, messageId);
+    });
+
+    await listener.close();
+  });
+
+  it("delivery coordinator does not dispatch duplicates with pending durable delivery", async () => {
+    const handlerGate = createDeferred<void>();
+    const onMessage = vi.fn(async () => {
+      await handlerGate.promise;
+    });
+
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const messageId = nextMessageId("durable-pending");
+    const upsert = dmUpsert(messageId);
+
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 1);
 
     resetWebInboundDedupeForTests();
     sock.ev.emit("messages.upsert", upsert);
@@ -270,36 +310,29 @@ describe("web monitor inbox delivery and dedupe", () => {
     expect(onMessage).toHaveBeenCalledTimes(1);
 
     handlerGate.resolve();
-    await vi.waitFor(() => expectRead(sock, messageId));
-    await waitForInboundWorkDrained();
-    expect(sock.readMessages).toHaveBeenCalledTimes(1);
-    sock.readMessages.mockClear();
-    sock.ev.emit("messages.upsert", upsert);
-    await vi.waitFor(() => expect(sock.readMessages).toHaveBeenCalledTimes(1));
-    expect(onMessage).toHaveBeenCalledTimes(1);
+    await listener.close();
   });
 
-  it("delivery coordinator retries a transient persistence failure through the drain", async () => {
-    const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
-    const durableInboundQueue = {
-      ...queue,
-      enqueue: vi.fn(queue.enqueue.bind(queue)).mockRejectedValueOnce(new Error("SQLITE_FULL")),
-    };
+  it("delivery coordinator does not redispatch a completed transport-key duplicate", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const upsert = dmUpsert(nextMessageId("durable-completed"));
 
-    const { sock, onMessage, emit } = await startDelivery({
-      durableInboundQueue,
-    });
-    const messageId = nextMessageId("durable-fallback");
-
-    emit(messageId);
+    sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 1);
+    await vi.waitFor(() => expect(sock.readMessages).toHaveBeenCalledTimes(1));
+    sock.readMessages.mockClear();
 
-    expect(inboundMessage(onMessage).payload.body).toBe("ping");
-    await vi.waitFor(() => expectRead(sock, messageId));
+    sock.ev.emit("messages.upsert", upsert);
+    await vi.waitFor(() => expect(sock.readMessages).toHaveBeenCalledTimes(1));
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    await listener.close();
   });
 
   it("delivery coordinator delivers a decrypted message after its ciphertext stub", async () => {
-    const { sock, onMessage } = await startDelivery();
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     const messageId = nextMessageId("ciphertext-stub");
     const upsert = dmUpsert(messageId, "decrypted");
 
@@ -323,6 +356,7 @@ describe("web monitor inbox delivery and dedupe", () => {
 
     expect(onMessage).toHaveBeenCalledTimes(1);
     expect(inboundMessage(onMessage).payload.body).toBe("decrypted");
+    await listener.close();
   });
 
   it("delivery coordinator lets a later same-key flush steer during an active turn", async () => {
@@ -334,21 +368,22 @@ describe("web monitor inbox delivery and dedupe", () => {
         await firstTurn.promise;
       }
     });
-    const { emit } = await startDelivery(
-      {
-        debounceMs: 20,
-      },
-      onMessage,
-    );
-    emit(nextMessageId("debounce-steer-1"), "first");
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      debounceMs: 20,
+    });
+    sock.ev.emit("messages.upsert", dmUpsert(nextMessageId("debounce-steer-1"), "first"));
     await waitForMessageCalls(onMessage, 1);
     expect(inboundMessage(onMessage).payload.body).toBe("first");
 
-    emit(nextMessageId("debounce-steer-2"), "steer", 1_700_000_001);
+    sock.ev.emit(
+      "messages.upsert",
+      dmUpsert(nextMessageId("debounce-steer-2"), "steer", 1_700_000_001),
+    );
     await waitForMessageCalls(onMessage, 2);
     expect(inboundMessage(onMessage, 1).payload.body).toBe("steer");
 
     firstTurn.resolve();
+    await listener.close();
   });
 
   it.each(["same window", "separate windows"] as const)(

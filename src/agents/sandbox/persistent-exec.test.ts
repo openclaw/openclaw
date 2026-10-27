@@ -449,7 +449,10 @@ it.each([
     if (phase === "START") {
       await f.expectCustody({ phase: "running", receipt: f.receipt });
     }
-    const cancelled = f.cancel(cancellation, "stream stop requested");
+    const cancelled = f.cancel(
+      cancellation,
+      phase === "preparation" ? "creator cancelled" : "stream stop requested",
+    );
     if (phase === "preparation") {
       expect(f.preparation.stop).not.toHaveBeenCalled();
     }

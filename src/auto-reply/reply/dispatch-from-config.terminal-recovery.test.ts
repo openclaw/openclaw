@@ -533,6 +533,8 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
 });
 
 describe("restart tombstone channel feedback", () => {
+  const notice =
+    "My session in this room ended during restart recovery. Use Resume in WebChat, or /reset or /new to start a replacement session.";
   const warn = vi.fn();
   const deliver = vi.fn(async () => {});
   const replyResolver = vi.fn(async () => ({ text: "agent reply" }));
@@ -626,13 +628,22 @@ describe("restart tombstone channel feedback", () => {
     await rejectInbound({ visibleReplies: "message_tool" });
     expect(rejectionWarnings()).toHaveLength(1);
     expect(deliver).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ isError: true }),
+      expect.objectContaining({ isError: true, text: notice }),
       expect.objectContaining({ kind: "final" }),
     );
     await rejectInbound({ visibleReplies: "message_tool" });
     expect(deliver).toHaveBeenCalledOnce();
     expect(replyResolver).not.toHaveBeenCalled();
     expect(rejectionWarnings()).toHaveLength(2);
+    for (const [line] of rejectionWarnings()) {
+      expect(line).toContain(recoverySessionKey);
+      expect(line).toContain("automatic recovery exhausted");
+      expect(line).toContain("/reset");
+    }
+    expect(sessionStoreMocks.currentEntry).toMatchObject({
+      sessionId: "failed-session",
+      mainRestartRecovery: { tombstone: { reason: "automatic recovery exhausted" } },
+    });
   });
 
   it.each(["session", "cycle"] as const)("notifies again for a new recovery %s", async (change) => {

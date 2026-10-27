@@ -385,6 +385,10 @@ it.each([
     label: "doctor",
     cmdline: ["node", "/srv/openclaw/openclaw.mjs", "doctor", "--state-sqlite", "compact"],
   },
+  {
+    label: "sessions",
+    cmdline: ["node", "/srv/openclaw/openclaw.mjs", "sessions", "cleanup", "--enforce"],
+  },
   { label: "unreadable", cmdline: null },
 ])("keeps an old maintenance owner with $label identity", async ({ cmdline }) => {
   const env = await makeEnv();
@@ -432,6 +436,39 @@ it("bounds oversized lock polling intervals by the acquire timeout", async () =>
   ).rejects.toBeInstanceOf(GatewayLockError);
 
   expect(sleepDelays).toEqual([5]);
+});
+
+it("keeps state ownership when the config singleton override is enabled", async () => {
+  const env = await makeEnv();
+  const { lockPath, stateLockPath } = resolveLockPath(env);
+  const lock = expectGatewayLock(
+    await acquireGatewayLock({
+      allowInTests: true,
+      env: { ...env, OPENCLAW_ALLOW_MULTI_GATEWAY: "1", VITEST: "" },
+      lockDir: resolveTestLockDir(env),
+    }),
+  );
+
+  try {
+    expect(lock.stateLockPath).toBe(stateLockPath);
+    expect(lock.lockPath).not.toBe(stateLockPath);
+    await fs.access(stateLockPath);
+    await expect(fs.access(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessCmdline").mockReturnValue([
+      "openclaw-gateway",
+    ]);
+    await expect(
+      acquireGatewayLock({
+        allowInTests: true,
+        env,
+        lockDir: resolveTestLockDir(env),
+        platform: "darwin",
+        timeoutMs: 15,
+      }),
+    ).rejects.toBeInstanceOf(GatewayLockError);
+  } finally {
+    await lock.release();
+  }
 });
 
 it("returns null in test env unless allowInTests is set", async () => {
