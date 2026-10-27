@@ -1,6 +1,13 @@
 import { text as readText } from "node:stream/consumers";
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
-import { assert, expect, it } from "vitest";
+import { assert, expect, it, vi } from "vitest";
+import {
+  onTrustedInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  setDiagnosticsEnabledForProcess,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import "./ai-transport-runtime-host.js";
 import { completeWithPreparedSimpleCompletionModel } from "./simple-completion-execution.js";
@@ -13,6 +20,62 @@ const thinkingError =
 const deepseekOff = { thinking: { type: "disabled" } };
 const togetherOff = { reasoning: { enabled: false } };
 const templateOff = { chat_template_kwargs: { enable_thinking: false } };
+
+it("serializes Anthropic completion requests once and reports their exact wire bytes", async () => {
+  const model = makeProviderModelFixture({
+    id: "synthetic-model",
+    provider: "anthropic",
+    api: "anthropic-messages",
+    baseUrl: "https://provider.invalid",
+  });
+  const host = getAiTransportHost();
+  const events: DiagnosticEventPayload[] = [];
+  resetDiagnosticEventsForTest();
+  setDiagnosticsEnabledForProcess(true);
+  const stop = onTrustedInternalDiagnosticEvent((event) => events.push(event));
+  let wire = "";
+  configureAiTransportHost({
+    ...host,
+    buildModelFetch: () => async (input, init) => {
+      wire = await new Request(input, init).text();
+      return new Response(
+        'data: {"type":"message_start","message":{"id":"fixture","usage":{"input_tokens":40,"output_tokens":0}}}\n\n' +
+          'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n' +
+          'data: {"type":"message_stop"}\n\n',
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    },
+  });
+  using stringify = vi.spyOn(JSON, "stringify");
+  try {
+    const result = await completeWithPreparedSimpleCompletionModel({
+      model,
+      auth: { apiKey: "synthetic-key", mode: "api-key", source: "test" },
+      cfg: { plugins: { enabled: false } },
+      context: {
+        messages: Array.from({ length: 40 }, (_, index) => ({
+          role: "user" as const,
+          content: `Message ${index}: " \\ \n 🦞\ud800`,
+          timestamp: index,
+        })),
+      },
+    });
+    expect(result.stopReason).toBe("stop");
+    await waitForDiagnosticEventsDrained();
+    expect(events.find((event) => event.type === "model.call.completed")).toMatchObject({
+      requestPayloadBytes: Buffer.byteLength(wire, "utf8"),
+    });
+    expect(
+      stringify.mock.calls.filter(
+        ([value]) => value?.model === model.id && Array.isArray(value.messages),
+      ),
+    ).toHaveLength(1);
+  } finally {
+    stop();
+    resetDiagnosticEventsForTest();
+    configureAiTransportHost(host);
+  }
+});
 
 it.each([
   ["https://api.z.ai/api/paas/v4", "glm-5.3-flash", "zhipu", undefined, undefined],
