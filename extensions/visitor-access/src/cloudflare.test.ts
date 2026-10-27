@@ -1,35 +1,30 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { VisitorPolicyClient } from "./cloudflare.js";
 import { VisitorAccessError } from "./errors.js";
-import {
-  visitorConfig as config,
-  githubProvider,
-  githubRule,
-  namedPolicy,
-} from "./visitors.test-support.js";
+import { visitorConfig, githubProvider, githubRule, namedPolicy } from "./visitors.test-support.js";
 
+const config = visitorConfig;
 const collectionUrl =
   "https://api.cloudflare.com/client/v4/accounts/test-account/access/apps/test-app/policies";
-const oidc = (overrides: Record<string, unknown> = {}) => ({
+const oidc = (overrides: Record<string, unknown>) => ({
   oidc: { ...githubRule.oidc, ...overrides },
 });
 
-function cloudflareResponse(result: unknown, resultInfo?: unknown) {
-  return Response.json({ success: true, result, result_info: resultInfo });
-}
-const policyPage = (policies: unknown[]) => cloudflareResponse(policies, { total_pages: 2 });
+const cloudflareResponse = (result: unknown, resultInfo?: unknown) =>
+  Response.json({ success: true, result, result_info: resultInfo });
+const page = (policies: unknown[]) => cloudflareResponse(policies, { total_pages: 2 });
+const fetcher = vi.fn<typeof fetch>();
+let provider: typeof githubProvider | undefined;
+const client = new VisitorPolicyClient(config, fetcher, undefined, () => provider);
 
-function fetchSequence(...responses: unknown[]) {
-  const fetcher = vi.fn<typeof fetch>();
+function respond(...responses: unknown[]) {
   for (const response of responses) {
-    fetcher.mockResolvedValueOnce(
-      response instanceof Response ? response : cloudflareResponse(response),
-    );
+    const payload = response instanceof Response ? response : cloudflareResponse(response);
+    fetcher.mockResolvedValueOnce(payload);
   }
-  return fetcher;
 }
 
-function requestBody(fetcher: ReturnType<typeof fetchSequence>, index: number) {
+function requestBody(index: number) {
   const body = fetcher.mock.calls[index]?.[1]?.body;
   if (typeof body !== "string") {
     throw new Error("Expected a JSON request body");
@@ -37,47 +32,44 @@ function requestBody(fetcher: ReturnType<typeof fetchSequence>, index: number) {
   return JSON.parse(body) as unknown;
 }
 
+const methods = () => fetcher.mock.calls.map(([, request]) => request?.method).join(" ");
+
 describe("VisitorPolicyClient", () => {
+  beforeEach(() => {
+    fetcher.mockReset();
+    provider = { ...githubProvider };
+  });
+
   it.each([
     ["githubAccountIdClaim", false],
     ["issuer", true],
   ] as const)("pins %s through renewal (after response: %s)", async (field, afterResponse) => {
-    let provider: typeof githubProvider | undefined;
     const policy = namedPolicy([42]);
-    const fetcher = fetchSequence([], policy, [policy], policy);
-    const client = new VisitorPolicyClient(config, fetcher, undefined, () => provider);
-    const changeMapping = () => {
-      provider = {
-        ...githubProvider,
-        [field]: field === "issuer" ? "https://changed.cloudflareaccess.com" : "changed_claim",
-      };
-    };
+    respond([], policy, [policy], policy);
+    const changed = { ...githubProvider, [field]: "changed" };
     fetcher.mockImplementationOnce(async () => {
-      changeMapping();
+      provider = changed;
       return cloudflareResponse(namedPolicy([42, 43]));
     });
-    provider = { ...githubProvider };
     await expect(client.update(() => [42])).resolves.toEqual([42]);
-    expect(requestBody(fetcher, 1)).toMatchObject({ include: [githubRule] });
+    expect(requestBody(1)).toEqual({
+      name: config.policyName,
+      decision: "allow",
+      include: [githubRule],
+    });
     await expect(
       client.update(() => {
         if (!afterResponse) {
-          changeMapping();
+          provider = changed;
         }
         return afterResponse ? [42, 43] : [42];
       }),
     ).rejects.toThrow("mapping changed");
-    expect(fetcher.mock.calls.map(([, request]) => request?.method)).toEqual([
-      "GET",
-      "POST",
-      "GET",
-      "GET",
-      ...(afterResponse ? ["PUT"] : []),
-    ]);
+    expect(methods()).toEqual(afterResponse ? "GET POST GET GET PUT" : "GET POST GET GET");
   });
 
-  it("rereads the named policy and preserves mixed dashboard targets and restrictions on update", async () => {
-    const original = namedPolicy(["FIRST@example.com", 42]);
+  it("rereads dashboard targets and preserves restrictions on update", async () => {
+    const original = namedPolicy(["A@b.com", 42]);
     const restrictions = {
       precedence: 9,
       session_duration: "12h",
@@ -86,88 +78,55 @@ describe("VisitorPolicyClient", () => {
       mfa_config: { mfa_disabled: false },
     };
     const updated = {
-      ...namedPolicy(["first@example.com", "manual@example.com", 42]),
+      ...namedPolicy(["a@b.com", "m@b.com", 42]),
       ...restrictions,
       created_at: "2026-08-28T00:00:00Z",
     };
-    const fetcher = fetchSequence([original], original, [updated], updated, updated);
-    const client = new VisitorPolicyClient(config, fetcher, undefined, () => githubProvider);
-    await expect(client.read()).resolves.toEqual({
-      id: original.id,
-      targets: ["first@example.com", 42],
-    });
+    const other = { id: "other", name: "Other" };
+    respond(page([other]), page([original]), original, [updated], updated, updated);
+    expect(await client.read()).toEqual({ id: original.id, targets: ["a@b.com", 42] });
+    expect(fetcher.mock.calls[1]?.[0]).toBe(`${collectionUrl}?page=2&per_page=100`);
 
-    await expect(client.update((targets) => [...targets, "next@example.com", 84])).resolves.toEqual(
-      ["first@example.com", "manual@example.com", 42, "next@example.com", 84],
-    );
+    const expected = ["a@b.com", "m@b.com", 42, "n@b.com", 84];
+    expect(await client.update((targets) => [...targets, "n@b.com", 84])).toEqual(expected);
 
-    expect(requestBody(fetcher, 4)).toEqual({
-      name: config.policyName,
-      decision: "allow",
-      include: [
-        { email: { email: "first@example.com" } },
-        { email: { email: "manual@example.com" } },
-        githubRule,
-        { email: { email: "next@example.com" } },
-        oidc({ claim_value: "84" }),
-      ],
-      ...restrictions,
-    });
-    expect(fetcher.mock.calls[4]?.[0]).toBe(`${collectionUrl}/${original.id}`);
-    expect(fetcher.mock.calls[4]?.[1]?.method).toBe("PUT");
+    const { id, ...payload } = namedPolicy(expected);
+    expect(requestBody(5)).toEqual({ ...payload, ...restrictions });
+    expect(fetcher.mock.calls[5]?.[0]).toBe(`${collectionUrl}/${id}`);
+    expect(fetcher.mock.calls[5]?.[1]?.method).toBe("PUT");
   });
 
-  it.each<
-    [name: string, override: Record<string, unknown>, provider?: typeof githubProvider | null]
-  >([
-    ["deny decision", { decision: "deny" }],
-    ["unsupported includes", { include: [{ everyone: {} }] }],
-    ["mixed email rules", { include: [{ email: { email: "first@example.com" }, everyone: {} }] }],
-    ["unconfigured GitHub mapping", { include: [githubRule] }, null],
-    ["another OIDC provider", { include: [oidc({ identity_provider_id: "other-provider" })] }],
-    ["another OIDC claim", { include: [oidc({ claim_name: "login" })] }],
-    ["mixed OIDC rules", { include: [{ ...githubRule, everyone: {} }] }],
-    ["extra OIDC fields", { include: [oidc({ login: "visitor" })] }],
-    ...["042", "9007199254740992", 42].map((claimValue): [string, Record<string, unknown>] => [
-      `noncanonical account ID ${JSON.stringify(claimValue)}`,
-      { include: [oidc({ claim_value: claimValue })] },
-    ]),
-    ["required restrictions", { require: [{ email_domain: { domain: "example.com" } }] }],
-    ["excluded identities", { exclude: [{ email: { email: "excluded@example.com" } }] }],
-    ["renamed policy", { name: "GitHub organization" }],
-    ["replaced policy", { id: "other-policy" }],
-  ])(
-    "refuses %s before running a change or writing Cloudflare",
-    async (_name, override, provider = githubProvider) => {
-      const policy = namedPolicy();
-      const fetcher = fetchSequence([policy], { ...policy, ...override });
-      const change = vi.fn(() => ["next@example.com"]);
-      const readProvider = () => provider ?? undefined;
-      const client = new VisitorPolicyClient(config, fetcher, undefined, readProvider);
-      await expect(client.update(change)).rejects.toBeInstanceOf(VisitorAccessError);
-      expect(change).not.toHaveBeenCalled();
-      expect(fetcher.mock.calls.every(([, options]) => options?.method === "GET")).toBe(true);
-    },
-  );
-
-  it.each([false, true])("discovers policies; rejects duplicates: %s", async (duplicate) => {
+  it.each<[Record<string, unknown>, (typeof githubProvider | null)?]>([
+    [{ decision: "deny" }],
+    [{ include: [{ everyone: {} }] }],
+    [{ include: [{ email: { email: "first@example.com" }, everyone: {} }] }],
+    [{ include: [githubRule] }, null],
+    [{ include: [oidc({ identity_provider_id: "other-provider" })] }],
+    [{ include: [oidc({ claim_name: "login" })] }],
+    [{ include: [{ ...githubRule, everyone: {} }] }],
+    [{ include: [oidc({ login: "visitor" })] }],
+    [{ include: [oidc({ claim_value: "042" })] }],
+    [{ include: [oidc({ claim_value: "9007199254740992" })] }],
+    [{ include: [oidc({ claim_value: 42 })] }],
+    [{ require: [{ email_domain: { domain: "example.com" } }] }],
+    [{ exclude: [{ email: { email: "excluded@example.com" } }] }],
+    [{ name: "GitHub organization" }],
+    [{ id: "other-policy" }],
+  ])("rejects %j (provider %j)", async (override, mapping = githubProvider) => {
     const policy = namedPolicy();
-    const fetcher = fetchSequence(
-      policyPage([duplicate ? policy : { id: "other", name: "Maintainers" }]),
-      policyPage([{ ...policy, id: duplicate ? "duplicate" : policy.id }]),
-      ...(duplicate ? [] : [policy]),
-    );
-    const client = new VisitorPolicyClient(config, fetcher);
-    if (duplicate) {
-      await expect(client.update(() => [])).rejects.toBeInstanceOf(VisitorAccessError);
-    } else {
-      await expect(client.read()).resolves.toEqual({
-        id: policy.id,
-        targets: ["first@example.com"],
-      });
-    }
-    expect(fetcher.mock.calls[1]?.[0]).toBe(`${collectionUrl}?page=2&per_page=100`);
-    expect(fetcher.mock.calls.every(([, options]) => options?.method === "GET")).toBe(true);
+    respond([policy], { ...policy, ...override });
+    provider = mapping ?? undefined;
+    const change = vi.fn(() => ["next@example.com"]);
+    await expect(client.update(change)).rejects.toBeInstanceOf(VisitorAccessError);
+    expect(change).not.toHaveBeenCalled();
+    expect(methods()).toBe("GET GET");
+  });
+
+  it("rejects duplicate policies across pages without writing", async () => {
+    const policy = namedPolicy();
+    respond(page([policy]), page([{ ...policy, id: "duplicate" }]));
+    await expect(client.update(() => [])).rejects.toBeInstanceOf(VisitorAccessError);
+    expect(methods()).toBe("GET GET");
   });
 
   it.each([
@@ -176,19 +135,19 @@ describe("VisitorPolicyClient", () => {
     ["api", async () => Response.json({ success: false, errors: [{ message: config.apiToken }] })],
     ["json", async () => new Response(config.apiToken)],
   ] as const)("never exposes token-bearing %s failures", async (_mode, response) => {
-    const fetcher = vi.fn<typeof fetch>().mockImplementationOnce(response);
-    const error = await new VisitorPolicyClient(config, fetcher)
-      .read()
-      .catch((cause: unknown) => cause);
+    fetcher.mockImplementationOnce(response);
+    const error = await client.read().catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(VisitorAccessError);
     expect(String(error)).not.toContain(config.apiToken);
-    const options = fetcher.mock.calls[0]?.[1];
-    expect(options).toMatchObject({ redirect: "error", signal: expect.any(AbortSignal) });
+    expect(fetcher.mock.calls[0]?.[1]).toMatchObject({
+      redirect: "error",
+      signal: expect.any(AbortSignal),
+    });
   });
 
   it("fences an obsolete service before the durable callback runs", async () => {
     const abort = new AbortController();
-    const fetcher = vi.fn<typeof fetch>().mockImplementationOnce(async () => {
+    fetcher.mockImplementationOnce(async () => {
       abort.abort();
       return cloudflareResponse([]);
     });

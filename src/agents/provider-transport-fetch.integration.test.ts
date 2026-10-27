@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it } from "vitest";
+import * as httpFixtures from "../../test/helpers/gateway-integration-fixtures.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
@@ -19,14 +19,10 @@ describe("guarded model fetch secret sentinel integration", () => {
       response.writeHead(200, { "content-type": "application/json" });
       response.end('{"ok":true}');
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
+    const origin = await httpFixtures.listenLoopback(server);
 
     try {
-      const port = (server.address() as AddressInfo).port;
-      const baseUrl = `http://127.0.0.1:${port}/v1`;
+      const baseUrl = `${origin}/v1`;
       const model = {
         id: "integration-model",
         provider: "sentinel-integration",

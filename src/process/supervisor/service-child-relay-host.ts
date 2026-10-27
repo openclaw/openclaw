@@ -586,7 +586,7 @@ export async function createServiceChildRelayAdapter(
     args: params.args,
     argv0: params.argv0,
     cwd: params.cwd,
-    env: params.env ? toStringEnv(params.env) : undefined,
+    env: toStringEnv(params.env ?? process.env),
     stdinMode: params.stdinMode,
     secretFd: params.secretInput?.fd,
     terminateOnHostLoss: params.terminateOnHostLoss,

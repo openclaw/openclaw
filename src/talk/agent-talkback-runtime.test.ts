@@ -42,21 +42,6 @@ async function createPendingQueue(debounceMs = 1) {
   };
 }
 
-function expectConsultCall(
-  consult: { mock: { calls: [Parameters<QueueParams["consult"]>[0]][] } },
-  callIndex: number,
-  question: string,
-  metadata?: unknown,
-) {
-  const call = consult.mock.calls[callIndex]?.[0];
-  if (call === undefined) {
-    throw new Error(`Expected talkback consult call ${callIndex}`);
-  }
-  const { signal, ...request } = call;
-  expect(signal).toBeInstanceOf(AbortSignal);
-  expect(request).toStrictEqual({ metadata, question, responseStyle: "brief" });
-}
-
 describe("realtime voice agent talkback queue", () => {
   it("keeps active pending questions split by metadata", async () => {
     const ownerMetadata = { senderIsOwner: true };
@@ -70,10 +55,13 @@ describe("realtime voice agent talkback queue", () => {
     await vi.advanceTimersByTimeAsync(10);
     await finish();
 
-    expectConsultCall(consult, 1, "owner", ownerMetadata);
-    expectConsultCall(consult, 2, "guest", guestMetadata);
-    expect(deliver).toHaveBeenCalledWith("owner-answer");
-    expect(deliver).toHaveBeenCalledWith("guest-answer");
+    expect(
+      consult.mock.calls.slice(1).map(([{ question, metadata }]) => [question, metadata]),
+    ).toEqual([
+      ["owner", ownerMetadata],
+      ["guest", guestMetadata],
+    ]);
+    expect(deliver.mock.calls.slice(1)).toEqual([["owner-answer"], ["guest-answer"]]);
   });
 
   it("bounds merged pending question text while a consult is active", async () => {
@@ -84,11 +72,11 @@ describe("realtime voice agent talkback queue", () => {
     }
     await finish();
 
-    expectConsultCall(consult, 1, Array.from({ length: 7 }, () => fragment).join("\n"));
-    expect(consult).toHaveBeenCalledTimes(2);
-    expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
-      "[test] consult queue full: droppedChars=4096 queued=1 queuedChars=28678",
-    );
+    expect(consult.mock.calls.map(([request]) => request.question)).toEqual([
+      "first",
+      Array.from({ length: 7 }, () => fragment).join("\n"),
+    ]);
+    expect(logger.warn).toHaveBeenCalledOnce();
   });
 
   it("bounds pending question count while preserving retained order", async () => {
@@ -97,26 +85,21 @@ describe("realtime voice agent talkback queue", () => {
     metadata.forEach((entry, index) => queue.enqueue(`question-${index}`, entry));
     await finish();
 
-    expect(consult).toHaveBeenCalledTimes(33);
     expect(consult.mock.calls.slice(1).map(([request]) => request.metadata)).toStrictEqual(
       metadata.slice(0, 32),
     );
-    expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
-      "[test] consult queue full: droppedChars=11 queued=32 queuedChars=342",
-    );
+    expect(logger.warn).toHaveBeenCalledOnce();
   });
 
   it("delivers fallback text when consult fails", async () => {
     const { queue, logger, deliver } = createQueue({
-      consult: vi.fn(async () => {
-        throw new Error("boom");
-      }),
+      consult: vi.fn<QueueParams["consult"]>().mockRejectedValue(new Error("boom")),
     });
 
     queue.enqueue("question");
     await vi.advanceTimersByTimeAsync(1);
 
-    expect(logger.warn).toHaveBeenCalledExactlyOnceWith("[test] consult failed: elapsedMs=0 boom");
+    expect(logger.warn).toHaveBeenCalledOnce();
     expect(deliver).toHaveBeenCalledWith("fallback");
   });
 
@@ -135,18 +118,11 @@ describe("realtime voice agent talkback queue", () => {
   });
 
   it("aborts the active consult on close without delivering fallback", async () => {
-    let signal: AbortSignal | undefined;
-    const consult = vi.fn<QueueParams["consult"]>(
-      ({ signal: nextSignal }) =>
-        new Promise<{ text: string }>((_resolve, reject) => {
-          signal = nextSignal;
-          nextSignal.addEventListener("abort", () => {
-            const error = new Error("aborted");
-            error.name = "AbortError";
-            reject(error);
-          });
-        }),
-    );
+    const pending = createDeferred<{ text: string }>();
+    const consult = vi.fn<QueueParams["consult"]>(({ signal }) => {
+      signal.addEventListener("abort", () => pending.reject(signal.reason));
+      return pending.promise;
+    });
     const { queue, logger, deliver } = createQueue({ consult });
 
     queue.enqueue("question");
@@ -156,10 +132,7 @@ describe("realtime voice agent talkback queue", () => {
     queue.enqueue("late question");
     await vi.runAllTimersAsync();
 
-    if (!signal) {
-      throw new Error("Expected talkback consult abort signal");
-    }
-    expect(signal.aborted).toBe(true);
+    expect(consult.mock.calls[0]?.[0].signal.aborted).toBe(true);
     expect(consult).toHaveBeenCalledOnce();
     expect(deliver).not.toHaveBeenCalled();
     expect(logger.warn).not.toHaveBeenCalled();

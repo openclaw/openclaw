@@ -15,13 +15,19 @@ import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 const { values } = parseArgs({
   options: {
     iterations: { type: "string", default: "108" },
+    mode: { type: "string", default: "allocation" },
     output: { type: "string" },
     golden: { type: "string" },
     ordinary: { type: "boolean", default: false },
+    "team-shape": { type: "boolean", default: false },
+    selection: { type: "boolean", default: false },
+    "reference-only": { type: "boolean", default: false },
     "heap-profile": { type: "string" },
     "start-at": { type: "string" },
   },
 });
+assert.ok(values.mode === "timing" || values.mode === "allocation");
+const allocations = values.mode === "allocation";
 const iterations = parseStrictIntegerOption({
   raw: values.iterations,
   label: "--iterations",
@@ -37,7 +43,17 @@ const startAt = parseStrictIntegerOption({
 const stateDir = await mkdtemp(path.join(tmpdir(), "session-profile-reference-"));
 process.env.OPENCLAW_STATE_DIR = stateDir;
 
-const [registry, filters, targets, contexts, selections, profiles, database] = await Promise.all([
+const [
+  registry,
+  filters,
+  targets,
+  contexts,
+  selections,
+  profiles,
+  database,
+  identity,
+  sessionLists,
+] = await Promise.all([
   import("../../src/agents/subagents/registry/subagent-registry-state.js"),
   import("../../src/gateway/session-list-filters.js"),
   import("../../src/gateway/session-list-target.js"),
@@ -45,6 +61,8 @@ const [registry, filters, targets, contexts, selections, profiles, database] = a
   import("../../src/gateway/session-row-selection.js"),
   import("../../src/state/user-profile-list.js"),
   import("../../src/state/openclaw-state-db.js"),
+  import("../../src/gateway/session-identity-projection.js"),
+  import("../../src/gateway/session-utils-list.js"),
 ]);
 const inspector = new Session();
 let owner: ReturnType<typeof contexts.createSessionRowProjectionContext> | undefined;
@@ -106,28 +124,48 @@ try {
     () => context,
   );
   const viewerKeys = [new Set<string>(), new Set<string>()];
-  const sessionCount = 5_000;
+  const sessionCount = values["team-shape"] ? 10_800 : 5_000;
   const now = 10_000_000;
   const keys: string[] = [];
   for (let index = 0; index < sessionCount; index++) {
     const person = index % profileCount;
     const group = Math.floor(person / 25);
     const agentId = values.ordinary && index % 2 ? "secondary" : "main";
-    const kind = values.ordinary ? index % 5 : 0;
-    const key = `agent:${agentId}:${kind === 1 ? "cron:" : kind === 2 ? "subagent:" : ""}session-${index}`;
+    const kind = values["team-shape"]
+      ? index < 4_300
+        ? 2
+        : index < 9_100
+          ? 5
+          : index % 25 === 0
+            ? 1
+            : 0
+      : values.ordinary
+        ? index % 5
+        : 0;
+    const key =
+      values["team-shape"] && index >= sessionCount - 2
+        ? index === sessionCount - 1
+          ? "global"
+          : "unknown"
+        : `agent:${agentId}:${kind === 1 ? "cron:" : kind === 2 ? "subagent:" : kind === 5 ? "dashboard:" : ""}session-${index}`;
     keys.push(key);
     viewerKeys[group]!.add(key);
     const entry: SessionEntry = {
       sessionId: `session-${index}`,
       updatedAt: now - (index + 61) * 1_000,
-      createdActor: { type: "human", source: "profile", id: identityId(person) },
+      createdActor:
+        kind === 2 && values["team-shape"]
+          ? { type: "agent", id: "main" }
+          : { type: "human", source: "profile", id: identityId(person) },
       participants: Array.from({ length: 3 }, (_, offset) => ({
         identity: {
           type: "profile",
           id: identityId(group * 25 + ((person + offset) % 25)),
         },
       })),
-      ...(index % 3 === 0 ? { archivedAt: 1 } : {}),
+      ...((values["team-shape"] ? index >= 4_300 && index < 8_700 : index % 3 === 0)
+        ? { archivedAt: 1 }
+        : {}),
       ...(values.ordinary ? { label: `Label ${index % 10}` } : {}),
       ...(kind === 3 ? { createdActor: { type: "system" as const, id: "system" } } : {}),
       ...(kind === 4 ? { createdSurface: "plugin-dock" as const } : {}),
@@ -143,7 +181,12 @@ try {
     });
   }
   const selected = selection.read("updatedAt");
-  const cases: Array<{ name: string; opts: SessionsListParams }> = [
+  const cases: Array<{
+    name: string;
+    opts: SessionsListParams;
+    involvingActorId?: string;
+    ownerFirstActorId?: string;
+  }> = [
     { name: "canonical-exact", opts: { involvingProfileId: identityId(3) } },
     { name: "alias-exact", opts: { involvingProfileId: identityId(33) } },
     { name: "retained-exact", opts: { involvingProfileId: identityId(43) } },
@@ -160,6 +203,21 @@ try {
     },
     { name: "ordinary-list", opts: {} },
   ];
+  if (values["team-shape"]) {
+    cases.push(
+      { name: "involving-me", opts: { includePeople: false }, involvingActorId: identityId(3) },
+      { name: "owner-first", opts: { includePeople: false }, ownerFirstActorId: identityId(3) },
+      {
+        name: "owner-counts",
+        opts: {
+          includePeople: false,
+          includeOwnerSessionCounts: true,
+          includeGlobal: true,
+          includeUnknown: true,
+        },
+      },
+    );
+  }
   const ordinaryCases: typeof cases = [
     { name: "default", opts: {} },
     { name: "open", opts: { archived: false } },
@@ -176,9 +234,10 @@ try {
   ];
   const requests = (values.ordinary ? ["all"] : ["all", "first", "second"]).flatMap(
     (viewer, viewerIndex) =>
-      (values.ordinary ? ordinaryCases : cases).map(({ name, opts }) => ({
+      (values.ordinary ? ordinaryCases : cases).map(({ name, opts, ...actors }) => ({
         name: `${viewer}/${name}`,
         params: {
+          ...actors,
           cfg,
           entries: selected.entries,
           entriesSorted: true,
@@ -205,7 +264,44 @@ try {
     }
   }
   const page = { offset: 0, limit: 25, ownerLimit: 25 };
-  const run = (index: number) => filters.filterSessionEntries(requests[index]!.params, page);
+  const projectOwner = context.identityProjection?.owner ?? identity.projectSessionOwner;
+  const projectPeople = context.identityProjection?.people ?? identity.projectSessionPeople;
+  const referenceScopes = requests.map(({ params }) => {
+    const entries = Array.from(params.entries("all")).filter(
+      ([key]) => params.entryFilter?.(key) ?? true,
+    );
+    const allowed = params.restrictProfileReferences ? new Set<string>() : undefined;
+    if (allowed) {
+      for (const [, entry] of entries) {
+        const actor = projectOwner(entry, identities, cfg, configuredAgentIds)?.actor;
+        for (const person of projectPeople(entry, identities, actor)) {
+          allowed.add(person.identity.id);
+        }
+      }
+    }
+    return { entries, allowed };
+  });
+  const run = (index: number) => {
+    const params = requests[index]!.params;
+    if (values["reference-only"]) {
+      const scope = referenceScopes[index]!;
+      const resolved = params.opts.involvingProfileId
+        ? identity.resolveSessionListProfileReference(
+            params.opts.involvingProfileId,
+            scope.entries,
+            identities,
+            scope.allowed,
+          )
+        : undefined;
+      if (resolved && !resolved.ok) {
+        throw new Error("Unexpected ambiguous benchmark reference");
+      }
+      return { entries: [], totalCount: 0, involvingProfileId: resolved?.value };
+    }
+    return values.selection
+      ? sessionLists.selectSessionEntries({ ...params, opts: { ...params.opts, limit: 25 } })
+      : filters.filterSessionEntries(params, page);
+  };
   const capture = () =>
     requests.map(({ name, params }, index) => ({
       name,
@@ -214,12 +310,18 @@ try {
     }));
   const golden = capture();
   if (!values.ordinary) {
-    assert.equal(golden.length, 27);
+    assert.equal(golden.length, values["team-shape"] ? 36 : 27);
     assert.equal(golden[3]!.result.involvingProfileId, identityId(43));
     assert.equal(golden[4]!.result.involvingProfileId, identityId(3));
     assert.equal(golden[5]!.result.involvingProfileId, undefined);
-    assert.equal(golden[12]!.result.involvingProfileId, undefined);
-    assert.equal(golden[21]!.result.involvingProfileId, identityId(43));
+    assert.equal(
+      golden.find((item) => item.name === "first/retained-prefix")!.result.involvingProfileId,
+      undefined,
+    );
+    assert.equal(
+      golden.find((item) => item.name === "second/retained-prefix")!.result.involvingProfileId,
+      identityId(43),
+    );
     assert.equal(golden[6]!.result.totalCount, 0);
   }
   const warmupOperations = requests.length * 2;
@@ -233,11 +335,13 @@ try {
     assert.ok(waitMs > 0, "--start-at must leave enough time for preparation and warmup");
     await delay(waitMs);
   }
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32_768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  if (allocations) {
+    await inspector.post("HeapProfiler.startSampling", {
+      samplingInterval: 32_768,
+      includeObjectsCollectedByMajorGC: true,
+      includeObjectsCollectedByMinorGC: true,
+    });
+  }
   const counts = requests.map(() => 0);
   const durations = new Float64Array(iterations);
   const gcDurations: number[] = [];
@@ -280,7 +384,9 @@ try {
   }
   const cpu = process.threadCpuUsage(started);
   measuredUntil = performance.now();
-  const { profile } = await inspector.post("HeapProfiler.stopSampling");
+  const profile = allocations
+    ? (await inspector.post("HeapProfiler.stopSampling")).profile
+    : undefined;
   await delay(10);
   recordGc(observer.takeRecords());
   observer.disconnect();
@@ -296,6 +402,9 @@ try {
   durations.sort();
   const result = {
     sessionCount,
+    teamShape: values["team-shape"],
+    selection: values.selection,
+    referenceOnly: values["reference-only"],
     profileCount,
     aliases: 10,
     retainedProfiles: 10,
@@ -319,14 +428,15 @@ try {
     returnedEntries,
     matchedEntries,
     cpuMsPerOperation: (cpu.user + cpu.system) / 1_000 / iterations,
-    allocationBytesPerOperation: allocatedBytes(profile.head) / iterations,
-    samplingInterval: 32_768,
-    includesCollectedObjects: true,
+    mode: values.mode,
+    allocationBytesPerOperation: profile ? allocatedBytes(profile.head) / iterations : undefined,
+    samplingInterval: allocations ? 32_768 : undefined,
+    includesCollectedObjects: allocations ? true : undefined,
   };
   if (values.golden) {
     await writeJson(values.golden, values.ordinary ? { before: golden, after: capture() } : golden);
   }
-  if (values["heap-profile"]) {
+  if (values["heap-profile"] && profile) {
     await writeJson(values["heap-profile"], profile);
   }
   if (values.output) {

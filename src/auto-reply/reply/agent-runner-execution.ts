@@ -452,11 +452,12 @@ async function executeAgentTurnInternalLoop(
       }
     }
     if (cycle.kind === "aborted") {
-      return cycle;
+      return { ...cycle, sessionWriter: fallbackCycleState.sessionWriter };
     }
     if (cycle.kind === "final") {
       return {
         ...cycle,
+        sessionWriter: fallbackCycleState.sessionWriter,
         resolved: {
           provider: fallbackCycleState.attemptedRuntimeProvider,
           model: fallbackCycleState.attemptedRuntimeModel,
@@ -656,12 +657,21 @@ async function executeAgentTurnOutcome(
       internal.kind !== "aborted" &&
       resolveReplyOperationAbortReason(executionParams.replyOperation);
     if (abortReason) {
-      return { runId, outcome: { kind: "aborted", reason: abortReason, ...completedCompaction() } };
+      return {
+        runId,
+        outcome: {
+          kind: "aborted",
+          reason: abortReason,
+          sessionWriter: internal.sessionWriter,
+          ...completedCompaction(),
+        },
+      };
     }
     const outcome: AgentTurnExecutionResult["outcome"] =
       internal.kind === "final"
         ? {
             kind: "rejected",
+            sessionWriter: internal.sessionWriter,
             payload: internal.payload,
             resolved: internal.resolved,
             ...(internal.postCompactionModelFailure

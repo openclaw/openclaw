@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { configForProviders } from "../agents/model-auth.fixtures.test-support.js";
 import * as sourceProjection from "../config/runtime-source-projection.js";
 import type { ModelApi } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -26,17 +27,13 @@ describe("provider model route adapter", () => {
       const resolveRoutes = createProviderModelRoutesResolver({
         provider: "fixture",
         requestTransportOverrides,
-        config: {
-          models: {
-            providers: {
-              fixture: {
-                baseUrl: "https://provider.example.test/v1",
-                headers: { "x-route": "custom" },
-                models: [],
-              },
-            },
+        config: configForProviders({
+          fixture: {
+            baseUrl: "https://provider.example.test/v1",
+            headers: { "x-route": "custom" },
+            models: [],
           },
-        },
+        }),
         env: {},
         surface: { resolveModelRoutes },
       });
@@ -73,17 +70,13 @@ describe("provider model route adapter", () => {
       resolveProviderModelRoutes({
         provider: "openai",
         modelId: "gpt-5.4-mini",
-        config: {
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://api.openai.com/v1",
-                models: [],
-                agentRuntime: { id: "openclaw" },
-              },
-            },
+        config: configForProviders({
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [],
+            agentRuntime: { id: "openclaw" },
           },
-        },
+        }),
         routeIntent: { runtimeId: "codex", authRequirement: "subscription", source },
         env: {},
         surface: { resolveModelRoutes },
@@ -101,28 +94,24 @@ describe("provider model route adapter", () => {
     "projects an explicit %s runtime pin without treating the adapter as a pin",
     (scope) => {
       const resolveModelRoutes = createIndeterminateRouteMock();
-      const config: OpenClawConfig = {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              api: "openai-completions",
-              ...(scope === "provider" ? { agentRuntime: { id: "openclaw" } } : {}),
-              models: [
-                {
-                  id: "gpt-5.4-mini",
-                  name: "Small model",
-                  reasoning: false,
-                  input: ["text"],
-                  maxTokens: 4096,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  ...(scope === "model" ? { agentRuntime: { id: "openclaw" } } : {}),
-                },
-              ],
+      const config: OpenClawConfig = configForProviders({
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions",
+          ...(scope === "provider" ? { agentRuntime: { id: "openclaw" } } : {}),
+          models: [
+            {
+              id: "gpt-5.4-mini",
+              name: "Small model",
+              reasoning: false,
+              input: ["text"],
+              maxTokens: 4096,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              ...(scope === "model" ? { agentRuntime: { id: "openclaw" } } : {}),
             },
-          },
+          ],
         },
-      };
+      });
       resolveProviderModelRoutes({
         provider: "openai",
         modelId: "gpt-5.4-mini",

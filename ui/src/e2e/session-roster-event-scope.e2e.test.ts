@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -27,6 +28,8 @@ suite.define(() => {
         await refresh.waitFor();
         await gateway.waitForRequest("sessions.subscribe");
         await waitForSessionRosterHydration(page);
+        await page.clock.install();
+        await pauseVirtualClock(page);
 
         const pageQuery = { includeUnknown: false };
         await gateway.deferNext("sessions.list", pageQuery);
@@ -36,9 +39,11 @@ suite.define(() => {
           reason: "update",
           updatedAt: 2,
         });
+        await page.clock.runFor(5_001);
         await gateway.waitForRequest("sessions.list", { after: before, match: pageQuery });
         heldRequest = true;
-        await page.waitForTimeout(50);
+        await page.clock.runFor(50);
+        await page.clock.resume();
 
         expect(await refresh.getAttribute("aria-label")).toBe("Refresh");
         expect(await refresh.isEnabled()).toBe(true);
@@ -58,13 +63,15 @@ suite.define(() => {
         methodResponses: { "sessions.list": sessionsListResponse([row]) },
         sessionKey: key,
       });
+      await page.clock.install();
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
       const sidebar = page.locator("openclaw-app-sidebar");
       const selectedRow = sidebar.locator(`[data-session-key="${key}"]`);
       await expect.poll(() => selectedRow.textContent()).toContain("Weekly report");
       await gateway.waitForRequest("sessions.subscribe");
+      await pauseVirtualClock(page);
       // Let startup reconciliation settle before counting event-driven network traffic.
-      await page.waitForTimeout(1_200);
+      await page.clock.runFor(1_200);
       const before = (await gateway.getRequests("sessions.list")).length;
       for (let burst = 0; burst < 3; burst += 1) {
         for (let index = 0; index < 20; index += 1) {
@@ -74,9 +81,9 @@ suite.define(() => {
             updatedAt: burst + 2,
           });
         }
-        // Each burst crosses the real debounce window; sustained traffic must
+        // Each burst crosses the full debounce window; sustained traffic must
         // not make an unrelated selected roster poll once per burst.
-        await page.waitForTimeout(300);
+        await page.clock.runFor(5_001);
       }
       expect((await gateway.getRequests("sessions.list")).length - before).toBe(0);
       expect(await selectedRow.textContent()).toContain("Weekly report");
@@ -92,6 +99,8 @@ suite.define(() => {
         reason: "update",
         updatedAt: 5,
       });
+      await page.clock.runFor(5_001);
+      await page.clock.resume();
       await expect.poll(() => selectedRow.textContent()).toContain("Weekly report ready");
       await expect
         .poll(

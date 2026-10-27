@@ -306,29 +306,99 @@ describe("openai completions stream", () => {
     },
   );
 
-  it("promotes native tool calls through fetch wrapper when SSE terminates cleanly with [DONE] without finish_reason", async () => {
+  it.each([
+    { name: "split CRLF", prefix: "", terminal: ["data: [DO", "NE]\r\n\r\n"], valid: true },
+    { name: "initial BOM", prefix: "\uFEFF", terminal: ["data: [DONE]\n\n"], valid: true },
+    { name: "mixed line endings", prefix: "", terminal: ["data:[DONE]\r\n\n"], valid: true },
+    { name: "padded marker", prefix: "", terminal: ["data:\t[DONE]\t\n\n"], valid: false },
+    {
+      name: "oversized marker line",
+      prefix: "",
+      terminal: [`data:${" ".repeat(1_014)}[DONE]\n\n`],
+      valid: false,
+    },
+    { name: "comment marker", prefix: "", terminal: [":data: [DONE]\n\n"], valid: false },
+    {
+      name: "embedded marker",
+      prefix: "",
+      terminal: [`data: ${JSON.stringify(makeCompletionsChunk({ content: "[DONE]" }))}\n\n`],
+      valid: false,
+    },
+  ])(
+    "preserves native tool terminal proof over HTTP: $name",
+    async ({ prefix, terminal, valid }) => {
+      await withServer(
+        (_req, res) => {
+          startSse(res, true);
+          res.write(prefix);
+          writeSse(
+            res,
+            makeCompletionsChunk(
+              nativeTool("call_loopback_done", "bash", '{"cmd":"echo loopback"}'),
+            ),
+          );
+          for (const part of terminal) {
+            res.write(part);
+          }
+          res.end();
+        },
+        async (baseUrl) => {
+          const { terminal: event, events, result } = await collectLocal(baseUrl);
+          expect(events.some((entry) => entry.type === "toolcall_start")).toBe(true);
+          if (valid) {
+            expect(event).toMatchObject({ type: "done", reason: "toolUse" });
+            expect(result.content.filter((block) => block.type === "toolCall")).toHaveLength(1);
+          } else {
+            expect(event?.type).toBe("error");
+            expect(events.some((entry) => entry.type === "toolcall_end")).toBe(false);
+            expect(result.content.filter((block) => block.type === "toolCall")).toHaveLength(0);
+          }
+        },
+      );
+    },
+  );
+
+  it("observes terminal proof without walking every SSE character", async () => {
+    const chunks = Array.from({ length: 200 }, () =>
+      makeCompletionsChunk({ content: "Streaming text 🦞 " }),
+    );
+    chunks.push(makeCompletionsChunk({}, "stop"));
+    const body =
+      chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n";
     await withServer(
       (_req, res) => {
-        startSse(res, true);
-        writeSse(
-          res,
-          makeCompletionsChunk(nativeTool("call_loopback_done", "bash", '{"cmd":"echo loopback"}')),
-        );
-        // Split CRLF-formatted terminal proof across chunks. The SDK accepts this
-        // framing, so the raw terminal observer must preserve the same contract.
-        res.write("data: [DO");
-        res.write("NE]\r\n\r\n");
-        res.end();
+        startSse(res);
+        res.end(body);
       },
       async (baseUrl) => {
-        const { terminal, events } = await collectLocal(baseUrl);
-        expect(terminal).toMatchObject({ type: "done", reason: "toolUse" });
-        expect(events.some((event) => event.type === "toolcall_start")).toBe(true);
-        expect(
-          terminal?.type === "done"
-            ? terminal.message.content.filter((block) => block.type === "toolCall")
-            : [],
-        ).toHaveLength(1);
+        const iteratedCharacters = [];
+        for (const createStream of [
+          streamOpenAICompletions,
+          createOpenAICompletionsTransportStreamFn(),
+        ]) {
+          const iterate = String.prototype[Symbol.iterator];
+          let characters = 0;
+          const iterator = vi
+            .spyOn(String.prototype, Symbol.iterator)
+            .mockImplementation(function* (this: string) {
+              for (const character of iterate.call(this)) {
+                characters++;
+                yield character;
+              }
+              return undefined;
+            });
+          try {
+            const result = await captureStream(
+              createStream(localModel(baseUrl), replyContext(), { apiKey: "test-key" }),
+            );
+            expect(result.text).toBe("Streaming text 🦞 ".repeat(200));
+            expect(result.result.stopReason).toBe("stop");
+            iteratedCharacters.push(characters);
+          } finally {
+            iterator.mockRestore();
+          }
+        }
+        expect(iteratedCharacters[1]).toBe(iteratedCharacters[0]);
       },
     );
   });

@@ -53,6 +53,12 @@ After `sessions_yield`, the frozen batch waits for its own children and their
 descendants to settle. A still-running child from an earlier requester turn does
 not delay that batch's result; the earlier batch retains its own completion wake.
 
+Completion and settle run IDs stay within the 256-character execution-identity
+admission limit, including nested completions. IDs that fit remain unchanged;
+longer IDs retain their routing prefix and continuation markers with a SHA-256
+digest of the full identity. Batch size and nesting therefore do not prevent
+completion admission when execution-identity collection is enabled.
+
 Completion inputs retain their own turn identity across compaction and runtime
 context messages. If transcript persistence rejects a completion because its
 keyed input belongs to a closed turn, delivery records a permanent failure with
@@ -154,7 +160,10 @@ Announce context is normalized to a stable internal event block:
 
 The result is the child's complete visible final answer for the completed run,
 including ACP-backed runs and CLI fallback transcripts. A later turn in the same
-child session does not replace that run's answer. Once cleanup and requester obligations
+child session does not replace that run's answer. Native answers preserve the same
+text-block boundaries as terminal results. Already displayed replies retain their
+recorded display text, and media references remain available for parent review.
+Once cleanup and requester obligations
 have settled, the in-memory registry keeps a short task preview and lifecycle
 metadata. Full task and result text remain in SQLite and are loaded for selected
 reads or later mutations. Pending delivery, suspended delivery, cancellation, and

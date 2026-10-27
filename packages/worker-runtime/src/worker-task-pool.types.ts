@@ -22,7 +22,7 @@ export type WorkerTaskPoolOptions<Output> = {
   maxPendingTasks?: number;
   maxPendingBytes?: number;
   idleTimeoutMs?: number;
-  /** Retire workers beyond the first usable slot sooner, without extending its warm window. */
+  /** Surplus idle timeout; one recently recreated burst can stay warm for three times this value. */
   burstIdleTimeoutMs?: number;
   restartOnError?: boolean;
   validateResult?: (value: Output) => void;
@@ -78,6 +78,8 @@ export type WorkerTaskOptions<Input> = {
 
 /** Internal codecs may answer a worker while their caller cannot run Promise reactions. */
 export type OwnedWorkerTaskOptions<Input> = Omit<WorkerTaskOptions<Input>, "onRequest"> & {
+  /** Retained owners may exclude queueing behind owner-controlled work from their budget. */
+  timeoutFrom?: "dispatch";
   /** Host diagnostics classify this operation before publishing bounded labels. */
   diagnosticOperation?: string;
   /** Optional shared sequence word; wakeups are hints, never task receipts. */

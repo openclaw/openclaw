@@ -314,11 +314,8 @@ suite.define(() => {
       await duplicate.addInitScript((eventName) => {
         const manager = navigator.locks;
         const nativeRequest = manager.request.bind(manager);
-        let release!: () => void;
         let released = false;
-        const latch = new Promise<void>((resolve) => {
-          release = resolve;
-        });
+        const { promise: latch, resolve: release } = Promise.withResolvers<void>();
         window.addEventListener(
           eventName,
           () => {

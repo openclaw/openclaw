@@ -3,13 +3,12 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ToolsCatalogResult, ToolsEffectiveResult } from "../../api/types.ts";
 import { readToolsEffective } from "../../lib/agents/index.ts";
 
-type ReadScope = {
-  client: GatewayBrowserClient | null;
-  connected: boolean;
-  requestGeneration: number;
-};
 type ReadOptions = {
-  scope: () => ReadScope;
+  scope: () => {
+    client: GatewayBrowserClient | null;
+    connected: boolean;
+    requestGeneration: number;
+  };
   isCurrent: (client: GatewayBrowserClient, generation: number, agentId: string) => boolean;
 };
 type CatalogRequest = {

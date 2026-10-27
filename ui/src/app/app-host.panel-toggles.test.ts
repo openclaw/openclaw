@@ -89,6 +89,34 @@ afterEach(() => {
 });
 
 describe("OpenClaw shell panel toggles", () => {
+  it.each(["pending", "closed"] as const)(
+    "does not toggle a %s cold palette on a held shortcut",
+    (phase) => {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux x86_64");
+      const { shell, owner } = configurePanelShell();
+      const target = shell.element.appendChild(document.createElement("textarea"));
+      document.addEventListener("keydown", owner.handleDocumentKeydown, true);
+      onTestFinished(() =>
+        document.removeEventListener("keydown", owner.handleDocumentKeydown, true),
+      );
+      const chord = (repeat = false) =>
+        keyEvent("k", "KeyK", { ctrlKey: true, bubbles: true, repeat });
+      target.dispatchEvent(chord());
+      expect(owner.pendingShellAction).not.toBeNull();
+      expect(owner.commandPaletteLoading.active()).toBe(true);
+      if (phase === "closed") {
+        target.dispatchEvent(chord());
+        expect(owner.pendingShellAction).toBeNull();
+        expect(owner.commandPaletteLoading.active()).toBe(false);
+      }
+      const repeated = chord(true);
+      target.dispatchEvent(repeated);
+      expect(repeated.defaultPrevented).toBe(true);
+      expect(owner.pendingShellAction !== null).toBe(phase === "pending");
+      expect(owner.commandPaletteLoading.active()).toBe(phase === "pending");
+    },
+  );
+
   it("captures the terminal chord once before a consuming target", async () => {
     const { owner } = configurePanelShell();
     const target = document.body.appendChild(document.createElement("div"));

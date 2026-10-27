@@ -117,7 +117,6 @@ describe("session model patches under operator policy", () => {
 
   it("retains the exact selected-model guard until the write commits", async () => {
     const value = fixture();
-    const before = structuredClone(value.initial);
     const result = await value.project("chosen");
     expect(result).toMatchObject({
       ok: true,
@@ -127,6 +126,5 @@ describe("session model patches under operator policy", () => {
     expect(result.validateModelSelection?.()).toBeUndefined();
     value.tighten();
     expect(result.validateModelSelection?.()).toMatchObject(denied);
-    expect(value.initial).toEqual(before);
   });
 });

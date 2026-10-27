@@ -99,7 +99,7 @@ function pruneHistory(
   const records = readCronRunRecordsInDatabase(db);
   const activeJobs = new Set(records.flatMap((row) => (row.jobId ? [row.jobId] : [])));
   const plan = planCronRunHistoryMaintenance(records, now, activeJobs);
-  return applyCronRunHistoryMaintenanceInDatabase(db, plan, now, schema).pruned;
+  return applyCronRunHistoryMaintenanceInDatabase(db, plan, schema).pruned;
 }
 
 async function readCronRunHistoryPage(options: ReadCronRunHistoryPageOptions) {

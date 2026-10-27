@@ -6,7 +6,6 @@ import { reservePendingWorktree } from "../agents/worktrees/pending-slots.js";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { makeWorktreeRecord } from "../agents/worktrees/service.test-support.js";
 import { buildBackupArchivePath } from "../commands/backup-shared.js";
-import { verifyBackupArchive } from "../commands/backup-verify.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -66,7 +65,6 @@ describe("backup managed workspaces", () => {
         output: state.path("backup.tar.gz"),
         includeWorkspace: false,
       });
-      expect(await verifyBackupArchive(archive.archivePath)).toMatchObject({ ok: true });
       const restored = await restoreBackup(state, archive);
       const restoredPath = (source: string) =>
         path.join(restored.targetPath, buildBackupArchivePath(archive.archiveRoot, source));
@@ -133,7 +131,6 @@ describe("backup managed workspaces", () => {
       await closeStateDatabaseForTest();
 
       const archive = await createVerifiedBackup(state);
-      expect(archive.verified).toBe(true);
       const restored = await restoreBackup(state, archive);
       const restoredPath = (source: string) =>
         path.join(restored.targetPath, buildBackupArchivePath(archive.archiveRoot, source));

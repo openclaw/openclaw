@@ -71,7 +71,7 @@ async function checkRefreshAvailability({ page }: { page: Page }) {
   await page.clock.fastForward(5_001);
   await page.clock.resume();
   await sidebar.getByText("Recovered sample session", { exact: true }).waitFor();
-  await connectionStatus.waitFor({ state: "detached" });
+  await connectionStatus.getByText("Connected", { exact: true }).waitFor();
   expect((await gateway.getRequests(catalogMethod)).length).toBe(before + 1);
   expect(await gateway.getSocketCount()).toBe(1);
   expect(await sidebar.getByRole("alert").count()).toBe(0);

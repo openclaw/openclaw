@@ -134,8 +134,10 @@ describe("session transcript title hydration", () => {
       assistant("Hot reply"),
     ]);
     expectTitle(cold, null, null);
+    const emptyTitles = readTitles(cold);
     expectTitle(hot, "Hot prompt", "Hot reply");
     expectTitle(cold, null, null);
+    expect(readTitles(cold)).toBe(emptyTitles);
     expect(readSessionColdTranscript(database.db, cold.sessionId)).toEqual(archive);
 
     await restoreSessionColdTranscript(cold);

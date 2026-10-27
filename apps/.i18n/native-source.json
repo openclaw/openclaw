@@ -2652,6 +2652,7 @@
     {"path":"apps/macos/Sources/OpenClaw/DashboardWindowController.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.778ee016f8779750","source":"Gateway sign-in"},
     {"path":"apps/macos/Sources/OpenClaw/DashboardWindowController.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.14bac08e2f5473c7","source":"Sign-in cancelled. Try again."},
     {"path":"apps/macos/Sources/OpenClaw/DashboardWindowController.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.47ceb7000b4c0195","source":"The Gateway returned HTTP %ld (%@)."},
+    {"path":"apps/macos/Sources/OpenClaw/DashboardWindowController.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.b0fdd0432e45bdc7","source":"The dashboard page stopped unexpectedly."},
     {"path":"apps/macos/Sources/OpenClaw/DashboardWindowController.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.0fc8bd5d7e83da87","source":"Gateway sign-in required"},
     {"path":"apps/macos/Sources/OpenClaw/DashboardWindowController.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.0727ac92fee6dd66","source":"Reconnect in Connection → Gateways."},
     {"path":"apps/macos/Sources/OpenClaw/DashboardWindowController.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.94698c3702d1370e","source":"Sign in again in Connection → Gateways."},

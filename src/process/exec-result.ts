@@ -79,7 +79,7 @@ export type SpawnResult = {
 
 export type CommandProcessOutcome = Pick<
   SpawnResult,
-  "pid" | "code" | "cleanup" | "termination"
+  "pid" | "code" | "cleanup" | "termination" | "killIssuedByAbort" | "outputLimitExceeded"
 > & {
   /** False only while a managed beforeInput callback has withheld every input byte. */
   inputReleased?: boolean;

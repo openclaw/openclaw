@@ -182,20 +182,38 @@ describe("X native media request boundary", () => {
     },
   );
 
-  it("bounds repeated pending processing responses without shortening X polling delays", async () => {
-    vi.useFakeTimers();
-    const test = processingFixture({ finalize: processing("pending", 60) });
-    const started = Date.now();
-    const result = test.api.uploadMedia(image).catch((cause: unknown) => cause);
-    await test.finalized;
-    await vi.advanceTimersByTimeAsync(300_000);
-    expect(await result).toMatchObject({
-      code: "OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED",
-      retryable: true,
-      message: expect.stringContaining("processing timed out"),
-    });
-    expect(test.polls.map((time) => time - started)).toEqual([60_000, 120_000, 180_000, 240_000]);
-  });
+  it.each([0, -600_000])(
+    "bounds pending processing without shortening polling delays (wall-clock step %i ms)",
+    async (clockStep) => {
+      vi.useFakeTimers();
+      const test = processingFixture({ finalize: processing("pending", 60) });
+      const started = Date.now();
+      const controller = new AbortController();
+      let error: unknown;
+      const result = test.api
+        .uploadMedia({ ...image, signal: controller.signal })
+        .catch((cause: unknown) => {
+          error = cause;
+        });
+      try {
+        await test.finalized;
+        await vi.advanceTimersByTimeAsync(0);
+        vi.setSystemTime(Date.now() + clockStep);
+        await vi.advanceTimersByTimeAsync(300_000);
+        expect(error).toMatchObject({
+          code: "OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED",
+          retryable: true,
+          message: expect.stringContaining("processing timed out"),
+        });
+        expect(test.polls.map((time) => time - started - clockStep)).toEqual([
+          60_000, 120_000, 180_000, 240_000,
+        ]);
+      } finally {
+        controller.abort();
+        await result;
+      }
+    },
+  );
 
   it.each(["caller abort", "revoked authority", "missing processing status"])(
     "stops after %s during the processing wait without posting",

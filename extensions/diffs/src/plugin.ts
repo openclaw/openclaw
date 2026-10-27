@@ -13,7 +13,6 @@ import {
   resolveDiffsPluginSecurity,
   resolveDiffsPluginViewerBaseUrl,
 } from "./config.js";
-import { DIFFS_AGENT_GUIDANCE } from "./prompt-guidance.js";
 import { DiffArtifactStore } from "./store.js";
 import { createDiffsTool } from "./tool.js";
 import {
@@ -23,6 +22,14 @@ import {
 } from "./types.js";
 import { VIEWER_ASSET_PREFIX, VIEWER_RUNTIME_PATH, getServedViewerAsset } from "./viewer-assets.js";
 
+const DIFFS_AGENT_GUIDANCE = [
+  "When you need to show edits as a real diff, prefer the `diffs` tool instead of writing a manual summary.",
+  "It accepts either `before` + `after` text or a unified `patch`.",
+  "Check `details.changed`: identical before/after input returns `false` without creating an artifact; rendered results return `true`.",
+  "`mode=view` returns `details.viewerUrl` for interactive viewing; `mode=file` returns `details.filePath`; `mode=both` returns both.",
+  "To send the rendered file, use an available file-sending tool to send `details.filePath` as an attachment.",
+  "Include `path` when you know the filename, and omit presentation overrides unless needed.",
+].join("\n");
 const DIFFS_LANGUAGE_PACK_PLUGIN_ID = "diffs-language-pack";
 const DIFF_ARTIFACT_NAMESPACE = "diff-artifacts";
 const DIFF_ARTIFACT_MAX_ENTRIES = 2_048;

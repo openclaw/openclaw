@@ -128,6 +128,18 @@ type GitHubPublicApi = {
     request: (token: string | undefined) => Promise<T>,
   ) => Promise<T>;
   readGitHubJsonResponse: (response: Response, maxBytes?: number) => Promise<unknown>;
+  fetchGitHubJsonPage: (
+    url: string,
+    fetchImpl: typeof fetch,
+    token?: string,
+    options?: {
+      maxBytes?: number;
+      apiBaseUrl?: string;
+      beforeRedirect?: (url: URL) => Promise<void>;
+      identity?: Pick<ControlUiGitHubPreviewIdentity, "revalidate" | "assertSelected" | "signal">;
+      signal?: AbortSignal;
+    },
+  ) => Promise<{ value: unknown; link: string | null }>;
   fetchGitHubJson: (
     url: string,
     fetchImpl: typeof fetch,
@@ -326,6 +338,13 @@ export const gitHubPublicApi = createLazyFacadeObjectValue<GitHubPublicApi>(() =
     fetchGitHubApi(...args) {
       args[8] ??= resolveConfiguredGitHubApiBaseUrl(getRuntimeConfigSnapshot());
       return library.fetchGitHubApi(...args);
+    },
+    fetchGitHubJsonPage(url, fetchImpl, token, options) {
+      return library.fetchGitHubJsonPage(url, fetchImpl, token, {
+        ...options,
+        apiBaseUrl:
+          options?.apiBaseUrl ?? resolveConfiguredGitHubApiBaseUrl(getRuntimeConfigSnapshot()),
+      });
     },
     fetchGitHubJson(...args) {
       args[4] ??= resolveConfiguredGitHubApiBaseUrl(getRuntimeConfigSnapshot());

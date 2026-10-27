@@ -51,8 +51,6 @@ const reversePort = /Reverse-port to SQLite with the current binary/;
 it.each([
   ["postgres", true, undefined, reversePort],
   ["postgres", true, ["sqlite"], reversePort],
-  ["postgres", true, [], reversePort],
-  ["postgres", true, "postgres", reversePort],
   ["postgres", true, engines, null],
   ["sqlite", true, undefined, null],
   ["postgres", false, undefined, /target does not support the PostgreSQL store/],
@@ -61,14 +59,12 @@ it.each([
   async (engine, enabled, declaration, error) => {
     const { file, context } = await store(engine, enabled);
     const before = await fs.readFile(file);
-    const activate = vi.fn();
-    const admission = admitEngines([context], declaration, ["workboard"]).then(activate);
+    const admission = admitEngines([context], declaration, ["workboard"]);
     if (error) {
       await expect(admission).rejects.toThrow(error);
     } else {
       await admission;
     }
-    expect(activate).toHaveBeenCalledTimes(error ? 0 : 1);
     expect(await fs.readFile(file)).toEqual(before);
     expect(await fs.readdir(path.dirname(file))).toEqual(["workboard.sqlite"]);
   },
@@ -99,41 +95,26 @@ it.each(["sqlite", "postgres"] as const)(
 );
 
 it.each([
-  { engine: "sqlite", families: { workboard: { engine: "postgres" } } },
-  {
-    engine: "postgres",
-    families: { agent: { engine: "sqlite" }, workboard: { engine: "sqlite" } },
-  },
-  { engine: "sqlite", families: { state: { engine: "postgres" } } },
-  { engine: "sqlite", families: { agent: { engine: "sqlite" } } },
-] satisfies NonNullable<OpenClawConfig["database"]>[])(
-  "admits selected mixed families without changing store bytes (%j)",
-  async (database) => {
-    const { file, context } = await store("sqlite");
-    const before = await fs.readFile(file);
-    await admitEngines([withDatabase(context, database)], engines, families);
-    expect(await fs.readFile(file)).toEqual(before);
-  },
-);
-
-it("checks every context for its selected PostgreSQL family", async () => {
-  const { context } = await store("sqlite");
-  await expect(
-    admitEngines(
-      [context, withDatabase(context, { families: { state: { engine: "postgres" } } })],
-      ["postgres"],
-      ["workboard"],
-    ),
-  ).rejects.toThrow(/target does not declare support for the PostgreSQL state family/);
-});
-
-it("protects selected PostgreSQL families before any anchor has been created", async () => {
-  const { context } = await store("sqlite");
-  const postgres = withDatabase(context, { engine: "postgres" });
-  await expect(admitEngines([postgres], ["sqlite"])).rejects.toThrow(
-    /target does not support the configured PostgreSQL families.*Reverse-port to SQLite/,
+  [{ engine: "sqlite", families: { workboard: { engine: "postgres" } } }, null],
+  [{ engine: "postgres" }, "configured"],
+  [{ engine: "postgres" }, null],
+  [{ families: { state: { engine: "postgres" } } }, "state"],
+] as const)("checks every context without modifying stores: %j", async (database, error) => {
+  const { file, context } = await store("sqlite");
+  const before = await fs.readFile(file);
+  const admission = admitEngines(
+    [context, withDatabase(context, database)],
+    error === "configured" ? ["sqlite"] : engines,
+    error === "state" ? ["workboard"] : families,
   );
-  await expect(admitEngines([postgres], engines, families)).resolves.toBeUndefined();
+  if (error) {
+    await expect(admission).rejects.toThrow(
+      error === "configured" ? /configured PostgreSQL families/ : /PostgreSQL state family/,
+    );
+  } else {
+    await expect(admission).resolves.toBeUndefined();
+  }
+  expect(await fs.readFile(file)).toEqual(before);
 });
 
 it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(

@@ -264,7 +264,11 @@ describe("board and progress event session ownership", () => {
 });
 
 describe("collaboration event scope guards", () => {
-  it("revalidates an authoritative session-generation creator replacement before socket I/O", async () => {
+  it.each([
+    { event: "sessions.changed", scope: "operator.read" },
+    { event: "board.changed", scope: "operator.sessions.read" },
+    { event: "board.command", scope: "operator.sessions.write" },
+  ])("filters $event after creator replacement ($scope)", async ({ event, scope }) => {
     await withBoardState(async () => {
       const cfg: OpenClawConfig = {};
       setRuntimeConfigSnapshot(cfg);
@@ -278,6 +282,8 @@ describe("collaboration event scope guards", () => {
       );
       const owner = readPeer("owner");
       const successor = readPeer("successor");
+      owner.client.connect.scopes = [scope];
+      successor.client.connect.scopes = [scope];
       for (const [entry, actor] of [
         [owner, ownerActor],
         [successor, successorActor],
@@ -299,10 +305,19 @@ describe("collaboration event scope guards", () => {
           clients: registry([owner, successor]),
           canReceiveSessionEvent: filter,
         });
+        const payload = {
+          sessionKey,
+          agentId: "main",
+          ...(event === "board.command"
+            ? { command: { kind: "focus_tab", tabId: "main" } }
+            : event === "board.changed"
+              ? { revision: 1 }
+              : { reason: "updated" }),
+        };
         const broadcast = () =>
           broadcastToConnIds(
-            "sessions.changed",
-            { sessionKey, agentId: "main", reason: "updated" },
+            event,
+            payload,
             new Set([owner.client.connId, successor.client.connId]),
             { agentId: "main", sessionKeys: [sessionKey] },
           );
@@ -310,8 +325,8 @@ describe("collaboration event scope guards", () => {
           expect(rejected.socket.send).not.toHaveBeenCalled();
           expect(frames(recipient)).toEqual([
             expect.objectContaining({
-              event: "sessions.changed",
-              payload: { sessionKey, agentId: "main", reason: "updated" },
+              event,
+              payload,
             }),
           ]);
         };
@@ -319,7 +334,11 @@ describe("collaboration event scope guards", () => {
         broadcast();
         expectRecipient(owner, successor);
 
-        const target = await resolveSessionSharingTargetAsync({ cfg, sessionKey, agentId: "main" });
+        const target = await resolveSessionSharingTargetAsync({
+          cfg,
+          sessionKey,
+          agentId: "main",
+        });
         if (!target) {
           throw new Error("expected the persisted draft session target");
         }

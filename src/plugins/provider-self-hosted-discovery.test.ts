@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { configForProviders } from "../agents/model-auth.fixtures.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { discoverOpenAICompatibleLocalModels } from "./provider-self-hosted-discovery.js";
 
@@ -40,35 +41,31 @@ async function discoverModelContexts(
 
 describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
   it("resolves only the configured provider's request secrets and preserves its transport policy", async () => {
-    const config = {
-      models: {
-        providers: {
-          litellm: {
-            baseUrl: "https://192.168.1.2/v1",
-            headers: {
-              "X-Tenant": { source: "env", provider: "default", id: "PROXY_TENANT" },
-            },
-            request: {
-              allowPrivateNetwork: false,
-              headers: { "X-Request": "discovery" },
-              proxy: {
-                mode: "explicit-proxy",
-                url: "https://proxy.example:8443",
-                tls: { ca: { source: "env", provider: "default", id: "PROXY_CA" } },
-              },
-            },
-            models: [],
-          },
-          unrelated: {
-            baseUrl: "https://other.example/v1",
-            headers: {
-              "X-Unavailable": { source: "env", provider: "default", id: "MISSING_OTHER_KEY" },
-            },
-            models: [],
+    const config = configForProviders({
+      litellm: {
+        baseUrl: "https://192.168.1.2/v1",
+        headers: {
+          "X-Tenant": { source: "env", provider: "default", id: "PROXY_TENANT" },
+        },
+        request: {
+          allowPrivateNetwork: false,
+          headers: { "X-Request": "discovery" },
+          proxy: {
+            mode: "explicit-proxy",
+            url: "https://proxy.example:8443",
+            tls: { ca: { source: "env", provider: "default", id: "PROXY_CA" } },
           },
         },
+        models: [],
       },
-    } satisfies OpenClawConfig;
+      unrelated: {
+        baseUrl: "https://other.example/v1",
+        headers: {
+          "X-Unavailable": { source: "env", provider: "default", id: "MISSING_OTHER_KEY" },
+        },
+        models: [],
+      },
+    }) satisfies OpenClawConfig;
     const source = structuredClone(config);
     fetchWithSsrFGuardMock.mockResolvedValueOnce(
       guarded(Response.json({ data: [{ id: "local-qwen" }] })),

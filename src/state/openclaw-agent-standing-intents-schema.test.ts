@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import {
   ensureMemoryChunkProvenance,
   MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
@@ -33,7 +33,12 @@ function expectAccepted(db: Database, databasePath: string) {
   expect(() =>
     ensureOpenClawAgentDatabaseSchema(db, { agentId: "main", path: databasePath }),
   ).not.toThrow();
+  expect(db.prepare("PRAGMA user_version").get()).toEqual({
+    user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+  });
 }
+const expectRow = (db: Database, sql: string, expected: unknown) =>
+  expect(db.prepare(sql).get()).toEqual(expected);
 function table(db: Database, name: string) {
   return db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?").get(name);
 }
@@ -50,94 +55,85 @@ function schemaWithoutStandingIntentCreator(): string {
   return OPENCLAW_AGENT_SCHEMA_SQL.replace(STANDING_CREATOR_COLUMN, "");
 }
 
-describe("additive memory agent schemas", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  function withDatabase(schema: string, run: (db: Database, databasePath: string) => void) {
-    const tempDir = tempDirs.make("openclaw-memory-schema-");
-    const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
-    using db = openNodeSqliteDatabase(databasePath);
-    db.exec(schema);
-    db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`);
-    db.prepare(
-      `INSERT INTO schema_meta (
+function withDatabase(schema: string, run: (db: Database, databasePath: string) => void) {
+  const tempDir = tempDirs.make("openclaw-memory-schema-");
+  const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
+  using db = openNodeSqliteDatabase(databasePath);
+  db.exec(schema);
+  db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`);
+  db.prepare(
+    `INSERT INTO schema_meta (
           meta_key, role, schema_version, agent_id, app_version, created_at, updated_at
         ) VALUES ('primary', 'agent', ?, 'main', 'test', 1, 1)`,
-    ).run(OPENCLAW_AGENT_SCHEMA_VERSION);
-    run(db, databasePath);
-  }
+  ).run(OPENCLAW_AGENT_SCHEMA_VERSION);
+  run(db, databasePath);
+}
 
-  it.each(["tables", "creator"] as const)("lazily repairs missing %s idempotently", (missing) =>
-    withDatabase(
-      missing === "tables"
-        ? removeSchemaSection("standing_intents", "session_transcript_index_state")
-        : schemaWithoutStandingIntentCreator(),
-      (db, databasePath) => {
-        expectAccepted(db, databasePath);
-        if (missing === "tables") {
-          expect(table(db, "standing_intents")).toBeUndefined();
-        } else {
-          expect(columnNames(db, "standing_intents")).not.toContain("creator_sender");
-        }
+it.each(["tables", "creator"] as const)("lazily repairs missing %s idempotently", (missing) =>
+  withDatabase(
+    missing === "tables"
+      ? removeSchemaSection("standing_intents", "session_transcript_index_state")
+      : schemaWithoutStandingIntentCreator(),
+    (db, databasePath) => {
+      expectAccepted(db, databasePath);
+      if (missing === "tables") {
+        expect(table(db, "standing_intents")).toBeUndefined();
+      } else {
+        expect(columnNames(db, "standing_intents")).not.toContain("creator_sender");
+      }
 
-        ensureOpenClawAgentStandingIntentsSchema(db);
-        ensureOpenClawAgentStandingIntentsSchema(db);
+      ensureOpenClawAgentStandingIntentsSchema(db);
+      ensureOpenClawAgentStandingIntentsSchema(db);
 
-        const tables = db
+      expect(
+        db
           .prepare(
             "SELECT name FROM sqlite_schema WHERE name IN ('standing_intents', 'standing_intents_fts') ORDER BY name",
           )
-          .all() as Array<{ name: string }>;
-        expect(tables.map((row) => row.name)).toStrictEqual([
-          "standing_intents",
-          "standing_intents_fts",
-        ]);
-        expect(
-          db
-            .prepare(
-              "SELECT name, type, pk FROM pragma_table_info('standing_intents') WHERE name IN ('id', 'intent_key') ORDER BY name",
-            )
-            .all(),
-        ).toEqual([
-          { name: "id", type: "TEXT", pk: 0 },
-          { name: "intent_key", type: "INTEGER", pk: 1 },
-        ]);
-        expect(columnNames(db, "standing_intents")).toContain("creator_sender");
-        expectAccepted(db, databasePath);
-        expect(db.prepare("PRAGMA user_version").get()).toMatchObject({
-          user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-        });
-      },
-    ),
-  );
+          .all(),
+      ).toEqual([{ name: "standing_intents" }, { name: "standing_intents_fts" }]);
+      expect(
+        db
+          .prepare(
+            "SELECT name, type, pk FROM pragma_table_info('standing_intents') WHERE name IN ('id', 'intent_key') ORDER BY name",
+          )
+          .all(),
+      ).toEqual([
+        { name: "id", type: "TEXT", pk: 0 },
+        { name: "intent_key", type: "INTEGER", pk: 1 },
+      ]);
+      expect(columnNames(db, "standing_intents")).toContain("creator_sender");
+      expectAccepted(db, databasePath);
+    },
+  ),
+);
 
-  it("accepts current-version databases before the provenance lazy ensure", () =>
-    withDatabase(
-      removeSchemaSection("memory_index_chunk_provenance", "memory_embedding_cache"),
-      (db, databasePath) => {
-        expectAccepted(db, databasePath);
-        expect(table(db, MEMORY_INDEX_CHUNK_PROVENANCE_TABLE)).toBeUndefined();
+it("accepts current-version databases before the provenance lazy ensure", () =>
+  withDatabase(
+    removeSchemaSection("memory_index_chunk_provenance", "memory_embedding_cache"),
+    (db, databasePath) => {
+      expectAccepted(db, databasePath);
+      expect(table(db, MEMORY_INDEX_CHUNK_PROVENANCE_TABLE)).toBeUndefined();
 
-        db.exec("BEGIN IMMEDIATE");
-        ensureMemoryChunkProvenance(db);
-        db.exec("ROLLBACK");
-        expect(table(db, MEMORY_INDEX_CHUNK_PROVENANCE_TABLE)).toBeUndefined();
+      db.exec("BEGIN IMMEDIATE");
+      ensureMemoryChunkProvenance(db);
+      db.exec("ROLLBACK");
+      expect(table(db, MEMORY_INDEX_CHUNK_PROVENANCE_TABLE)).toBeUndefined();
 
-        ensureMemoryChunkProvenance(db);
-        ensureMemoryChunkProvenance(db);
+      ensureMemoryChunkProvenance(db);
+      ensureMemoryChunkProvenance(db);
 
-        expectAccepted(db, databasePath);
+      expectAccepted(db, databasePath);
 
-        expect(table(db, MEMORY_INDEX_CHUNK_PROVENANCE_TABLE)).toBeDefined();
-        expect(db.prepare("PRAGMA user_version").get()).toMatchObject({
-          user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-        });
-      },
-    ));
+      expect(table(db, MEMORY_INDEX_CHUNK_PROVENANCE_TABLE)).toBeDefined();
+    },
+  ));
 
-  it("migrates unreleased inline chunk metadata into rollback-safe storage", () =>
-    withDatabase(
-      `${removeSchemaSection("memory_index_chunk_recall_metadata", "memory_index_chunk_provenance")}
+it("migrates unreleased inline chunk metadata into rollback-safe storage", () =>
+  withDatabase(
+    `${removeSchemaSection("memory_index_chunk_recall_metadata", "memory_index_chunk_provenance")}
         ALTER TABLE memory_index_chunks ADD COLUMN importance INTEGER
           CHECK (importance IS NULL OR importance BETWEEN 1 AND 10);
         ALTER TABLE memory_index_chunks ADD COLUMN triggers TEXT;
@@ -157,44 +153,26 @@ describe("additive memory agent schemas", () => {
           42, 9, 'when testing rollback', 'project/key'
         );
       `,
-      (db, databasePath) => {
-        expectAccepted(db, databasePath);
-        expect(columnNames(db, "memory_index_chunks")).toEqual([
-          "chunk_rowid",
-          "id",
-          "path",
-          "source",
-          "start_line",
-          "end_line",
-          "hash",
-          "model",
-          "text",
-          "embedding",
-          "updated_at",
-        ]);
-        expect(
-          db
-            .prepare(
-              `SELECT importance, triggers, project_key
+    (db, databasePath) => {
+      expectAccepted(db, databasePath);
+      expectRow(
+        db,
+        `SELECT importance, triggers, project_key
              FROM ${MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE}
              WHERE chunk_id = 'sentinel'`,
-            )
-            .get(),
-        ).toEqual({
+        {
           importance: 9,
           triggers: "when testing rollback",
           project_key: "project/key",
-        });
-        expect(
-          db
-            .prepare(
-              "SELECT 1 FROM sqlite_schema WHERE type = 'trigger' AND name = 'memory_index_chunk_provenance_after_insert'",
-            )
-            .get(),
-        ).toBeUndefined();
-        expect(db.prepare("SELECT origin_class FROM memory_index_chunk_provenance").get()).toEqual({
-          origin_class: "agent",
-        });
-      },
-    ));
-});
+        },
+      );
+      expectRow(
+        db,
+        "SELECT 1 FROM sqlite_schema WHERE type = 'trigger' AND name = 'memory_index_chunk_provenance_after_insert'",
+        undefined,
+      );
+      expectRow(db, "SELECT origin_class FROM memory_index_chunk_provenance", {
+        origin_class: "agent",
+      });
+    },
+  ));

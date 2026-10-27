@@ -1,7 +1,5 @@
-import assert from "node:assert/strict";
 import { beforeAll, describe, expect, it } from "vitest";
 import { labelRuntimeContextText } from "../llm/types.js";
-import { isRecord } from "../plugin-sdk/string-coerce-runtime.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import {
   buildAgentInternalEventContext,
@@ -68,7 +66,6 @@ describe("image completion producer context through the QA provider", () => {
           body: JSON.stringify({
             model: "gpt-5.6-luna",
             stream: false,
-            instructions: "Read source and docs; report worked, failed, blocked.",
             tools: [{ type: "function", name: "message" }],
             input: [
               user("Image generation check: generate a QA lighthouse image."),
@@ -76,15 +73,12 @@ describe("image completion producer context through the QA provider", () => {
                 type: "function_call",
                 name: "image_generate",
                 call_id: "qa-image",
-                arguments: JSON.stringify({ prompt: "A QA lighthouse" }),
+                arguments: "{}",
               },
               {
                 type: "function_call_output",
                 call_id: "qa-image",
-                output: JSON.stringify({
-                  content: [{ type: "text", text: "Background image generation started." }],
-                  details: { async: true, status: "started" },
-                }),
+                output: "Background image generation started.",
               },
               completion,
               ...(projection === "queued host delivery" ? [user(provenance)] : []),
@@ -92,23 +86,12 @@ describe("image completion producer context through the QA provider", () => {
           }),
         });
         expect(response.ok).toBe(true);
-        const result: unknown = await response.json();
-        assert.ok(isRecord(result) && Array.isArray(result.output));
-        expect(result.output.some((item) => isRecord(item) && item.type === "function_call")).toBe(
-          false,
-        );
-        const text = result.output
-          .flatMap((item) => (isRecord(item) && Array.isArray(item.content) ? item.content : []))
-          .flatMap((part) =>
-            isRecord(part) && part.type === "output_text" && typeof part.text === "string"
-              ? [part.text]
-              : [],
-          )
-          .join("");
-        expect(text).toBe(
+        const text =
           "Protocol note: generated the QA lighthouse image successfully." +
-            (projection === "queued host delivery" ? "" : "\nMEDIA:/tmp/qa-lighthouse.png"),
-        );
+          (projection === "queued host delivery" ? "" : "\nMEDIA:/tmp/qa-lighthouse.png");
+        expect(await response.json()).toMatchObject({
+          output: [{ type: "message", content: [{ type: "output_text", text }] }],
+        });
       } finally {
         await server.stop();
       }

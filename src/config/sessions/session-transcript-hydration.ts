@@ -14,6 +14,7 @@ import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js
 import type { SessionActorMemoryHistoryReads } from "./session-actor-memory-history-contract.js";
 import {
   readSessionActorTranscriptReplica,
+  readSessionActorTranscriptStateFromReplica,
   retainSessionActorTranscriptReplica,
 } from "./session-actor-replica.js";
 import { readSessionActorTranscriptAnchors } from "./session-actor-transcript-anchors.js";
@@ -37,11 +38,12 @@ import {
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
-import type {
-  PreparedSessionTranscriptHydration,
-  SessionHistoryWorkerDatabase,
-  SessionTranscriptCurrentTurnEntryRead,
-  SessionTranscriptCurrentTurnEntryRequest,
+import {
+  MAX_SESSION_ROW_FACTS_KEYS,
+  type PreparedSessionTranscriptHydration,
+  type SessionHistoryWorkerDatabase,
+  type SessionTranscriptCurrentTurnEntryRead,
+  type SessionTranscriptCurrentTurnEntryRequest,
 } from "./session-transcript-worker.types.js";
 import {
   captureSessionTranscriptTargetBinding,
@@ -220,12 +222,30 @@ export function prepareSessionTranscriptHydration(
       assertAgentDatabaseTerminalOpenAllowed(databasePath);
     }
   };
-  const retainedRead = (selection?: NonNullable<SessionEntryCohortRequest["transcript"]>) => {
+  const retainedRead = (
+    selection?: NonNullable<SessionEntryCohortRequest["transcript"]>,
+    resolved?: ResolvedTranscriptReadScope,
+  ) => {
     if (!contextLimits || "compaction" in contextLimits) {
       return undefined;
     }
-    const hot = readOwnedSessionTranscriptState(target);
+    const hot =
+      readOwnedSessionTranscriptState(target) ??
+      (resolved?.sessionKey
+        ? readSessionActorTranscriptStateFromReplica({
+            path: resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved)),
+            sessionId: resolved.sessionId,
+            sessionKey: resolved.sessionKey,
+          })
+        : undefined);
     if (!hot) {
+      return undefined;
+    }
+    if (
+      selection &&
+      (selection.sessionKey !== hot.target.sessionKey ||
+        selection.entryIds.length > MAX_SESSION_ROW_FACTS_KEYS)
+    ) {
       return undefined;
     }
     const retained = readSessionActorTranscriptReplica(hot);
@@ -250,7 +270,7 @@ export function prepareSessionTranscriptHydration(
       if (!transcript) {
         return undefined;
       }
-      prepared.transcript = transcript;
+      prepared.transcript = structuredClone(transcript);
     } else {
       delete prepared.transcript;
     }
@@ -277,15 +297,17 @@ export function prepareSessionTranscriptHydration(
   };
   const read: SessionTranscriptHydrationReader["read"] = async (options) => {
     signal?.throwIfAborted();
-    const retained = retainedRead();
+    const retained = options?.compaction ? undefined : retainedRead();
     if (retained) {
       return retained;
     }
-    const prepared = await readInOwner<PreparedSessionTranscriptHydration>((owner, resolvedScope) =>
-      owner.readTranscript(
-        { target, resolvedScope, limits: contextLimits, admission, ...options },
-        signal,
-      ),
+    const prepared = await readInOwner<PreparedSessionTranscriptHydration>(
+      async (owner, resolvedScope) =>
+        (options?.compaction ? undefined : retainedRead(undefined, resolvedScope)) ??
+        owner.readTranscript(
+          { target, resolvedScope, limits: contextLimits, admission, ...options },
+          signal,
+        ),
     );
     retainRead(prepared);
     return prepared;
@@ -313,7 +335,7 @@ export function prepareSessionTranscriptHydration(
                     assertSource();
                     const assertNative = captureSessionEntryNativeMutationWitness([database]);
                     const prepared =
-                      retainedRead(selection) ??
+                      retainedRead(selection, resolved) ??
                       (await owner.readTranscript(
                         {
                           target: scope,

@@ -5,10 +5,10 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { createRefreshChatPane, nativeHistoryMessage } from "./chat-pane-history.test-support.ts";
-import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
 import { ChatHistoryBoundary } from "./components/chat-history-boundary.tsx";
 
 describe("chat pane history loading", () => {

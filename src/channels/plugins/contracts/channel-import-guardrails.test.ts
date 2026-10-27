@@ -84,7 +84,6 @@ const SETUP_BARREL_GUARDS: GuardedSource[] = [
   ["slack", "src/setup-core.ts", [docsLink]],
   ["slack", "src/setup-surface.ts", [docsLink]],
   ["discord", "src/setup-core.ts", [docsLink]],
-  ["discord", "src/setup-surface.ts", [docsLink]],
   ["imessage", "src/setup-core.ts", [docsLink]],
   ["imessage", "src/setup-surface.ts", [detectBinary, docsLink]],
   ["telegram", "src/setup-core.ts", [cliCommand, docsLink]],

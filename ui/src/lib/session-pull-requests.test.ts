@@ -1,15 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import {
   createGatewayHarness,
   createHello,
   flushSync,
 } from "./session-pull-requests.test-support.ts";
-import {
-  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-  sessionGitHubRepository,
-  sessionPullRequestsForGateway,
-} from "./session-pull-requests.ts";
+import { sessionGitHubRepository, sessionPullRequestsForGateway } from "./session-pull-requests.ts";
 import { scopedSessionArtifactKey } from "./sessions/session-key.ts";
 
 let harness: ReturnType<typeof createGatewayHarness>;

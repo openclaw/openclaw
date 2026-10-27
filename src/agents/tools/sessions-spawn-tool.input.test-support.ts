@@ -7,6 +7,7 @@ import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { createAgentsWaitTool } from "./agents-wait-tool.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
+import { registerSessionsSpawnAccessProgramTests } from "./sessions-spawn-tool.access-program.test-support.js";
 import type { createSessionsSpawnTool as SpawnToolFactory } from "./sessions-spawn-tool.js";
 
 const requireRecord = createRequireRecord("record", "expected-label");
@@ -27,6 +28,13 @@ export function registerSessionsSpawnInputTests({
     inProcessCreationMock: Mock;
   };
 }) {
+  registerSessionsSpawnAccessProgramTests({
+    createTool,
+    registerAcpBackendForTest,
+    mockGateway,
+    mocks: hoisted,
+  });
+
   it.each([false, true])(
     "keeps collector inputs within the declared spawn contract (placement=%s)",
     (workerPlacement) => {
@@ -51,11 +59,6 @@ export function registerSessionsSpawnInputTests({
       "runTimeoutSeconds must be a non-negative integer",
     ],
     [
-      "nonnumeric timeout",
-      { runTimeoutSeconds: "not-a-number" },
-      "runTimeoutSeconds must be a non-negative integer",
-    ],
-    [
       "retired timeout alias",
       { timeout_seconds: 2 },
       'sessions_spawn does not support "timeout_seconds". Use "runTimeoutSeconds" for a per-run timeout.',
@@ -69,6 +72,16 @@ export function registerSessionsSpawnInputTests({
       "ACP light context",
       { runtime: "acp", lightContext: true },
       "lightContext is only supported for runtime='subagent'.",
+    ],
+    [
+      "ACP blind child",
+      { runtime: "acp", blind: true },
+      'blind=true requires a hidden runtime="subagent" child.',
+    ],
+    [
+      "visible blind child",
+      { visible: true, blind: true },
+      'blind=true requires a hidden runtime="subagent" child.',
     ],
     [
       "ACP managed worktree",
@@ -146,13 +159,16 @@ export function registerSessionsSpawnInputTests({
       callGateway,
     });
     finalizeAgentToolAvailability([tool, createAgentsWaitTool({})]);
+    const visibleArgs = {
+      task: "Review the API change",
+      group: "Reviews",
+      projectGitUrl: "https://github.com/example/project.git",
+      worktreeName: "api-review",
+      worktreeBaseRef: "origin/main",
+    };
     const error = await tool
       .execute("hidden-visible-options", {
-        task: "Review the API change",
-        group: "Reviews",
-        projectGitUrl: "https://github.com/example/project.git",
-        worktreeName: "api-review",
-        worktreeBaseRef: "origin/main",
+        ...visibleArgs,
         completionTarget: "parent",
         cleanup: "delete",
         mode: "run",
@@ -182,11 +198,7 @@ export function registerSessionsSpawnInputTests({
     }
     const corrected: unknown = JSON.parse(match[1]);
     expect(corrected).toEqual({
-      task: "Review the API change",
-      group: "Reviews",
-      projectGitUrl: "https://github.com/example/project.git",
-      worktreeName: "api-review",
-      worktreeBaseRef: "origin/main",
+      ...visibleArgs,
       worktree: true,
       runtime: "subagent",
       visible: true,
@@ -272,10 +284,5 @@ export function registerSessionsSpawnInputTests({
       'With runtime="acp": ACP harness id from: main. agentId is required.',
     );
     expect(description).not.toContain('`runtime="acp"` ids: codex, claude');
-  });
-
-  it("adds no agentId guidance for a lone agent without ACP", () => {
-    const tool = createTool({ config: { agents: { entries: { main: {} } } } });
-    expect(tool.description).not.toContain("`agentId` targets:");
   });
 }

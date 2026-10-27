@@ -313,7 +313,7 @@
 
 .settings-theme-card--absolutely,
 .settings-accent-theme--absolutely {
-  --theme-chip-bg: #1c1c1a;
+  --theme-chip-bg: #1f1f1e;
   --theme-chip-accent: #d97757;
   --theme-chip-accent-2: #b8926a;
 }
@@ -391,8 +391,8 @@
 
   .settings-theme-card--absolutely,
   .settings-accent-theme--absolutely {
-    --theme-chip-bg: #faf9f5;
-    --theme-chip-accent: #a8452a;
+    --theme-chip-bg: #f3f2f1;
+    --theme-chip-accent: #cc7d5d;
     --theme-chip-accent-2: #8a6a44;
   }
 

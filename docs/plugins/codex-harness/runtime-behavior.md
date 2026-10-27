@@ -309,10 +309,13 @@ turns of the same child remain independent. Parent subscription retention during
 ordinary completion retries is unchanged.
 
 If a chat's previous client was retired while other chats still use it, the
-next turn waits for that client to exit before resuming. Stopping that turn
-ends the wait without closing a healthy new client. A startup deadline also
-ends the wait, but retires the startup client; neither path resumes the thread
-while its old writer remains alive.
+next turn waits for its exact thread to close or for that client to exit before
+resuming. If a plugin reload missed the thread's closure notification, OpenClaw
+reads the exact old client's thread status once. A matching `notLoaded` status
+allows the handoff; a still-loaded thread keeps waiting. Native resume retains
+its exclusive persistence writer lock. Stopping the waiting turn cancels its
+read and wait without closing sibling sessions or a healthy new client. A
+startup deadline also ends the wait, but retires the startup client.
 
 Managed local connections share a bounded inference relay. Up to 16 request
 preparations and uploads run at once, with another 16 waiting in arrival order.

@@ -455,8 +455,8 @@ const includeReleaseOnlyUiTests =
     !isCanonicalRepository ||
     compatibilityTarget ||
     changedPaths === null);
-// Pack ordinary CI into six 16-class browser jobs without increasing the
-// aggregate worker budget. Private source-server projects remain serial.
+// Match four observed CPUs per 16-class job while retaining 24 worker slots.
+// Private source-server projects remain serial.
 const compactUiE2e = supportsUiE2eProjects && !includeReleaseOnlyUiTests;
 let uiE2eJobCount = compactUiE2e
   ? 7
@@ -1099,6 +1099,13 @@ const runBuildArtifacts =
 // keep their local preparation without adding a serial build dependency.
 const reuseBrowserExtensionBuild =
   runBrowserExtensionE2e && runBuildArtifacts && !frozenTarget && !compatibilityTarget;
+// Keep dispatch/frozen locale jobs separate for release diagnostics and historical tooling.
+const reuseControlUiI18nSetup =
+  runControlUiI18n &&
+  runBuildArtifacts &&
+  ["pull_request", "push", "schedule"].includes(workflowEventName) &&
+  !frozenTarget &&
+  !compatibilityTarget;
 const runControlUiPerformance =
   !releaseFastLane &&
   (runNodeFull || runUiTests) &&
@@ -1705,6 +1712,7 @@ const manifest = {
   run_docs_content: !(ordinaryPullRequest && docsOnly && rootProseOnly),
   run_format_check: runFormatCheck,
   run_control_ui_i18n: runControlUiI18n,
+  reuse_control_ui_i18n_setup: reuseControlUiI18nSetup,
   run_ui_tests: runUiTests,
   run_ui_webkit: runUiWebkit,
   ui_test_runtime_policy: uiTestRuntimePolicy,
@@ -1878,7 +1886,7 @@ if (hybridHostedEligible) {
     "control-ui-performance": count(manifest.run_control_ui_performance),
     "published-driver-update": count(manifest.run_published_driver_update),
     "native-i18n": count(manifest.run_native_i18n),
-    "control-ui-i18n": count(manifest.run_control_ui_i18n),
+    "control-ui-i18n": count(manifest.run_control_ui_i18n && !manifest.reuse_control_ui_i18n_setup),
     "checks-baseline-ratchets": count(hostedRatchets && manifest.run_baseline_ratchets),
     "checks-fast-core": count(
       manifest.run_checks_fast_core,
@@ -1924,7 +1932,6 @@ if (hybridHostedEligible) {
   }).reduce((total, rows) => total + rows, 0);
   hybridHostedOffloadRows =
     1 +
-    count(manifest.reuse_browser_extension_build) +
     count(
       manifest.run_ui_e2e && !compatibilityTarget,
       manifest.ui_e2e_matrix.include.filter((row) => row.task === "browser-extension").length,

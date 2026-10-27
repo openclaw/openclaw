@@ -14,6 +14,7 @@ import { SettingsRow } from "./solid/settings-ui.tsx";
 import "../styles/base.css";
 import "../styles/settings-controls.css";
 import "../styles/settings.css";
+import "../styles/model-providers.css";
 
 afterEach(async () => {
   cleanupSolid();
@@ -319,6 +320,80 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
         )) {
           expect(getComputedStyle(label).whiteSpace).toBe("normal");
         }
+      }
+    },
+  );
+
+  it.each([390, 1280])(
+    "preserves intrinsic width for long provider labels and details at %i pixels",
+    async (width) => {
+      const { page, userEvent } = await browser(width);
+      const options = numberedModels(1000).map((entry, index) => ({
+        value: entry.value,
+        label: entry.label,
+        provider: index % 2 ? "openai" : undefined,
+        description: index % 3 ? "API" : "Account",
+      }));
+      options[998] = {
+        value: "fixture/long",
+        label: "A long provider model with   extra whitespace and a\nwide context window",
+        provider: "openai",
+        description: "Team account with an extended capability description",
+      };
+      const measured: { open: number; filtered: number; empty: number }[] = [];
+      for (const windowed of [false, true]) {
+        const { host, picker } = await mountPickers(
+          () => (
+            <div class="model-providers__defaults">
+              <SettingsRow
+                title="Primary"
+                control={
+                  <ModelPicker
+                    label="Primary"
+                    value={options[0]!.value}
+                    options={options}
+                    onChange={() => {}}
+                    windowed={windowed}
+                  />
+                }
+              />
+            </div>
+          ),
+          "position:fixed;right:12px;top:32px;width:min(720px,calc(100vw - 24px))",
+        );
+        const trigger = picker.querySelector<HTMLButtonElement>(".picker-select__trigger")!;
+        const menu = picker.querySelector<HTMLElement>(".picker-select__menu")!;
+        const list = picker.querySelector<HTMLElement>(".picker-select__options")!;
+        await page.elementLocator(trigger).click();
+        const count = () => picker.querySelectorAll('[role="option"]').length;
+        await expect.poll(count).toBeGreaterThan(0);
+        if (windowed) {
+          expect(count()).toBeLessThan(50);
+          expect(
+            picker.querySelectorAll(".picker-select__sizer .picker-select__option").length,
+          ).toBeLessThanOrEqual(32);
+        } else {
+          expect(count()).toBe(1000);
+        }
+        const open = menu.getBoundingClientRect().width;
+        if (width === 1280) {
+          expect(open).toBeGreaterThan(trigger.getBoundingClientRect().width + 20);
+        }
+        const search = picker.querySelector<HTMLInputElement>(".picker-select__search")!;
+        await page.elementLocator(search).fill("long provider");
+        await expect.poll(count).toBe(1);
+        const filtered = menu.getBoundingClientRect().width;
+        await page.elementLocator(search).fill("no-match-here");
+        await expect.poll(count).toBe(0);
+        const empty = menu.getBoundingClientRect().width;
+        measured.push({ open, filtered, empty });
+        expect(list.scrollWidth).toBeLessThanOrEqual(list.clientWidth + 1);
+        await userEvent.keyboard("{Escape}");
+        cleanupSolid();
+        host.remove();
+      }
+      for (const state of ["open", "filtered", "empty"] as const) {
+        expect(measured[1]![state]).toBeCloseTo(measured[0]![state], 0);
       }
     },
   );

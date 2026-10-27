@@ -1,20 +1,29 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
-import { resolveInstalledPluginIndexStateDatabaseOptions } from "./installed-plugin-index-store-path.js";
+import {
+  resolveInstalledPluginIndexStateDatabaseOptions,
+  resolveInstalledPluginIndexStorePath,
+} from "./installed-plugin-index-store-path.js";
 import {
   refreshPersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndex,
 } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
-import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import {
+  withPluginLifecycleLease,
+  withPluginLifecycleLeaseAsync,
+} from "./plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { createPluginSourceAdmissionPublisher } from "./plugin-source-admission-store.js";
 import { createInstalledPluginIndexCandidate as createCandidate } from "./test-helpers/installed-plugin-index.js";
@@ -52,108 +61,210 @@ function makeFixture(owner?: string) {
   return { stateDir, pluginDir, candidate, candidates, refresh, read, write };
 }
 
-describe("installed plugin index policy refresh", () => {
-  it("preserves admitted source during policy refresh and refuses publication under its lease", async () => {
-    const { stateDir, pluginDir, candidate, refresh, read, write } = makeFixture("package");
-    const installRecords = {
-      package: { source: "git", installPath: pluginDir },
-      orphaned: { source: "path", installPath: path.join(stateDir, "missing") },
-    } satisfies InstalledPluginIndex["installRecords"];
-    const initial = await refresh({ reason: "manual", installRecords });
-    expect(initial.plugins[0]).toMatchObject({ pluginId: "demo", installOwner: "package" });
-    const admissionKey = pluginDir + "\0";
-    const admission = {
-      signature: "admitted-source",
-      sourceDigest: "a".repeat(64),
-      nativeArtifacts: {},
-      nativeNamespaces: {},
-    };
-    const sourceAdmissions = { [admissionKey]: admission };
-    const latestAdmission = { ...admission, signature: "readmitted-source" };
-    const newerAdmission = { ...admission, signature: "source-observed-during-refresh" };
-    const publication = {
-      pluginId: "demo",
-      rootDir: fs.realpathSync(pluginDir),
-      installRecordHash: initial.plugins[0]?.installRecordHash,
-      key: admissionKey,
-    };
-    const publish = (receipt: typeof admission) =>
-      createPluginSourceAdmissionPublisher({ stateDir })!({ ...publication, receipt });
-    await write({
-      ...initial,
-      plugins: initial.plugins.map((plugin) => ({ ...plugin, sourceAdmissions })),
-    });
-    expect(Object.keys((await read())!.installRecords)).toEqual(["orphaned", "package"]);
-    expect(await publish(latestAdmission)).toBe(true);
-    const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
-    const manifest: { providers: string[] } = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    manifest.providers = ["demo", "changed"];
-    fs.writeFileSync(manifestPath, JSON.stringify(manifest), "utf8");
+it("preserves admitted source during policy refresh and refuses publication under its lease", async () => {
+  const { stateDir, pluginDir, candidate, refresh, read } = makeFixture("package");
+  const installRecords = {
+    package: { source: "git", installPath: pluginDir },
+    orphaned: { source: "path", installPath: path.join(stateDir, "missing") },
+  } satisfies InstalledPluginIndex["installRecords"];
+  const initial = await refresh({ reason: "manual", installRecords });
+  expect(initial.plugins[0]).toMatchObject({ pluginId: "demo", installOwner: "package" });
+  const admissionKey = pluginDir + "\0";
+  const admission = {
+    signature: "admitted-source",
+    sourceDigest: "a".repeat(64),
+    nativeArtifacts: {},
+    nativeNamespaces: {},
+  };
+  const latestAdmission = { ...admission, signature: "readmitted-source" };
+  const newerAdmission = { ...admission, signature: "source-observed-during-refresh" };
+  const publication = {
+    pluginId: "demo",
+    rootDir: fs.realpathSync(pluginDir),
+    installRecordHash: initial.plugins[0]?.installRecordHash,
+    key: admissionKey,
+  };
+  const publish = (receipt: typeof admission) =>
+    createPluginSourceAdmissionPublisher({ stateDir })!({ ...publication, receipt });
+  expect(await publish(admission)).toBe(true);
+  expect(Object.keys((await read())!.installRecords)).toEqual(["orphaned", "package"]);
+  expect(await publish(latestAdmission)).toBe(true);
+  const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
+  const manifest: { providers: string[] } = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  manifest.providers = ["demo", "changed"];
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest), "utf8");
 
-    const refreshed = await withPluginLifecycleLease(
-      resolveInstalledPluginIndexStateDatabaseOptions({ stateDir, env }),
-      async (lease) => {
-        const current = await refresh({
-          lease,
-          reason: "policy-changed",
-          installRecords,
-          ...disablePlugin("demo"),
-        });
-        expect(await publish(newerAdmission)).toBe(false);
-        return current;
-      },
-    );
-
-    expect(refreshed.plugins).toHaveLength(initial.plugins.length);
-    expect(refreshed.plugins.find((plugin) => plugin.pluginId === "demo")).toMatchObject({
-      pluginId: "demo",
-      enabled: false,
-      manifestHash: initial.plugins[0]?.manifestHash,
-      sourceAdmissions: { [admissionKey]: latestAdmission },
-    });
-    expect((await read())?.plugins[0]?.sourceAdmissions).toEqual({
-      [admissionKey]: latestAdmission,
-    });
-    expect(refreshed.policyHash).not.toBe(initial.policyHash);
-
-    const rebuilt = await refresh({
-      reason: "policy-changed",
-      candidates: undefined,
-      discovery: { candidates: [candidate], diagnostics: [] },
-      installRecords: { ...installRecords, package: { ...installRecords.package, source: "npm" } },
-    });
-    expect(rebuilt.plugins[0]).toMatchObject({ pluginId: "demo", installOwner: "package" });
-    expect(rebuilt.plugins[0]?.manifestHash).not.toBe(initial.plugins[0]?.manifestHash);
-    expect(rebuilt.plugins[0]?.sourceAdmissions).toBeUndefined();
-  });
-
-  it.each(["policy target", "installed projection"] as const)(
-    "rebuilds source when the %s is missing",
-    async (missing) => {
-      const { stateDir, pluginDir, candidates, refresh, read, write } = makeFixture();
-      const installRecords: InstalledPluginIndex["installRecords"] | undefined =
-        missing === "installed projection"
-          ? { demo: { source: "path", installPath: pluginDir } }
-          : undefined;
-      const initial = await refresh({ reason: "manual", installRecords });
-      if (missing === "installed projection") {
-        await write({ ...initial, plugins: [] });
-      } else {
-        const nextPluginDir = path.join(stateDir, "plugins", "next-demo");
-        fs.mkdirSync(nextPluginDir, { recursive: true });
-        candidates.push(createCandidate(nextPluginDir, { id: "next-demo" }));
-      }
-      const refreshed = await refresh({
+  const refreshed = await withPluginLifecycleLease(
+    resolveInstalledPluginIndexStateDatabaseOptions({ stateDir, env }),
+    async (lease) => {
+      const current = await refresh({
+        lease,
         reason: "policy-changed",
         installRecords,
-        ...(missing === "policy target" ? disablePlugin("next-demo") : {}),
+        ...disablePlugin("demo"),
       });
-      if (missing === "policy target") {
-        expect(refreshed.plugins.map((plugin) => plugin.pluginId)).toContain("next-demo");
-      } else {
-        expect(refreshed.plugins.map((plugin) => plugin.pluginId)).toEqual(["demo"]);
-        expect((await read())?.plugins.map((plugin) => plugin.pluginId)).toEqual(["demo"]);
-      }
+      expect(await publish(newerAdmission)).toBe(false);
+      return current;
     },
   );
+
+  expect(refreshed.plugins).toHaveLength(initial.plugins.length);
+  expect(refreshed.plugins.find((plugin) => plugin.pluginId === "demo")).toMatchObject({
+    pluginId: "demo",
+    enabled: false,
+    manifestHash: initial.plugins[0]?.manifestHash,
+    sourceAdmissions: { [admissionKey]: latestAdmission },
+  });
+  expect((await read())?.plugins[0]?.sourceAdmissions).toEqual({
+    [admissionKey]: latestAdmission,
+  });
+  expect(refreshed.policyHash).not.toBe(initial.policyHash);
+
+  const rebuilt = await refresh({
+    reason: "policy-changed",
+    candidates: undefined,
+    discovery: { candidates: [candidate], diagnostics: [] },
+    installRecords: { ...installRecords, package: { ...installRecords.package, source: "npm" } },
+  });
+  expect(rebuilt.plugins[0]).toMatchObject({ pluginId: "demo", installOwner: "package" });
+  expect(rebuilt.plugins[0]?.manifestHash).not.toBe(initial.plugins[0]?.manifestHash);
+  expect(rebuilt.plugins[0]?.sourceAdmissions).toBeUndefined();
+});
+
+it.each(["policy target", "installed projection"] as const)(
+  "rebuilds source when the %s is missing",
+  async (missing) => {
+    const { stateDir, pluginDir, candidates, refresh, read, write } = makeFixture();
+    const installRecords: InstalledPluginIndex["installRecords"] | undefined =
+      missing === "installed projection"
+        ? { demo: { source: "path", installPath: pluginDir } }
+        : undefined;
+    const initial = await refresh({ reason: "manual", installRecords });
+    if (missing === "installed projection") {
+      await write({ ...initial, plugins: [] });
+    } else {
+      const nextPluginDir = path.join(stateDir, "plugins", "next-demo");
+      fs.mkdirSync(nextPluginDir, { recursive: true });
+      candidates.push(createCandidate(nextPluginDir, { id: "next-demo" }));
+    }
+    const refreshed = await refresh({
+      reason: "policy-changed",
+      installRecords,
+      ...(missing === "policy target" ? disablePlugin("next-demo") : {}),
+    });
+    if (missing === "policy target") {
+      expect(refreshed.plugins.map((plugin) => plugin.pluginId)).toContain("next-demo");
+    } else {
+      expect(refreshed.plugins.map((plugin) => plugin.pluginId)).toEqual(["demo"]);
+      expect((await read())?.plugins.map((plugin) => plugin.pluginId)).toEqual(["demo"]);
+    }
+  },
+);
+
+it.each(["keep", "replace"] as const)(
+  "keeps plugin inventory ownership off the host with %s custody",
+  async (ending) => {
+    const { stateDir, refresh, write, read } = makeFixture();
+    const databasePath = resolveInstalledPluginIndexStorePath({ stateDir });
+    const owner = acquireGatewayStateOwner({
+      databasePath,
+      payload: {
+        pid: process.pid,
+        role: "gateway",
+        createdAt: new Date().toISOString(),
+        configPath: `${databasePath}.config`,
+        processNamespace: readGatewayLockProcessNamespace(),
+      },
+    });
+    let expectedGeneratedAtMs: number;
+    try {
+      const initial = await refresh({ reason: "manual" });
+      expectedGeneratedAtMs = initial.generatedAtMs + Number(ending === "keep");
+      const originalOwner = await fs.promises.readFile(owner.path);
+      const lstat = fs.lstatSync;
+      const stat = fs.statSync;
+      const realpath = fs.realpathSync.native;
+      const pause = new Int32Array(new SharedArrayBuffer(4));
+      const hostOwnershipReads = { owner: 0, database: 0, identity: 0 };
+      let hostLeaseStatements = 0;
+      const ownerProbe = vi.spyOn(fs, "lstatSync").mockImplementation((pathname, options) => {
+        if (String(pathname) === owner.path) {
+          hostOwnershipReads.owner++;
+          Atomics.wait(pause, 0, 0, 20);
+        }
+        return lstat(pathname, options);
+      });
+      const databaseProbe = vi.spyOn(fs, "statSync").mockImplementation((pathname, options) => {
+        if (String(pathname) === databasePath) {
+          hostOwnershipReads.database++;
+          Atomics.wait(pause, 0, 0, 20);
+        }
+        return stat(pathname, options);
+      });
+      const identityProbe = vi
+        .spyOn(fs.realpathSync, "native")
+        .mockImplementation((pathname, options) => {
+          if ([databasePath, path.dirname(owner.path)].includes(String(pathname))) {
+            hostOwnershipReads.identity++;
+            Atomics.wait(pause, 0, 0, 20);
+          }
+          return realpath(pathname, options);
+        });
+      const sql = observeMainThreadSql({
+        onStatement: (statement) => {
+          if (/\bstate_leases\b/u.test(statement)) {
+            hostLeaseStatements++;
+          }
+        },
+      });
+      try {
+        if (ending === "replace") {
+          await fs.promises.writeFile(owner.path, "replacement");
+        }
+        const publication = write({ ...initial, generatedAtMs: initial.generatedAtMs + 1 });
+        if (ending === "replace") {
+          await expect(publication).rejects.toThrow();
+        } else {
+          await expect(publication).resolves.toBe(databasePath);
+        }
+        expect(hostOwnershipReads).toEqual({ owner: 0, database: 0, identity: 0 });
+        expect(hostLeaseStatements).toBe(0);
+      } finally {
+        ownerProbe.mockRestore();
+        databaseProbe.mockRestore();
+        identityProbe.mockRestore();
+        sql.restore();
+        await fs.promises.writeFile(owner.path, originalOwner);
+      }
+    } finally {
+      owner.release();
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+    }
+    clearPluginMetadataLifecycleCaches();
+    expect((await read())?.generatedAtMs).toBe(expectedGeneratedAtMs);
+  },
+);
+
+it("refuses plugin inventory publication after its admitted database is replaced", async () => {
+  const { stateDir, refresh, write, read } = makeFixture();
+  const initial = await refresh({ reason: "manual" });
+  const options = resolveInstalledPluginIndexStateDatabaseOptions({ stateDir });
+  const databasePath = resolveInstalledPluginIndexStorePath({ stateDir });
+  const original = `${databasePath}.original`;
+  const replacement = `${databasePath}.replacement`;
+  await fs.promises.copyFile(databasePath, replacement);
+  await expect(
+    withPluginLifecycleLeaseAsync(options, async () => {
+      await fs.promises.rename(databasePath, original);
+      await fs.promises.rename(replacement, databasePath);
+      try {
+        await write({ ...initial, generatedAtMs: initial.generatedAtMs + 1 });
+      } finally {
+        await fs.promises.unlink(databasePath);
+        await fs.promises.rename(original, databasePath);
+      }
+    }),
+  ).rejects.toThrow();
+  expect((await read())?.generatedAtMs).toBe(initial.generatedAtMs);
 });

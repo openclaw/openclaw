@@ -48,10 +48,13 @@ across unrelated source revisions. Repeated commands reuse a complete entry.
 The current wrapper can prepare dependencies for older retained workflows without
 changing their binding or executing newer workflow code in their place.
 
-Each entry records its consumer wrapper PIDs. Reuse refreshes its age; each
-materialization sweeps at most four owned entries older than 24 hours, only when
-all recorded consumers have exited. PID reuse may delay cleanup. Failed or
-interrupted staging directories follow the same age and live-creator checks.
+Each entry records its consumer wrapper PIDs. Reuse refreshes its modification
+time; each materialization keeps the four most recently used complete entries
+with no live consumers, plus every entry with a live consumer and the current
+entry. Other unused complete entries are removed regardless of age. Cleanup
+only removes owned, mode-0700 directories with cache entry names. PID reuse may
+delay cleanup. Failed or interrupted staging directories and incomplete entries
+retain a 24-hour grace period and the same live-consumer and live-creator checks.
 The canonical and explicit tooling roots are never fetched, fast-forwarded, or
 reinstalled by this path. Explicit-root identity checks remain unchanged, and
 matching installed packages still take the direct path. Keep any externally
@@ -174,6 +177,9 @@ The replay validates the completed run's repository and workflow, then selects
 only current PRs whose head, source repository, and branch still match. It runs
 the ordinary security review and CI checks; it does not rerun CI or waive a gate.
 The dispatch must use the default branch. A stale run cannot approve a newer PR head.
+Native prior-CI admission accepts the replay only when its successful security
+enforcement names the selected PR head, CI run, and attempt. Protected publisher
+source and current review authority checks still apply.
 
 Completion reviews retain the observed run ID and attempt. Missing or older
 observations retry within the existing recovery budget; exhaustion fails the

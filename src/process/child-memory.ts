@@ -1,6 +1,11 @@
-import { readFile, readdir } from "node:fs/promises";
+import { readFile as readFileCallback } from "node:fs";
+import { readdir } from "node:fs/promises";
 import os from "node:os";
+import { promisify } from "node:util";
 import { hasErrnoCode } from "../infra/errno.js";
+
+// Avoid fs/promises' extra promise layers for every tiny procfs read.
+const readFile = promisify(readFileCallback);
 
 /** Host exec budgets physical memory, not V8/Go's virtual address reservations. */
 export function resolveHostExecMemoryLimit(): number | undefined {
@@ -32,9 +37,9 @@ async function readTreeMemory(
     try {
       const status = await readFile(`/proc/${pid}/status`, "utf8");
       // Include swapped private pages so swapping cannot hide a runaway allocation.
-      for (const match of status.matchAll(/^(?:VmRSS|VmSwap):\s+(\d+) kB$/gm)) {
-        bytes += Number(match[1]) * 1024;
-      }
+      const rss = /^VmRSS:\s+(\d+) kB$/m.exec(status);
+      const swap = /^VmSwap:\s+(\d+) kB$/m.exec(status);
+      bytes += (Number(rss?.[1] ?? 0) + Number(swap?.[1] ?? 0)) * 1024;
       if (bytes > limitBytes) {
         return { bytes, pids: seen };
       }
@@ -44,6 +49,9 @@ async function readTreeMemory(
         }
         try {
           const children = await readFile(`/proc/${pid}/task/${tid}/children`, "utf8");
+          if (!children) {
+            continue;
+          }
           for (const child of children.trim().split(/\s+/)) {
             const childPid = Number(child);
             if (childPid > 0 && !seen.has(childPid)) {

@@ -1,6 +1,7 @@
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { pollText, pollCount } from "./new-session-page.test-support.ts";
 
@@ -125,7 +126,7 @@ suite.define(() => {
           ],
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, child.key));
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         await page.getByText("View-only subagent", { exact: true }).waitFor();
         const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
         const bubble = activePane.locator('.chat-bubble[data-entry-id="review-result"]');
@@ -235,7 +236,7 @@ suite.define(() => {
             : [source],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       const bubble = page.locator(`.chat-bubble[data-entry-id="${sourceId}"]`);
       await bubble.waitFor({ state: "visible" });
       if (kind === "image") {
@@ -548,6 +549,10 @@ suite.define(() => {
       await replyText(fullTextReplyPreview).toContain("# Deployment report");
       await fullTextReplyPreview.getByRole("button", { name: "Cancel reply" }).click();
 
+      const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+      await thread.hover();
+      await page.mouse.wheel(0, await thread.evaluate((element) => element.scrollHeight));
+      await waitForChatScrollIdle(page);
       const userOversizedBubble = page.locator('.chat-bubble[data-entry-id="oversized-user"]');
       expect(await userOversizedBubble.getAttribute("data-message-text")).toBe(oversizedNotice);
       await pollText(userOversizedBubble.locator(".chat-text")).toContain(oversizedNotice);

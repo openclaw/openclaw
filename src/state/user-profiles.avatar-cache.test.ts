@@ -1,5 +1,5 @@
-import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import * as stateReads from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
@@ -13,11 +13,8 @@ import { ensureProfileForEmail } from "./user-profiles.js";
 const { options, hydrate } = useProfileDatabase("profile-avatar-cache-");
 const inspect = (id: string) => createProfileAvatarReader(id, options).inspect();
 const observeReads = () => vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-function expectByteFetch(read: ReturnType<typeof observeReads>) {
-  expect(read.mock.calls.map(([, command]) => command.type)).toEqual([
-    "userProfiles.avatar.inspect",
-    "userProfiles.avatar.read",
-  ]);
+function upload(id: string, bytes: Uint8Array) {
+  expect(setAvatar(id, bytes, "image/png", options).ok).toBe(true);
 }
 
 it("retains absent avatars until committed email or avatar changes", async () => {
@@ -39,51 +36,79 @@ it("retains absent avatars until committed email or avatar changes", async () =>
   expect(read).toHaveBeenCalledOnce();
   read.mockClear();
   const bytes = new Uint8Array([1, 2, 3]);
-  expect(setAvatar(profile.id, bytes, "image/png", options).ok).toBe(true);
+  upload(profile.id, bytes);
   const uploaded = await inspect(profile.id);
   expect(uploaded.hasAvatar).toBe(true);
   expect((await uploaded.loadBytes())?.bytes).toEqual(bytes);
-  expectByteFetch(read);
 });
 
-it("evicts the least recently used avatar at the byte budget while preserving unrelated cached bytes", async () => {
-  const bytes = new Uint8Array(512 * 1024).fill(7);
-  const profiles = Array.from({ length: 33 }, (_, index) => {
-    const profile = ensureProfileForEmail(`avatar-${index}@example.test`, options);
-    expect(setAvatar(profile.id, bytes, "image/png", options).ok).toBe(true);
-    return profile;
-  });
-  await hydrate();
-  const load = async (index: number) => {
-    const profile = profiles[index];
-    assert(profile);
-    const prepared = await inspect(profile.id);
-    return await prepared.loadBytes();
-  };
-  for (let index = 0; index < 32; index++) {
-    await load(index);
-  }
-  await load(0);
-  await load(32);
+it.each(["settled", "pending"] as const)(
+  "evicts %s avatar bytes without losing warm reads or in-flight coalescing",
+  async (phase) => {
+    const bytes = new Uint8Array(512 * 1024).fill(7);
+    const profiles = Array.from({ length: 33 }, (_, index) => {
+      const profile = ensureProfileForEmail(`avatar-${index}@example.test`, options);
+      upload(profile.id, bytes);
+      return profile;
+    });
+    await hydrate();
+    const load = async (index: number) => (await inspect(profiles[index]!.id)).loadBytes();
+    const retained = await inspect(profiles[1]!.id);
+    const started = createDeferred();
+    const release = createDeferred();
+    const originalRead = stateReads.executeExistingOpenClawStateRead;
+    const heldRead =
+      phase === "pending"
+        ? observeReads().mockImplementationOnce(async (...args) => {
+            const result = await originalRead(...args);
+            started.resolve();
+            await release.promise;
+            return result;
+          })
+        : undefined;
+    const firstLoad = retained.loadBytes();
+    if (phase === "pending") {
+      await started.promise;
+    } else {
+      await firstLoad;
+    }
+    for (let index = 0; index < 32; index++) {
+      if (index !== 1) {
+        await load(index);
+      }
+    }
+    await load(0);
+    await load(32);
+    try {
+      if (phase === "pending") {
+        expect(retained.loadBytes()).toBe(firstLoad);
+      }
+    } finally {
+      release.resolve();
+      await firstLoad;
+      heldRead?.mockRestore();
+    }
 
-  const other = ensureProfileForEmail("other@example.test", options);
-  setDisplayName(other.id, "Changed name", options);
-  const read = observeReads();
-  const prepared = await inspect(profiles[0]!.id);
-  expect(prepared.isCurrent()).toBe(true);
-  expect((await prepared.loadBytes())?.bytes).toEqual(bytes);
-  expect(Buffer.from((await load(0))?.bytes ?? []).equals(bytes)).toBe(true);
-  expect(read).not.toHaveBeenCalled();
-  expect(Buffer.from((await load(1))?.bytes ?? []).equals(bytes)).toBe(true);
-  expectByteFetch(read);
-});
+    const other = ensureProfileForEmail("other@example.test", options);
+    setDisplayName(other.id, "Changed name", options);
+    const read = observeReads();
+    const prepared = await inspect(profiles[0]!.id);
+    expect(prepared.isCurrent()).toBe(true);
+    expect((await prepared.loadBytes())?.bytes).toEqual(bytes);
+    expect((await load(0))?.bytes).toEqual(bytes);
+    expect(read).not.toHaveBeenCalled();
+    // A retained reader must not keep an evicted payload outside the byte budget.
+    expect((await retained.loadBytes())?.bytes).toEqual(bytes);
+    expect(read).toHaveBeenCalledOnce();
+  },
+);
 
 it.each(["database close and reopen", "avatar replacement"] as const)(
   "requires fresh avatar reads after %s",
   async (boundary) => {
     const profile = ensureProfileForEmail("lifetime@example.test", options);
     let bytes = new Uint8Array([1, 2, 3]);
-    expect(setAvatar(profile.id, bytes, "image/png", options).ok).toBe(true);
+    upload(profile.id, bytes);
     await hydrate();
     const warm = await inspect(profile.id);
     expect((await warm.loadBytes())?.bytes).toEqual(bytes);
@@ -91,20 +116,15 @@ it.each(["database close and reopen", "avatar replacement"] as const)(
     if (boundary === "database close and reopen") {
       await closeOpenClawStateDatabaseByPathAsync(options.path);
       openOpenClawStateDatabase(options);
-    } else {
-      bytes = new Uint8Array([4, 5]);
-      expect(setAvatar(profile.id, bytes, "image/png", options).ok).toBe(true);
-    }
-    if (boundary === "database close and reopen") {
       expect(() => warm.loadBytes()).toThrow("OpenClaw state database read admission changed");
     } else {
+      bytes = new Uint8Array([4, 5]);
+      upload(profile.id, bytes);
       await expect(warm.loadBytes()).resolves.toBeUndefined();
     }
 
-    const read = observeReads();
     const fresh = await inspect(profile.id);
     expect(fresh.isCurrent()).toBe(true);
     expect((await fresh.loadBytes())?.bytes).toEqual(bytes);
-    expectByteFetch(read);
   },
 );

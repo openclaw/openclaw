@@ -4,6 +4,7 @@ import { projectGatewaySessionEntry } from "../config/sessions/combined-store-ga
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { filterSessionEntries } from "./session-list-filters.js";
+import { createSessionRowLookup } from "./session-row-projection-materialize.js";
 import * as records from "./session-row-projection-record.js";
 import { createSessionRowProjectionRevisions } from "./session-row-projection-revisions.js";
 import * as display from "./session-utils-display.js";
@@ -25,6 +26,32 @@ const target = {
   agentId: "main",
   storeTarget: { agentId: "main", storePath: "/synthetic/sessions.sqlite" },
 };
+
+it("captures current published entries without preparing acquisition state", () => {
+  let current: records.Row | undefined = { ...records.create(target, original), entry: original };
+  const state = vi.fn(() => {
+    throw new Error("Published entries do not need acquisition state");
+  });
+  const lookup = createSessionRowLookup({
+    state,
+    lookup: () => current,
+    assertCurrent: noop,
+    matching: () => [],
+    acquireEntry: () => {
+      throw new Error("Published entries do not need acquisition");
+    },
+    env: {},
+    runInOwner: (consume) => consume(),
+  });
+  expect(lookup.capture(target)).toBe(current);
+  const previous = current;
+  current = { ...previous, entry: { ...original, visibility: "draft" } };
+  expect(lookup.capture(target)).toBe(current);
+  expect(lookup.capture(target)?.entry?.visibility).toBe("draft");
+  current = undefined;
+  expect(lookup.capture(target)).toBeUndefined();
+  expect(state).not.toHaveBeenCalled();
+});
 
 it("reuses search fields across equal reads and refreshes replaced entries", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -131,6 +158,14 @@ it("keeps accepted facts and sharing revisions when database reads return equal 
     expect(rows.get(records.identity(row))).toBe(accepted);
     expect(put).toHaveBeenCalledOnce();
     expect(revisions.sharing()).not.toBe(sharing);
+
+    const committed = { ...original, label: "Committed while lineage was pending" };
+    const deferred = acquire(
+      { ...row, storedEntry: committed, sharingEntry: committed, entryAcquisitionPending: true },
+      committed,
+    );
+    expect(deferred?.entry).toBe(committed);
+    expect(deferred?.entryAcquisitionPending).toBeUndefined();
   });
 });
 
@@ -165,6 +200,11 @@ it("preserves deep change detection for entry metadata and unordered parent memb
           new Set([...parents, "logical:main\0agent:main:other"]),
         ]) {
           row.parents = oldParents;
+          const acquiredParents = records.readSessionRowParents(row, storedEntry, cfg, context);
+          expect(acquiredParents).toEqual(parents);
+          if (isDeepStrictEqual(oldParents, parents)) {
+            expect(acquiredParents).toBe(oldParents);
+          }
           const changed = !isDeepStrictEqual([storedEntry, parents], [previous, oldParents]);
           const marked: records.Row[] = [];
           const next = records.acquireSessionRowEntry({

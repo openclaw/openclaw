@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   readOperatorToolGatewayAuthority,
   runWithOperatorToolGatewayAuthority,
@@ -80,9 +80,8 @@ it.each([
         },
       }),
     });
-    const observedAuthority = vi.fn();
     dispatch.mockImplementation(async () => {
-      observedAuthority(readOperatorToolGatewayAuthority()?.operatorRunAuthority);
+      expect(readOperatorToolGatewayAuthority()?.operatorRunAuthority).toBeUndefined();
       return { status: "ok" };
     });
     try {
@@ -96,7 +95,6 @@ it.each([
       );
       if (current) {
         await expect(delivery).resolves.toEqual({ status: "ok" });
-        expect(observedAuthority).toHaveBeenCalledWith(undefined);
       } else {
         await expect(delivery).rejects.toThrow("continuation owner retired");
         expect(dispatch).not.toHaveBeenCalled();
@@ -145,26 +143,24 @@ it.each(["commit", "failure", "revocation"] as const)(
   },
 );
 
-describe("hasFailedSubagentNoOutputCompletion", () => {
-  it.each([
-    ["absent", { noVisibleResult: true }, true],
-    ["reworded", { noVisibleResult: true, result: "(nothing to report)" }, true],
-    ["visible placeholder", {}, false],
-    ["success", { noVisibleResult: true, status: "ok" }, false],
-    ["other source", { noVisibleResult: true, source: "image_generation" }, false],
-  ] as const)("classifies %s from the recorded fact", (_label, overrides, expected) => {
-    const event = {
-      type: "task_completion",
-      source: "subagent",
-      status: "error",
-      result: "(no output)",
-      ...overrides,
-    } as const;
-    expect(hasFailedSubagentNoOutputCompletion([event])).toBe(expected);
-  });
+it.each([
+  ["absent", { noVisibleResult: true }, true],
+  ["reworded", { noVisibleResult: true, result: "(nothing to report)" }, true],
+  ["visible placeholder", {}, false],
+  ["success", { noVisibleResult: true, status: "ok" }, false],
+  ["other source", { noVisibleResult: true, source: "image_generation" }, false],
+] as const)("classifies %s completion from the recorded fact", (_label, overrides, expected) => {
+  const event = {
+    type: "task_completion",
+    source: "subagent",
+    status: "error",
+    result: "(no output)",
+    ...overrides,
+  } as const;
+  expect(hasFailedSubagentNoOutputCompletion([event])).toBe(expected);
+});
 
-  it("reports nothing for an absent or empty event list", () => {
-    expect(hasFailedSubagentNoOutputCompletion(undefined)).toBe(false);
-    expect(hasFailedSubagentNoOutputCompletion([])).toBe(false);
-  });
+it("reports nothing for an absent or empty event list", () => {
+  expect(hasFailedSubagentNoOutputCompletion(undefined)).toBe(false);
+  expect(hasFailedSubagentNoOutputCompletion([])).toBe(false);
 });

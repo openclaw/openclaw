@@ -6,16 +6,14 @@ import {
   sqliteSessionIdWriteScope,
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
+import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { appendSqliteTrajectoryRuntimeEventsWithWriter } from "../../trajectory/runtime-store.sqlite.js";
 import { readSessionTranscriptBoundedActiveContextCore as readBoundedContext } from "./session-accessor.sqlite-active-context.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
-import {
-  readCurrentProjectionSnapshot as readProjection,
-  type CurrentTranscriptProjection,
-} from "./session-accessor.sqlite-projection-read.js";
+import { readCurrentProjectionSnapshot as readProjection } from "./session-accessor.sqlite-projection-read.js";
 import {
   appendTranscriptEventsInTransaction,
   rewriteSqliteTranscriptEventRowsInTransaction as rewriteEvents,
@@ -97,13 +95,14 @@ function fixture(initialEvents: TranscriptEvent[] = [user, assistant]) {
   const receipt = (
     state: SessionActorStoredState = hydrate(),
   ): SessionTranscriptProjectionReceipt => {
-    const facts = projectSessionActorHotState(state).transcript.projection;
+    const { projection: facts, contextStats } = projectSessionActorHotState(state).transcript;
     assert(facts, "Hydrated actor did not publish projection facts");
     return {
       sessionId: scope.sessionId,
       writeScopes,
       writeToken: token(),
       facts,
+      contextStats,
     };
   };
   const read = (facts?: SessionTranscriptProjectionReceipt) =>
@@ -201,11 +200,14 @@ it("serves committed actor postimages without projection SQL and confines facts 
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = fixture();
     const actor = f.hydrate();
-    const initial = f.receipt(actor);
+    const initial = freezeTrustedJsonSnapshot(f.receipt(actor));
     withObservedSnapshot(f, (observed) => {
-      expect(f.read(initial)).toMatchObject(
+      const first = f.read(initial);
+      expect(first).toMatchObject(
         expectedProjection(1, { activeMessageCount: 2, leafEventId: "assistant" }),
       );
+      assert(first.kind === "value");
+      expect(first.value.state).toBe(initial.facts?.state);
       expect(f.read(initial)).toMatchObject({ kind: "value" });
       expect(observed.counts.snapshot).toBe(0);
 
@@ -285,18 +287,6 @@ it.each([
         if (kind === "reset") {
           expect(f.read(refreshed)).toMatchObject({
             value: { latestIndexedReset: { seq: 2, active_position: 2, event_type: "reset" } },
-          });
-          withReceipt(refreshed, () => {
-            readProjection(f.database, f.scope, (projection: CurrentTranscriptProjection) => {
-              projection.state.activeMessageCount = 999;
-              if (projection.latestIndexedReset) {
-                projection.latestIndexedReset.seq = 999;
-              }
-            });
-            expect(f.read(refreshed)).toMatchObject({
-              kind: "value",
-              value: { state: { activeMessageCount: 2 }, latestIndexedReset: { seq: 2 } },
-            });
           });
         }
       });
@@ -410,6 +400,13 @@ it("preserves bounded context and accounting with compact committed receipts", a
         ),
       );
     const receipt = f.receipt(actor);
+    freezeTrustedJsonSnapshot(receipt);
+    assert(receipt.contextStats);
+    withReceipt(receipt, () => {
+      readProjection(f.database, f.scope, (projection) => {
+        expect(projection.contextStats).toBe(receipt.contextStats);
+      });
+    });
     expect(readContext(receipt)).toEqual(readContext());
     expect(readAccounting(receipt)).toEqual(readAccounting());
     expect(readContext(receipt, 1)).toMatchObject({ events: [assistant], truncated: true });

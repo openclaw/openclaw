@@ -321,6 +321,93 @@ const catalog = module.loadControlUiSourceCatalog();`;
     );
   });
 
+  it("roots benchmark parents and follows only their live computed child launches", () => {
+    const entries = knipConfig.workspaces["."].entry;
+    for (const parent of [
+      "scripts/perf/archive-worker-churn-measure.ts!",
+      "scripts/perf/session-create-measure.ts!",
+      "scripts/perf/session-create-repository-measure.ts!",
+    ]) {
+      expect(
+        entries.filter((entry) => entry === parent),
+        parent,
+      ).toHaveLength(1);
+    }
+    expect(entries).not.toContain("scripts/perf/archive-worker-churn-preload.mjs!");
+    expect(entries).not.toContain("scripts/perf/session-create-measure-loader.mjs!");
+
+    const archivePath = path.resolve("scripts/perf/archive-worker-churn-measure.ts");
+    const sessionCreatePath = path.resolve("scripts/perf/session-create-measure.ts");
+    const archiveSource = fs.readFileSync(archivePath, "utf8");
+    const sessionCreateSource = fs.readFileSync(sessionCreatePath, "utf8");
+    const compile = knipConfig.compilers.mjs;
+    const compileWithSources = (archive: string, sessionCreate: string) => {
+      const readFileSync = fs.readFileSync.bind(fs);
+      vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
+        const resolved = path.resolve(String(file));
+        if (resolved === archivePath) {
+          return archive;
+        }
+        if (resolved === sessionCreatePath) {
+          return sessionCreate;
+        }
+        return readFileSync(file, options);
+      });
+      return compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
+    };
+
+    const compiled = compileWithSources(archiveSource, sessionCreateSource);
+    expect(compiled).toContain('import "../scripts/perf/archive-worker-churn-preload.mjs";');
+    expect(compiled).toContain('import "../scripts/perf/session-create-measure-loader.mjs";');
+
+    vi.restoreAllMocks();
+    const archiveWithoutLaunch = replaceFixture(
+      archiveSource,
+      '              execArgv: [...(options.execArgv ?? process.execArgv), "--import", preload],',
+      `              execArgv: [...(options.execArgv ?? process.execArgv)],
+              // "--import", preload remains a decoy after the launch is removed.`,
+    );
+    const archiveWithDetachedFragments = `${archiveWithoutLaunch}
+const preload = pathToFileURL(
+  path.join(path.dirname(fileURLToPath(import.meta.url)), "archive-worker-churn-preload.mjs"),
+).href;
+const options = {};
+const unrelatedWorkerOptions = {
+  execArgv: [...(options.execArgv ?? process.execArgv), "--import", preload],
+};`;
+    const withoutArchiveLaunch = compileWithSources(
+      archiveWithDetachedFragments,
+      sessionCreateSource,
+    );
+    expect(withoutArchiveLaunch).not.toContain("archive-worker-churn-preload.mjs");
+    expect(withoutArchiveLaunch).toContain(
+      'import "../scripts/perf/session-create-measure-loader.mjs";',
+    );
+
+    vi.restoreAllMocks();
+    const sessionCreateWithoutLaunch = replaceFixture(
+      sessionCreateSource,
+      `      "--import",
+      new URL("./session-create-measure-loader.mjs", import.meta.url).pathname,`,
+      `      "--inspect",
+      new URL("./session-create-measure-loader.mjs", import.meta.url).pathname,
+      // "--import" and the loader path remain decoys after the launch is removed.`,
+    );
+    const sessionCreateWithDetachedArgs = `${sessionCreateWithoutLaunch}
+const unrelatedArgs = [
+  "--import",
+  new URL("./session-create-measure-loader.mjs", import.meta.url).pathname,
+];`;
+    const withoutSessionCreateLaunch = compileWithSources(
+      archiveSource,
+      sessionCreateWithDetachedArgs,
+    );
+    expect(withoutSessionCreateLaunch).toContain(
+      'import "../scripts/perf/archive-worker-churn-preload.mjs";',
+    );
+    expect(withoutSessionCreateLaunch).not.toContain("session-create-measure-loader.mjs");
+  });
+
   it("models exact generated and module-hook named consumers", () => {
     expect(knipConfig.workspaces["."].project).toContain("config/knip-dynamic-consumers.mjs!");
     const compile = knipConfig.compilers.mjs;
@@ -412,6 +499,130 @@ const catalog = module.loadControlUiSourceCatalog();`;
     expect(withoutConsumers).not.toContain("fetchWithSsrFGuard");
     expect(withoutConsumers).not.toContain("addDoctorLegacyIssues");
     expect(withoutConsumers).not.toContain("recordTrajectoryFlush");
+  });
+
+  it("models Codex lazy runtime members only from their live loaders and consumers", () => {
+    const consumerPaths = {
+      plugin: path.resolve("extensions/codex/src/native-plugin-tool.ts"),
+      thread: path.resolve("extensions/codex/src/native-thread-tool.ts"),
+      adoption: path.resolve("extensions/codex/src/session-catalog-list-operation.ts"),
+      control: path.resolve("extensions/codex/src/session-catalog-control.ts"),
+    };
+    const sources = new Map(
+      Object.values(consumerPaths).map((consumerPath) => [
+        consumerPath,
+        fs.readFileSync(consumerPath, "utf8"),
+      ]),
+    );
+    const compile = knipConfig.compilers.mjs;
+    const readFileSync = fs.readFileSync.bind(fs);
+    const readFile = vi.spyOn(fs, "readFileSync");
+    const compileWithSources = (overrides = new Map<string, string>()) => {
+      readFile.mockImplementation((file, options) => {
+        const override = overrides.get(path.resolve(String(file)));
+        return override ?? readFileSync(file, options);
+      });
+      return compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
+    };
+
+    const compiled = compileWithSources();
+    expect(compiled).toMatch(
+      /import \{[^}\n]*\bcodexBindingConnectionSelection as __dynamic\d+_\d+\b[^}\n]*\} from "\.\.\/extensions\/codex\/src\/app-server\/binding-connection\.js";/u,
+    );
+    expect(compiled).toMatch(
+      /import \{[^}\n]*\blistNodeAdoptedSessionEntries as __dynamic\d+_\d+\b[^}\n]*\} from "\.\.\/extensions\/codex\/src\/session-catalog-node-adoption\.js";/u,
+    );
+    expect(compiled).toMatch(
+      /import \{[^}\n]*\bclearSharedCodexAppServerClientAndWait as __dynamic\d+_\d+\b[^}\n]*\} from "\.\.\/extensions\/codex\/src\/app-server\/shared-client\.js";/u,
+    );
+
+    const bindingWithoutPluginConsumer = replaceFixture(
+      sources.get(consumerPaths.plugin) ?? "",
+      "const { codexBindingConnectionSelection, resolveCodexBindingAppServerConnection } =",
+      "const { resolveCodexBindingAppServerConnection } =",
+    );
+    const pluginRemoved = compileWithSources(
+      new Map([[consumerPaths.plugin, bindingWithoutPluginConsumer]]),
+    );
+    expect(pluginRemoved).toContain("codexBindingConnectionSelection as");
+
+    const bindingWithoutThreadConsumer = replaceFixture(
+      sources.get(consumerPaths.thread) ?? "",
+      "const { codexBindingConnectionSelection, resolveCodexBindingAppServerConnection } =",
+      "const { resolveCodexBindingAppServerConnection } =",
+    );
+    const bothBindingConsumersRemoved = compileWithSources(
+      new Map([
+        [consumerPaths.plugin, bindingWithoutPluginConsumer],
+        [consumerPaths.thread, bindingWithoutThreadConsumer],
+      ]),
+    );
+    expect(bothBindingConsumersRemoved).not.toContain("codexBindingConnectionSelection as");
+
+    const adoptionWithoutLoader = replaceFixture(
+      sources.get(consumerPaths.adoption) ?? "",
+      `const loadNodeAdoption = createLazyRuntimeModule(
+  () => import("./session-catalog-node-adoption.js"),
+);`,
+      `const loadNodeAdoption = async () => import("./session-catalog-node-adoption.js");`,
+    );
+    expect(
+      compileWithSources(new Map([[consumerPaths.adoption, adoptionWithoutLoader]])),
+    ).not.toContain("listNodeAdoptedSessionEntries as");
+
+    const controlWithoutMember = replaceFixture(
+      sources.get(consumerPaths.control) ?? "",
+      `        const { clearSharedCodexAppServerClientAndWait } = await loadSharedClient();
+        await clearSharedCodexAppServerClientAndWait();`,
+      `        await loadSharedClient();`,
+    );
+    const withoutControlMember = compileWithSources(
+      new Map([[consumerPaths.control, controlWithoutMember]]),
+    );
+    expect(withoutControlMember).not.toContain("clearSharedCodexAppServerClientAndWait as");
+    expect(withoutControlMember).toContain("runtimeProcessDeployManifest");
+  });
+
+  it("models a computed checkout module member only while its binding and call exist", () => {
+    const consumerPath = path.resolve(
+      ".agents/skills/telegram-e2e-userbot/scripts/published-upgrade-scenario.mjs",
+    );
+    const consumerSource = fs.readFileSync(consumerPath, "utf8");
+    const compile = knipConfig.compilers.mjs;
+    const compiled = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
+    expect(compiled).toMatch(
+      /import \{[^}\n]*\bcreateScenarioCommandEnvironment as __dynamic\d+_\d+\b[^}\n]*\} from "\.\.\/\.agents\/skills\/telegram-e2e-userbot\/scripts\/run-mock-sut-user-e2e\.mjs";/u,
+    );
+
+    const readFileSync = fs.readFileSync.bind(fs);
+    const readFile = vi.spyOn(fs, "readFileSync");
+    const compileWithConsumer = (source: string) => {
+      readFile.mockImplementation((file, options) =>
+        path.resolve(String(file)) === consumerPath ? source : readFileSync(file, options),
+      );
+      return compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
+    };
+
+    const withoutBinding = compileWithConsumer(
+      replaceFixture(
+        consumerSource,
+        'const harness = await import(pathToFileURL(join(scripts, "run-mock-sut-user-e2e.mjs")));',
+        "const harness = {};",
+      ),
+    );
+    expect(withoutBinding).not.toContain("run-mock-sut-user-e2e.mjs");
+
+    const withoutCall = compileWithConsumer(
+      replaceFixture(
+        consumerSource,
+        "  const commandEnv = harness.createScenarioCommandEnvironment({",
+        '  // harness.createScenarioCommandEnvironment({ is not a call.\n  const mention = "harness.createScenarioCommandEnvironment(";\n  const commandEnv = Object.freeze({',
+      ),
+    );
+    expect(withoutCall).not.toContain("createScenarioCommandEnvironment as");
+    expect(withoutCall).toContain("run-mock-sut-user-e2e.mjs");
+    expect(withoutCall).toContain("runtimeProcessDeployManifest");
+    expect(withoutCall).toContain("observeNativeMcpProbe");
   });
 
   it("removes projected MCP and Python edges with their actual consumers", () => {

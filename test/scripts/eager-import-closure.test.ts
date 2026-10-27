@@ -431,6 +431,12 @@ it("resolves runtime aliases and import/require conditions without following dec
 
 it.each([
   {
+    name: "local avatar worker",
+    entrypoints: ["src/agents/identity-avatar-file.worker.ts"],
+    dynamic: false,
+    deferredOwners: ["src/agents/agent-scope.ts", "src/agents/agent-scope-config.ts"],
+  },
+  {
     name: "native update authority",
     dynamic: false,
     entrypoints: [
@@ -452,12 +458,67 @@ it.each([
     deferredOwners: ["src/cli/daemon-cli.ts", "src/cli/daemon-cli/register.ts"],
   },
   {
+    name: "shared-state read worker startup",
+    entrypoints: ["src/state/openclaw-state-read.worker.ts"],
+    dynamic: false,
+    deferredOwners: [
+      "src/infra/state-migrations.cron-run-logs.ts",
+      "src/cron/run-history-detail.ts",
+    ],
+  },
+  {
+    name: "shared-state read command handlers",
+    entrypoints: ["src/state/openclaw-state-read-handlers.ts"],
+    dynamic: false,
+    deferredOwners: ["src/state/openclaw-agent-db.ts"],
+  },
+  {
     name: "Git operation workers",
     entrypoints: ["src/infra/git-operation.worker.ts"],
     dynamic: true,
     deferredOwners: [
       "src/agents/worktrees/service-preparation.ts",
       "src/agents/worktrees/allocation.ts",
+    ],
+  },
+  {
+    name: "Git worktree inspections",
+    entrypoints: ["src/agents/worktrees/git-worktree-operations.runtime.ts"],
+    dynamic: false,
+    deferredOwners: ["src/agents/worktrees/snapshot-inventory.ts"],
+  },
+  {
+    name: "persisted model catalog reader",
+    entrypoints: ["src/agents/plugin-model-catalog-read.worker.ts"],
+    dynamic: false,
+    deferredOwners: [
+      "src/state/openclaw-agent-db-readonly.ts",
+      "src/state/openclaw-agent-db-borrower.ts",
+    ],
+  },
+  {
+    name: "canonical validation worker",
+    entrypoints: [
+      "src/config/sessions/session-accessor.sqlite-archive.worker.ts",
+      "src/config/sessions/session-accessor.sqlite-mutation-worker.runtime.ts",
+      "src/config/sessions/session-canonical-validation.ts",
+    ],
+    dynamic: false,
+    deferredOwners: [
+      "src/config/sessions/session-cold-storage-source-guard.worker.ts",
+      "src/config/sessions/session-source-predicate.worker.ts",
+    ],
+  },
+  {
+    name: "cold archive preparation",
+    entrypoints: [
+      "src/config/sessions/session-cold-storage-selection.ts",
+      "src/config/sessions/session-cold-storage-prepare.ts",
+    ],
+    dynamic: false,
+    deferredOwners: [
+      "src/state/openclaw-agent-db.ts",
+      "src/config/sessions/session-turn.kernel.ts",
     ],
   },
   {

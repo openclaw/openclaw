@@ -36,7 +36,6 @@ import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
 import { createModelProviderLogin } from "./login-controller.ts";
 import { createModelProvidersState } from "./page-state.ts";
 import { createModelProviderProfileActions } from "./profile-actions-controller.ts";
-import { createModelProviderProfilePresentation } from "./profile-actions-presentation.ts";
 import { updateRecordEntry } from "./record-state.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
 import { ModelProviderSupplementalLoader } from "./supplemental-load.ts";
@@ -189,14 +188,8 @@ export function createModelProviders(
       );
     },
   });
-  const profilePresentation = createModelProviderProfilePresentation({
-    scope: mutations.scope,
-    isCurrent: mutations.isCurrent,
-    retirement: mutations.retirement,
-    authStatus: mutations.authStatus,
-  });
   const profileActions = createModelProviderProfileActions({
-    onLogoutStarted: (receipt) => void profilePresentation.logoutStarted(receipt),
+    onLogoutStarted: (receipt) => void mutations.logoutStarted(receipt),
     getAgentEpoch: () => agentEpoch,
     getAgentId: () => state.selectedAgentId,
     getClient: () => context.gateway.snapshot.client,
@@ -683,7 +676,7 @@ export function createModelProviders(
     discovery,
     login,
     mutations,
-    logoutSaving: profilePresentation.logoutSaving,
+    logoutSaving: mutations.logoutSaving,
     retryCatalog,
   };
 }

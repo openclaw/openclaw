@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as logger from "../logger.js";
 import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import * as pluginLoader from "../plugins/loader.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -165,6 +166,8 @@ module.exports = {
       const owner = createPluginRegistryOwner(root, state.workspaceDir);
       lifecycle.close = owner.close;
       const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+      const loadRegistry = vi.spyOn(pluginLoader, "loadPluginRegistryHandle");
+      const loadPlugins = vi.spyOn(pluginLoader, "loadOpenClawPlugins");
       const inventoryParams = {
         agentId: "main",
         agentDir: state.agentDir(),
@@ -197,6 +200,13 @@ module.exports = {
         expect(warn.mock.calls.some(([message]) => message.includes("unknown entries"))).toBe(
           false,
         );
+        for (let repeat = 0; repeat < 2; repeat++) {
+          expect(await resolveInventory(config)).toContainEqual(
+            expect.objectContaining({ id: toolName, source: "plugin", pluginId: toolPluginId }),
+          );
+        }
+        expect(loadRegistry).not.toHaveBeenCalled();
+        expect(loadPlugins).not.toHaveBeenCalled();
 
         const disabledConfig: OpenClawConfig = {
           ...config,
@@ -221,6 +231,8 @@ module.exports = {
         expect(closing).toBeDefined();
         await closing;
       } finally {
+        loadRegistry.mockRestore();
+        loadPlugins.mockRestore();
         warn.mockRestore();
         await owner.close();
       }

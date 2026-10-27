@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
@@ -7,6 +6,7 @@ import { createMacosAppInstallOwner } from "../commands/test-runtime-config-help
 import * as service from "../daemon/service.js";
 import * as exec from "../process/exec.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
+import { writeFixtureJson } from "./cli-fixtures.test-support.js";
 import { registerUpdateCli } from "./update-cli.js";
 import * as shared from "./update-cli/shared.js";
 
@@ -28,10 +28,7 @@ it.each([
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "state", "openclaw.json"));
     const installOwner = createMacosAppInstallOwner();
-    await fs.writeFile(
-      path.join(root, "openclaw-install-owner.json"),
-      JSON.stringify(installOwner),
-    );
+    await writeFixtureJson(path.join(root, "openclaw-install-owner.json"), installOwner);
     vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(root);
     const subprocess = vi
       .spyOn(exec, "runCommandWithTimeout")

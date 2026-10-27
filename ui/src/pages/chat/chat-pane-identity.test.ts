@@ -14,19 +14,21 @@ import { createApplicationContextProvider } from "../../test-helpers/application
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { setChatHistoryLoad } from "./chat-history-state.ts";
-import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
-  createRenderTestChatPane,
-  createSessionCapabilityFixture,
   createSessionContext,
+} from "./chat-application-context.test-support.ts";
+import { setChatHistoryLoad } from "./chat-history-state.ts";
+import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
+import {
+  createRenderTestChatPane,
   createTestChatPane,
   connectPaneTestView,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import { disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import { ChatView } from "./chat-view.tsx";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
@@ -35,6 +37,11 @@ import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
+import {
+  cacheChatSessionSnapshot,
+  readChatSessionSnapshot,
+  type ChatSessionSnapshot,
+} from "./session-message-cache.ts";
 
 function createLiveSessionContext(client: GatewayBrowserClient, sessions?: SessionCapability) {
   const initial = createInitializationContext();
@@ -72,6 +79,40 @@ function overlays(approvalQueue: ExecApprovalRequest[] = [], decideApproval = vi
 }
 
 describe("chat pane assistant identity snapshots", () => {
+  it("keeps live row measurements out of the admitted reservation across pane renders", () => {
+    const pane = createRenderTestChatPane();
+    const state = pane.initialize(createInitializationContext());
+    state.currentSessionId = "row-footprint-session";
+    const target = { sessionKey: state.sessionKey };
+    const snapshot: ChatSessionSnapshot = {
+      messages: [],
+      pagination: { hasMore: false },
+      sessionId: state.currentSessionId,
+    };
+    cacheChatSessionSnapshot(state.chatMessagesBySession, state, target, snapshot);
+    pane.render();
+    const row = 'row:v1:768:footer:revision-1:"video-row"';
+    const layout = pane.chatProps!.widgetLayout!;
+    layout.write(row, 1600);
+    pane.render();
+    const next = pane.chatProps!.widgetLayout!;
+    expect(next.read(row)).toBeUndefined();
+    next.write(row, 1100);
+    expect(
+      readChatSessionSnapshot(state.chatMessagesBySession, state, target)?.widgetHeights?.[row],
+    ).toBe(1100);
+
+    state.currentSessionId = "replacement-session";
+    cacheChatSessionSnapshot(state.chatMessagesBySession, state, target, {
+      ...snapshot,
+      sessionId: state.currentSessionId,
+      widgetHeights: { [row]: 400 },
+    });
+    pane.render();
+    expect(layout.read(row)).toBeUndefined();
+    expect(pane.chatProps!.widgetLayout!.read(row)).toBe(400);
+  });
+
   it("keeps an unknown transcript loading before hello and reconciles cached or live history", () => {
     installTranscriptDomMocks();
     const pane = createRenderTestChatPane();
