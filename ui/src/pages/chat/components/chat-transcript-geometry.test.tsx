@@ -86,7 +86,10 @@ it("reserves only the matching width and appearance, including text scale, width
     widgetLayout,
     applicationContext: { ...context, theme },
   });
-  const layout = new TranscriptLayoutOwner(() => {});
+  const layout = new TranscriptLayoutOwner(
+    () => {},
+    () => {},
+  );
   layout.rows = [{ key: "notice", revision: "notice-v1" }];
   layout.rowWidth = 768;
   layout.paneWidth = 1100;
@@ -180,7 +183,10 @@ it.each(["chat-bubble-activity", "", "code-block-expand", "code-block-wrap", "ra
     });
     const write = vi.fn();
     observeChatCache(cache, { write, delete: vi.fn() });
-    const layout = new TranscriptLayoutOwner(() => {});
+    const layout = new TranscriptLayoutOwner(
+      () => {},
+      () => {},
+    );
     layout.configureRows(
       threadProps("footprint-idle", target.sessionKey, [], {
         widgetLayout: createChatWidgetLayout()(cache, host, target),

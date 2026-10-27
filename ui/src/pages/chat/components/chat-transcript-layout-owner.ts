@@ -103,6 +103,10 @@ export class TranscriptLayoutOwner {
   }
 
   readonly measureRow: typeof measureTranscriptRow = (element, entry, instance) => {
+    // Observer delivery must sync the native anchor before size compensation.
+    if (entry) {
+      this.beforeMeasure();
+    }
     const size = measureTranscriptRow(element, entry, instance);
     return Math.max(size, this.rowMinimum(instance.indexFromElement(element)));
   };
@@ -161,7 +165,10 @@ export class TranscriptLayoutOwner {
 
   private geometryTarget: HTMLElement | undefined;
 
-  constructor(private readonly onLayoutChange: (before: number, after: number) => void) {}
+  constructor(
+    private readonly onLayoutChange: (before: number, after: number) => void,
+    private readonly beforeMeasure: () => void,
+  ) {}
 
   get viewportResizePending(): boolean {
     const viewport = this.viewport;

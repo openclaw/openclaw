@@ -86,7 +86,9 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     this.endAnchor.recordLayoutCorrection(before, after);
     this.scheduleEndReconcile();
   };
-  readonly layout = new TranscriptLayoutOwner(this.recordEndLayoutCorrection);
+  // A boot re-anchor can precede its native extent; only reader geometry may override it.
+  private beforeMeasure = () => this.initialRange.reading && this.offsetState.syncNativeOffset?.();
+  readonly layout = new TranscriptLayoutOwner(this.recordEndLayoutCorrection, this.beforeMeasure);
   private readonly followEnd = () =>
     this.scrollToEnd({
       source: "auto",
@@ -248,18 +250,16 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     });
     // Initial placement owns compensation; an estimated end is not a native scroll target.
     this.virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false;
-    // A boot re-anchor can precede its native extent; only reader geometry may override it.
-    const beforeMeasure = () => this.initialRange.reading && this.offsetState.syncNativeOffset?.();
     this.presentation = createTranscriptPresentation(
       () => this.scrollElement,
       this.virtualizer,
       () => this.rowRefs.elements,
-      beforeMeasure,
+      this.beforeMeasure,
     );
     this.rowRefs = new TranscriptRowRefs(this.virtualizer, {
       isCurrentRow: (element, key) =>
         this.threadInnerElement?.contains(element) === true && this.rowIndexesByKey.has(key),
-      beforeMeasure,
+      beforeMeasure: this.beforeMeasure,
       onMount: () => this.queueLayout(),
     });
     this.scrollRestoreHost = {
@@ -303,7 +303,6 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     const target = this.callbacks.geometryEventTarget;
     this.stopGeometry =
       target && listen(target, SIDEBAR_GEOMETRY_COMMIT_EVENT, this.handleGeometryCommit);
-    // Virtual-core exposes its lifecycle hooks as bound arrow functions.
     const { _didMount: mountVirtualizer } = this.virtualizer;
     this.cleanupVirtualizer = mountVirtualizer();
     if (this.offsetState.pendingScrollOffset) {
@@ -624,10 +623,11 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       this.presentation.measureRowsWithoutScrollAdjustment();
     }
     const element = this.scrollElement;
-    // Only smooth native motion needs replacement; instant targets just retire.
-    return element && measureSkippedRows
-      ? this.virtualizer.scrollToOffset(element.scrollTop, { behavior: "instant" })
-      : this.virtualizer.cancelScroll();
+    if (element) {
+      // Cancellation is one instant target replacement, never the multi-frame
+      // restoration API.
+      this.virtualizer.scrollToOffset(element.scrollTop, { behavior: "instant" });
+    }
   }
 
   syncMessageRows(

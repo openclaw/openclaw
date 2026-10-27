@@ -403,8 +403,8 @@ export function observeTranscriptOffset(
         owner.state.scrollCommand = null;
         // Arrival can precede the queued reconciliation frame. Retire its
         // index target too, without cancelling the reader’s end-follow intent.
-        // Its native write has arrived; cancellation must not write that offset again.
-        instance.cancelScroll();
+        // The notification can lag a newer native write; hold the current viewport.
+        instance.scrollToOffset(element.scrollTop, { behavior: "instant" });
       }
       owner.endAnchor.capture(element);
     }
