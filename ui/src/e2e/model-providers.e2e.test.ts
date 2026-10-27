@@ -323,9 +323,13 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await expect.poll(async () => claudeReadiness.textContent()).not.toContain("Expiring");
       await expect.poll(async () => claudeReadiness.textContent()).not.toContain("Not signed in");
       await expandProvider(page, "anthropic");
+      const claudeProfile = claudeCard.locator(".model-providers__profile");
       await expect
-        .poll(async () => claudeCard.locator(".model-providers__profile").textContent())
-        .toContain("Expired");
+        .poll(async () => claudeProfile.textContent())
+        .toContain("Credentials configured");
+      await expect
+        .poll(async () => claudeProfile.textContent())
+        .toContain("Access-token expiry alone does not mean you need to sign in again.");
       // The open row trades its summary chips for the full window tiles.
       expect(await claudeCard.locator(".provider-usage__chip").count()).toBe(0);
       const fiveHour = claudeCard.locator(".provider-usage__window", { hasText: "5h" });
