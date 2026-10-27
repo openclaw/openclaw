@@ -350,10 +350,12 @@ describe("mobile release CI tools", () => {
     const fetched = bash(history, { GITHUB_SHA: source }, { cwd: checkout });
     expect(fetched.status, fetched.stderr).toBe(0);
     expect(git(checkout, "rev-parse", "--is-shallow-repository")).toBe("false");
-    expect(git(checkout, "for-each-ref", "--format=%(refname)")).toBe("");
+    expect(git(checkout, "for-each-ref", "--format=%(refname)")).toBe("refs/remotes/origin/main");
+    expect(git(checkout, "rev-parse", "origin/main")).toBe(source);
     expect(() => git(checkout, "cat-file", "-e", unrelated)).toThrow();
     git(checkout, "fetch", "--no-tags", "origin", "refs/heads/main");
     expect(git(checkout, "rev-parse", "FETCH_HEAD")).toBe(currentMain);
+    expect(git(checkout, "rev-parse", "origin/main")).toBe(currentMain);
     git(checkout, "merge-base", "--is-ancestor", source, currentMain);
     const staged = path.join(root, "staged");
     git(checkout, "worktree", "add", "--detach", staged, source);

@@ -77,8 +77,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Keep release-note history without fetching unrelated branches and tags.
-          git fetch --no-tags --unshallow origin "$GITHUB_SHA"
+          # Retain this main commit as a negotiation tip for the release owner's later main fetch.
+          git fetch --no-tags --unshallow origin "+$GITHUB_SHA:refs/remotes/origin/main"
 
       - name: Prepare trusted Linux Android tooling
         if: >-
