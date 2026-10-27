@@ -154,17 +154,19 @@ function AgentSkillsContent(
     })),
   );
   const filter = createMemo(() => normalizeLowercaseStringOrEmpty(params.filter));
-  const filtered = createMemo(() =>
-    filter()
-      ? searchableSkills()
-          .filter((entry) => entry.text.includes(filter()))
-          .map((entry) => entry.skill)
-      : rawSkills(),
+  const filtered = createMemo(
+    () =>
+      filter()
+        ? searchableSkills()
+            .filter((entry) => entry.text.includes(filter()))
+            .map((entry) => entry.skill)
+        : rawSkills(),
+    {
+      equals: (previous, next) =>
+        previous.length === next.length && previous.every((skill, index) => skill === next[index]),
+    },
   );
-  const shownNames = createMemo(() => new Set(filtered().map((skill) => skill.name)));
-  // Keep the entry policy for this scope: a sticky filter must not mount every control.
-  const retainControls = createMemo<boolean>((initial) => initial ?? !filter());
-  const groups = createMemo(() => groupSkills(retainControls() ? rawSkills() : filtered()));
+  const groups = createMemo(() => groupSkills(filtered()));
   const enabledCount = createMemo(() =>
     usingAllowlist()
       ? rawSkills().filter((skill) => isWorkshopSkill(skill) || allowSet().has(skill.name)).length
@@ -250,29 +252,21 @@ function AgentSkillsContent(
             />
           }
         />
-        <Show when={filtered().length === 0}>
+        {filtered().length === 0 ? (
           <SettingsEmpty message={t("agents.skillsPanel.empty")} />
-        </Show>
-        <div class="agents-panel-body agent-skills-groups" hidden={filtered().length === 0}>
-          <For each={groups()} keyed={(group) => group.id}>
-            {(group) => {
-              const count = createMemo(() =>
-                group().skills.reduce(
-                  (total, skill) => total + Number(shownNames().has(skill.name)),
-                  0,
-                ),
-              );
-              return (
+        ) : (
+          <div class="agents-panel-body agent-skills-groups">
+            <For each={groups()} keyed={(group) => group.id}>
+              {(group) => (
                 <details
                   class="agent-skills-group"
-                  hidden={count() === 0}
                   open={
                     Boolean(filter()) || (group().id !== "workspace" && group().id !== "built-in")
                   }
                 >
                   <summary class="agent-skills-header">
                     <span>{group().label}</span>
-                    <span class="muted">{count()}</span>
+                    <span class="muted">{group().skills.length}</span>
                   </summary>
                   <div class="list skills-grid">
                     <For each={group().skills} keyed={(skill) => skill.name}>
@@ -281,10 +275,7 @@ function AgentSkillsContent(
                         const enabled = () =>
                           learned() || !usingAllowlist() || allowSet().has(skill().name);
                         return (
-                          <div
-                            class="settings-row agent-skill-row"
-                            hidden={!shownNames().has(skill().name)}
-                          >
+                          <div class="settings-row agent-skill-row">
                             <div class="settings-row__text">
                               <span class="settings-row__title">
                                 {skill().emoji ? `${skill().emoji} ` : ""}
@@ -331,10 +322,10 @@ function AgentSkillsContent(
                     </For>
                   </div>
                 </details>
-              );
-            }}
-          </For>
-        </div>
+              )}
+            </For>
+          </div>
+        )}
       </SettingsSection>
     </>
   );

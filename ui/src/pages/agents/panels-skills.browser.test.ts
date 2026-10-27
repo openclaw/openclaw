@@ -327,7 +327,7 @@ describe("agents skills panel (browser)", () => {
     },
   );
 
-  it("retains filtered controls and shows matches from default-collapsed groups", async () => {
+  it("retains matching controls while filtering and restores removed skills after clearing", async () => {
     const view = mountSkills([
       createSkill({ name: "Unique Built In Match", source: "openclaw-bundled", bundled: true }),
       createSkill({ name: "Installed Distractor", source: "openclaw-managed" }),
@@ -336,34 +336,35 @@ describe("agents skills panel (browser)", () => {
     await waitForSolid(() =>
       expect(container.querySelector<HTMLDetailsElement>(".agent-skills-group")?.open).toBe(false),
     );
-    const rows = view.rows();
-    const controls = rows.map((row) => row.querySelector("input"));
+    const matchedRow = view.rows()[0]!;
+    const matchedControl = matchedRow.querySelector("input");
+    const filter = view.filter();
+
+    view.update({ ...params, filter: "Unique" });
+    await waitForSolid(() => expect(view.rows()).toHaveLength(1));
+    const filteredGroup = container.querySelector<HTMLDetailsElement>(".agent-skills-group");
+    expect(filteredGroup?.open).toBe(true);
+    expect(view.rows()[0]).toBe(matchedRow);
+    expect(matchedRow.querySelector("input")).toBe(matchedControl);
+    expect(container.textContent).not.toContain("Installed Distractor");
 
     view.update({ ...params, filter: "Unique Built In Match" });
     await waitForSolid(() => expect(container.textContent).toContain("1 shown"));
-    const filteredGroup = container.querySelector<HTMLDetailsElement>(
-      ".agent-skills-group:not([hidden])",
-    );
-    expect(filteredGroup?.open).toBe(true);
-    expect(filteredGroup?.querySelector(".agent-skill-row")?.textContent).toContain(
-      "Unique Built In Match",
-    );
-    expect(container.querySelectorAll(".agent-skill-row:not([hidden])")).toHaveLength(1);
-    view.expectRows(rows);
+    expect(view.rows()[0]).toBe(matchedRow);
+    expect(view.filter()).toBe(filter);
 
     view.update({ ...params, filter: "No matching skill" });
     await waitForSolid(() => expect(container.textContent).toContain("0 shown"));
-    expect(container.querySelectorAll(".agent-skills-group:not([hidden])")).toHaveLength(0);
-    expect(container.querySelector<HTMLElement>(".agent-skills-groups")?.hidden).toBe(true);
-    view.expectRows(rows);
+    expect(view.rows()).toHaveLength(0);
+    expect(container.querySelectorAll(".agent-skills-group")).toHaveLength(0);
+    expect(view.filter()).toBe(filter);
 
     view.update({ ...params, filter: "" });
-    await waitForSolid(() =>
-      expect(container.querySelectorAll(".agent-skill-row:not([hidden])")).toHaveLength(2),
-    );
-    expect(container.querySelector<HTMLElement>(".agent-skills-groups")?.hidden).toBe(false);
-    view.expectRows(rows);
-    view.rows().forEach((row, index) => expect(row.querySelector("input")).toBe(controls[index]));
+    await waitForSolid(() => expect(view.rows()).toHaveLength(2));
+    expect(container.textContent).toContain("Unique Built In Match");
+    expect(container.textContent).toContain("Installed Distractor");
+    expect(view.checked()).toEqual([true, true]);
+    expect(view.filter()).toBe(filter);
   });
 
   it.each(["initial", "agent", "connection"])(

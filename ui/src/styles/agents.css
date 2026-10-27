@@ -1074,12 +1074,6 @@
   gap: 10px;
 }
 
-.agent-skills-groups[hidden],
-.agent-skills-group[hidden],
-.agent-skill-row[hidden] {
-  display: none;
-}
-
 .agent-skills-group summary {
   list-style: none;
 }
