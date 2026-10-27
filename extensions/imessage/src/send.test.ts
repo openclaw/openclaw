@@ -105,14 +105,6 @@ describe("sendMessageIMessage receipts", () => {
     await openClawState.cleanup();
   });
 
-  function sendMessage(
-    to: string,
-    text: string,
-    options: Partial<Parameters<typeof sendMessageIMessage>[2]> = {},
-  ) {
-    return sendMessageIMessage(to, text, { config: IMESSAGE_TEST_CFG, ...options });
-  }
-
   function createOutboundMediaFile(filename: string, contents: Buffer): string {
     const sourcePath = openClawState.path(filename);
     fs.writeFileSync(sourcePath, contents);
@@ -121,18 +113,6 @@ describe("sendMessageIMessage receipts", () => {
 
   function mockAttachment(value: { path: string; contentType?: string }) {
     return vi.spyOn(mediaRuntime, "resolveOutboundAttachmentFromUrl").mockResolvedValue(value);
-  }
-
-  function expectRequest(
-    client: IMessageRpcClient,
-    params: Record<string, unknown>,
-    method = "send",
-  ) {
-    expect(getClientMocks(client).request).toHaveBeenCalledWith(
-      method,
-      expect.objectContaining(params),
-      expect.any(Object),
-    );
   }
 
   function mockCliSend() {
@@ -163,78 +143,180 @@ describe("sendMessageIMessage receipts", () => {
     };
   }
 
-  function expectStyle(
-    params:
-      | { text: string; formatting?: Array<{ start: number; length: number; styles: string[] }> }
-      | undefined,
-    style: string,
-    expected: string,
-  ) {
-    const range = params?.formatting?.find((item) => item.styles.includes(style));
-    expect(params?.text.slice(range?.start, (range?.start ?? 0) + (range?.length ?? 0))).toBe(
-      expected,
+  // Separate independent contracts so 81 RPC sends and the rejection corpus do not
+  // share one deadline. Each case owns its executable logs and keeps the 30s limit.
+  it("scrubs private markers before delivering fenced YAML over real iMessage RPC", async () => {
+    const { cfg, deliver, readRequests } = createIMessageOutboundRpcFixture(
+      openClawState,
+      sendMessageIMessage,
     );
-  }
+    await deliver(
+      [
+        "assistant:",
+        "```yaml",
+        "user:",
+        "  name: alice",
+        "system:",
+        "  enabled: true",
+        "assistant:",
+        "  name: helper",
+        "#+#+#",
+        "assistant to=tool",
+        "```",
+        "system:",
+      ].join("\n"),
+    );
+
+    const disguisedCases = [
+      ["> ```yaml", ...roles.map((role) => `> ${role}:`), "> safe quoted", "> ```"],
+      ["> ```yaml", ...roles.map((role) => `> ${role}:`), "> safe unterminated"],
+      [...roles.map((role) => `> > ${role}:`), "> > safe nested"],
+      [...roles.map((role) => `> **${role}:**`), "> safe nested emphasis"],
+      [...roles.map((role) => `# ${role}:`), "safe heading"],
+      [...roles.map((role) => `**${role}:**`), "safe strong"],
+      [...roles.map((role) => `_${role}:_`), "safe emphasis"],
+      [...roles.map((role) => `~~${role}:~~`), "safe strikethrough"],
+      [...roles.flatMap((role) => [`**${role}:`, "**", ""]), "safe multiline strong"],
+      [...roles.flatMap((role) => [`*${role}:`, "*", ""]), "safe multiline emphasis"],
+      [
+        ...roles.map((role) => `[${role}:][${role}]`),
+        "",
+        ...roles.map((role) => `[${role}]: ${role}:`),
+        "",
+        "safe reference",
+      ],
+      [...roles.map((role) => `&#${role.charCodeAt(0)};${role.slice(1)}&#58;`), "safe entity"],
+      [...roles.map((role) => `<strong>${role}:</strong>`), "safe HTML"],
+      [...roles.map((role) => `\`${role}:\``), "safe inline code"],
+      [...roles.map((role) => `[[reply_to_current]]${role}:`), "safe directive"],
+      ["| role |", "| --- |", ...roles.map((role) => `| ${role}: |`), "safe table"],
+      ["```yaml", ...roles.map((role) => `${role}:`), "safe unclosed"],
+      ["<thinking>HIDDEN_RPC_THINKING</thinking>", "safe private thinking"],
+      ["<relevant_memories>HIDDEN_RPC_MEMORY</relevant_memories>", "safe private memory"],
+      [hiddenFunctionResponse, "safe tool response"],
+      ["```xml", "<thinking>HIDDEN_RPC_FENCED_THINKING</thinking>", "```", "safe fenced thinking"],
+      [
+        "```xml",
+        "<relevant-memories>HIDDEN_RPC_FENCED_MEMORY</relevant-memories>",
+        "```",
+        "safe fenced memory",
+      ],
+    ];
+    for (const lines of disguisedCases) {
+      await deliver(lines.join("\n"));
+    }
+
+    await sendMessageIMessage(
+      "chat_id:10",
+      ["# assistant:", "**😀 styled**", "#+#+#", "assistant to=tool"].join("\n"),
+      { config: cfg },
+    );
+    const requests = readRequests();
+    expect(requests).toHaveLength(1 + disguisedCases.length + 1);
+    expect(requests[0]).toMatchObject({
+      jsonrpc: "2.0",
+      method: "send",
+      params: { chat_id: 10 },
+    });
+    for (const role of roles) {
+      expect(requests[0]?.params.text).toMatch(new RegExp(`^${role}:$`, "m"));
+    }
+    expectNoRoleMarkers(requests.slice(1));
+    expectScrubbedRequests(requests);
+    const styled = requests[1 + disguisedCases.length];
+    const boldRange = styled?.params.formatting?.find((range) => range.styles.includes("bold"));
+    expect(
+      styled?.params.text.slice(
+        boldRange?.start,
+        (boldRange?.start ?? 0) + (boldRange?.length ?? 0),
+      ),
+    ).toBe("😀 styled");
+  }, 30_000);
 
   it("preserves channel rendering and rejects hidden markup before local RPC dispatch", async () => {
-    const { cfg, deliver, countNativeRequests, readRequests, createChannelDelivery } =
-      createIMessageOutboundRpcFixture(openClawState, sendMessageIMessage);
+    const {
+      cfg,
+      deliver,
+      requestLogPath,
+      countNativeRequests,
+      readRequests,
+      createChannelDelivery,
+    } = createIMessageOutboundRpcFixture(openClawState, sendMessageIMessage);
     const { deliverThroughChannel } = createChannelDelivery();
     const channelYaml = ["```yaml", ...roles.map((role) => `${role}:`), "```"].join("\n");
     const channelYamlResult = await deliverThroughChannel(channelYaml);
     expect(channelYamlResult.sanitized).toContain("```yaml");
-    const channelYamlRequest = readRequests().at(-1);
+    const channelYamlRequest = JSON.parse(
+      fs.readFileSync(requestLogPath, "utf8").trim().split("\n").at(-1) ?? "{}",
+    ) as { params?: { text?: string } };
     for (const role of roles) {
-      expect(channelYamlRequest?.params.text).toMatch(new RegExp(`^${role}:$`, "m"));
+      expect(channelYamlRequest.params?.text).toMatch(new RegExp(`^${role}:$`, "m"));
     }
 
     let channelContractRequestCount = 1;
-    for (const [boldAttribute, strikeAttribute] of [
-      ['title="b>"', "data-note='s>'"],
-      ['title="<tag>"', "data-note='<tag>'"],
-      ['title="<previous_response>"', "data-note='<system-reminder>'"],
-      ['title="<!--"', "data-note='<?'"],
-    ]) {
-      const bold = "😀 channel bold";
-      const strike = "channel strike";
-      const html = `<strong ${boldAttribute}>${bold}</strong> <del ${strikeAttribute}>${strike}</del>`;
+    for (const [html, bold, strike] of [
+      [
+        `<strong title="b>">😀 channel bold</strong> <del data-note='s>'>channel strike</del>`,
+        "😀 channel bold",
+        "channel strike",
+      ],
+      [
+        `<strong title="<tag>">😀 quoted bold</strong> <del data-note='<tag>'>quoted strike</del>`,
+        "😀 quoted bold",
+        "quoted strike",
+      ],
+      [
+        `<strong title="<previous_response>">😀 private-looking bold</strong> <del data-note='<system-reminder>'>private-looking strike</del>`,
+        "😀 private-looking bold",
+        "private-looking strike",
+      ],
+      [
+        `<strong title="<!--">😀 opaque-looking bold</strong> <del data-note='<?'>opaque-looking strike</del>`,
+        "😀 opaque-looking bold",
+        "opaque-looking strike",
+      ],
+    ] as const) {
       const attributedHtml = await deliverThroughChannel(html);
       expect(attributedHtml.sanitized).toBe(`**${bold}** ~~${strike}~~`);
-      const attributedRequest = readRequests().at(-1);
+      const attributedRequest = JSON.parse(
+        fs.readFileSync(requestLogPath, "utf8").trim().split("\n").at(-1) ?? "{}",
+      ) as {
+        params?: {
+          text: string;
+          formatting?: Array<{ start: number; length: number; styles: string[] }>;
+        };
+      };
       for (const [style, expected] of [
         ["bold", bold],
         ["strikethrough", strike],
       ] as const) {
-        expectStyle(attributedRequest?.params, style, expected);
+        const range = attributedRequest.params?.formatting?.find((item) =>
+          item.styles.includes(style),
+        );
+        expect(
+          attributedRequest.params?.text.slice(
+            range?.start,
+            (range?.start ?? 0) + (range?.length ?? 0),
+          ),
+        ).toBe(expected);
       }
       channelContractRequestCount += attributedHtml.chunks.length;
     }
 
-    // Parser variants live in the sanitizer owner; retain every native style here.
-    const renderedMarkers = roles
-      .flatMap((role) => [
-        `# ${role}:\n\nsafe heading`,
-        `**${role}:**\n\nsafe strong`,
-        `_${role}:_\n\nsafe emphasis`,
-        `~~${role}:~~\n\nsafe strikethrough`,
-        `**${role}:\n**\n\nsafe multiline strong`,
-        `*${role}:\n*\n\nsafe multiline emphasis`,
-        `&#${role.charCodeAt(0)};${role.slice(1)}&#58;\n\nsafe entity`,
-        `<strong>${role}:</strong>\n\nsafe HTML`,
-        `[[reply_to_current]]${role}:\n\nsafe directive`,
-        `| role |\n| --- |\n| ${role}: |\n\nsafe table`,
-        `[${role}:][${role}]\n\n[${role}]: ${role}:\n\nsafe reference`,
-      ])
-      .join("\n\n");
-    const runtimeCompanion = `${privateRuntimeScaffolding}\n${renderedMarkers}\nvisible runtime companion`;
+    const runtimeCompanion = `${privateRuntimeScaffolding}\nvisible runtime companion`;
     for (const sendPrivateRuntime of [
-      () => sendMessage("chat_id:10", runtimeCompanion, { config: cfg }),
+      () => sendMessageIMessage("chat_id:10", runtimeCompanion, { config: cfg }),
       () => deliver(runtimeCompanion),
       () => deliverThroughChannel(runtimeCompanion),
     ]) {
       const previousRequestCount = countNativeRequests();
       await sendPrivateRuntime();
-      const runtimeRequests = readRequests().slice(previousRequestCount);
+      const runtimeRequests = fs
+        .readFileSync(requestLogPath, "utf8")
+        .trim()
+        .split("\n")
+        .slice(previousRequestCount)
+        .map((line) => JSON.parse(line) as { params?: { text?: string } });
       expect(runtimeRequests.length).toBeGreaterThan(0);
       expect(
         runtimeRequests.some((request) =>
@@ -250,29 +332,48 @@ describe("sendMessageIMessage receipts", () => {
       channelContractRequestCount += runtimeRequests.length;
     }
 
-    await sendMessage(
-      "chat_id:10",
-      ["# assistant:", "**😀 styled**", "#+#+#", "assistant to=tool"].join("\n"),
-      { config: cfg },
-    );
-    expectStyle(readRequests().at(-1)?.params, "bold", "😀 styled");
-    channelContractRequestCount += 1;
-
-    // The owner suite covers the parser cross-products. Keep one native
-    // channel non-dispatch proof for hidden projections and nested HTML.
-    for (const [source, reason] of [
-      [nestMarkdownFences(hiddenFunctionResponse, 4), "hidden assistant content"],
-      [
-        "<thi<details><summary>noise</summary></details>nking>HIDDEN_CHANNEL</thi<details>nking>",
-        "ambiguous nested HTML",
-      ],
+    for (const hidden of [
+      "```xml\n<thinking>HIDDEN_CHANNEL_FENCED_THINKING</thinking>\n```",
+      "`<thinking>HIDDEN_CHANNEL_INLINE_THINKING</thinking>`",
+      "```xml\n<relevant_memories>HIDDEN_CHANNEL_FENCED_MEMORY</relevant_memories>\n```",
+      "`<relevant-memories>HIDDEN_CHANNEL_INLINE_MEMORY</relevant-memories>`",
+      nestMarkdownFences("<thinking>HIDDEN_CHANNEL_DEEPLY_NESTED_THINKING</thinking>", 4),
+      nestMarkdownFences(
+        "<relevant_memories>HIDDEN_CHANNEL_DEEPLY_NESTED_MEMORY</relevant_memories>",
+        4,
+      ),
+      `\`\`\`xml\n${hiddenFunctionResponse}\n\`\`\``,
+      nestMarkdownFences(hiddenFunctionResponse, 4),
     ]) {
       const requestCount = countNativeRequests();
-      await expect(deliverThroughChannel(source + "\nsafe channel text")).rejects.toThrow(
-        `iMessage outbound ${reason} is not allowed`,
+      await expect(deliverThroughChannel(`${hidden}\nsafe channel text`)).rejects.toThrow(
+        "iMessage outbound hidden assistant content is not allowed",
       );
       expect(countNativeRequests()).toBe(requestCount);
     }
+    const malformedHiddenFunctionResponse = [
+      '<<script>function_calls><<script>invoke name="exec">HIDDEN_CHANNEL_SYNTH_FUNCTION_CALL</<script>invoke></<script>function_calls><<script>function_response>',
+      "HIDDEN_CHANNEL_SYNTH_FUNCTION_RESPONSE",
+      "</<script>function_response>",
+    ].join("\n");
+    for (const malformed of [
+      "<<script>thinking>HIDDEN_CHANNEL_SYNTH_THINKING</<script>thinking>",
+      "<t<script>hinking>HIDDEN_CHANNEL_INNER_THINKING</t<script>hinking>",
+      "<<script>relevant_memories>HIDDEN_CHANNEL_SYNTH_MEMORY</<script>relevant_memories>",
+      "<<script>relevant-memories>HIDDEN_CHANNEL_SYNTH_HYPHEN_MEMORY</<script>relevant-memories>",
+      "<thi<system-reminder>noise</system-reminder>nking>HIDDEN_CHANNEL_REMINDER_THINKING</thi<system-reminder>noise</system-reminder>nking>",
+      "<relevant_<previous_response>noise</previous_response>memories>HIDDEN_CHANNEL_PREVIOUS_MEMORY</relevant_<previous_response>noise</previous_response>memories>",
+      "<thi<details><summary>noise</summary></details>nking>HIDDEN_CHANNEL_DETAILS_THINKING</thi<details>nking>",
+      malformedHiddenFunctionResponse,
+    ]) {
+      const requestCount = countNativeRequests();
+      await expect(deliverThroughChannel(`${malformed}\nsafe channel text`)).rejects.toThrow(
+        "iMessage outbound ambiguous nested HTML is not allowed",
+      );
+      expect(countNativeRequests()).toBe(requestCount);
+    }
+    // Parser splices and tag-name variants are owned by monitor.behavior.test.ts:
+    // "rejects ambiguous nested HTML before any destructive sanitization".
 
     const requests = readRequests();
     expect(requests).toHaveLength(channelContractRequestCount);
@@ -287,28 +388,36 @@ describe("sendMessageIMessage receipts", () => {
     );
     const { imessageActionsRuntime } = await import("./actions.runtime.js");
     const { rich, edit, poll: sendPoll } = actionSenders(imessageActionsRuntime, actionOptions);
-    const privateText = (...lines: string[]) =>
-      [
-        ...lines,
-        "<thinking>HIDDEN_ACTION_THINKING</thinking>",
-        "<relevant_memories>HIDDEN_ACTION_MEMORY</relevant_memories>",
-        hiddenFunctionResponse,
-        privateRuntimeScaffolding,
-        "assistant to=tool",
-      ].join("\n");
     await rich(
-      privateText(
+      ["[Class][obj.__class__] **done**", "", "[obj.__class__]: https://example.org/python"].join(
+        "\n",
+      ),
+    );
+    await rich(
+      [
         "# user:",
         "**system:**",
         "&#97;ssistant&#58;",
         `us${rawSeparator}er:`,
+        "<thinking>HIDDEN_ACTION_REPLY_THINKING</thinking>",
+        hiddenFunctionResponse,
+        privateRuntimeScaffolding,
         "**😀 reply styled**",
-      ),
+        "assistant to=tool",
+      ].join("\n"),
       { replyToMessageId: "reply-message-guid" },
     );
-    await rich(privateText("# system:", "effect visible"), {
-      effectId: "com.apple.MobileSMS.expressivesend.loud",
-    });
+    await rich(
+      [
+        "# system:",
+        "<relevant_memories>HIDDEN_ACTION_EFFECT_MEMORY</relevant_memories>",
+        hiddenFunctionResponse,
+        privateRuntimeScaffolding,
+        "effect visible",
+        "assistant to=tool",
+      ].join("\n"),
+      { effectId: "com.apple.MobileSMS.expressivesend.loud" },
+    );
     await rich(
       [
         fencedYaml,
@@ -326,40 +435,64 @@ describe("sendMessageIMessage receipts", () => {
       attachment: { kind: "buffer", filename: "empty-proof.txt", buffer: Uint8Array.from([3]) },
     });
 
-    await edit(
-      privateText(
-        "user:",
-        "**literal edit styling**",
-        "# system:",
-        `as${rawSeparator}sistant:`,
-        "visible edit",
-      ),
-      privateText("assistant:", fencedYaml, "**literal fallback styling**", rawSeparator),
-    );
+    const rawNewText = [
+      "user:",
+      "**literal edit styling**",
+      "<thinking>HIDDEN_ACTION_EDIT_THINKING</thinking>",
+      hiddenFunctionResponse,
+      privateRuntimeScaffolding,
+      "# system:",
+      `as${rawSeparator}sistant:`,
+      "visible edit",
+    ].join("\n");
+    const rawFallbackText = [
+      "assistant:",
+      fencedYaml,
+      "**literal fallback styling**",
+      "<relevant_memories>HIDDEN_ACTION_FALLBACK_MEMORY</relevant_memories>",
+      hiddenFunctionResponse,
+      privateRuntimeScaffolding,
+      rawSeparator,
+      "assistant to=tool",
+    ].join("\n");
+    await edit(rawNewText, rawFallbackText);
 
-    const poll = await sendPoll(
-      privateText(
-        "user:",
-        "# literal question heading",
-        "**literal question styling**",
-        rawSeparator,
-        "Which option?",
-      ),
+    const rawQuestion = [
+      "user:",
+      "# literal question heading",
+      "**literal question styling**",
+      "<thinking>HIDDEN_ACTION_QUESTION_THINKING</thinking>",
+      hiddenFunctionResponse,
+      privateRuntimeScaffolding,
+      rawSeparator,
+      "Which option?",
+    ].join("\n");
+    const rawChoices = [
       [
-        privateText("system:", "**Allow exactly**", rawSeparator),
-        privateText("assistant:", fencedYaml, "_Deny exactly_"),
-      ],
-    );
+        "system:",
+        "**Allow exactly**",
+        "<relevant_memories>HIDDEN_ACTION_FIRST_OPTION_MEMORY</relevant_memories>",
+        hiddenFunctionResponse,
+        privateRuntimeScaffolding,
+        rawSeparator,
+      ].join("\n"),
+      [
+        "assistant:",
+        fencedYaml,
+        "_Deny exactly_",
+        "<thinking>HIDDEN_ACTION_SECOND_OPTION_THINKING</thinking>",
+        hiddenFunctionResponse,
+        privateRuntimeScaffolding,
+        "assistant to=tool",
+      ].join("\n"),
+    ];
+    const poll = await sendPoll(rawQuestion, rawChoices);
 
-    const actionValue = (args: string[] | undefined, flag: string) => {
-      if (!args) {
-        throw new Error("Missing native iMessage action");
-      }
-      return args[args.indexOf(flag) + 1] ?? "";
-    };
+    const actionValue = (args: string[], flag: string) => args[args.indexOf(flag) + 1] ?? "";
     const actions = readActions();
-    expect(actions).toHaveLength(6);
+    expect(actions).toHaveLength(7);
     const [
+      dunderReferenceAction,
       replyAction,
       effectAction,
       attachmentAction,
@@ -367,6 +500,23 @@ describe("sendMessageIMessage receipts", () => {
       editAction,
       pollAction,
     ] = actions;
+    if (
+      !dunderReferenceAction ||
+      !replyAction ||
+      !effectAction ||
+      !attachmentAction ||
+      !emptyAttachmentAction ||
+      !editAction ||
+      !pollAction
+    ) {
+      throw new Error("Expected all seven native iMessage action subprocesses");
+    }
+    expect(actionValue(dunderReferenceAction, "--text")).toBe(
+      "Class (https://example.org/python) done",
+    );
+    expect(JSON.parse(actionValue(dunderReferenceAction, "--format"))).toEqual([
+      { start: 35, length: 4, styles: ["bold"] },
+    ]);
     expect(replyAction).toContain("--reply-to");
     expect(actionValue(replyAction, "--reply-to")).toBe("reply-message-guid");
     expect(actionValue(effectAction, "--effect")).toBe("com.apple.MobileSMS.expressivesend.loud");
@@ -377,11 +527,15 @@ describe("sendMessageIMessage receipts", () => {
 
     const replyText = actionValue(replyAction, "--text");
     expect(replyText).not.toMatch(/^[ \t]*(?:user|system|assistant):[ \t]*$/gim);
-    expectStyle(
-      { text: replyText, formatting: JSON.parse(actionValue(replyAction, "--format")) },
-      "bold",
-      "😀 reply styled",
-    );
+    const replyFormatting = JSON.parse(actionValue(replyAction, "--format")) as Array<{
+      start: number;
+      length: number;
+      styles: string[];
+    }>;
+    const replyBold = replyFormatting.find((range) => range.styles.includes("bold"));
+    expect(
+      replyText.slice(replyBold?.start, (replyBold?.start ?? 0) + (replyBold?.length ?? 0)),
+    ).toBe("😀 reply styled");
     const attachmentText = actionValue(attachmentAction, "--text");
     for (const role of roles) {
       expect(attachmentText).toMatch(new RegExp(`^${role}:$`, "m"));
@@ -453,28 +607,52 @@ describe("sendMessageIMessage receipts", () => {
       "```",
       "&#xE000;&#xE000;&lt;relevant_memories&gt;HIDDEN_ROLE_SWAP&lt;/relevant_memories&gt;&#xE000;&#xE000;:",
     ].join("\n");
-    // Full malformed-wrapper grammar stays in the sanitizer owner. Each
-    // transport still proves that the shared gate runs before dispatch.
-    for (const source of [
+    for (const malformed of [
+      "<system-reminder><system-reminder>inner</system-reminder>OUTER_PRIVATE_SECRET",
       "<system-reminder><previous_response>inner</previous_response>OUTER_PRIVATE_SECRET",
+      "<previous_response><system-reminder />OUTER_PRIVATE_SECRET",
       "<system-reminder>`</system-reminder>`OUTER_PRIVATE_SECRET",
+      "<system-reminder>`prefix </system-reminder> suffix`OUTER_PRIVATE_SECRET",
+      "<system-reminder>``prefix </system-reminder> suffix``OUTER_PRIVATE_SECRET",
+      "<system-reminder>`prefix </previous_response> suffix`OUTER_PRIVATE_SECRET",
+      "<previous_response>```xml\n</system-reminder>\n```\nOUTER_PRIVATE_SECRET",
       "<system-reminder><plaintext></system-reminder>OUTER_PRIVATE_SECRET",
+      "<previous_response><plaintext></previous_response>OUTER_PRIVATE_SECRET",
+      "<system-reminder><PLAINTEXT /></system-reminder>OUTER_PRIVATE_SECRET",
+      "<previous_response><PLAINTEXT /></previous_response>OUTER_PRIVATE_SECRET",
       "<system-reminder data-x=<previous_response>>OUTER_PRIVATE_SECRET",
+      "<system-reminder <previous_response>>OUTER_PRIVATE_SECRET",
+      "<previous_response data-x=<system-reminder>>OUTER_PRIVATE_SECRET",
+      "</previous_response data-x=<system-reminder>>OUTER_PRIVATE_SECRET",
     ]) {
-      for (const [route, reject] of [
-        ["rpc", () => sendMessage("chat_id:10", source, { config: cfg })],
-        ["monitor", () => deliver(source)],
-        ["channel", () => deliverThroughChannel(source)],
-        ["rich", () => rich(source)],
-        ...createRawTextActions(source, "visible edit"),
+      for (const [wrapper, source] of [
+        ["raw", malformed],
+        ["inline", `\`${malformed}\``],
+        ["fenced", `\`\`\`xml\n${malformed}\n\`\`\``],
+        ["wide-fenced", `\`\`\`\`xml\n${malformed}\n\`\`\`\``],
       ] as const) {
-        await expect(reject(), route).rejects.toThrow(
-          "iMessage outbound runtime markup is malformed",
-        );
+        const previousActionCount = readActions().length;
+        const previousRequestCount = readRequests().length;
+        for (const [route, sendMalformed] of [
+          ["rpc", () => sendMessageIMessage("chat_id:10", source, { config: cfg })],
+          ["monitor", () => deliver(source)],
+          ["channel", () => deliverThroughChannel(source)],
+          ["rich", () => rich(source)],
+          ...createRawTextActions(source, "visible edit"),
+        ] as const) {
+          await expect(
+            sendMalformed(),
+            JSON.stringify({ malformed, wrapper, route }),
+          ).rejects.toThrow("iMessage outbound runtime markup is malformed");
+        }
+        expect(readActions()).toHaveLength(previousActionCount);
+        expect(readRequests()).toHaveLength(previousRequestCount);
       }
     }
     for (const hidden of privateRuntimeBlocks) {
-      await expect(sendMessage("chat_id:10", hidden, { config: cfg })).rejects.toThrow(
+      const previousActionCount = readActions().length;
+      const previousRequestCount = readRequests().length;
+      await expect(sendMessageIMessage("chat_id:10", hidden, { config: cfg })).rejects.toThrow(
         "iMessage send requires text or media",
       );
       await expect(rich(hidden)).rejects.toThrow(
@@ -497,44 +675,82 @@ describe("sendMessageIMessage receipts", () => {
           "iMessage poll requires a non-empty question and options after sanitization",
         );
       }
+      expect(readActions()).toHaveLength(previousActionCount);
+      expect(readRequests()).toHaveLength(previousRequestCount);
     }
-    const rpc = (source: string) => sendMessage("chat_id:10", source, { config: cfg });
+    await expect(sendMessageIMessage("chat_id:10", "# user:", { config: cfg })).rejects.toThrow(
+      "iMessage send requires text or media",
+    );
+    await expect(
+      sendMessageIMessage("chat_id:10", ["```yaml", "user:", "```", forgedTokenEntity].join("\n"), {
+        config: cfg,
+      }),
+    ).rejects.toThrow("iMessage outbound role protection failed");
     const splitForgedToken = "&#xE000;&#xE000;" + entitySeparator + "&#xE000;&#xE000;";
-    for (const forged of [forgedTokenEntity, splitForgedToken]) {
-      await expect(rpc(["```yaml", "user:", "```", forged].join("\n"))).rejects.toThrow(
-        "iMessage outbound role protection failed",
-      );
-    }
-    for (const [send, source] of [
-      [rpc, roleTokenSwap],
-      [rich, roleTokenSwap],
-      [rich, [fencedYaml, forgedTokenEntity].join("\n")],
+    await expect(
+      sendMessageIMessage("chat_id:10", ["```yaml", "user:", "```", splitForgedToken].join("\n"), {
+        config: cfg,
+      }),
+    ).rejects.toThrow("iMessage outbound role protection failed");
+    await expect(
+      sendMessageIMessage("chat_id:10", "`<thinking>HIDDEN_RPC_INLINE_THINKING</thinking>`", {
+        config: cfg,
+      }),
+    ).rejects.toThrow("iMessage outbound hidden assistant content is not allowed");
+    await expect(sendMessageIMessage("chat_id:10", roleTokenSwap, { config: cfg })).rejects.toThrow(
+      "iMessage outbound role protection failed",
+    );
+    await expect(
+      sendMessageIMessage(
+        "chat_id:10",
+        nestMarkdownFences("<thinking>HIDDEN_RPC_DEEPLY_NESTED</thinking>", 4),
+        { config: cfg },
+      ),
+    ).rejects.toThrow("iMessage outbound hidden assistant content is not allowed");
+    await expect(rich([fencedYaml, forgedTokenEntity].join("\n"))).rejects.toThrow(
+      "iMessage outbound role protection failed",
+    );
+    await expect(
+      rich("`<relevant_memories>HIDDEN_ACTION_INLINE_MEMORY</relevant_memories>`"),
+    ).rejects.toThrow("iMessage outbound hidden assistant content is not allowed");
+    await expect(rich(roleTokenSwap)).rejects.toThrow("iMessage outbound role protection failed");
+    await expect(
+      rich(nestMarkdownFences("<relevant_memories>HIDDEN_RICH_NESTED</relevant_memories>", 4)),
+    ).rejects.toThrow("iMessage outbound hidden assistant content is not allowed");
+    await expect(rich("# user:")).rejects.toThrow(
+      "iMessage rich send requires text or an attachment after sanitization",
+    );
+    await expect(edit("user:")).rejects.toThrow(
+      "iMessage edit requires non-empty text after sanitization",
+    );
+    await expect(edit("safe edit", "system:")).rejects.toThrow(
+      "iMessage edit requires non-empty text after sanitization",
+    );
+    for (const [questionText, choices] of [
+      ["assistant:", ["first", "second"]],
+      ["safe question", ["first", "system:"]],
     ] as const) {
-      await expect(send(source)).rejects.toThrow("iMessage outbound role protection failed");
-    }
-    for (const [send, source] of [
-      [rpc, "`<thinking>HIDDEN_RPC_INLINE_THINKING</thinking>`"],
-      [rich, "`<relevant_memories>HIDDEN_ACTION_INLINE_MEMORY</relevant_memories>`"],
-      [rpc, nestMarkdownFences("<thinking>HIDDEN_RPC_DEEPLY_NESTED</thinking>", 4)],
-      [rich, nestMarkdownFences("<relevant_memories>HIDDEN_RICH_NESTED</relevant_memories>", 4)],
-    ] as const) {
-      await expect(send(source)).rejects.toThrow(
-        "iMessage outbound hidden assistant content is not allowed",
+      await expect(sendPoll(questionText, choices)).rejects.toThrow(
+        "iMessage poll requires a non-empty question and options after sanitization",
       );
     }
     await expect(sendPoll("Choose one", ["Allow", `Al${rawSeparator}low`])).rejects.toThrow(
       "iMessage poll options must remain distinct after sanitization",
     );
-    for (const [, reject] of createRawTextActions(roleTokenSwap, "visible replacement")) {
-      await expect(reject()).rejects.toThrow("iMessage outbound role protection failed");
+
+    for (const [, sendSwappedRole] of createRawTextActions(roleTokenSwap, "visible replacement")) {
+      await expect(sendSwappedRole()).rejects.toThrow("iMessage outbound role protection failed");
     }
+
+    // Keep each raw-text action's rejection boundary; the sanitizer owner covers
+    // the tag/wrapper cross-product and unterminated/recursive Markdown variants.
     for (const wrapped of [
       "```xml\n<thinking>HIDDEN_RAW_CODE_PAYLOAD</thinking>\n```",
       "`<relevant_memories>HIDDEN_RAW_CODE_PAYLOAD</relevant_memories>`",
       nestMarkdownFences(hiddenFunctionResponse, 3),
     ]) {
-      for (const [, reject] of createRawTextActions(wrapped, "visible replacement")) {
-        await expect(reject()).rejects.toThrow(
+      for (const [, sendHiddenCode] of createRawTextActions(wrapped, "visible replacement")) {
+        await expect(sendHiddenCode()).rejects.toThrow(
           "iMessage outbound hidden assistant content is not allowed",
         );
       }
@@ -560,7 +776,9 @@ describe("sendMessageIMessage receipts", () => {
       });
       let settled = false;
       vi.spyOn(clientRuntime, "createIMessageRpcClient").mockResolvedValue(rpc);
-      const observed = sendMessage("chat_id:42", "close proof", {}).then(
+      const observed = sendMessageIMessage("chat_id:42", "close proof", {
+        config: IMESSAGE_TEST_CFG,
+      }).then(
         (value) => {
           settled = true;
           return { value };
@@ -671,7 +889,7 @@ describe("sendMessageIMessage receipts", () => {
       .spyOn(clientRuntime, "createIMessageRpcClient")
       .mockResolvedValue(createClient({ guid: "unexpected-rpc" }));
     mockAttachment({ path: mediaPath, contentType: "application/pdf" });
-    const sending = sendMessage("chat_guid:fixture-chat", "", {
+    const sending = sendMessageIMessage("chat_guid:fixture-chat", "", {
       config: createSendConfig({ accounts: { default: { cliPath, dbPath } } }),
       mediaUrl: mediaPath,
     });
@@ -728,7 +946,8 @@ describe("sendMessageIMessage receipts", () => {
       });
     const client = createClient({ success: false, error: "recipient is not registered" });
     let settled = false;
-    const send = sendMessage("+15551234567", "hello", {
+    const send = sendMessageIMessage("+15551234567", "hello", {
+      config: IMESSAGE_TEST_CFG,
       client,
     }).catch((error: unknown) => {
       settled = true;
@@ -780,14 +999,18 @@ describe("sendMessageIMessage receipts", () => {
     vi.spyOn(remoteFile, "withIMessageRemoteFile").mockImplementation(
       async (params) => await params.use("/tmp/openclaw-imessage-safe/photo.png"),
     );
-    const rejection = await sendMessage("chat_id:42", "", {
+    const rejection = await sendMessageIMessage("chat_id:42", "", {
       config: createSendConfig({ accounts: { default: { remoteHost: "work@messages-b" } } }),
       mediaUrl: "/gateway/photo.png",
     }).catch((error: unknown) => error);
     expect(rejection).toBeInstanceOf(PlatformMessageNotDispatchedError);
     expect(rejection).toMatchObject({ message: rpcError.message, cause: rpcError });
     expect(getClientMocks(client).request).toHaveBeenCalledOnce();
-    expectRequest(client, { file: "/tmp/openclaw-imessage-safe/photo.png" }, "send.attachment");
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send.attachment",
+      expect.objectContaining({ file: "/tmp/openclaw-imessage-safe/photo.png" }),
+      expect.any(Object),
+    );
     expect(getClientMocks(client).stop).toHaveBeenCalledOnce();
   });
 
@@ -797,7 +1020,8 @@ describe("sendMessageIMessage receipts", () => {
     });
     const client = createRejectingClient(rpcError);
 
-    const rejection = await sendMessage("chat_id:42", "hello", {
+    const rejection = await sendMessageIMessage("chat_id:42", "hello", {
+      config: IMESSAGE_TEST_CFG,
       client,
     }).catch((error: unknown) => error);
 
@@ -809,7 +1033,7 @@ describe("sendMessageIMessage receipts", () => {
     const client = createClient({ guid: "p:0/plain-guid" });
     const runCliJson = mockCliSend().mockResolvedValueOnce({ messageId: "p:0/plain-guid" });
     mockAttachment({ path: "/tmp/image.png", contentType: "image/png" });
-    const result = await sendMessage("chat_guid:chat-1", "", {
+    const result = await sendMessageIMessage("chat_guid:chat-1", "", {
       config: createSendConfig({ actions: { reply: false }, accounts: { default: {} } }),
       client,
       replyToId: "p:0/reply-guid",
@@ -832,7 +1056,7 @@ describe("sendMessageIMessage receipts", () => {
     });
 
     await expect(
-      sendMessage("chat_id:42", "caption", {
+      sendMessageIMessage("chat_id:42", "caption", {
         config: createSendConfig({
           remoteHost: "qa@example.invalid",
           accounts: { default: {} },
@@ -874,7 +1098,7 @@ describe("sendMessageIMessage receipts", () => {
         timestamp: Date.now(),
       });
       await expect(
-        sendMessage(target, "hello", {
+        sendMessageIMessage(target, "hello", {
           config: createSendConfig({ remoteHost: "qa@example.invalid", accounts: { default: {} } }),
           client,
           service,
@@ -882,7 +1106,11 @@ describe("sendMessageIMessage receipts", () => {
           replyToId,
         }),
       ).resolves.toMatchObject({ messageId: "p:0/imsg-bound" });
-      expectRequest(client, { ...rpcTarget, reply_to: replyToId });
+      expect(getClientMocks(client).request).toHaveBeenCalledWith(
+        "send",
+        expect.objectContaining({ ...rpcTarget, reply_to: replyToId }),
+        expect.any(Object),
+      );
     },
   );
 
@@ -897,7 +1125,7 @@ describe("sendMessageIMessage receipts", () => {
     });
 
     await expect(
-      sendMessage("+15550004567", "hello", {
+      sendMessageIMessage("+15550004567", "hello", {
         config: createSendConfig({
           remoteHost: "qa@example.invalid",
           accounts: { default: {} },
@@ -917,7 +1145,7 @@ describe("sendMessageIMessage receipts", () => {
       .spyOn(clientRuntime, "createIMessageRpcClient")
       .mockResolvedValue(client);
 
-    await sendMessage("chat_id:42", "hello", {
+    await sendMessageIMessage("chat_id:42", "hello", {
       config: createSendConfig({
         cliPath: "/gateway/default-imsg",
         dbPath: "/Users/default/Library/Messages/chat.db",
@@ -957,7 +1185,7 @@ describe("sendMessageIMessage receipts", () => {
       );
     mockAttachment({ path: "/gateway/photo.png" });
 
-    const result = await sendMessage("imessage:+15550004567", "", {
+    const result = await sendMessageIMessage("imessage:+15550004567", "", {
       config: createSendConfig({
         accounts: {
           default: {
@@ -974,11 +1202,15 @@ describe("sendMessageIMessage receipts", () => {
         localPath: "/gateway/photo.png",
       }),
     );
-    expectRequest(client, {
-      to: "+15550004567",
-      file: "/tmp/openclaw-imessage-safe/photo.png",
-      service: "imessage",
-    });
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({
+        to: "+15550004567",
+        file: "/tmp/openclaw-imessage-safe/photo.png",
+        service: "imessage",
+      }),
+      expect.any(Object),
+    );
     expect(getClientMocks(client).request).not.toHaveBeenCalledWith(
       "send.attachment",
       expect.anything(),
@@ -1006,7 +1238,7 @@ describe("sendMessageIMessage receipts", () => {
     mockAttachment({ path: "/gateway/photo.png" });
 
     await expect(
-      sendMessage("chat_id:42", "", {
+      sendMessageIMessage("chat_id:42", "", {
         config: createSendConfig({ cliPath }),
         mediaUrl: "/gateway/photo.png",
       }),
@@ -1039,7 +1271,7 @@ describe("sendMessageIMessage receipts", () => {
       stop: vi.fn(async () => {}),
     } as unknown as IMessageRpcClient;
 
-    const send = sendMessage("chat_id:42", "hello", {
+    const send = sendMessageIMessage("chat_id:42", "hello", {
       config: createSendConfig({
         ...IMESSAGE_TEST_CFG.channels.imessage,
         probeTimeoutMs: 10_000,
@@ -1064,7 +1296,8 @@ describe("sendMessageIMessage receipts", () => {
     const runCliJson = mockCliSend().mockResolvedValueOnce({ messageGuid: "p:0/voice-guid" });
     mockAttachment({ path: "/tmp/voice.caf", contentType: "audio/x-caf" });
 
-    const result = await sendMessage("chat_guid:chat-1", "", {
+    const result = await sendMessageIMessage("chat_guid:chat-1", "", {
+      config: IMESSAGE_TEST_CFG,
       client,
       mediaUrl: "/tmp/voice.caf",
       audioAsVoice: true,
@@ -1103,7 +1336,7 @@ describe("sendMessageIMessage receipts", () => {
     mockAttachment({ path: "/tmp/voice.caf", contentType: "audio/x-caf" });
 
     await expect(
-      sendMessage("chat_guid:chat-1", "", {
+      sendMessageIMessage("chat_guid:chat-1", "", {
         config: createSendConfig({ sendTransport: "applescript" }),
         client,
         conversationReadOrigin: "direct-operator",
@@ -1145,18 +1378,23 @@ describe("sendMessageIMessage receipts", () => {
       const runCliJson = mockCliSend().mockRejectedValueOnce(new Error(error));
       mockAttachment({ path: "/tmp/image.png", contentType: "image/png" });
 
-      const result = await sendMessage(target, "", {
+      const result = await sendMessageIMessage(target, "", {
+        config: IMESSAGE_TEST_CFG,
         client,
         mediaUrl: "/tmp/image.png",
       });
 
       expect(result.messageId).toBe("12345");
       expect(runCliJson.mock.calls).toEqual([[command]]);
-      expectRequest(client, {
-        ...rpcTarget,
-        file: "/tmp/image.png",
-        text: "",
-      });
+      expect(client["request"]).toHaveBeenCalledWith(
+        "send",
+        expect.objectContaining({
+          ...rpcTarget,
+          file: "/tmp/image.png",
+          text: "",
+        }),
+        expect.any(Object),
+      );
     },
   );
 
@@ -1167,7 +1405,7 @@ describe("sendMessageIMessage receipts", () => {
     });
     mockAttachment({ path: "/tmp/image.png", contentType: "image/png" });
 
-    await sendMessage("imessage:+15550004567", "", {
+    await sendMessageIMessage("imessage:+15550004567", "", {
       config: createSendConfig({ sendTransport: "bridge" }),
       client,
       mediaUrl: "/tmp/image.png",
@@ -1205,7 +1443,8 @@ describe("sendMessageIMessage receipts", () => {
       stop: vi.fn(async () => {}),
     } as unknown as IMessageRpcClient;
 
-    const result = await sendMessage("chat_id:42", "caption", {
+    const result = await sendMessageIMessage("chat_id:42", "caption", {
+      config: IMESSAGE_TEST_CFG,
       client,
       conversationReadOrigin: "direct-operator",
       replyToId: "p:0/thread-root",
@@ -1232,7 +1471,8 @@ describe("sendMessageIMessage receipts", () => {
 
     let observedError: unknown;
     try {
-      await sendMessage("+15550004567", "caption", {
+      await sendMessageIMessage("+15550004567", "caption", {
+        config: IMESSAGE_TEST_CFG,
         client,
         mediaUrl: "/tmp/image.png",
         onDeliveryResult,
@@ -1287,7 +1527,8 @@ describe("sendMessageIMessage receipts", () => {
     });
 
     await expect(
-      sendMessage("+15550004567", "caption", {
+      sendMessageIMessage("+15550004567", "caption", {
+        config: IMESSAGE_TEST_CFG,
         client,
         mediaUrl: "/tmp/image.png",
         onDeliveryResult,
@@ -1334,11 +1575,16 @@ describe("sendMessageIMessage receipts", () => {
         .mockResolvedValue(client);
       mockCliSend().mockResolvedValueOnce(attachment);
       mockAttachment({ path: "/tmp/image.png", contentType: "image/png" });
-      const result = await sendMessage(target, "caption", {
+      const result = await sendMessageIMessage(target, "caption", {
+        config: IMESSAGE_TEST_CFG,
         ...(ownsClient ? {} : { client }),
         mediaUrl: "/tmp/image.png",
       });
-      expectRequest(client, { ...rpcTarget, text: "caption" });
+      expect(getClientMocks(client).request).toHaveBeenCalledWith(
+        "send",
+        expect.objectContaining({ ...rpcTarget, text: "caption" }),
+        expect.any(Object),
+      );
       expect(createClientImpl).toHaveBeenCalledTimes(ownsClient ? 1 : 0);
       expect(getClientMocks(client).stop).toHaveBeenCalledTimes(ownsClient ? 1 : 0);
       expect(result.messageId).toBe(mediaId ?? "p:0/caption-guid");
@@ -1365,7 +1611,8 @@ describe("sendMessageIMessage receipts", () => {
       stop: vi.fn(async () => {}),
     } as unknown as IMessageRpcClient;
 
-    const send = sendMessage("+15551234567", "slow hello", {
+    const send = sendMessageIMessage("+15551234567", "slow hello", {
+      config: IMESSAGE_TEST_CFG,
       client,
     });
     await requestStarted.promise;
@@ -1395,7 +1642,8 @@ describe("sendMessageIMessage receipts", () => {
       return persisted.promise;
     });
     let completed = false;
-    const send = sendMessage("chat_id:42", createApprovalText(), {
+    const send = sendMessageIMessage("chat_id:42", createApprovalText(), {
+      config: IMESSAGE_TEST_CFG,
       client: createClient({ guid: "p:0/durable-approval" }),
       dbPath: openClawState.path("synthetic-chat.db"),
       approvalPrompt: createApprovalPrompt(),
@@ -1435,7 +1683,8 @@ describe("sendMessageIMessage receipts", () => {
       .mockImplementation(async (_dbPath, use) => await use(readGuid));
     const approvalText = createApprovalText("approval-default");
 
-    const result = await sendMessage("chat_id:42", approvalText, {
+    const result = await sendMessageIMessage("chat_id:42", approvalText, {
+      config: IMESSAGE_TEST_CFG,
       approvalPrompt: createApprovalPrompt("approval-default"),
       client,
       cliPath,
@@ -1467,7 +1716,8 @@ describe("sendMessageIMessage receipts", () => {
       .spyOn(chatDb, "withIMessageReceiptGuidReader")
       .mockRejectedValue(new Error("unexpected Messages database access"));
     const rejection = expect(
-      sendMessage("chat_id:42", createApprovalText("approval-remote"), {
+      sendMessageIMessage("chat_id:42", createApprovalText("approval-remote"), {
+        config: IMESSAGE_TEST_CFG,
         approvalPrompt: createApprovalPrompt("approval-remote"),
         client,
         cliPath,
@@ -1492,7 +1742,8 @@ describe("sendMessageIMessage receipts", () => {
       .mockImplementation(async (_dbPath, use) => await use(readGuid));
     const approvalText = createApprovalText();
 
-    const result = await sendMessage("chat_id:42", approvalText, {
+    const result = await sendMessageIMessage("chat_id:42", approvalText, {
+      config: IMESSAGE_TEST_CFG,
       approvalPrompt: createApprovalPrompt(),
       client,
       dbPath,
@@ -1528,7 +1779,8 @@ describe("sendMessageIMessage receipts", () => {
     const client = createClient({ status: "sent" });
     const approvalText = createApprovalText();
 
-    const result = await sendMessage("chat_id:42", approvalText, {
+    const result = await sendMessageIMessage("chat_id:42", approvalText, {
+      config: IMESSAGE_TEST_CFG,
       approvalPrompt: createApprovalPrompt(),
       client,
     });

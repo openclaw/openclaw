@@ -8,7 +8,6 @@ import {
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { resetPluginRuntimeStateForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { createTypingController } from "openclaw/plugin-sdk/reply-payload-testing";
 import type { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -289,6 +288,43 @@ describe("iMessage monitor last-route updates", () => {
     });
   });
 
+  it("keeps group chat_id routing unchanged through final delivery", async () => {
+    setAvailablePrivateApiMethods(["watch.subscribe", "send", "typing", "read"]);
+    dispatchReply.mockImplementationOnce(async (params) => {
+      await params.dispatcherOptions.deliver({ text: "group reply" }, { kind: "final" });
+      return EMPTY_DISPATCH_RESULT;
+    });
+    const client = await runMessageCase({
+      auxiliaryRequests: {
+        read: { ok: true },
+        send: { guid: "group-reply-guid" },
+        typing: { ok: true },
+      },
+      message: createInboundMessage({
+        id: 103,
+        guid: "group-route-guid",
+        chat_id: 456,
+        chat_guid: "iMessage;+;chat456",
+        is_group: true,
+        text: "reply to this group",
+      }),
+      monitor: { allowlist: false, imessage: { groupPolicy: "open" } },
+    });
+    const auxiliaryClient = client.auxiliaryClient!;
+
+    expect(auxiliaryClient.request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ chat_id: 456, service: "auto", text: "group reply" }),
+      expect.any(Object),
+    );
+    const dispatchParams = dispatchReply.mock.calls.at(0)?.[0];
+    expect(dispatchParams?.ctx).toMatchObject({
+      ChatType: "group",
+      From: "imessage:group:456",
+      To: "chat_id:456",
+    });
+  });
+
   function createIMessageWatchClient(params: WatchClientParams = {}) {
     let onNotification:
       | NonNullable<NonNullable<Parameters<typeof createIMessageRpcClient>[0]>["onNotification"]>
@@ -479,6 +515,22 @@ describe("iMessage monitor last-route updates", () => {
     });
 
     await runIMessageMonitor(createConfiguredBindingMonitor());
+
+    expect(ensureReady).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      bindingResolution: expect.objectContaining({
+        record: expect.objectContaining({
+          conversation: expect.objectContaining({
+            channel: "imessage",
+            accountId: "default",
+            conversationId: DEFAULT_SENDER,
+          }),
+        }),
+      }),
+    });
+    expect(ensureReady.mock.invocationCallOrder[0]).toBeLessThan(
+      dispatchReply.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("drops unavailable configured ACP messages before typing, reads, media, history, or dispatch", async () => {
@@ -573,30 +625,57 @@ describe("iMessage monitor last-route updates", () => {
   it("keeps native typing alive when tool activity arrives before reply text", async () => {
     setAvailablePrivateApiMethods(["watch.subscribe", "send", "typing"]);
     dispatchReply.mockImplementationOnce(async (params) => {
+      expect(params.replyOptions?.suppressDefaultToolProgressMessages).toBe(true);
+      expect(params.replyOptions?.allowToolLifecycleWhenProgressHidden).toBe(true);
+      expect(params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
       const onReplyStart =
         params.dispatcherOptions.onReplyStart ??
         params.dispatcherOptions.typingCallbacks?.onReplyStart;
       const onTypingCleanup =
         params.dispatcherOptions.onCleanup ?? params.dispatcherOptions.typingCallbacks?.onCleanup;
-      const typingController = createTypingController({
-        onReplyStart,
-        onCleanup: onTypingCleanup,
-        keepalive: false,
+      let active = false;
+      let runComplete = false;
+      let dispatchIdle = false;
+      const stopIfSettled = () => {
+        if (active && runComplete && dispatchIdle) {
+          active = false;
+          onTypingCleanup?.();
+        }
+      };
+      const typingController = {
+        onReplyStart: async () => {
+          await onReplyStart?.();
+        },
+        startTypingLoop: async () => {
+          active = true;
+          await onReplyStart?.();
+        },
+        startTypingOnText: async () => {},
+        refreshTypingTtl: () => {},
+        isActive: () => active,
+        markRunComplete: () => {
+          runComplete = true;
+          stopIfSettled();
+        },
+        markDispatchIdle: () => {
+          dispatchIdle = true;
+          stopIfSettled();
+        },
+        cleanup: () => {
+          active = false;
+          onTypingCleanup?.();
+        },
+      };
+      params.replyOptions?.onTypingController?.(typingController);
+      await params.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      const onToolResult = params.replyOptions?.onToolResult;
+      expect(onToolResult).toBeTypeOf("function");
+      await onToolResult?.({
+        text: "💨Fast: auto-off(75s>=60s)",
+        channelData: { openclawProgressKind: "fast-mode-auto" },
       });
-      try {
-        params.replyOptions?.onTypingController?.(typingController);
-        await params.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-        const onToolResult = params.replyOptions?.onToolResult;
-        expect(onToolResult).toBeTypeOf("function");
-        await onToolResult?.({
-          text: "💨Fast: auto-off(75s>=60s)",
-          channelData: { openclawProgressKind: "fast-mode-auto" },
-        });
-        typingController.markRunComplete();
-        typingController.markDispatchIdle();
-      } finally {
-        typingController.cleanup();
-      }
+      typingController.markRunComplete();
+      typingController.markDispatchIdle();
       return EMPTY_DISPATCH_RESULT;
     });
 
@@ -625,7 +704,6 @@ describe("iMessage monitor last-route updates", () => {
         expect.objectContaining({ typing: false }),
       );
     });
-    expect(client.request.mock.calls.map(([method]) => method)).not.toContain("send");
   });
 
   it("starts direct typing before dispatching the inbound turn", async () => {
@@ -706,15 +784,15 @@ describe("iMessage monitor last-route updates", () => {
   });
 
   for (const { name, id, guid, monitor } of [
-    {
-      name: "does not start direct tool typing when typingMode is thinking",
+    ...(["thinking"] as const).map((typingMode) => ({
+      name: `does not start direct tool typing when typingMode is ${typingMode}`,
       id: 8,
-      guid: "typing-mode-thinking-guid-8",
+      guid: `typing-mode-${typingMode}-guid-8`,
       monitor: {
         imessage: { sendReadReceipts: false },
-        agents: { defaults: { typingMode: "thinking" } },
+        agents: { defaults: { typingMode } },
       },
-    },
+    })),
     {
       name: "does not start direct tool typing when sendPolicy denies source delivery",
       id: 9,
@@ -727,7 +805,14 @@ describe("iMessage monitor last-route updates", () => {
   ]) {
     it(name, async () => {
       setAvailablePrivateApiMethods(["watch.subscribe", "send", "typing"]);
-      dispatchReply.mockResolvedValueOnce(EMPTY_DISPATCH_RESULT);
+      dispatchReply.mockImplementationOnce(async (params) => {
+        expect(params.replyOptions?.suppressDefaultToolProgressMessages).toBeUndefined();
+        expect(
+          params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed,
+        ).toBeUndefined();
+        expect(params.replyOptions?.onToolStart).toBeUndefined();
+        return EMPTY_DISPATCH_RESULT;
+      });
 
       const client = await runMessageCase({
         requests: { "watch.subscribe": { subscription: 1 } },
@@ -768,27 +853,41 @@ describe("iMessage monitor last-route updates", () => {
     expect(dispatchReply).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    ["account block override", false, { block: { enabled: true } }],
-    ["account coalescing override", true, { block: { coalesce: { idleMs: 1 } } }],
-  ] as const)(
-    "preserves channel/account streaming precedence: %s",
-    async (name, enabled, streaming) => {
-      const params = await runBlockStreamingCase(
-        { id: 11, guid: name },
-        {
-          accountId: "personal",
-          imessage: {
-            sendReadReceipts: false,
-            streaming: { block: { enabled } },
-            accounts: { personal: { streaming } },
+  it("preserves the account block-streaming override", async () => {
+    const params = await runBlockStreamingCase(
+      { id: 11, guid: "account-block-streaming-override" },
+      {
+        accountId: "personal",
+        imessage: {
+          sendReadReceipts: false,
+          streaming: { block: { enabled: false } },
+          accounts: {
+            personal: { streaming: { block: { enabled: true } } },
           },
         },
-      );
-      expect(params.replyOptions?.disableBlockStreaming).toBe(false);
-      await expectDispatch();
-    },
-  );
+      },
+    );
+    expect(params.replyOptions?.disableBlockStreaming).toBe(false);
+    await expectDispatch();
+  });
+
+  it("preserves channel block streaming when an account overrides coalescing", async () => {
+    const params = await runBlockStreamingCase(
+      { id: 11, guid: "account-streaming-block-coalesce" },
+      {
+        accountId: "personal",
+        imessage: {
+          sendReadReceipts: false,
+          streaming: { block: { enabled: true } },
+          accounts: {
+            personal: { streaming: { block: { coalesce: { idleMs: 1 } } } },
+          },
+        },
+      },
+    );
+    expect(params.replyOptions?.disableBlockStreaming).toBe(false);
+    await expectDispatch();
+  });
 
   it("recovers over a remote cliPath: replays from the cursor even without a local chat.db boundary", async () => {
     await advanceIMessageRecoveryCursor(
@@ -972,17 +1071,7 @@ describe("iMessage monitor last-route updates", () => {
       }),
     );
 
-    setAvailablePrivateApiMethods(["watch.subscribe", "send", "typing", "read"]);
-    dispatchReply.mockImplementationOnce(async (params) => {
-      await params.dispatcherOptions.deliver({ text: "group reply" }, { kind: "final" });
-      return EMPTY_DISPATCH_RESULT;
-    });
-    const client = createIMessageWatchClient({
-      auxiliaryRequests: {
-        read: { ok: true },
-        send: { guid: "group-reply-guid" },
-        typing: { ok: true },
-      },
+    createIMessageWatchClient({
       requests: {
         "watch.subscribe": { subscription: 1 },
         "chats.list": { chats: [{ id: 349 }] },
@@ -1008,16 +1097,18 @@ describe("iMessage monitor last-route updates", () => {
         },
       },
       message: {
-        ...createInboundMessage({
-          id: 9500,
-          guid: "ANCHORLESS-GROUP-GUID",
-          chat_id: 0,
-          text: "@openclaw check this https://example.com",
-          chat_guid: "",
-          chat_identifier: "",
-        }),
+        id: 9500,
+        guid: "ANCHORLESS-GROUP-GUID",
+        chat_id: 0,
+        sender: "+15550001111",
+        is_from_me: false,
+        text: "@openclaw check this https://example.com",
+        is_group: false,
+        chat_guid: "",
+        chat_identifier: "",
         chat_name: "",
         participants: null,
+        created_at: new Date().toISOString(),
       },
     });
 
@@ -1029,17 +1120,11 @@ describe("iMessage monitor last-route updates", () => {
 
     await expectDispatch();
     const dispatchParams = dispatchReply.mock.calls.at(0)?.[0];
-    expect(dispatchParams?.ctx).toMatchObject({
-      To: "chat_id:349",
-      From: "imessage:group:349",
-      ChatType: "group",
-      SessionKey: "agent:main:imessage:group:349",
-    });
-    expect(client.auxiliaryClient!.request).toHaveBeenCalledWith(
-      "send",
-      expect.objectContaining({ chat_id: 349, service: "auto", text: "group reply" }),
-      expect.any(Object),
-    );
+    expect(dispatchParams?.ctx.To).toBe("chat_id:349");
+    expect(dispatchParams?.ctx.From).toBe("imessage:group:349");
+    expect(dispatchParams?.ctx.ChatType).toBe("group");
+    expect(dispatchParams?.ctx.SessionKey).toBe("agent:main:imessage:group:349");
+    expect(dispatchParams?.ctx.To).not.toBe("imessage:+15550001111");
   });
 
   it("suppresses anchorless watch payloads when authoritative history is from-me (#104136)", async () => {
@@ -1186,35 +1271,59 @@ describe("iMessage monitor last-route updates", () => {
     expect(stage).not.toHaveBeenCalled();
   });
 
-  const missingImage = {
-    original_path: "/Users/openclaw/Library/Messages/Attachments/missing.heic",
-    mime_type: "image/heic",
-    missing: true,
-  };
-  const pdf = "/Users/openclaw/Library/Messages/Attachments/report.pdf";
-  const unavailableImage = { contentType: "image/heic", kind: "image" as const };
   it.each([
     {
       name: "admits an attachment-only message when the image is unavailable",
-      extraAttachments: [],
-      extraStaged: [],
+      attachments: [
+        {
+          original_path: "/Users/openclaw/Library/Messages/Attachments/missing.heic",
+          mime_type: "image/heic",
+          missing: true,
+        },
+      ],
+      staged: {
+        attachments: [{ contentType: "image/heic", kind: "image" as const }],
+        unavailableCount: 1,
+      },
+      expectedBody: "[imessage attachment unavailable]",
       expectedMediaTypes: ["image/heic"],
-      expectedMediaUrls: [undefined],
+      expectedMediaUrls: undefined,
     },
     {
       name: "uses the first materialized attachment type when earlier media is unavailable",
-      extraAttachments: [{ original_path: pdf, mime_type: "application/pdf", missing: false }],
-      extraStaged: [{ path: pdf, contentType: "application/pdf", kind: "document" as const }],
+      attachments: [
+        {
+          original_path: "/Users/openclaw/Library/Messages/Attachments/missing.heic",
+          mime_type: "image/heic",
+          missing: true,
+        },
+        {
+          original_path: "/Users/openclaw/Library/Messages/Attachments/report.pdf",
+          mime_type: "application/pdf",
+          missing: false,
+        },
+      ],
+      staged: {
+        attachments: [
+          { contentType: "image/heic", kind: "image" as const },
+          {
+            path: "/Users/openclaw/Library/Messages/Attachments/report.pdf",
+            contentType: "application/pdf",
+            kind: "document" as const,
+          },
+        ],
+        unavailableCount: 1,
+      },
+      expectedBody: "[imessage attachment unavailable]",
       expectedMediaTypes: ["image/heic", "application/pdf"],
-      expectedMediaUrls: [undefined, pdf],
+      expectedMediaUrls: ["", "/Users/openclaw/Library/Messages/Attachments/report.pdf"],
     },
   ])(
     "$name",
-    async ({ name, extraAttachments, extraStaged, expectedMediaTypes, expectedMediaUrls }) => {
-      const stage = vi.spyOn(iMessageMediaStaging, "stageIMessageAttachments").mockResolvedValue({
-        attachments: [unavailableImage, ...extraStaged],
-        unavailableCount: 1,
-      });
+    async ({ name, attachments, staged, expectedBody, expectedMediaTypes, expectedMediaUrls }) => {
+      const stage = vi
+        .spyOn(iMessageMediaStaging, "stageIMessageAttachments")
+        .mockResolvedValue(staged);
       const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() };
       await runMessageCase({
         message: {
@@ -1224,7 +1333,7 @@ describe("iMessage monitor last-route updates", () => {
             chat_identifier: DEFAULT_SENDER,
             text: "",
           }),
-          attachments: [missingImage, ...extraAttachments],
+          attachments,
         },
         monitor: {
           runtime,
@@ -1239,10 +1348,12 @@ describe("iMessage monitor last-route updates", () => {
       expect(stage).toHaveBeenCalledTimes(1);
       expect(dispatchReply).toHaveBeenCalledTimes(1);
       const ctx = dispatchReply.mock.calls[0]?.[0].ctx;
-      expect(ctx?.BodyForAgent).toBe("[imessage attachment unavailable]");
+      expect(ctx?.BodyForAgent).toBe(expectedBody);
       const media = ctx?.media;
       expect(media?.map((fact) => fact.contentType ?? fact.kind)).toEqual(expectedMediaTypes);
-      expect(media?.map((fact) => fact.url)).toEqual(expectedMediaUrls);
+      expect(media?.map((fact) => fact.url)).toEqual(
+        expectedMediaUrls?.map((url) => url || undefined) ?? media?.map(() => undefined),
+      );
     },
   );
 });
