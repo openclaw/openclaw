@@ -801,17 +801,15 @@ describe("Systems workspace", () => {
     expect(reads()).toBe(initialReads + 1);
 
     environments = [host, { ...cloud("destroying"), status: "stopping" }];
-    place(
-      {
-        state: "reclaimed",
-        generation: 1,
-        createdAtMs: 1,
-        updatedAtMs: 3,
-        stateChangedAtMs: 3,
-        environmentId: "worker:cloud",
-      },
-      "reclaim",
-    );
+    const { generation, createdAtMs, environmentId } = active;
+    const reclaimed = {
+      generation,
+      createdAtMs,
+      environmentId,
+      updatedAtMs: 3,
+      stateChangedAtMs: 3,
+    };
+    place({ ...reclaimed, state: "reclaimed" }, "reclaim");
     await waitForSolid(() => expect(sidebar.textContent).toContain("Stopping"));
     expect(reads()).toBe(initialReads + 2);
     // Teardown completes without another session event; the page tick re-reads it.
