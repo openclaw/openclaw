@@ -493,8 +493,8 @@ try {
           result.ownerSessionCounts.reduce((total, owner) => total + owner.running, 0),
           new Set(
             active
-              .filter((run) => run.execution?.status === "running")
-              .map((run) => run.requesterSessionKey),
+              .filter((subagentRun) => subagentRun.execution?.status === "running")
+              .map((subagentRun) => subagentRun.requesterSessionKey),
           ).size,
         );
       }
