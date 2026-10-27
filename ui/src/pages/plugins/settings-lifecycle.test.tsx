@@ -100,43 +100,34 @@ it("does not offer enablement or Settings for an uninstalled plugin", () => {
   expect(find('[aria-label="Enable Workboard"], [aria-label="Settings"]')).toBeNull();
 });
 
-it.each([
-  { inventory: true, inspected: false, visible: false },
-  { inventory: false, inspected: true, visible: true },
-  { inventory: true, inspected: undefined, visible: true },
-  { inventory: undefined, inspected: undefined, visible: false },
-])(
-  "uses inspection $inspected over inventory $inventory for native UI disclosure",
-  ({ inventory, inspected, visible }) => {
-    const { container } = mount({
-      result: createResult(createPlugin({ hasNativeUi: inventory })),
-      inspection: createInspectResult({
-        overview: {
-          hasNativeUi: inspected,
-          capabilities: { providers: [], channels: [], contracts: {}, ui: ["page"] },
-        },
-      }),
+it("updates native UI disclosure from inventory and inspection across enablement", () => {
+  const { container, find, update } = mount({});
+  expect(find(".plugin-native-ui-disclosure")).toBeNull();
+  for (const [inventory, inspected, enabled, visible] of [
+    [true, null, false, true],
+    [true, null, true, true],
+    [true, undefined, true, true],
+    [true, false, true, false],
+    [false, true, true, true],
+    [undefined, undefined, true, false],
+  ] as const) {
+    update({
+      result: createResult(
+        createPlugin({ hasNativeUi: inventory, enabled, state: enabled ? "enabled" : "disabled" }),
+      ),
+      inspection:
+        inspected === null
+          ? null
+          : createInspectResult({
+              overview: {
+                hasNativeUi: inspected,
+                capabilities: { providers: [], channels: [], contracts: {}, ui: ["page"] },
+              },
+            }),
     });
-    const disclosure = container.querySelector(".plugin-native-ui-disclosure");
-    expect(Boolean(disclosure)).toBe(visible);
-  },
-);
-
-it("retains the disclosure as inventory enables the plugin and inspection arrives", () => {
-  const { container, update } = mount({
-    result: createResult(createPlugin({ hasNativeUi: true })),
-    inspection: null,
-  });
-  const disclosure = () => container.querySelector(".plugin-native-ui-disclosure");
-  expect(disclosure()?.textContent).toContain("Only enable plugins you trust.");
-  expect(container.querySelector('[aria-label="Enable Workboard"]')).not.toBeNull();
-  update({
-    result: createResult(createPlugin({ hasNativeUi: true, enabled: true, state: "enabled" })),
-  });
-  expect(container.querySelector('[aria-label="Disable Workboard"]')).not.toBeNull();
-  expect(disclosure()?.textContent).toContain("Only enable plugins you trust.");
-  update({ inspection: createInspectResult({ overview: { hasNativeUi: true } }) });
-  expect(disclosure()?.textContent).toContain("Only enable plugins you trust.");
+    expect(Boolean(container.querySelector(".plugin-native-ui-disclosure"))).toBe(visible);
+    expect(find(`[aria-label="${enabled ? "Disable" : "Enable"} Workboard"]`)).not.toBeNull();
+  }
 });
 
 it("retains inspection retry focus and uses the current error and callback", async () => {

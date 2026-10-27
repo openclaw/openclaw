@@ -12,7 +12,7 @@ import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
-import { automaticallyCleanUpdateRecovery } from "./automatic-cleanup.js";
+import { automaticallyCleanUpdateRecovery, failedBeforeActivation } from "./automatic-cleanup.js";
 import { prepareResult, printResult } from "./progress.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
@@ -732,7 +732,9 @@ export async function prepareUpdateCommandTerminalResult(
       params.opts.run &&
       !params.opts.dryRun &&
       (result.status === "ok" ||
-        (result.status === "skipped" && result.reason === "already-current"))
+        (result.status === "skipped" && result.reason === "already-current") ||
+        (result.status === "error" &&
+          failedBeforeActivation(params.opts.run.runId, params.opts.run.env)))
         ? await automaticallyCleanUpdateRecovery(params.opts.run.runId, params.opts.run.env)
         : undefined;
     emit(cleanup ? [cleanup] : []);

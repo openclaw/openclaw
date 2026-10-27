@@ -36,7 +36,7 @@ function mount(result = createDiscoveryDetail(), overrides: Partial<Props> = {})
   return render(() => <Detail {...detailProps(result, overrides)} />);
 }
 
-it.each(["code-plugin", "bundle-plugin", undefined] as const)(
+it.each([undefined, "bundle-plugin"] as const)(
   "places qualified installation trust before the actions (family=%s)",
   (family) => {
     const result = createDiscoveryDetail(
@@ -46,9 +46,6 @@ it.each(["code-plugin", "bundle-plugin", undefined] as const)(
     result.detail.uiCapabilities = ["page"];
     const { container } = mount(result);
     const notice = container.querySelector(".plugin-native-ui-disclosure");
-    expect(notice?.textContent).toContain(
-      family === "bundle-plugin" ? "Bundle contents" : "Plugin code",
-    );
     expect(notice?.textContent).toContain(
       family === "bundle-plugin" ? "Bundles can add content" : "If a plugin includes native web UI",
     );

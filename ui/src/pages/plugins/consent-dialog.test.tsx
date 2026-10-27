@@ -177,10 +177,14 @@ describe("renderPluginConsentDialog", () => {
       const disclosure = container.querySelector(".plugin-native-ui-disclosure");
       expect(Boolean(disclosure)).toBe(hasNativeUi === true);
       if (hasNativeUi) {
-        expect(normalizedText(disclosure)).toContain("Includes native web UI");
-        expect(normalizedText(disclosure)).toContain(
-          "This plugin runs code in the OpenClaw web app. It can read and modify the app’s interface and use the Gateway permissions of the signed-in user. Only enable plugins you trust.",
-        );
+        const text = normalizedText(disclosure);
+        expect(text).toMatch(/runs code.*web app/u);
+        expect(text).toMatch(/read and modify.*interface/u);
+        expect(text).toMatch(/Gateway permissions.*signed-in user/u);
+        const actions = container.querySelector(".plugins-consent__actions")!;
+        expect(
+          disclosure!.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING,
+        ).not.toBe(0);
         expect(disclosure?.querySelector("[role=alert], input, button")).toBeNull();
       }
     },

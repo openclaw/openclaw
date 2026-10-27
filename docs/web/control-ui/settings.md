@@ -443,6 +443,11 @@ visible at your reading position while the schema refreshes. Form and Setup
 controls cannot be edited until that refresh finishes. The first load still
 shows **Loading schema…** until a schema is available.
 
+In an agent's **Tools** tab, expand a tool group to browse its tools and policy
+details. Browser Find searches group summaries and tools in expanded groups.
+Selecting a tool in **Tool preview** opens its group and focuses its details.
+Collapsing a group closes its tool details.
+
 In an agent's **Files** editor, **Add file** opens a missing optional workspace
 document. Saving creates it only if it is still missing. If another editor or
 process creates it first, the editor keeps your draft and reports a conflict.

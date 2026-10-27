@@ -2260,7 +2260,6 @@ td.data-table-key-col {
   width: min(320px, calc(100vw - 24px));
   max-height: 320px;
   border: 1px solid var(--overlay-border);
-  background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
 }
 

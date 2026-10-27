@@ -12,6 +12,7 @@ import { describeSource } from "./source-descriptors.js";
 import { encodeRecordEvidence, hydrateMetadata, readSourceDescriptor } from "./source-records.js";
 import type { PublicationHook } from "./storage-types.js";
 import { KnowledgeStorage } from "./storage.js";
+import { edit } from "./structured-write.test-support.js";
 import {
   createVault,
   plainAccess,
@@ -36,15 +37,6 @@ const draft = (title: any, attachments: any[] = []) => ({
   type: "note",
   body: title + "\n",
   attachments,
-});
-const edit = (record: any, fields = {}) => ({
-  requestId: randomUUID(),
-  id: record.id,
-  expectedRevision: record.revision,
-  expectedHash: record.hash,
-  title: record.title,
-  body: record.body,
-  ...fields,
 });
 
 // Temporary stores use the real storage journal and scoped vault reader.

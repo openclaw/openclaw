@@ -203,7 +203,7 @@ known task segment from RPC handlers, scheduled jobs, diagnostic phases, timelin
 worker message handling, with elapsed and task milliseconds. Time awaiting I/O
 does not count as task execution. Prepared session-row reads carry the enclosing
 operation across waits and append `session-rows:select`, `session-rows:prepare`, or
-`session-rows:consume`; agent roster batches append `agent-roster`. For example,
+`session-rows:consume`; roster fact batches preserve their caller's task label. For example,
 `gateway:rpc:sessions.list:session-rows:select` identifies list selection, and
 scheduled work retains its `scheduler:<lane>:<task>` prefix. Labels contain only
 code-owned operation names, never session keys or request content. Labels cover
@@ -862,6 +862,11 @@ workers. Retirement requests are asynchronous, skip active work, and keep native
 close/checkpoint operations off the main thread. Active operations keep their
 custody and the usual 30-minute database retention window resumes after use.
 No stored data, database schema, or update procedure changes.
+
+Transcript history and search lanes retain one warm reader for up to five idle
+minutes. Other transcript lanes retire after 90 idle seconds to span minute-spaced
+bursts, keeping their independent request ordering and growing again on demand. Whole-lane idle cleanup
+uses the existing rotation path, so its retirement reason is `rotation`.
 
 When a task pool recreates an idle-retired Worker within five minutes, it keeps
 one replacement warm for five minutes of inactivity. Other slots retain their

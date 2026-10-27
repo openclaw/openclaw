@@ -132,46 +132,39 @@ describe("Copilot attempt transcript journal", () => {
     expect(journal.snapshot().replayInvalid).toBe(true);
   });
 
-  it("drains work appended after a barrier starts waiting", async () => {
-    const { journal, session } = await createInitializedFixture();
-    emitAssistant(session, "assistant-before-barrier", { content: "first" });
-
-    const waiting = journal.barrier("concurrent event");
-    queueMicrotask(() => {
-      emitAssistant(session, "assistant-after-barrier", { content: "second" });
-    });
-    await waiting;
-
-    expect(journal.snapshot().messagesSnapshot.map((message) => message.role)).toEqual([
-      "user",
-      "assistant",
-      "assistant",
-    ]);
-  });
-
-  it("gives a queued tool completion one grace turn before failing the barrier", async () => {
-    const { journal, session } = await createInitializedFixture();
-    emitAssistant(session, "assistant-tools", {
-      content: "checking",
-      toolRequests: [{ arguments: {}, name: "read", toolCallId: "call-1" }],
-    });
-
-    const waiting = journal.barrier("queued tool result");
-    queueMicrotask(() => {
-      emitToolCompletion(session, "tool-result", {
-        result: { content: "done" },
-        success: true,
-        toolCallId: "call-1",
+  it.each(["assistant", "toolResult"] as const)(
+    "drains a queued %s appended after a barrier starts waiting",
+    async (role) => {
+      const { journal, session } = await createInitializedFixture();
+      emitAssistant(session, "assistant-before-barrier", {
+        content: "first",
+        ...(role === "toolResult"
+          ? {
+              toolRequests: [{ arguments: {}, name: "read", toolCallId: "call-1" }],
+            }
+          : {}),
       });
-    });
-    await waiting;
+      const waiting = journal.barrier("concurrent event");
+      queueMicrotask(() => {
+        if (role === "assistant") {
+          emitAssistant(session, "assistant-after-barrier", { content: "second" });
+        } else {
+          emitToolCompletion(session, "tool-result", {
+            result: { content: "done" },
+            success: true,
+            toolCallId: "call-1",
+          });
+        }
+      });
+      await waiting;
 
-    expect(journal.snapshot().messagesSnapshot.map((message) => message.role)).toEqual([
-      "user",
-      "assistant",
-      "toolResult",
-    ]);
-  });
+      expect(journal.snapshot().messagesSnapshot.map((message) => message.role)).toEqual([
+        "user",
+        "assistant",
+        role,
+      ]);
+    },
+  );
 
   it("replaces the originally staged user when async resolution changes it", async () => {
     const { journal, recorder } = await createFixture();
@@ -289,80 +282,41 @@ describe("Copilot attempt transcript journal", () => {
     expect(journal.snapshot()).toMatchObject({ messagesSnapshot: [], replayInvalid: true });
   });
 
-  it("marks empty transformed user content replay-incomplete", async () => {
-    const { journal, session } = await createFixture();
-    await journal.persistInitialUser();
-    session.emit(
-      event("user.message", "transformed-empty-user", {
+  it.each([
+    [
+      "empty transformed user",
+      "user.message",
+      {
         content: "provider-visible original",
         transformedContent: "",
-      }),
-    );
-
-    await journal.barrier("empty transformed user");
-
-    expect(journal.snapshot().replayInvalid).toBe(true);
-  });
-
-  it("marks a mismatched initial SDK user replay-incomplete", async () => {
-    const { journal, session } = await createFixture();
-    await journal.persistInitialUser();
-    session.emit(
-      event("user.message", "mismatched-initial-user", { content: "provider saw different" }),
-    );
-    await journal.barrier("mismatched initial user");
-
-    expect(journal.snapshot().replayInvalid).toBe(true);
-  });
-
-  it("marks non-interactive SDK user modes replay-incomplete", async () => {
-    const { journal, session } = await createFixture();
-    await journal.persistInitialUser();
-    session.emit(
-      event("user.message", "plan-user", {
+      },
+    ],
+    ["mismatched initial SDK user", "user.message", { content: "provider saw different" }],
+    [
+      "non-interactive SDK user mode",
+      "user.message",
+      {
         agentMode: "plan",
         content: "inspect both files",
-      }),
-    );
-    await journal.barrier("plan user");
-
-    expect(journal.snapshot().replayInvalid).toBe(true);
-  });
-
-  it("marks durable system and developer prompts replay-incomplete", async () => {
-    for (const role of ["system", "developer"] as const) {
-      const { journal, session } = await createFixture();
-      await journal.persistInitialUser();
-      session.emit(event("system.message", `${role}-message`, { content: "injected", role }));
-
-      await journal.barrier(`${role} message`);
-
-      expect(journal.snapshot().replayInvalid).toBe(true);
-    }
-  });
-
-  it("marks durable skill injection replay-incomplete", async () => {
-    const { journal, session } = await createFixture();
-    await journal.persistInitialUser();
-    session.emit(
-      event("skill.invoked", "skill-invoked", {
+      },
+    ],
+    ["system prompt", "system.message", { content: "injected", role: "system" }],
+    ["developer prompt", "system.message", { content: "injected", role: "developer" }],
+    [
+      "skill injection",
+      "skill.invoked",
+      {
         content: "full injected skill content",
         name: "example-skill",
         path: "/skills/example/SKILL.md",
-      }),
-    );
-    await journal.barrier("skill invocation");
-
-    expect(journal.snapshot().replayInvalid).toBe(true);
-  });
-
-  it("marks durable system notifications replay-incomplete", async () => {
+      },
+    ],
+    ["system notification", "system.notification", { content: "background task done" }],
+  ] as const)("marks durable %s replay-incomplete", async (name, type, data) => {
     const { journal, session } = await createFixture();
     await journal.persistInitialUser();
-    session.emit(
-      event("system.notification", "system-notification", { content: "background task done" }),
-    );
-    await journal.barrier("system notification");
+    session.emit(event(type, name, data));
+    await journal.barrier(name);
 
     expect(journal.snapshot().replayInvalid).toBe(true);
   });
@@ -640,57 +594,38 @@ describe("Copilot attempt transcript journal", () => {
     expect(journal.snapshot().replayInvalid).toBe(false);
   });
 
-  it("keeps the latest cumulative snapshot for one assistant message id", async () => {
-    const { bridge, journal, session, target } = await createInitializedFixture();
-    emitAssistant(session, "assistant-snapshot-a", {
-      apiCallId: "api-call-snapshot",
-      content: "checking",
-      messageId: "assistant-snapshot",
-    });
-    emitAssistant(session, "assistant-snapshot-b", {
-      apiCallId: "api-call-snapshot",
-      content: "checking now",
-      messageId: "assistant-snapshot",
-    });
-    bridge.flushTranscriptProjection();
-    await journal.barrier("cumulative assistant snapshot");
+  it.each(["api-call-snapshot", undefined])(
+    "accepts cumulative assistant snapshots only with an API call id (%s)",
+    async (apiCallId) => {
+      const { bridge, journal, session, target } = await createInitializedFixture();
+      for (const [id, content] of [
+        ["a", "checking"],
+        ["b", "checking now"],
+      ]) {
+        emitAssistant(session, `assistant-snapshot-${id}`, {
+          ...(apiCallId ? { apiCallId } : {}),
+          content,
+          messageId: "assistant-snapshot",
+        });
+      }
+      bridge.flushTranscriptProjection();
+      await journal.barrier("cumulative assistant snapshot");
 
-    const rows = transcriptMessages(await readSessionTranscriptEvents(target));
-    expect(rows.map((row) => row.message.role)).toEqual(["user", "assistant"]);
-    expect(rows.filter((row) => row.message.role === "assistant")).toHaveLength(1);
-    expect(rows.at(-1)?.message).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "checking now" }],
-    });
-  });
-
-  it("rejects cumulative assistant snapshots without an API call id", async () => {
-    const { bridge, journal, session, target } = await createInitializedFixture();
-    emitAssistant(session, "assistant-snapshot-a", {
-      content: "checking",
-      messageId: "assistant-snapshot",
-    });
-    emitAssistant(session, "assistant-snapshot-b", {
-      content: "checking now",
-      messageId: "assistant-snapshot",
-    });
-    bridge.flushTranscriptProjection();
-    await journal.barrier("cumulative assistant snapshot without API call id");
-
-    const rows = transcriptMessages(await readSessionTranscriptEvents(target));
-    expect(rows.map((row) => row.message.role)).toEqual(["user", "assistant"]);
-    expect(rows.at(-1)?.message).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "checking" }],
-    });
-    expect(
-      bridge.buildAssistantMessage({
-        modelRef: { api: "openai-responses", id: "gpt-5", provider: "github-copilot" },
-        now: () => 3,
-      })?.content,
-    ).toEqual([{ type: "text", text: "checking now" }]);
-    expect(journal.snapshot().replayInvalid).toBe(true);
-  });
+      const rows = transcriptMessages(await readSessionTranscriptEvents(target));
+      expect(rows.map((row) => row.message.role)).toEqual(["user", "assistant"]);
+      expect(rows.at(-1)?.message).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: apiCallId ? "checking now" : "checking" }],
+      });
+      expect(
+        bridge.buildAssistantMessage({
+          modelRef: { api: "openai-responses", id: "gpt-5", provider: "github-copilot" },
+          now: () => 3,
+        })?.content,
+      ).toEqual([{ type: "text", text: "checking now" }]);
+      expect(journal.snapshot().replayInvalid).toBe(!apiCallId);
+    },
+  );
 
   it("keeps ephemeral deltas out of the durable assistant row", async () => {
     const { journal, session, target } = await createInitializedFixture();
@@ -754,25 +689,44 @@ describe("Copilot attempt transcript journal", () => {
     ).toEqual([{ type: "text", text: "streamed final" }]);
   });
 
-  it("marks unprojected assistant provider round-trip state replay-incomplete", async () => {
+  it.each([
+    {
+      name: "provider round-trip state",
+      state: {
+        reasoningWireField: "reasoning_content",
+        serverTools: {
+          provider: "openai",
+          items: [{ type: "web_search" }],
+        },
+      },
+      usage: { outputTokens: 1 },
+    },
+    {
+      name: "encrypted reasoning",
+      state: { encryptedContent: "encrypted-openai-state" },
+      usage: {},
+    },
+    { name: "opaque reasoning", state: { reasoningOpaque: "opaque-anthropic-state" }, usage: {} },
+  ])("marks unprojected $name replay-incomplete", async ({ state, usage }) => {
     const { journal, session } = await createInitializedFixture();
     emitAssistant(session, "assistant-provider-state", {
       apiCallId: "api-call-provider-state",
       content: "",
-      reasoningWireField: "reasoning_content",
-      serverTools: { provider: "openai", items: [{ type: "web_search" }] },
+      ...state,
     });
     session.emit(
       event("assistant.usage", "assistant-provider-usage", {
         apiCallId: "api-call-provider-state",
         model: "gpt-5",
-        outputTokens: 1,
+        ...usage,
       }),
     );
     await journal.barrier("provider round-trip state");
 
-    expect(journal.snapshot().replayInvalid).toBe(true);
-    expect(journal.snapshot().messagesSnapshot).toMatchObject([{ role: "user" }]);
+    expect(journal.snapshot()).toMatchObject({
+      replayInvalid: true,
+      messagesSnapshot: [{ role: "user" }],
+    });
   });
 
   it("marks citation-bearing assistant messages replay-incomplete", async () => {
@@ -803,33 +757,6 @@ describe("Copilot attempt transcript journal", () => {
       messagesSnapshot: [{ role: "user" }, { role: "assistant" }],
       replayInvalid: true,
     });
-  });
-
-  it("marks session-bound encrypted reasoning replay-incomplete", async () => {
-    for (const [field, value] of [
-      ["encryptedContent", "encrypted-openai-state"],
-      ["reasoningOpaque", "opaque-anthropic-state"],
-    ] as const) {
-      const { journal, session } = await createFixture();
-      await journal.persistInitialUser();
-      session.emit(
-        event("user.message", `initial-user-${field}`, { content: "inspect both files" }),
-      );
-      emitAssistant(session, `assistant-${field}`, {
-        apiCallId: `api-call-${field}`,
-        content: "",
-        [field]: value,
-      });
-      session.emit(
-        event("assistant.usage", `assistant-usage-${field}`, {
-          apiCallId: `api-call-${field}`,
-          model: "gpt-5",
-        }),
-      );
-      await journal.barrier(`session-bound ${field}`);
-
-      expect(journal.snapshot().replayInvalid).toBe(true);
-    }
   });
 
   it("marks custom tool calls replay-incomplete", async () => {

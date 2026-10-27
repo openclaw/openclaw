@@ -236,50 +236,69 @@ it("omits settings-only presentations from activation while keeping ordinary plu
   expect(listControlUiPluginActivations({})).toEqual([]);
 });
 
-it("records valid receipts in a mixed batch only from a live Control UI connection", async () => {
-  activateFixture();
-  const [entry] = (await listControlUiPluginCatalog()).plugins;
-  const report = activation(entry!.revision);
-  const client = makeGatewayClient({
-    connId: "activation-browser",
-    clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
-    mode: "webchat",
-  });
-  let connected = false;
-  const context = createGatewayRequestContext(makeContextParams());
-  context.getClientConnIds = (filter) =>
-    new Set(connected && (!filter || filter(client)) ? [client.connId!] : []);
-  const call = async (method: string, params: Record<string, unknown>) => {
-    const respond = vi.fn<RespondFn>();
-    await pluginsControlUiHandlers[method]!({
-      req: { type: "req", id: "activation-report", method, params },
-      params,
-      client,
-      context,
-      respond,
-      isWebchatConnect: () => true,
+it.each([
+  { id: GATEWAY_CLIENT_IDS.CONTROL_UI, mode: "webchat" },
+  { id: GATEWAY_CLIENT_IDS.MACOS_APP, mode: "ui" },
+  { id: GATEWAY_CLIENT_IDS.LINUX_APP, mode: "ui" },
+  { id: GATEWAY_CLIENT_IDS.IOS_APP, mode: "ui" },
+  { id: GATEWAY_CLIENT_IDS.ANDROID_APP, mode: "ui" },
+] as const)(
+  "records current receipts only from a live $id/$mode connection",
+  async ({ id, mode }) => {
+    activateFixture();
+    const [entry] = (await listControlUiPluginCatalog()).plugins;
+    const report = activation(entry!.revision);
+    const client = makeGatewayClient({
+      connId: "activation-browser",
+      clientId: id,
+      mode,
     });
-    return respond.mock.calls[0]!;
-  };
-  expect((await call("plugins.controlUi.report", { reports: [report] }))[0]).toBe(false);
-  connected = true;
-  client.connect.client.id = GATEWAY_CLIENT_IDS.CLI;
-  expect((await call("plugins.controlUi.report", { reports: [report] }))[0]).toBe(false);
-  expect(listControlUiPluginActivations(client)).toEqual([]);
-  client.connect.client.id = GATEWAY_CLIENT_IDS.CONTROL_UI;
-  const [ok, , error] = await call("plugins.controlUi.report", {
-    reports: [{ ...report, pluginId: "retired-ui" }, report],
-  });
-  expect(ok).toBe(false);
-  expect(error).toMatchObject({
-    code: "INVALID_REQUEST",
-    details: { rejectedPluginIds: ["retired-ui"] },
-  });
-  expect((await call("plugins.controlUi.status", {}))[1]).toEqual({
-    clients: [{ connId: client.connId, activations: [report] }],
-  });
-  expect((await call("plugins.controlUi.report", { reports: [report] }))[0]).toBe(true);
-});
+    let connected = false;
+    let liveClient = client;
+    const context = createGatewayRequestContext(makeContextParams());
+    context.getClientConnIds = (filter) =>
+      new Set(connected && (!filter || filter(liveClient)) ? [liveClient.connId!] : []);
+    const call = async (method: string, params: Record<string, unknown>) => {
+      const respond = vi.fn<RespondFn>();
+      await pluginsControlUiHandlers[method]!({
+        req: { type: "req", id: "activation-report", method, params },
+        params,
+        client,
+        context,
+        respond,
+        isWebchatConnect: () => true,
+      });
+      return respond.mock.calls[0]!;
+    };
+    expect((await call("plugins.controlUi.report", { reports: [report] }))[0]).toBe(false);
+    connected = true;
+    liveClient = { ...client };
+    expect((await call("plugins.controlUi.report", { reports: [report] }))[0]).toBe(false);
+    liveClient = client;
+    client.connect.client.id = GATEWAY_CLIENT_IDS.CLI;
+    expect((await call("plugins.controlUi.report", { reports: [report] }))[0]).toBe(false);
+    expect(listControlUiPluginActivations(client)).toEqual([]);
+    client.connect.client.id = id;
+    if (id !== GATEWAY_CLIENT_IDS.CONTROL_UI) {
+      client.connect.client.mode = "node";
+      expect((await call("plugins.controlUi.report", { reports: [report] }))[0]).toBe(false);
+      expect((await call("plugins.controlUi.status", {}))[1]).toEqual({ clients: [] });
+      client.connect.client.mode = mode;
+    }
+    const [ok, , error] = await call("plugins.controlUi.report", {
+      reports: [{ ...report, pluginId: "retired-ui" }, report],
+    });
+    expect(ok).toBe(false);
+    expect(error).toMatchObject({
+      code: "INVALID_REQUEST",
+      details: { rejectedPluginIds: ["retired-ui"] },
+    });
+    expect((await call("plugins.controlUi.status", {}))[1]).toEqual({
+      clients: [{ connId: client.connId, activations: [report] }],
+    });
+    expect((await call("plugins.controlUi.report", { reports: [report] }))[0]).toBe(true);
+  },
+);
 
 it("serves enabled user-installed native UI without an experimental opt-in", async () => {
   await withConfig(async () => {

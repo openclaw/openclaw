@@ -151,7 +151,6 @@ export async function integrateManagedWorkspaceSource(
       await state.settle();
       previousBase = state.current().base_commit ?? undefined;
       const check = () => {
-        assertCurrent();
         state.current();
       };
       return await withWorktreeGitConfig<SessionGitHubBaseRefreshResult>(

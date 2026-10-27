@@ -158,7 +158,7 @@ function installedFiles() {
   return { packageRoot, files, archiveSha256: hash(archive) };
 }
 
-export function assertNativeUiPolicy(configValue, policy) {
+function assertNativeUiPolicy(configValue, policy) {
   const experimental = configValue.gateway?.controlUi?.experimental ?? {};
   if (policy === "omitted") {
     assert.equal(
@@ -182,7 +182,7 @@ export function assertNativeUiPolicy(configValue, policy) {
   );
 }
 
-export function assertNativeUiCatalog(catalog, enabled) {
+function assertNativeUiCatalog(catalog, enabled) {
   assert(
     Array.isArray(catalog.plugins) && Array.isArray(catalog.diagnostics),
     "Gateway omitted native UI catalog",

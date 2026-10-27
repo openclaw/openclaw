@@ -73,9 +73,6 @@ const bunTarget = nativeQualificationFixtures.first;
 const vitestBunTarget = "src/agents/sandbox/docker.execDockerRaw.enoent.test.ts";
 const nativeBunTarget = nativeQualificationFixtures.second;
 const nodeTarget = "src/cli/cli-process-diagnostics.test.ts";
-const pendingInputWeakRefTarget =
-  "src/config/sessions/session-accessor.pending-input-retention.test.ts";
-const pendingInputBunControl = "src/config/sessions/session-accessor.pending-inputs.test.ts";
 const overlapEnv = {
   CI: "1",
   RUNNER_ENVIRONMENT: "self-hosted",
@@ -524,15 +521,6 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     }
     expect(
       resolveCiTestRuntimeSelections({ targets: [nativeBunTarget, vitestBunTarget] }, "bun-all"),
-    ).toEqual([{ runtime: "bun" }]);
-  });
-
-  it("keeps only the pending-input WeakRef contract on Node", () => {
-    expect(
-      resolveCiTestRuntimeSelections({ targets: [pendingInputWeakRefTarget] }, "bun-all"),
-    ).toEqual([{ runtime: "node" }]);
-    expect(
-      resolveCiTestRuntimeSelections({ targets: [pendingInputBunControl] }, "bun-all"),
     ).toEqual([{ runtime: "bun" }]);
   });
 

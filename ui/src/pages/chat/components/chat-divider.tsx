@@ -5,6 +5,7 @@ import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 
 export type ChatNoticeProps = {
@@ -187,10 +188,12 @@ export function ChatNoticeDetails(props: ChatNoticeProps) {
     <Switch fallback={<OrdinaryNotice item={props.item} recovery={props.recovery} />}>
       <Match when={props.item.permissionMissing}>
         <div data-chat-row-key={props.item.key} data-ts={String(props.item.timestamp)}>
-          <ChatPermissionCard
-            request={props.item.permissionMissing!}
-            onRetry={props.onPermissionRetry}
-          />
+          <ChatLazyBoundary>
+            <ChatPermissionCard
+              request={props.item.permissionMissing!}
+              onRetry={props.onPermissionRetry}
+            />
+          </ChatLazyBoundary>
         </div>
       </Match>
       <Match when={props.item.collapsedBody && props.item.text}>
@@ -198,7 +201,9 @@ export function ChatNoticeDetails(props: ChatNoticeProps) {
       </Match>
       <Match when={props.item.skillChanges}>
         <div data-chat-row-key={props.item.key} data-ts={String(props.item.timestamp)}>
-          <ChatSkillLearnedNotice notice={props.item.skillChanges} />
+          <ChatLazyBoundary>
+            <ChatSkillLearnedNotice notice={props.item.skillChanges} />
+          </ChatLazyBoundary>
         </div>
       </Match>
     </Switch>

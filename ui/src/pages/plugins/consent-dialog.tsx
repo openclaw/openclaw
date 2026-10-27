@@ -32,7 +32,7 @@ registerEnglishCatalog(registerPluginManagementEnglish);
 
 registerEnglishCatalog(registerPluginConsentEnglish);
 
-export type PluginConsentIntent = { kind: "enable"; pluginId: string; rowKey: string };
+type PluginConsentIntent = { kind: "enable"; pluginId: string; rowKey: string };
 
 type PluginConsentFallback = {
   name: string;

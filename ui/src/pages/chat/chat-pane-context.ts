@@ -34,6 +34,7 @@ import { isTerminalAvailable } from "../../lib/terminal-availability.ts";
 import { invalidateChatAvatarCache } from "./chat-avatar.ts";
 import {
   getChatHistoryLoadState,
+  isChatHistoryLoading,
   synchronizeInitialChatSnapshotConnection,
 } from "./chat-history-state.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
@@ -126,7 +127,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     super.dispose();
   }
 
-  protected async changeHeaderPlacement(
+  async changeHeaderPlacement(
     row: GatewaySessionRow,
     mode: "move" | "recover" | "reclaim",
     presentation?: SessionPlacementPresentation,
@@ -355,6 +356,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.sessionCompanionThreads.retire();
     }
     if (sourceChanged) {
+      this.retireTranscriptReads(true);
       this.retireDetailsOutputs();
       this.resetSessionReadAcknowledgements();
       this.headerPresentation.continueInTerminalDialog = null;
@@ -450,7 +452,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (!state.connected && (wasConnected || sourceChanged)) {
       // The first client can arrive after startup is already waiting for it.
       // Preserve that loading intent; repeated disconnected snapshots stay no-ops.
-      state.chatLoading = getChatHistoryLoadState(state).phase === "pending-connection";
+      state.chatLoading = isChatHistoryLoading(getChatHistoryLoadState(state));
     }
     const resumedHistory =
       !wasConnected && state.connected ? resumePendingChatHistoryLoad(state) : undefined;

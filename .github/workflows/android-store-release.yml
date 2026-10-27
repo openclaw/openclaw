@@ -175,6 +175,7 @@ jobs:
           GOOGLE_PLAY_RELEASE_STATUS: completed
           GOOGLE_PLAY_TRACK: internal
           GOOGLE_PLAY_VALIDATE_ONLY: "0"
+          ANDROID_SCREENSHOT_DIAGNOSTICS: "1"
           SIPS: ${{ runner.temp }}/openclaw-android-tools/android-sips-linux.sh
         run: |
           set -euo pipefail
@@ -210,6 +211,7 @@ jobs:
         with:
           name: android-release-emulator-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
+            ${{ runner.temp }}/android-release-recovery/source/.artifacts/android-screenshots/latest/*/diagnostics/**
             ${{ runner.temp }}/android-release-recovery/source/.artifacts/android-screenshots/latest/*/emulator.log
             ${{ runner.temp }}/android-release-recovery/source/.artifacts/android-screenshots/latest/*/emulator-args.txt
             ${{ runner.temp }}/android-release-recovery/source/.artifacts/android-screenshots/latest/*/process-status.txt

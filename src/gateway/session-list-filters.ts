@@ -255,6 +255,8 @@ export function filterSessionEntries(
   const agentFilter = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
   // Excluded rows must not participate in search or ownership resolution.
   const titleSearch = search && normalizeSessionSearchText(search);
+  const matchesLiteralField = (field: string) => field.includes(search);
+  const matchesTitleField = (field: string) => field.includes(titleSearch);
   const searchRunState =
     search &&
     [...SessionRunStatusSchema.anyOf.map((status) => status.const), "live running", "idle"].some(
@@ -305,6 +307,13 @@ export function filterSessionEntries(
             provider: entry.modelProvider,
             model: entry.model,
           });
+          // Goal search uses entry usage, not elapsed time or display-only timestamps.
+          const goal = entry.goal && resolveGatewaySessionGoal(entry, now);
+          if (goal) {
+            rawFields.push(
+              `${goal.objective} ${goal.status} ${formatGoalSummary(goal)} ${goal.lastStatusNote ?? ""}`,
+            );
+          }
           fields = {
             key: storeKey,
             literal: rawFields.map(normalizeLowercaseStringOrEmpty),
@@ -313,8 +322,8 @@ export function filterSessionEntries(
           staticSearchFields.set(entry, fields);
         }
         if (
-          fields.literal.some((field) => field.includes(search)) ||
-          (titleSearch && fields.titles.some((field) => field.includes(titleSearch)))
+          fields.literal.some(matchesLiteralField) ||
+          (titleSearch && fields.titles.some(matchesTitleField))
         ) {
           return true;
         }
@@ -343,18 +352,6 @@ export function filterSessionEntries(
           ) {
             return true;
           }
-        }
-        const goal = entry.goal && resolveGatewaySessionGoal(entry, now);
-        if (
-          goal &&
-          matchesSessionListSearch(
-            [
-              `${goal.objective} ${goal.status} ${formatGoalSummary(goal)} ${goal.lastStatusNote ?? ""}`,
-            ],
-            search,
-          )
-        ) {
-          return true;
         }
         let identityMatch = identityMatches?.get(agentId);
         if (identityMatch === undefined) {

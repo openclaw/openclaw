@@ -294,7 +294,7 @@ export function DailyChartCompact(props: {
                         { "daily-bar-label--hidden": index % labelEvery() !== 0 },
                       ]}
                     >
-                      {formatDayLabel(date())}
+                      {index % labelEvery() === 0 ? formatDayLabel(date()) : ""}
                     </span>
                   </button>
                 )}
