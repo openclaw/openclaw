@@ -87,6 +87,7 @@ vi.mock("./pw-session-connection.js", () => ({
   pageTargetInfo: vi.fn(async () => ({ targetId: "tab-1" })),
 }));
 
+const { pageTargetInfo } = await import("./pw-session-connection.js");
 const { executeActViaPlaywright } = await import("./pw-tools-core.interactions.execution.js");
 
 const target = { cdpUrl: "http://127.0.0.1:9222", targetId: "tab-1" };
@@ -120,6 +121,7 @@ function batch(
 describe("executeActViaPlaywright batches", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(pageTargetInfo).mockReset();
     ({ page, setPageUrl, setPageClosed } = createPage());
     for (const mock of Object.values(locator)) {
       mock.mockReset();
@@ -172,7 +174,12 @@ describe("executeActViaPlaywright batches", () => {
     expect(locator.hover).not.toHaveBeenCalled();
   });
 
-  it("supports resize and close inside a batch", async () => {
+  it("supports resize and close while retaining the closed target identity", async () => {
+    closePageViaPlaywright.mockImplementationOnce(async () => {
+      setPageClosed(true);
+      // A closed page cannot answer a target-info query; the selected ID must survive.
+      vi.mocked(pageTargetInfo).mockRejectedValueOnce(new Error("Target closed"));
+    });
     const result = await batch([{ kind: "resize", width: 800, height: 600 }, { kind: "close" }]);
 
     expect(result).toEqual({ targetId: "tab-1", results: [{ ok: true }, { ok: true }] });

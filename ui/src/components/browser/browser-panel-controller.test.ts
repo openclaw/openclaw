@@ -599,3 +599,45 @@ describe("BrowserPanel superseded tab snapshots", () => {
     },
   );
 });
+
+describe("BrowserPanel input ordering", () => {
+  it("pipelines typing responses but settles input before submit and a later focus change", async () => {
+    vi.useFakeTimers();
+    const responses = Array.from({ length: 5 }, () => createDeferred<unknown>());
+    const delivered: string[] = [];
+    const { client } = createBrowserClient(async (envelope) => {
+      if (envelope.path !== "/act") {
+        throw new Error(`Unexpected route: ${envelope.path}`);
+      }
+      delivered.push(String(envelope.body?.key ?? envelope.body?.kind));
+      return await responses[delivered.length - 1]!.promise;
+    });
+    const controller = createBrowserPanelTestController(client, "active-tab");
+    const sendKey = (key: string) =>
+      controller.input.handleViewportKeydown(new KeyboardEvent("keydown", { key }));
+    sendKey("a");
+    sendKey("b");
+    sendKey("Enter");
+    sendKey("c");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(delivered).toEqual(["a", "b"]);
+    responses[1]!.resolve({ ok: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(delivered).toEqual(["a", "b"]);
+    responses[0]!.resolve({ ok: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(delivered).toEqual(["a", "b", "Enter"]);
+    responses[2]!.resolve({ ok: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(delivered).toEqual(["a", "b", "Enter", "c"]);
+    controller.input.handleStageClick(new MouseEvent("click", { clientX: 20, clientY: 20 }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(delivered).toHaveLength(4);
+    responses[3]!.resolve({ ok: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(delivered).toEqual(["a", "b", "Enter", "c", "clickCoords"]);
+    responses[4]!.resolve({ ok: true });
+    await vi.advanceTimersByTimeAsync(0);
+    controller.suspendView();
+  });
+});

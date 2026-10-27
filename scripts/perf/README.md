@@ -1,5 +1,45 @@
 # Team-shaped synthetic state
 
+## Browser panel typing (#165752)
+
+Build with `OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB=4608 pnpm build:runtime`, then run:
+
+```sh
+PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/supported/chrome \
+  node --import ./scripts/tsx.mjs scripts/perf/browser-panel-input-measure.mjs --sample=0
+```
+
+The workload opens the real Browser panel through visible controls and a private
+Gateway, navigates its session-owned managed tab to a synthetic input, and types
+80 characters at 6 and 10 cps. Cold resets client/document while retaining Gateway
+and Chromium; warm resets the field. Native controls characterize the host.
+Acceptance: routine typing keeps up without a growing queue, preserving exact
+text, individual input order, every-event focus and existing navigation/ownership
+protection. Request count, client queue, drain and input-to-DOM/decoded-frame
+latency diagnose the flow. No model or live user state is used.
+
+`--smoke` verifies setup only; `--profile` captures a separate cold 10 cps sequence
+with client/Gateway profiles. `--sample=0..4`, `--rate=6|10` and
+`--from-sample=0..4` select complete cells. Five serial interleaved base/candidate
+pairs are needed for a controlled timing claim. One sample across all four cells
+confirms behavior only. Build each revision before running; the workload rejects
+source/build commit mismatch. Do not replace runtimes while a run owns them.
+
+The printed artifact directory contains sanitized `evidence.json` with source,
+build, browser and workload identities, synthetic text/events, per-key timestamps,
+counts, queue and latency summaries. Retain it with command and exit status.
+Raw measurements, HTML, images and Gateway logs stay private because they can
+include addresses and payloads. Decoded marker readback after two animation frames
+is a presentation proxy, not physical display timing, and adds measurement work.
+Local headless proof does not establish WSL/network or third-party site behavior,
+or CPU/memory equivalence. Record host load and competing work.
+
+Historical prior-candidate comparisons disclosed DOM-to-frame p95 increases of
+15–18 ms in two cells. Those remain historical regressions with unestablished
+cause; the browser owner's acceptance is still pending. No local repair or new
+measurement makes that decision. Fresh measurements must identify their own
+revision and must not reuse historical percentages as final-head proof.
+
 ## Plugin policy reads
 
 `plugin-policy-read-measure.mjs` measures warm Codex config resolution and registered

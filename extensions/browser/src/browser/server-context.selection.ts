@@ -118,11 +118,14 @@ export function createProfileSelectionOps({
       return resolved.ok || resolved.reason === "ambiguous";
     };
 
-    const tabs1 = await readTabs();
-    await openWhenConfirmedEmpty(tabs1);
-
     let listedTabs = await readTabs();
     await openWhenConfirmedEmpty(listedTabs);
+    // A fresh usable list already owns selection. Relist only for recovery or
+    // an opened tab; interaction owners still check the live target at dispatch.
+    if (openedTab || !canResolveSelection(candidateTabs(listedTabs))) {
+      listedTabs = await readTabs();
+      await openWhenConfirmedEmpty(listedTabs);
+    }
     let unfilteredTabs = mergeOpenedTabSnapshot(listedTabs, openedTab);
     let candidates = candidateTabs(unfilteredTabs);
     const preservedCanResolveSelection = () =>

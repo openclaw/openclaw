@@ -20,6 +20,7 @@ import {
 import type { BrowserActRequest } from "../client-actions.types.js";
 import { BROWSER_ACT_ERROR_CODES, type BrowserActErrorCode } from "../errors.js";
 import { normalizeBrowserEvaluateFunctionSource } from "../evaluate-source.js";
+import { reserveKeyboardInteraction } from "../keyboard-dispatch.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import { clearSnapshotKeysForTab } from "../snapshot-delta-cache.js";
@@ -124,7 +125,16 @@ export function registerBrowserAgentActRoutes(
           "Browser action request",
         )
       : undefined;
+    // Admit ordered keyboard work before target, URL-policy and authority setup.
+    // The same reservation reaches native dispatch without waiting for its response.
+    const keyboardDispatch =
+      !isExistingSession && (action.kind === "press" || action.kind === "insertText")
+        ? reserveKeyboardInteraction({ cdpUrl: profileCtx.profile.cdpUrl, targetId })
+        : undefined;
     try {
+      if (keyboardDispatch?.ready) {
+        await keyboardDispatch.ready;
+      }
       await withRouteTabContext({
         req: requestDeadline ? { ...req, signal: requestDeadline.signal } : req,
         res,
@@ -409,6 +419,7 @@ export function registerBrowserAgentActRoutes(
             }
             const result = await pw.executeActViaPlaywright({
               cdpUrl,
+              keyboardDispatch,
               action,
               targetId: tab.targetId,
               evaluateEnabled,
@@ -461,6 +472,7 @@ export function registerBrowserAgentActRoutes(
         },
       });
     } finally {
+      keyboardDispatch?.releaseIfUnused();
       requestDeadline?.cleanup();
     }
   });
