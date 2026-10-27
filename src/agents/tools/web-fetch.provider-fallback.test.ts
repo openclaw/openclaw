@@ -101,18 +101,15 @@ function metadata(provider: string) {
 
 function unreadError(cancel: () => void | Promise<void>) {
   global.fetch = withFetchPreconnect(
-    vi.fn(
-      async () =>
-        new Response(
-          new ReadableStream<Uint8Array>({
-            pull(controller) {
-              controller.enqueue(new TextEncoder().encode("unread upstream error"));
-            },
-            cancel,
-          }),
-          { status: 503, headers: { "content-type": "text/plain" } },
-        ),
-    ),
+    vi.fn(async () => {
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          controller.enqueue(new TextEncoder().encode("unread upstream error"));
+        },
+        cancel,
+      });
+      return new Response(body, { status: 503, headers: { "content-type": "text/plain" } });
+    }),
   );
 }
 
@@ -474,13 +471,8 @@ describe("web_fetch", () => {
       const baseUrl = await listenLoopback(server);
       const args = { url: `${baseUrl}/cache-ttl-${initialTtl}-direct` };
       const setTtl = (cacheTtlMinutes: number) => {
-        runtimeState.activeSecretsRuntimeSnapshot = {
-          config: {
-            tools: {
-              web: { fetch: { cacheTtlMinutes, ssrfPolicy: { allowedHostnames: ["127.0.0.1"] } } },
-            },
-          },
-        };
+        const fetch = { cacheTtlMinutes, ssrfPolicy: { allowedHostnames: ["127.0.0.1"] } };
+        runtimeState.activeSecretsRuntimeSnapshot = { config: { tools: { web: { fetch } } } };
       };
       setTtl(initialTtl);
       const tool = createWebFetchTool({ lateBindRuntimeConfig: true })!;

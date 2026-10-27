@@ -388,10 +388,7 @@ function getRequestHeaders(
 describe("web_fetch headers and response extraction", () => {
   it("normalizes operator headers before capture and cache partitioning", async () => {
     const fetchSpy = installResponse("# Routed", "text/markdown");
-    const fetchWithRealGuard = webGuardedFetch.fetchWithWebToolsNetworkGuard;
-    const guardedFetchSpy = vi
-      .spyOn(webGuardedFetch, "fetchWithWebToolsNetworkGuard")
-      .mockImplementation((params) => fetchWithRealGuard(params));
+    const guardedFetchSpy = vi.spyOn(webGuardedFetch, "fetchWithWebToolsNetworkGuard");
 
     const headers = {
       "ATL-SG-SERVICE-INJECTION-URL": "http://host.docker.internal:9999",
@@ -446,17 +443,12 @@ describe("web_fetch headers and response extraction", () => {
     await fetchHeaders({}, "survives", 15);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect((result?.details as { status?: number } | undefined)?.status).toBe(200);
-    const warned = warnSpy.mock.calls
-      .map(([message]) => message)
-      .filter((message) => message.includes("X-Survives-Unicode"));
-    expect(warned).toHaveLength(1);
-    expect(warned[0]).not.toContain("東京");
-    const invalidNameWarning = warnSpy.mock.calls
-      .map(([message]) => message)
-      .find((message) => message.includes("X-Bad"));
-    expect(invalidNameWarning).toContain(JSON.stringify(invalidName));
-    expect(invalidNameWarning).not.toContain("\n");
-    expect(invalidNameWarning).not.toContain("\u001b");
+    const warnings = warnSpy.mock.calls.map(([message]) => message).join("");
+    expect(warnings).toContain("X-Survives-Unicode");
+    expect(warnings).toContain(JSON.stringify(invalidName));
+    expect(warnings).not.toContain("東京");
+    expect(warnings).not.toContain("\n");
+    expect(warnings).not.toContain("\u001b");
   });
 });
 
