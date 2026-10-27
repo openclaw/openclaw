@@ -322,7 +322,6 @@ openclaw-chat-detail-panel,
   max-width: min(320px, calc(100vw - 24px));
   padding: var(--menu-padding);
   border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
   box-shadow: var(--shadow-md);
 }
 

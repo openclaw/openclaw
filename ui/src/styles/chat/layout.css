@@ -199,14 +199,6 @@ openclaw-pending-session-create {
   opacity: 0.1;
 }
 
-.chat > * {
-  transition: opacity 140ms cubic-bezier(0.23, 1, 0.32, 1);
-}
-
-.chat[data-attachment-drop-active] > * {
-  opacity: 0.5;
-}
-
 /* Center search in its own pane, including narrow split views. */
 .agent-chat__search-bar {
   display: flex;
@@ -2939,7 +2931,7 @@ openclaw-chat-ci-details {
       min-width: var(--chat-microphone-picker-width);
       height: var(--chat-microphone-picker-width);
       border: 1px solid var(--chat-composer-surface);
-      background: var(--chat-composer-popover-background);
+      background: var(--popover);
     }
 
     .agent-chat__input--chat .chat-talk-input-picker__trigger svg {
