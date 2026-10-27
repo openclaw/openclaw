@@ -18,11 +18,7 @@ import {
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
 import type { PluginMetadataSnapshotScopeRunner } from "./current-plugin-metadata-snapshot.js";
 import { createInstalledPluginEnabledPredicate } from "./installed-plugin-index.js";
-import {
-  acquirePluginRegistryForInspection,
-  loadPluginRegistryHandle,
-  type PluginLoadOptions,
-} from "./loader.js";
+import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "./loader.js";
 import {
   isManifestPluginAvailableForControlPlane,
   loadManifestContractSnapshot,
@@ -47,7 +43,7 @@ import {
   bindPluginToolCallbacks,
   createPluginToolFactoryResolver,
 } from "./tool-factory-runtime.js";
-import { createPluginToolAllowlist, type PluginToolAllowlist } from "./tool-grant-allowlist.js";
+import { createPluginToolAllowlist } from "./tool-grant-allowlist.js";
 import {
   createPluginToolInspection,
   inspectionToolOwners,
@@ -92,16 +88,7 @@ function resolvePluginToolLoadState(params: {
   hasAuthForProvider?: (providerId: string) => boolean;
   env?: NodeJS.ProcessEnv;
   preparedRuntime?: PreparedPluginToolRuntime;
-}):
-  | {
-      context: ReturnType<typeof resolvePluginRuntimeLoadContext>;
-      env: NodeJS.ProcessEnv;
-      loadOptions: PluginLoadOptions;
-      onlyPluginIds: string[];
-      allowlist: PluginToolAllowlist;
-      snapshot: PluginMetadataManifestView;
-    }
-  | undefined {
+}) {
   const env = params.env ?? process.env;
   const baseConfig = applyTestPluginDefaults(params.context.config ?? {}, env);
   const preparedLoadContext = params.preparedRuntime?.loadContext;

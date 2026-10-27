@@ -215,6 +215,7 @@ jobs:
       run_format_check: ${{ steps.manifest.outputs.run_format_check }}
       compatibility_target: ${{ steps.manifest.outputs.compatibility_target }}
       run_control_ui_i18n: ${{ steps.manifest.outputs.run_control_ui_i18n }}
+      reuse_control_ui_i18n_setup: ${{ steps.manifest.outputs.reuse_control_ui_i18n_setup }}
       strict_control_ui_i18n: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.strict_control_ui_i18n }}
       run_ui_tests: ${{ steps.manifest.outputs.run_ui_tests }}
       run_ui_webkit: ${{ steps.manifest.outputs.run_ui_webkit }}
@@ -789,7 +790,6 @@ jobs:
               linux_node_scripts = (
                   *upgrade_scripts, *npm_lock_scripts, "scripts/ci-additional-checks.sh",
                   "scripts/stage-openclaw-bun.sh", "scripts/lib/openclaw-bun.json",
-                  "scripts/ui-browser-runtime-artifact.mjs",
               )
               if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
                   raise GitFailure(1)
@@ -1796,11 +1796,10 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.run_build_artifacts == 'true'
     outputs:
+      control_ui_i18n_result: ${{ steps.control_ui_i18n_result.outputs.result }}
       published_driver_artifact_id: ${{ steps.published_driver_package_upload.outputs.artifact-id }}
       published_driver_sha256: ${{ steps.published_driver_package.outputs.sha256 }}
       native_runtime_artifact_id: ${{ steps.native_runtime_upload.outputs.artifact-id }}
-      browser_runtime_artifact_id: ${{ steps.browser_runtime_upload.outputs.artifact-id }}
-      browser_runtime_sha256: ${{ steps.browser_runtime_package.outputs.sha256 }}
     # The measured hosted tail reached 898s before preflight and gate overhead.
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04')))) || ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04')) }}
     # Hosted rows (github backend, hybrid retries, full-release dispatches, fork PRs) run slower.
@@ -1816,6 +1815,7 @@ jobs:
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: *owned_checkout_run
       - name: Setup Node environment
+        id: node_setup
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
           cache-mode: &cache_mode ${{ needs.preflight.outputs.cache_mode }}
@@ -1824,6 +1824,29 @@ jobs:
           build-all-cache-scope: full
           # Use the physical runner to keep hosted retries store-only.
           dependency-cache: &trusted_dependency_cache ${{ (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) != 'github' && runner.environment == 'self-hosted' && (github.event_name != 'workflow_dispatch' || ((needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') && github.run_attempt == 1)) && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+
+      # Validate the checkout before generators; settle failures after unrelated build proof.
+      - name: Verify Control UI i18n source
+        id: control_ui_i18n_source
+        if: ${{ !cancelled() && needs.preflight.outputs.reuse_control_ui_i18n_setup == 'true' && steps.node_setup.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          COMPATIBILITY_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
+        run: &control_ui_i18n_source_run |
+          if node -e 'process.exit(require("./package.json").scripts?.["ui:i18n:verify"] ? 0 : 1)'; then
+            pnpm ui:i18n:verify
+          elif [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
+            echo "Skipping ui:i18n:verify: unavailable on the selected compatibility target." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ui:i18n:verify is required for non-compatibility targets." >&2
+            exit 1
+          fi
+
+      - name: Check Control UI locale parity
+        id: control_ui_i18n_parity
+        if: ${{ !cancelled() && needs.preflight.outputs.reuse_control_ui_i18n_setup == 'true' && steps.node_setup.outcome == 'success' }}
+        continue-on-error: true
+        run: &control_ui_i18n_parity_run pnpm ui:i18n:check
 
       - name: Restore dist build cache
         id: dist_build_cache
@@ -1845,26 +1868,57 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build:ci-artifacts
 
-      # Publish before the singleton/watch verifiers can mutate the built tree.
-      - name: Package runtime for browser extension tests
-        id: browser_runtime_package
-        if: needs.preflight.outputs.reuse_browser_extension_build == 'true'
-        env:
-          TARGET_SHA: *checkout_sha
-        run: |
-          digest="$(node .ci-harness/scripts/ui-browser-runtime-artifact.mjs pack .artifacts/ui-browser-runtime "$TARGET_SHA")"
-          echo "sha256=$digest" >> "$GITHUB_OUTPUT"
+      # Reuse the public build before singleton/watch checks mutate its outputs.
+      - name: Install Playwright Chromium for public-build browser tests
+        id: browser_chromium
+        if: ${{ !cancelled() && needs.preflight.outputs.reuse_browser_extension_build == 'true' && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') }}
+        uses: ./.ci-harness/.github/actions/setup-playwright-chromium
+        with:
+          cache-mode: *cache_mode
+          compatibility-target: ${{ needs.preflight.outputs.compatibility_target }}
 
-      - name: Upload runtime for browser extension tests
-        id: browser_runtime_upload
-        if: steps.browser_runtime_package.outcome == 'success'
+      - name: Test browser extension bootstrap end-to-end
+        if: ${{ !cancelled() && needs.preflight.outputs.reuse_browser_extension_build == 'true' && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') && steps.browser_chromium.outcome == 'success' }}
+        env:
+          OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1"
+          OPENCLAW_BROWSER_EXTENSION_E2E: "1"
+          OPENCLAW_E2E_WORKERS: "1"
+        run: |
+          node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium
+          node scripts/run-vitest.mjs run \
+            --config test/vitest/vitest.extension-browser.config.ts \
+            --configLoader runner \
+            extensions/browser/chrome-extension/bootstrap.chromium.test.ts
+
+      - name: Test production Control UI deployment fixtures
+        if: ${{ !cancelled() && needs.preflight.outputs.reuse_browser_extension_build == 'true' && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') && steps.browser_chromium.outcome == 'success' && needs.preflight.outputs.run_ui_e2e == 'true' && needs.preflight.outputs.compatibility_target != 'true' }}
+        env:
+          OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1"
+          OPENCLAW_UI_E2E_PRODUCTION_ARTIFACT_ROOT: ${{ github.workspace }}/dist/control-ui
+          OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/production-artifact-attempt-${{ github.run_attempt }}
+        run: |
+          if ! node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          const config = readFileSync("test/vitest/vitest.ui-e2e.config.ts", "utf8");
+          process.exit(config.includes("ui-e2e-production-artifact-contract-v1") ? 0 : 1);
+          NODE
+          then
+            echo "Target retains production deployment fixtures in ordinary UI shards."
+            exit 0
+          fi
+          node scripts/run-vitest.mjs run \
+            --config test/vitest/vitest.ui-e2e.config.ts \
+            --configLoader runner \
+            --maxWorkers 2
+
+      - name: Upload production Control UI deployment timeout diagnostics
+        if: failure() && hashFiles('.artifacts/control-ui-e2e-timeouts/production-artifact-attempt-*/failure-*/failure.public.json') != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ui-browser-runtime-${{ needs.preflight.outputs.checkout_revision }}-${{ github.run_attempt }}
-          path: .artifacts/ui-browser-runtime/runtime.tar.zst
-          compression-level: 0
-          if-no-files-found: error
-          retention-days: 1
+          name: control-ui-production-artifact-timeout-${{ github.run_attempt }}
+          path: .artifacts/control-ui-e2e-timeouts/production-artifact-attempt-${{ github.run_attempt }}/failure-*/failure.public.json
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Check bundled plugin generated assets
         if: ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') }}
@@ -1902,14 +1956,14 @@ jobs:
 
       - name: Package runtime for native policy tests
         id: native_runtime_package
-        if: ${{ needs.preflight.outputs.run_macos_swift == 'true' && hashFiles('apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift') != '' }}
+        if: ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') && needs.preflight.outputs.run_macos_swift == 'true' && hashFiles('apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift') != '' }}
         env:
           TARGET_SHA: *checkout_sha
         run: node .ci-harness/scripts/macos-native-runtime-artifact.mjs pack .artifacts/macos-native-runtime "$TARGET_SHA"
 
       - name: Upload runtime for native policy tests
         id: native_runtime_upload
-        if: steps.native_runtime_package.outcome == 'success'
+        if: ${{ !cancelled() && steps.native_runtime_package.outcome == 'success' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-native-runtime-${{ needs.preflight.outputs.checkout_revision }}-${{ github.run_attempt }}
@@ -1959,6 +2013,7 @@ jobs:
         env:
           FROZEN_TARGET: &frozen_target ${{ needs.preflight.outputs.frozen_target }}
           OPENCLAW_E2E_USE_PREBUILT_DIST: "1"
+          OPENCLAW_VITEST_WORKER_CACHE: "1"
           OPENCLAW_VITEST_MAX_WORKERS: "1"
         run: |
           set -euo pipefail
@@ -2087,7 +2142,7 @@ jobs:
             if [[ -f test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts ]]; then
               # Cold hosted runners can spend over five minutes in E2E setup before
               # this proof's own bounded test can report a result.
-              env OPENCLAW_E2E_USE_PREBUILT_DIST=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=660000 node scripts/run-vitest.mjs run \
+              env OPENCLAW_VITEST_WORKER_CACHE=1 OPENCLAW_E2E_USE_PREBUILT_DIST=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=660000 node scripts/run-vitest.mjs run \
                 --config test/vitest/vitest.e2e.config.ts \
                 test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts
             else
@@ -2181,7 +2236,7 @@ jobs:
 
           if [ "$RUN_SQLITE_SESSION_LIFECYCLE" = "true" ]; then
             run_verifier "sqlite-session-lifecycle" env \
-              OPENCLAW_E2E_USE_PREBUILT_DIST=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=660000 \
+              OPENCLAW_VITEST_WORKER_CACHE=1 OPENCLAW_E2E_USE_PREBUILT_DIST=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=660000 \
               node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts \
               test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts
           fi
@@ -2220,7 +2275,7 @@ jobs:
             wait_checks
           fi
 
-          # These canaries verify the built CLI's local roundtrip and Gateway connection.
+          # This canary verifies the built CLI's local roundtrip.
           # Full plans retain the PTY descriptor, but CI consumes it only as this selection flag.
           if [ "$RUN_TUI_PTY" = "true" ]; then
             start_check "tui-pty" env \
@@ -2231,7 +2286,7 @@ jobs:
               node scripts/run-vitest.mjs run \
                 --config test/vitest/vitest.tui-pty.config.ts \
                 src/tui/tui-pty-local.e2e.test.ts \
-                --testNamePattern "launches openclaw (chat as local mode|tui against a real Gateway) through a real PTY"
+                --testNamePattern "launches openclaw chat as local mode through a real PTY"
             wait_checks
           fi
 
@@ -2281,6 +2336,25 @@ jobs:
           name: gateway-watch-regression
           path: .local/gateway-watch-regression/
           retention-days: 7
+
+      - name: Record Control UI i18n result
+        id: control_ui_i18n_result
+        if: ${{ !cancelled() && needs.preflight.outputs.reuse_control_ui_i18n_setup == 'true' }}
+        env:
+          SOURCE_RESULT: ${{ steps.control_ui_i18n_source.outcome }}
+          PARITY_RESULT: ${{ steps.control_ui_i18n_parity.outcome }}
+          STRICT_PARITY: ${{ needs.preflight.outputs.strict_control_ui_i18n }}
+        run: |
+          result=failure
+          if [[ "$SOURCE_RESULT" == "success" && ( "$PARITY_RESULT" == "success" || ( "$PARITY_RESULT" == "failure" && "$STRICT_PARITY" != "true" ) ) ]]; then
+            result=success
+          fi
+          echo "result=$result" >> "$GITHUB_OUTPUT"
+          echo "Control UI i18n: source=$SOURCE_RESULT, parity=$PARITY_RESULT, strict=$STRICT_PARITY" >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$result" != "success" ]]; then
+            echo "::error title=Control UI i18n failed::See Verify Control UI i18n source and Check Control UI locale parity above."
+            exit 1
+          fi
 
   control-ui-performance:
     permissions:
@@ -2471,11 +2545,12 @@ jobs:
     name: checks-ui-e2e (${{ matrix.shard }}/${{ matrix.shard_count }})
     needs: [preflight]
     if: needs.preflight.outputs.run_ui_e2e == 'true' && needs.preflight.outputs.compatibility_target != 'true'
-    runs-on: &ui_e2e_runner ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && needs.preflight.outputs.hybrid_hosted_offload == 'true' && matrix.task == 'browser-extension') && 'ubuntu-24.04' || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.task == 'control-ui' && 'blacksmith-16vcpu-ubuntu-2404' || 'blacksmith-8vcpu-ubuntu-2404') || 'ubuntu-24.04')))) || ((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && needs.preflight.outputs.hybrid_hosted_offload == 'true' && matrix.task == 'browser-extension') && 'ubuntu-24.04' || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.task == 'control-ui' && 'blacksmith-16vcpu-ubuntu-2404' || 'blacksmith-8vcpu-ubuntu-2404') || 'ubuntu-24.04')) }}
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && needs.preflight.outputs.hybrid_hosted_offload == 'true' && matrix.task == 'browser-extension') && 'ubuntu-24.04' || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.task == 'control-ui' && 'blacksmith-16vcpu-ubuntu-2404' || 'blacksmith-8vcpu-ubuntu-2404') || 'ubuntu-24.04')))) || ((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && needs.preflight.outputs.hybrid_hosted_offload == 'true' && matrix.task == 'browser-extension') && 'ubuntu-24.04' || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.task == 'control-ui' && 'blacksmith-16vcpu-ubuntu-2404' || 'blacksmith-8vcpu-ubuntu-2404') || 'ubuntu-24.04')) }}
     # Runtime-budget Chromium projects stay serial.
     timeout-minutes: 25
     env:
       OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1"
+      OPENCLAW_UI_E2E_SKIP_PRODUCTION_ARTIFACT: ${{ needs.preflight.outputs.reuse_browser_extension_build == 'true' && needs.preflight.outputs.run_ui_e2e == 'true' && needs.preflight.outputs.compatibility_target != 'true' && '1' || '0' }}
     strategy:
       fail-fast: false
       max-parallel: 14
@@ -2495,6 +2570,8 @@ jobs:
 
       - name: Test Control UI end-to-end
         if: matrix.task == 'control-ui'
+        # Fail the step before the job deadline so progress diagnostics can upload.
+        timeout-minutes: 20
         env:
           OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           VITEST_SHARD_INDEX: ${{ matrix.shard }}
@@ -2517,15 +2594,17 @@ jobs:
           )"
             export OPENCLAW_VITEST_INCLUDE_FILE
           fi
-          requires_webkit="$(node --input-type=module <<'NODE'
+          requirements="$(node --input-type=module <<'NODE'
           import { existsSync } from "node:fs";
           import { resolve } from "node:path";
           const webkitSuites = new Set([
             resolve("ui/src/pages/workboard/workboard-native-bundle.e2e.test.ts"),
             resolve("ui/src/e2e/tooltip-first-activation.e2e.test.ts"),
           ].filter(existsSync));
+          const runtimeSuite = resolve("ui/src/e2e/stale-build-recovery.production.e2e.test.ts");
           let requiresWebkit = false;
-          if (webkitSuites.size > 0) {
+          let requiresRuntime = false;
+          if (webkitSuites.size > 0 || existsSync(runtimeSuite)) {
             const { createVitest } = await import("vitest/node");
             const vitest = await createVitest({
               config: "test/vitest/vitest.ui-e2e.config.ts",
@@ -2538,15 +2617,22 @@ jobs:
               const sequencer = new vitest.config.sequence.sequencer(vitest);
               const files = await sequencer.shard(await vitest.globTestSpecifications());
               requiresWebkit = files.some((file) => webkitSuites.has(file.moduleId));
+              requiresRuntime = files.some((file) => file.moduleId === runtimeSuite);
             } finally {
               await vitest.close();
             }
           }
-          process.stdout.write(String(requiresWebkit));
+          process.stdout.write([requiresWebkit && "webkit", requiresRuntime && "runtime"].filter(Boolean).join(" "));
           NODE
           )"
-          if [[ "$requires_webkit" == "true" ]]; then
+          if [[ "$requirements" == *webkit* ]]; then
             pnpm --dir ui exec playwright install --with-deps webkit
+          fi
+          if [[ "$requirements" == *runtime* ]]; then
+            # Run the helper's cold preparation before Vitest starts its subprocess budget.
+            preparation_started=$SECONDS
+            VITEST=1 node scripts/run-node.mjs --help
+            echo "Control UI Gateway runtime preparation: $((SECONDS - preparation_started))s"
           fi
           node scripts/run-vitest.mjs run \
             --config test/vitest/vitest.ui-e2e.config.ts \
@@ -2620,61 +2706,6 @@ jobs:
         if: matrix.task == 'browser-extension'
         run: pnpm test:e2e:browser-extension
 
-  checks-ui-browser-extension:
-    name: checks-ui-browser-extension
-    permissions:
-      contents: read
-    needs: [preflight, build-artifacts]
-    if: ${{ !cancelled() && needs.preflight.outputs.reuse_browser_extension_build == 'true' && needs.build-artifacts.outputs.browser_runtime_artifact_id != '' }}
-    runs-on: *ui_e2e_runner
-    timeout-minutes: 25
-    env:
-      OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1"
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        task: [browser-extension]
-    steps:
-      - name: Checkout
-        shell: bash
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_TOKEN: ${{ github.token }}
-          CHECKOUT_SHA: *checkout_sha
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
-        run: *owned_checkout_run
-      - name: Setup Node environment
-        uses: ./.ci-harness/.github/actions/setup-node-env
-        with:
-          cache-mode: *cache_mode
-          node-version: "24.22.1"
-          install-bun: "false"
-          dependency-cache: *trusted_first_attempt_dependency_cache
-          restore-test-caches: *restore_test_caches
-
-      - *install_playwright_chromium
-
-      - name: Download public runtime for browser extension tests
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          artifact-ids: ${{ needs.build-artifacts.outputs.browser_runtime_artifact_id }}
-          path: .artifacts/ui-browser-runtime
-
-      - name: Restore public runtime for browser extension tests
-        env:
-          TARGET_SHA: *checkout_sha
-          RUNTIME_SHA256: ${{ needs.build-artifacts.outputs.browser_runtime_sha256 }}
-        run: node .ci-harness/scripts/ui-browser-runtime-artifact.mjs restore .artifacts/ui-browser-runtime "$TARGET_SHA" "$RUNTIME_SHA256"
-
-      - name: Test browser extension bootstrap end-to-end
-        env:
-          OPENCLAW_BROWSER_EXTENSION_E2E: "1"
-          OPENCLAW_E2E_WORKERS: "1"
-        run: |
-          node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium
-          node scripts/run-vitest.mjs extensions/browser/chrome-extension/bootstrap.chromium.test.ts
-
   checks-ui-e2e-real-gateway:
     permissions:
       contents: read
@@ -2698,6 +2729,7 @@ jobs:
           node-version: "24.22.1"
           install-bun: "false"
           dependency-cache: *trusted_first_attempt_dependency_cache
+          build-all-cache-scope: full
 
       - *install_playwright_chromium
 
@@ -2880,7 +2912,7 @@ jobs:
       contents: read
     name: control-ui-i18n
     needs: [preflight]
-    if: needs.preflight.outputs.run_control_ui_i18n == 'true'
+    if: needs.preflight.outputs.run_control_ui_i18n == 'true' && needs.preflight.outputs.reuse_control_ui_i18n_setup != 'true'
     runs-on: *shared_small_linux_runner
     timeout-minutes: 10
     env:
@@ -2898,20 +2930,12 @@ jobs:
 
       - name: Verify Control UI i18n source
         if: ${{ !cancelled() && steps.node_setup.outcome == 'success' }}
-        run: |
-          if node -e 'process.exit(require("./package.json").scripts?.["ui:i18n:verify"] ? 0 : 1)'; then
-            pnpm ui:i18n:verify
-          elif [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
-            echo "Skipping ui:i18n:verify: unavailable on the selected compatibility target." >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "ui:i18n:verify is required for non-compatibility targets." >&2
-            exit 1
-          fi
+        run: *control_ui_i18n_source_run
 
       - name: Check Control UI locale parity
         if: ${{ !cancelled() && steps.node_setup.outcome == 'success' }}
         continue-on-error: ${{ needs.preflight.outputs.strict_control_ui_i18n != 'true' }}
-        run: pnpm ui:i18n:check
+        run: *control_ui_i18n_parity_run
 
   checks-baseline-ratchets:
     permissions:
@@ -6754,7 +6778,6 @@ jobs:
       - native-i18n
       - checks-ui
       - checks-ui-e2e
-      - checks-ui-browser-extension
       - checks-ui-e2e-real-gateway
       - control-ui-i18n
       - checks-baseline-ratchets
@@ -6833,7 +6856,6 @@ jobs:
       - native-i18n
       - checks-ui
       - checks-ui-e2e
-      - checks-ui-browser-extension
       - checks-ui-e2e-real-gateway
       - control-ui-i18n
       - checks-baseline-ratchets
@@ -6906,9 +6928,8 @@ jobs:
             native-i18n=${{ needs.native-i18n.result }}|${{ needs.preflight.outputs.run_native_i18n }}
             checks-ui=${{ needs.checks-ui.result }}|${{ needs.preflight.outputs.run_ui_tests }}
             checks-ui-e2e=${{ needs.checks-ui-e2e.result }}|${{ needs.preflight.outputs.run_ui_e2e == 'true' && needs.preflight.outputs.compatibility_target != 'true' }}
-            checks-ui-browser-extension=${{ needs.checks-ui-browser-extension.result }}|${{ needs.preflight.outputs.reuse_browser_extension_build }}
             checks-ui-e2e-real-gateway=${{ needs.checks-ui-e2e-real-gateway.result }}|${{ needs.preflight.outputs.run_ui_real_gateway == 'true' && needs.preflight.outputs.compatibility_target != 'true' }}
-            control-ui-i18n=${{ needs.control-ui-i18n.result }}|${{ needs.preflight.outputs.run_control_ui_i18n }}
+            control-ui-i18n=${{ needs.preflight.outputs.reuse_control_ui_i18n_setup == 'true' && (needs.build-artifacts.outputs.control_ui_i18n_result || 'missing') || needs.control-ui-i18n.result }}|${{ needs.preflight.outputs.run_control_ui_i18n }}
             checks-baseline-ratchets=${{ needs.checks-baseline-ratchets.result }}|${{ needs.preflight.outputs.run_baseline_ratchets }}
             checks-fast-core=${{ needs.checks-fast-core.result }}|${{ needs.preflight.outputs.run_checks_fast_core }}
             qa-smoke-ci-profile=${{ needs.qa-smoke-ci-profile.result }}|${{ needs.preflight.outputs.run_qa_smoke_ci }}
@@ -6992,7 +7013,6 @@ jobs:
       - native-i18n
       - checks-ui
       - checks-ui-e2e
-      - checks-ui-browser-extension
       - checks-ui-e2e-real-gateway
       - control-ui-i18n
       - checks-fast-core

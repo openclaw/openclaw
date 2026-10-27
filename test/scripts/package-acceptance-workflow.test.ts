@@ -12114,7 +12114,11 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     const hydrateScript = readFileSync(CI_HYDRATE_LIVE_AUTH_SCRIPT, "utf8");
 
     expect(hydrateScript).toContain("  ANTHROPIC_OAUTH_TOKEN \\");
-    expect(hydrateScript).toContain("access_token=\"$(jq -r '.claudeAiOauth.accessToken // empty'");
+    expect(hydrateScript).toContain(
+      'local access_token="${ANTHROPIC_OAUTH_TOKEN:-${CLAUDE_CODE_OAUTH_TOKEN:-}}"',
+    );
+    expect(hydrateScript).toContain("candidate=\"$(jq -r '.claudeAiOauth.accessToken // empty'");
+    expect(hydrateScript).toContain('access_token="$candidate"');
     expect(hydrateScript).toContain('export ANTHROPIC_OAUTH_TOKEN="$access_token"');
     expect(hydrateScript).toContain('local min_remaining_ms="$(( 90 * 60 * 1000 ))"');
     expect(hydrateScript).toContain(

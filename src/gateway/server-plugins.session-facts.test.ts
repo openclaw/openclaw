@@ -220,9 +220,16 @@ describe("trusted plugin selected session facts", () => {
       await fixture.seed(sibling, fixture.profile.id, { label: "Unchanged", status: "done" });
       await fixture.subscriptions.replace(fixture.client.connId, [sessionKey]);
 
+      using inspection = vi.spyOn(Object, "getPrototypeOf");
       const first = await selected();
       const unchanged = fact(first, sibling)!;
+      const pullRequestInspections = inspection.mock.calls.filter(
+        ([value]) => value === unchanged.pullRequests,
+      ).length;
+      inspection.mockRestore();
+      expect(pullRequestInspections).toBe(0);
       expect(Object.isFrozen(unchanged)).toBe(true);
+      expect(Reflect.set(unchanged.pullRequests, "0", { number: 99, state: "open" })).toBe(false);
       expect(fact(await selected(), sibling)).toBe(unchanged);
       const peer = await selected({}, fixture.addReader("other-reader").client);
       expect(peer.scope).toBe(first.scope);

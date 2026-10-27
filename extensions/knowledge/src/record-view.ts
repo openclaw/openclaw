@@ -1,6 +1,6 @@
 import { ask } from "./ask-dialog.js";
 import { renderClaim, summaryLink } from "./claim-view.js";
-import { evidenceView } from "./evidence-view.js";
+import { evidenceView, originalDownload } from "./evidence-view.js";
 import { displayAliases, identityTag } from "./knowledge-presentation.js";
 import { markdownView } from "./markdown-view.js";
 import type { Page } from "./page-context.js";
@@ -10,6 +10,8 @@ import {
   date,
   disclosureLabel,
   el,
+  fileKind,
+  fileSize,
   human,
   identificationDetails,
   label,
@@ -17,8 +19,7 @@ import {
   tile,
   withoutTitleHeading,
 } from "./page-dom.js";
-import { fileDetails, sourcesRail } from "./record-files.js";
-import { aboutLinks, relationshipEndpoints } from "./record-links.js";
+import { fileDetails } from "./record-files.js";
 import { recordPanels } from "./record-panels.js";
 import { claimVersions } from "./record-versions.js";
 import { formatSourceDate, sourceDateNote } from "./temporal.js";
@@ -38,7 +39,7 @@ export async function showDetail(
   ui: Page,
   id: string,
   n: number,
-  target: HTMLElement,
+  detailTarget: HTMLElement,
   pages = 1,
   waitForPanels = false,
 ) {
@@ -68,7 +69,7 @@ export async function showDetail(
     return;
   }
   if (!result.record) {
-    target.replaceChildren(
+    detailTarget.replaceChildren(
       empty(
         "Record unavailable",
         "This record cannot be opened in the current scope. No matching record was selected arbitrarily.",
@@ -453,7 +454,104 @@ export async function showDetail(
   aside.append(connections, learned);
   const { files, filePanel, checkpointValue, historyList, technical } = fileDetails(ui, r, id, n);
   aside.append(files);
-  sourcesRail(ui, result, r, id, n, aside, learned);
+  /** Cited and uncited retained files for a page, inserted above `learned` in the aside. */
+  if (r.kind === "page" && result.sourceFiles?.length) {
+    // One compact row per file. Downloads need the retaining record's
+    // authority, so a file retained only by a citing claim downloads there.
+    const sourceFile = (file: NonNullable<typeof result.sourceFiles>[number]) => {
+      const e = file.evidence,
+        name = e.filename ?? e.path.split("/").at(-1)!,
+        row = el("div", undefined, "knowledge-source-file"),
+        copy = el("span", undefined, "knowledge-source-file-copy");
+      const title = el("span", name, "knowledge-source-file-name");
+      title.title = e.attribution ? `${name}\n${e.attribution}` : name;
+      copy.append(
+        title,
+        el(
+          "small",
+          [
+            fileKind(e),
+            e.size !== undefined ? fileSize(e.size) : "",
+            file.citations
+              ? `${file.citations} cited ${file.citations === 1 ? "passage" : "passages"}`
+              : "",
+          ]
+            .filter(Boolean)
+            .join(" · "),
+        ),
+      );
+      if (!e.verified) {
+        const warning = el("small", "Source file unavailable", "knowledge-unverified");
+        warning.prepend(icon("alertTriangle", 12));
+        copy.append(warning);
+      }
+      row.append(icon("fileText", 14), copy);
+      const own = result.evidence?.some((o) => o.path === e.path && o.sha256 === e.sha256);
+      if (own && e.verified) {
+        const { download, status } = originalDownload(
+          feature,
+          id,
+          e,
+          () => live(n),
+          errorText,
+          true,
+        );
+        download.className = "knowledge-source-download";
+        copy.append(status);
+        row.append(download);
+      } else if (e.verified) {
+        row.title = "Download this file from the claim that cites it.";
+      }
+      return row;
+    };
+    // Cited files lead and uncited retained files collapse beneath them.
+    // Outside meetings a page's own retained files already live in File
+    // details, so the rail appears only when claims sourced here cite files.
+    const cited = result.sourceFiles.filter((file) => file.citations),
+      uncited = result.sourceFiles.filter((file) => !file.citations);
+    if (cited.length || r.type === "meeting") {
+      const sources = el("section", undefined, "knowledge-sources"),
+        passages = cited.reduce((sum, file) => sum + file.citations, 0),
+        total = result.sourceFilesTotal ?? result.sourceFiles.length;
+      sources.append(
+        el("h3", "Sources"),
+        el(
+          "p",
+          `${passages} cited ${passages === 1 ? "passage" : "passages"} · ${total} ${total === 1 ? "file" : "files"}`,
+          "knowledge-muted",
+        ),
+      );
+      if (cited.length) {
+        const list = el("div", undefined, "knowledge-surface knowledge-source-files");
+        list.append(...cited.map(sourceFile));
+        sources.append(list);
+      }
+      if (uncited.length) {
+        const rest = el("details", undefined, "knowledge-source-uncited"),
+          summary = el(
+            "summary",
+            `${uncited.length} ${cited.length ? "more " : ""}${uncited.length === 1 ? "file" : "files"} not cited directly`,
+          ),
+          list = el("div", undefined, "knowledge-surface knowledge-source-files");
+        rest.dataset.readingKey = `uncited:${id}`;
+        rest.open = !cited.length;
+        summary.append(icon("chevronDown", 12));
+        list.append(...uncited.map(sourceFile));
+        rest.append(summary, list);
+        sources.append(rest);
+      }
+      if (total > result.sourceFiles.length) {
+        sources.append(
+          el(
+            "p",
+            "Showing the first 100 files. Other files remain available from their citing claims.",
+            "knowledge-muted",
+          ),
+        );
+      }
+      aside.insertBefore(sources, learned);
+    }
+  }
   if (r.kind === "page" && result.evidence?.length) {
     const originals = el("details", undefined, "knowledge-retained-originals");
     originals.append(
@@ -463,11 +561,86 @@ export async function showDetail(
     filePanel.append(originals);
   }
   grid.append(main, aside);
-  target.replaceChildren(breadcrumb, head, grid);
-  aboutLinks(ui, result, r, n, aside, pending);
+  detailTarget.replaceChildren(breadcrumb, head, grid);
+  /** A claim's About rail: the pages it names, up to 20. */
+  if (r.kind === "claim" && meta?.entities?.length) {
+    const about = el("section", undefined, "knowledge-about"),
+      targets = el("div", undefined, "knowledge-surface knowledge-connections");
+    about.append(el("h3", "About"), targets);
+    aside.prepend(about);
+    const ids = [...new Set(meta.entities)].slice(0, 20);
+    pending.push(
+      Promise.all(
+        ids.map(
+          async (entityId) =>
+            result.references?.find((ref) => ref.id === entityId) ??
+            (await feature.invoke("record", { id: entityId, view: "summary" })).record,
+        ),
+      )
+        .then((records) => {
+          if (!live(n)) {
+            return;
+          }
+          for (const record of records) {
+            if (record) {
+              const row = el("div", undefined, "knowledge-connection");
+              row.append(summaryLink(ui, record));
+              targets.append(row);
+            }
+          }
+          if (!targets.children.length) {
+            targets.append(el("p", "Linked records are unavailable.", "knowledge-aside-empty"));
+          }
+          if (meta.entities!.length > ids.length) {
+            about.append(el("p", "Showing the first 20 linked entities.", "knowledge-muted"));
+          }
+        })
+        .catch((error: unknown) => {
+          if (live(n)) {
+            targets.append(failure(error));
+          }
+        }),
+    );
+  }
   const refs = el("div", undefined, "knowledge-surface knowledge-connections");
   connections.append(refs);
-  relationshipEndpoints(ui, result, r, n, refs, pending);
+  /** A relationship's From and To endpoints, resolved to page links as they load. */
+  if (r.kind === "relationship") {
+    for (const [role, endpointId] of [
+      ["From", meta?.from],
+      ["To", meta?.to],
+    ] as const) {
+      const row = el("div", undefined, "knowledge-connection"),
+        copy = el("span", undefined, "knowledge-connection-copy");
+      copy.append(el("small", role), el("span", endpointId ? "Loading…" : "Page not recorded."));
+      row.append(copy);
+      refs.append(row);
+      if (!endpointId) {
+        continue;
+      }
+      pending.push(
+        (async () => {
+          const target =
+            result.references?.find((ref) => ref.id === endpointId) ??
+            (await feature.invoke("record", { id: endpointId, view: "summary" })).record;
+          if (!live(n)) {
+            return;
+          }
+          copy.replaceChildren(el("small", role), el("span", target?.title ?? "Page unavailable."));
+          if (target) {
+            const destination = button("", () => open(target.id), "knowledge-connection-link");
+            destination.append(tile(target.type, 24, target.kind), copy);
+            row.replaceChildren(destination);
+          }
+        })().catch((error: unknown) => {
+          if (live(n)) {
+            copy.replaceChildren(el("small", role), el("span", "Page unavailable."));
+            row.append(failure(error));
+          }
+        }),
+      );
+    }
+  }
   await recordPanels(ui, {
     id,
     n,

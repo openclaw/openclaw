@@ -5,6 +5,7 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { createApiKeyCredential } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import { markStartupOrphanedMainSessionsForRecovery } from "../agents/main-session-recovery/main-session-restart-recovery-marking.js";
 import { recoverStore } from "../agents/main-session-recovery/main-session-restart-recovery-store.js";
@@ -321,11 +322,7 @@ describe("cold restart recovery of native operator input", () => {
         profiles: [
           {
             profileId: "openai:native-recovery-test",
-            credential: {
-              type: "api_key",
-              provider: "openai",
-              key: "synthetic-native-recovery-key",
-            },
+            credential: createApiKeyCredential("openai", "synthetic-native-recovery-key"),
           },
         ],
       });

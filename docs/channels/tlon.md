@@ -311,6 +311,11 @@ Upload failures after a successful bounded download can still use the original U
 Without a configured cap, the existing link fallback remains available even when
 the image cannot be downloaded within that ceiling.
 
+Outbound image uploads preserve the downloaded filename, including names supplied
+by `Content-Disposition`. If no filename is available, Tlon uses the source URL
+basename or a generated name. Custom-S3 public URLs encode object-key path segments
+so filename characters such as `#` and `?` remain part of the object name.
+
 | Feature         | Status                                        |
 | --------------- | --------------------------------------------- |
 | Direct messages | Supported                                     |

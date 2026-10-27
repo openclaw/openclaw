@@ -16,9 +16,7 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import type { TemplateContext } from "../templating.js";
-import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 import {
-  createFollowupRun,
   createCliFollowupRun as createCliRun,
   createMinimalRunAgentTurnParams,
   expectMockCallArgFields,
@@ -27,7 +25,6 @@ import {
   requireMockCall,
   requireRecord,
   setupAgentRunnerExecutionTestState,
-  runFallbackCandidate,
 } from "./agent-runner-execution.test-support.js";
 import { createTestUserTurnRecorder } from "./agent-runner-execution.transcript.test-support.js";
 
@@ -475,17 +472,11 @@ describe("executeAgentTurn: CLI session routing", () => {
 
   it("preserves a reused binding after an operator aborts a channel turn", async () => {
     const sessionKey = "agent:main:direct:aborted-run";
-    state.isCliProviderMock.mockReturnValue(true);
-    state.runWithModelFallbackMock.mockImplementationOnce((params: FallbackRunnerParams) =>
-      runFallbackCandidate(params, "claude-cli", "claude-opus-4-8"),
-    );
     state.runCliAgentMock.mockRejectedValueOnce(
       Object.assign(new Error("CLI run aborted"), { name: "AbortError" }),
     );
 
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "claude-cli";
-    followupRun.run.model = "claude-opus-4-8";
+    const followupRun = createCliRun("claude-cli", "claude-opus-4-8");
     const sessionEntry = {
       sessionId: "openclaw-session",
       updatedAt: 1,

@@ -272,6 +272,79 @@ describe("resolveAvatar profile-id senders", () => {
 });
 
 describe("authenticated profile avatar cache", () => {
+  it("keeps unconnected trusted image sources synchronous without fetching", () => {
+    setAvatarGatewayOrigin(null);
+    const fetchAvatar = vi.spyOn(globalThis, "fetch");
+    expect(resolveAvatarImageUrl("/avatar/research")).toBe("/avatar/research");
+    expect(resolveAvatarImageUrl("/api/users/self/avatar?v=1#fragment")).toBe(
+      "/api/users/self/avatar?v=1",
+    );
+    expect(fetchAvatar).not.toHaveBeenCalled();
+  });
+
+  it("shares unknown reads and misses while reusing verified URLs only in their admitted scope", async () => {
+    const origin = "https://gateway.example.test";
+    const url = `${origin}/api/users/profile-ada/avatar?v=7`;
+    const data = new Map<string, string>();
+    vi.stubGlobal("location", { origin });
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => data.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        data.set(key, value);
+      },
+      removeItem: (key: string) => {
+        data.delete(key);
+      },
+    });
+    const fetchAvatar = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => avatarResponse());
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:verified-profile");
+    const reload = async (scope = "operator-a") => {
+      vi.resetModules();
+      const window = new EventTarget();
+      vi.stubGlobal("window", window);
+      const owner = await import("./identity-avatar-loader.ts");
+      const context = await import("./identity-avatar-context.ts");
+      context.setAvatarGatewayOrigin(origin, [], "", scope);
+      return { owner, context, window };
+    };
+    const first = await reload();
+    const pending = first.owner.resolveAvatarImageUrl(url);
+    expect(first.owner.resolveAvatarImageUrl("/api/users/profile-ada/avatar?v=7#fragment")).toBe(
+      pending,
+    );
+    await expect(pending).resolves.toBe("blob:verified-profile");
+    expect(fetchAvatar).toHaveBeenCalledOnce();
+    first.window.dispatchEvent(new Event("pagehide"));
+
+    const second = await reload();
+    try {
+      expect(second.owner.resolveAvatarImageUrl(url)).toBe(url);
+      expect(fetchAvatar).toHaveBeenCalledOnce();
+      second.owner.recordAvatarImageError(url);
+      expect(second.owner.resolveAvatarImageUrl(url)).toBeNull();
+      expect(second.owner.resolveAvatarImageUrl("/api/users/profile-ada/avatar?v=7")).toBeNull();
+      expect(fetchAvatar).toHaveBeenCalledOnce();
+      second.window.dispatchEvent(new Event("pagehide"));
+      second.context.setAvatarGatewayOrigin(origin, [], "", "operator-b");
+      const undecodable = second.owner.resolveAvatarImageUrl(url);
+      await expect(undecodable).resolves.toBe("blob:verified-profile");
+      expect(fetchAvatar).toHaveBeenCalledTimes(2);
+      second.owner.recordAvatarImageError(undecodable);
+      second.window.dispatchEvent(new Event("pagehide"));
+      const third = await reload("operator-b");
+      try {
+        await expect(third.owner.resolveAvatarImageUrl(url)).resolves.toBe("blob:verified-profile");
+        expect(fetchAvatar).toHaveBeenCalledTimes(3);
+      } finally {
+        third.context.setAvatarGatewayOrigin(null);
+      }
+    } finally {
+      second.context.setAvatarGatewayOrigin(null);
+    }
+  });
+
   it.each([
     ["/api/users/profile-ada/avatar?v=7", "image/png"],
     ["/avatar/research", "image/svg+xml"],
@@ -341,11 +414,22 @@ describe("authenticated profile avatar cache", () => {
     expect(fetchAvatar).toHaveBeenCalledTimes(2);
   });
 
-  it.each([404, 503])(
-    "coalesces an avatar returning %s before retrying an unversioned upload after one minute",
-    async (status) => {
+  it.each([
+    [404, true],
+    [503, true],
+    [404, false],
+    [503, false],
+  ] as const)(
+    "coalesces an avatar returning %s with bearer=%s before retrying an unversioned upload after one minute",
+    async (status, bearer) => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(0);
-      setAvatarGatewayOrigin("https://gateway.example.test", ["profile-token", "profile-password"]);
+      vi.stubGlobal("location", { origin: "https://gateway.example.test" });
+      setAvatarGatewayOrigin(
+        "https://gateway.example.test",
+        bearer ? ["profile-token", "profile-password"] : [],
+        "",
+        "operator-a",
+      );
       const cancel = vi.fn();
       const fetchAvatar = vi
         .spyOn(globalThis, "fetch")

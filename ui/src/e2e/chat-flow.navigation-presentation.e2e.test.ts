@@ -69,6 +69,7 @@ suite.define(() => {
     }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      subscriptionInitialHistory: false,
       deferredMethods: ["chat.startup", "chat.startup"],
       historyMessages: [timedText("assistant", "Shared cold startup proof.")],
       methodResponses: { "sessions.list": chatSessionListResponse() },
@@ -195,6 +196,7 @@ suite.define(() => {
     const { page, gateway } = await chatFixture(
       suite,
       {
+        subscriptionInitialHistory: false,
         historyMessages: [timedText("assistant", "Split toolbar proof.")],
         methodResponses: { "sessions.list": chatSessionListResponse() },
         sessionKey: "agent:main:session-a",

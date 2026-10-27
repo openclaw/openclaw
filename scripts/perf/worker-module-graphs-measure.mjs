@@ -1,9 +1,19 @@
+// Worker CPU and allocation use per-isolate counters. --sample-allocation writes a
+// separate inspector allocation pass; its timing must not be used for latency gates.
+// --discovery-skills scales each of four workspaces; --discovery-plugins adds shared contributions.
+// --worker identity-avatar-file measures a 64 KiB local avatar: startup, retained heap and warm reads.
+// --built loads dist workers; source-mode heap includes the TypeScript loader and is not packaged RSS.
+// --build-dir selects a preserved runtime build for --built comparisons.
+// --git-operation provisioning measures the common inspection with no .worktreeinclude file.
 // Run on the benchmark host: node --import ./scripts/tsx.mjs scripts/perf/worker-module-graphs-measure.mjs --state-dir <owned-dir> --output <json>
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { MessageChannel, Worker } from "node:worker_threads";
 import { distribution, installBaselineHook } from "./worker-module-graphs-worker.mjs";
@@ -12,17 +22,36 @@ const { values } = parseArgs({
   options: {
     "state-dir": { type: "string" },
     output: { type: "string" },
+    "discovery-skills": { type: "string", default: "8" },
+    "discovery-plugins": { type: "string", default: "0" },
+    "sample-allocation": { type: "boolean" },
     samples: { type: "string", default: "1200" },
     "start-at": { type: "string" },
     "baseline-dir": { type: "string" },
     "trace-gc": { type: "boolean" },
     snapshots: { type: "boolean" },
     worker: { type: "string" },
+    "git-operation": { type: "string", default: "branches" },
+    built: { type: "boolean" },
+    "build-dir": { type: "string" },
   },
 });
 assert(values["state-dir"] && values.output, "--state-dir and --output are required");
+assert(!values.built || !values["baseline-dir"], "--baseline-dir substitutes source files only");
+assert(!values["build-dir"] || values.built, "--build-dir requires --built");
+assert(["branches", "provisioning"].includes(values["git-operation"]), "unknown --git-operation");
 const state = path.resolve(values["state-dir"]);
 const samples = Number(values.samples);
+const skillCount = Number(values["discovery-skills"]);
+const pluginCount = Number(values["discovery-plugins"]);
+assert(
+  Number.isSafeInteger(skillCount) && skillCount > 0 && skillCount <= 100,
+  "--discovery-skills must be 1–100",
+);
+assert(
+  Number.isSafeInteger(pluginCount) && pluginCount >= 0 && pluginCount <= 100,
+  "--discovery-plugins must be 0–100",
+);
 assert(Number.isSafeInteger(samples) && samples > 0);
 const startAt = values["start-at"] === undefined ? undefined : Number(values["start-at"]);
 assert(startAt === undefined || (Number.isSafeInteger(startAt) && startAt > 0));
@@ -74,11 +103,27 @@ const environment = {
   OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
   OPENCLAW_BUNDLED_SKILLS_DIR: process.env.OPENCLAW_BUNDLED_SKILLS_DIR,
 };
+const pluginContributions = [];
+for (let index = 0; index < pluginCount; index++) {
+  const rootDir = path.join(state, `contribution-${index}`);
+  const skillDir = path.join(rootDir, "skills", `plugin-skill-${index}`);
+  await fs.mkdir(skillDir, { recursive: true });
+  await fs.writeFile(
+    path.join(skillDir, "SKILL.md"),
+    `---\nname: plugin-skill-${index}\ndescription: Provider plugin skill ${index}\n---\nSynthetic instructions.\n`,
+  );
+  pluginContributions.push({
+    id: `provider-${index}`,
+    origin: "bundled",
+    rootDir,
+    roots: ["skills"],
+  });
+}
 const requests = [];
 for (let workspace = 0; workspace < 4; workspace++) {
   const directory = path.join(state, `workspace-${workspace}`);
   const skills = path.join(directory, "skills");
-  for (let index = 0; index < 8; index++) {
+  for (let index = 0; index < skillCount; index++) {
     const skill = path.join(skills, `skill-${index}`);
     await fs.mkdir(skill, { recursive: true });
     await fs.writeFile(
@@ -90,7 +135,24 @@ for (let workspace = 0; workspace < 4; workspace++) {
     key: directory,
     environment,
     selection: {
-      kind: "selected",
+      kind: pluginCount ? "planned" : "selected",
+      ...(pluginCount
+        ? {
+            plan: {
+              input: {
+                workspaceDir: directory,
+                environment,
+                acpRuntimeAvailable: false,
+                pluginContributions,
+                options: {
+                  managedSkillsDir: path.join(state, "managed"),
+                  bundledSkillsDir: path.join(state, "absent"),
+                  pluginSkillsDir: path.join(state, "generated-plugin-skills"),
+                },
+              },
+            },
+          }
+        : {}),
       request: {
         sourcePlan: {
           workspaceDir: directory,
@@ -159,6 +221,7 @@ const initialization = Buffer.from(
 const initBuffer = new SharedArrayBuffer(initialization.length);
 new Uint8Array(initBuffer).set(initialization);
 const entries = {
+  "identity-avatar-file": "src/agents/identity-avatar-file.worker.ts",
   "git-operation": "src/infra/git-operation.worker.ts",
   "plugin-generation-preparation": "src/plugins/plugin-generation-preparation.worker.ts",
   "code-mode-node": "src/agents/code-mode-node.worker.ts",
@@ -166,13 +229,22 @@ const entries = {
 };
 const report = {
   samples,
-  fixture: { workspaces: 4, skillsPerWorkspace: 8, admissionRoots: 100, admissionFiles: 5000 },
+  fixture: {
+    workspaces: 4,
+    skillsPerWorkspace: skillCount,
+    pluginCount,
+    admissionRoots: 100,
+    admissionFiles: 5000,
+  },
   limitations: [
     "Synthetic worker-boundary workload, not a full Team-shaped Gateway",
     "Main-isolate heap and total allocated bytes are not measured",
     "GC time and promotion require separate trace-gc-nvp isolate attribution",
   ],
   baselineDir: values["baseline-dir"] ?? null,
+  built: values.built === true,
+  buildDir: values["build-dir"] ? path.resolve(values["build-dir"]) : null,
+  gitOperation: values["git-operation"],
   workers: {},
 };
 if (values.worker) {
@@ -200,13 +272,28 @@ for (const [name, relative] of Object.entries(entries)) {
   }
   const diagnostics = new MessageChannel();
   const tasks = new MessageChannel();
+  const rssBeforeWorker = process.memoryUsage().rss;
   const worker = new Worker(new URL("./worker-module-graphs-worker.mjs", import.meta.url), {
+    ...(values.built
+      ? { execArgv: ["--import", new URL("./team-shape-stress-loader.mjs", import.meta.url).href] }
+      : {}),
     workerData: {
       name,
-      entry: new URL(`../../${relative}`, import.meta.url).href,
+      ...(name === "identity-avatar-file"
+        ? { baselineFiles: ["src/agents/identity-avatar-file.ts"] }
+        : {}),
+      entry: new URL(
+        values.built ? relative.replace(/^src\//, "dist/").replace(/\.ts$/, ".js") : relative,
+        values["build-dir"]
+          ? pathToFileURL(`${path.resolve(values["build-dir"])}${path.sep}`)
+          : new URL("../../", import.meta.url),
+      ).href,
       diagnostics: diagnostics.port2,
       baselineDir: values["baseline-dir"],
       traceGc: values["trace-gc"],
+      sampleAllocation: values["sample-allocation"]
+        ? path.join(state, `${name}.allocation.json`)
+        : undefined,
     },
     transferList: [diagnostics.port2],
   });
@@ -317,35 +404,48 @@ for (const [name, relative] of Object.entries(entries)) {
       assert.equal(resolveHandle?.kind, "function");
     }
     const request = () =>
-      name === "git-operation"
-        ? { type: "repository.branches", input: { repoRoot: repository } }
-        : name === "plugin-generation-preparation"
-          ? {
-              operation: "call",
-              handle: resolveHandle.id,
-              args: [{ kind: "value", value: entry }],
-              asynchronous: false,
-            }
-          : name === "discovery"
-            ? { kind: "scan", path: process.env.PATH, requests }
-            : {
-                kind: "exec",
-                source:
-                  "const values = Array.from({length: 128}, (_, i) => i); return values.reduce((a, b) => a + b, 0);",
-                initialization: initBuffer,
-                progress: new SharedArrayBuffer(64 + 16384),
-                inlineHost: false,
-                config: {
-                  timeoutMs: 30000,
-                  memoryLimitBytes: 64 * 1024 * 1024,
-                  maxOutputBytes: 16384,
-                  maxSnapshotBytes: 65536,
-                  maxPendingToolCalls: 128,
-                },
-              };
+      name === "identity-avatar-file"
+        ? { workspaceDir: state, source: "avatar.png", readBody: true }
+        : name === "git-operation"
+          ? values["git-operation"] === "provisioning"
+            ? { type: "worktree.provisioning-inspection", input: { sourceRoot: repository } }
+            : { type: "repository.branches", input: { repoRoot: repository } }
+          : name === "plugin-generation-preparation"
+            ? {
+                operation: "call",
+                handle: resolveHandle.id,
+                args: [{ kind: "value", value: entry }],
+                asynchronous: false,
+              }
+            : name === "discovery"
+              ? { kind: "scan", path: process.env.PATH, requests }
+              : {
+                  kind: "exec",
+                  source:
+                    "const values = Array.from({length: 128}, (_, i) => i); return values.reduce((a, b) => a + b, 0);",
+                  initialization: initBuffer,
+                  progress: new SharedArrayBuffer(64 + 16384),
+                  inlineHost: false,
+                  config: {
+                    timeoutMs: 30000,
+                    memoryLimitBytes: 64 * 1024 * 1024,
+                    maxOutputBytes: 16384,
+                    maxSnapshotBytes: 65536,
+                    maxPendingToolCalls: 128,
+                  },
+                };
     const verify = (reply) => {
-      if (name === "git-operation") {
+      if (name === "identity-avatar-file") {
+        assert(reply.ok);
+        assert.equal(reply.file.body.byteLength, 65536);
+        assert.equal(reply.file.body[0], 42);
+        assert.equal(reply.file.body[65535], 42);
+      } else if (name === "git-operation") {
         assert(reply.ok, JSON.stringify(reply.error));
+        if (values["git-operation"] === "provisioning") {
+          assert.deepEqual(reply.value, { paths: [], estimatedBytes: 0 });
+          return;
+        }
         assert.equal(reply.value.headBranch, "main");
         assert(
           reply.value.branches.some((branch) => branch.name === "main" && branch.kind === "local"),
@@ -358,14 +458,22 @@ for (const [name, relative] of Object.entries(entries)) {
         assert.equal(reply.kind, "scan");
         assert.equal(reply.results.length, 4);
         for (const result of reply.results) {
-          assert.equal(result.sources.entries.length, 8);
+          assert.equal(
+            new Set(result.sources.entries.map((skillEntry) => skillEntry.skill.name)).size,
+            skillCount + pluginCount,
+          );
         }
       } else {
         assert.equal(reply.status, "completed", JSON.stringify(reply));
         assert.equal(reply.value.json, "8128");
       }
     };
+    if (name === "identity-avatar-file") {
+      await fs.writeFile(path.join(state, "avatar.png"), Buffer.alloc(65536, 42));
+    }
+    const firstTaskStarted = performance.now();
     const initial = await run(request());
+    const firstTaskMs = performance.now() - firstTaskStarted;
     verify(initial);
     if (name === "plugin-generation-preparation") {
       assert.equal(
@@ -388,6 +496,7 @@ for (const [name, relative] of Object.entries(entries)) {
     }
     await diagnose("begin");
     const latency = [];
+    const hostLoadAtStart = os.loadavg();
     const startedAt = Date.now();
     const started = performance.now();
     for (let index = 0; index < samples; index++) {
@@ -399,7 +508,7 @@ for (const [name, relative] of Object.entries(entries)) {
     const elapsedMs = performance.now() - started;
     const diagnosticsResult = await diagnose("end");
     const retained = await diagnose("inspect");
-    if (name === "git-operation") {
+    if (name === "git-operation" && values["git-operation"] === "branches") {
       git("branch", "observed-after-measurement");
       const changed = await run(request());
       verify(changed);
@@ -412,9 +521,14 @@ for (const [name, relative] of Object.entries(entries)) {
     }
     report.workers[name] = {
       isolateCount: 1,
+      firstTaskMs,
+      coldProcessRssDeltaBytes: cold.memory.rss - rssBeforeWorker,
+      resultHash: createHash("sha256").update(JSON.stringify(initial)).digest("hex"),
       cold,
       warm,
       retained,
+      hostLoadAtStart,
+      hostLoadAtEnd: os.loadavg(),
       startedAt,
       elapsedMs,
       latencyMs: distribution(latency),

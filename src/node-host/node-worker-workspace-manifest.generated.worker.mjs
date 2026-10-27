@@ -58,13 +58,6 @@ function isManagedSandboxSkillsPath(relativePath) {
     relativePath.startsWith(MATERIALIZED_SANDBOX_SKILLS_WORKSPACE + "/")
   );
 }
-const DERIVED_WORKSPACE_DIRECTORY_NAMES = new Set([
-  "__pycache__",
-  ".pytest_cache",
-  ".mypy_cache",
-  ".ruff_cache",
-  "node_modules",
-]);
 const DERIVED_WORKSPACE_ROOT_PATHS = [
   ".cache/vitest",
   ".cache/bun-transpiler",
@@ -92,10 +85,8 @@ function buildCacheInputPaths(paths = []) {
   return retained;
 }
 const RUNTIME_WORKSPACE_ROOT_PATHS = [".artifacts/dist-artifacts.lock", ".openclaw/tmp"];
-const DERIVED_WORKSPACE_FILE_NAMES = new Set([".DS_Store"]);
-const DERIVED_WORKSPACE_FILE_SUFFIXES = [".pyc", ".pyo"];
-const WORKER_ATTACHMENT_DIRECTORY_RE = new RegExp(
-  "^openclaw-inbound-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-4[0-9a-f][0-9a-f][0-9a-f]-[89ab][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]$",
+const DERIVED_WORKSPACE_SEGMENT_RE = new RegExp(
+  "(?:^|/)(?:__pycache__|\\.pytest_cache|\\.mypy_cache|\\.ruff_cache|node_modules|\\.DS_Store|[^/]*\\.pyc|[^/]*\\.pyo|openclaw-inbound-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-4[0-9a-f][0-9a-f][0-9a-f]-[89ab][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])(?![^/])",
 );
 function isRuntimeOwnedWorkspacePath(relativePath) {
   return (
@@ -120,15 +111,7 @@ function isDerivedWorkspacePath(relativePath, retainedInput = false, excludeBuil
   ) {
     return true;
   }
-  const segments = relativePath.split("/");
-  // "$" can match before a final newline; require the entire path segment.
-  return segments.some(
-    (segment) =>
-      WORKER_ATTACHMENT_DIRECTORY_RE.exec(segment)?.[0] === segment ||
-      DERIVED_WORKSPACE_DIRECTORY_NAMES.has(segment) ||
-      DERIVED_WORKSPACE_FILE_NAMES.has(segment) ||
-      DERIVED_WORKSPACE_FILE_SUFFIXES.some((suffix) => segment.endsWith(suffix)),
-  );
+  return DERIVED_WORKSPACE_SEGMENT_RE.test(relativePath);
 }
 function projectWorkspaceEntries(entries, isRetainedInput, excludeBuildCaches = false) {
   const nonemptyDirectories = new Set();

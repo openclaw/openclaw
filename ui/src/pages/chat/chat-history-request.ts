@@ -4,7 +4,8 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { sleepWithAbort } from "@openclaw/retry";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";

@@ -8,6 +8,10 @@ import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
+  combineNonStreamingReplyParts,
+  trimTextPreservingCode,
+} from "../../shared/text/text-projection.js";
+import {
   buildCaptionedFinalTextFallback,
   cleanDeferredFinalText,
   mergeDeferredFinalText,
@@ -676,6 +680,11 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
       }
     },
     getAccumulatedVisibleBlockText: () => joinAcpBlockText(state.blockTexts),
+    // Live chat previews use the same paragraph join as the final webchat message.
+    getVisibleBlockDisplayText: () =>
+      combineNonStreamingReplyParts(
+        state.blockTexts.map((block) => trimTextPreservingCode(block.payload.text ?? "")),
+      ),
     recoverBlockText: async (options?: { onlyUndelivered?: boolean }) => {
       if (!params.suppressBlockUserDelivery) {
         await settleDirectVisibleText();

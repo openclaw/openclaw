@@ -53,12 +53,11 @@ export function selectActivityHeadline(
   return operation.title.trim()
     ? {
         key: operation.toolCallId ?? operation.itemId,
-        // Prepared metadata owns the purpose; never strip a localized tool prefix.
+        // Purpose and outcome are separate: uncertainty must not replace known intent.
         title:
-          (!operation.status ? operation.summary : undefined) ??
           subagentLabel ??
           operation.meta ??
-          (operation.title === resolveToolDisplayIdentity(operation.name).label
+          (operation.status && operation.title === resolveToolDisplayIdentity(operation.name).label
             ? ""
             : operation.title),
         name: operation.name,

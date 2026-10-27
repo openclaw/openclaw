@@ -2,7 +2,6 @@ import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contrac
 import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   computeBackoff,
-  logVerbose,
   sleepWithAbort,
   type BackoffPolicy,
   type RuntimeEnv,
@@ -90,6 +89,8 @@ export async function runSignalSseLoop({
       if (abortSignal?.aborted) {
         return;
       }
+      lastError =
+        "Signal daemon closed the event stream. Check the daemon or proxy, then watch for reconnects.";
     } catch (err) {
       if (abortSignal?.aborted) {
         return;
@@ -113,11 +114,7 @@ export async function runSignalSseLoop({
     publishSignalRecovering(statusSink, lastError);
     reconnectAttempts += 1;
     const delayMs = computeBackoff(reconnectPolicy, reconnectAttempts);
-    if (lastError !== undefined) {
-      runtime.log?.(`Signal connection lost, reconnecting in ${delayMs / 1000}s...`);
-    } else {
-      logVerbose(`Signal stream ended, reconnecting in ${delayMs / 1000}s...`);
-    }
+    runtime.log?.(`Signal connection lost (${lastError}), reconnecting in ${delayMs / 1000}s...`);
     try {
       await sleepWithAbort(delayMs, abortSignal);
     } catch (sleepErr) {

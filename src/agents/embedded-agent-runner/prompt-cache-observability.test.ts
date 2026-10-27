@@ -6,6 +6,7 @@ import * as cryptoDigest from "@openclaw/normalization-core/node-crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Usage } from "../../llm/types.js";
 import { withEnv } from "../../test-utils/env.js";
+import type { SessionEntry } from "../sessions/session-manager-types.js";
 import { normalizeUsage } from "../usage.js";
 import {
   beginPromptCacheObservation,
@@ -19,6 +20,11 @@ import {
 } from "./prompt-cache-observability.test-support.js";
 import { createPromptCacheRequestObserver } from "./prompt-cache-request-observer.js";
 import { prepareProviderPrompt } from "./provider-prompt-serialization.js";
+import {
+  persistSessionSystemPrompt,
+  prepareSessionSystemPrompt,
+  retainEmbeddedSessionPromptState,
+} from "./session-prompt-state.js";
 
 let testScope = 0;
 
@@ -28,6 +34,49 @@ function scopedKey(value: string): string {
 
 describe("prompt cache observability", () => {
   afterEach(() => vi.restoreAllMocks());
+
+  it("reports the bounded personal-profile restart reason and subsequent pinned reuse on drops", async () => {
+    const sessionId = scopedKey("personal-profile-series");
+    using lease = retainEmbeddedSessionPromptState(sessionId);
+    const entries: SessionEntry[] = [];
+    const model = { provider: "openai", id: "gpt-5.4", api: "openai-responses" as const };
+    let status: ReturnType<typeof prepareSessionSystemPrompt>["seriesStatus"];
+    const observer = createPromptCacheRequestObserver(
+      { sessionId, streamStrategy: "test", getSystemPromptSeries: () => status },
+      () => {},
+    );
+    for (const [profile, cacheRead, expected] of [
+      ["selected-human", 10_000, "restarted:new"],
+      [undefined, 7_000, "restarted:route:personalProfile"],
+      [undefined, 3_000, "pinned"],
+    ] as const) {
+      const prepared = prepareSessionSystemPrompt({
+        state: lease.state,
+        routeKey: JSON.stringify([model.provider, model.id, model.api, null, true, profile]),
+        systemPrompt: "Synthetic instructions",
+        entries,
+      });
+      status = prepared.seriesStatus;
+      prepared.commit();
+      await persistSessionSystemPrompt(lease.state, (customType, data) => {
+        entries.push({
+          type: "custom",
+          customType,
+          data,
+          id: `checkpoint-${entries.length}`,
+          parentId: null,
+          timestamp: "2026-10-01T00:00:00Z",
+        });
+      });
+      await observer.onModelRequest(model, { systemPrompt: prepared.systemPrompt, messages: [] });
+      observer.onModelUsage({ cacheRead });
+      expect(observer.getObservation()).toMatchObject({
+        broke: cacheRead < 10_000,
+        systemPromptSeries: expected,
+      });
+      expect(JSON.stringify(observer.getObservation())).not.toContain("selected-human");
+    }
+  });
 
   it("bounds field details while detecting later item and tail changes", () => {
     const identity = { sessionId: scopedKey("bounded-wire-tail") };

@@ -21,6 +21,11 @@ const captureRef = (directory: string) => ({
   manifestPath: path.join(directory, "manifest.json"),
   manifestSha256: "0".repeat(64),
 });
+const captured = (directory: string) => ({
+  ref: captureRef(directory),
+  warnings: [],
+  diagnostics: { databaseWarnings: [] },
+});
 const captureDefaults = () => ({
   root: process.cwd(),
   runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
@@ -44,11 +49,7 @@ it.each(["admission", "worker"] as const)(
             await vi.advanceTimersByTimeAsync(10 * 60_000);
           }
           signal?.throwIfAborted();
-          return {
-            ref: captureRef(state.stateDir),
-            warnings: [],
-            diagnostics: { databaseWarnings: [] },
-          };
+          return captured(state.stateDir);
         },
       );
       const result = await preserveDoctorOriginalState({ ...captureDefaults(), env: state.env });
@@ -132,11 +133,7 @@ it("keeps one sealed container capture, skips repeats, and still retires old cap
         const directory = path.join(captureRoot, runId);
         fs.mkdirSync(directory, { recursive: true });
         fs.writeFileSync(path.join(directory, "manifest.json"), "{}");
-        return {
-          ref: captureRef(directory),
-          warnings: [],
-          diagnostics: { databaseWarnings: [] },
-        };
+        return captured(directory);
       });
     const retire = vi
       .spyOn(retention, "retireExpiredStandaloneDoctorCaptures")

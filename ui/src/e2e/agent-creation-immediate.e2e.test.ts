@@ -6,6 +6,7 @@ import {
   installMockGateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import { getInitialHistoryRequests } from "./chat-initial-history.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eSuite,
@@ -156,7 +157,7 @@ suite.define(() => {
       const originalPane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
       await originalPane.getByText(previousMessage, { exact: true }).waitFor();
       const originalUrl = page.url();
-      const startupRequests = await gateway.getRequests("chat.startup");
+      const historySubscriptions = await getInitialHistoryRequests(gateway);
       const sidebar = page.locator("openclaw-app-sidebar");
       const selectorButton = sidebar.locator(".sidebar-agent-card__main");
       await selectorButton.click();
@@ -227,7 +228,7 @@ suite.define(() => {
       const agentId = request.params.agentId;
       expect(new URL(page.url()).pathname).toBe(`/chat/${agentId}`);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      expect(await gateway.getRequests("chat.startup")).toEqual(startupRequests);
+      expect(await getInitialHistoryRequests(gateway)).toEqual(historySubscriptions);
       await selectorButton.click();
       const firstAgent = selector.locator('[data-value^="agent:"]').first();
       await expect.poll(() => firstAgent.getAttribute("data-value")).toBe(`agent:${agentId}`);
@@ -243,7 +244,7 @@ suite.define(() => {
       await originalPane.getByText(previousMessage, { exact: true }).waitFor();
       expect(await page.locator("openclaw-pending-session-create").count()).toBe(0);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      expect(await gateway.getRequests("chat.startup")).toEqual(startupRequests);
+      expect(await getInitialHistoryRequests(gateway)).toEqual(historySubscriptions);
       await selectorButton.click();
       await selector.waitFor({ state: "visible" });
       expect(await selector.locator(`[data-value="agent:${agentId}"]`).count()).toBe(0);

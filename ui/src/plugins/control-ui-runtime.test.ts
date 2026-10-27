@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { PluginsControlUiCatalog } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { createApplicationConfigCapability } from "../app/config.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { createGatewayEvent } from "../app/gateway-store.test-support.ts";

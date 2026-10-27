@@ -82,6 +82,15 @@ suite.define(() => {
           const bounds = await body.boundingBox();
           expect(bounds).not.toBeNull();
           const width = await roundedWidth(nav);
+          // The center of a 16px folding control at the content edge stays clickable.
+          expect(
+            await page.locator("main.content").evaluate((element, pageDirection) => {
+              const rect = element.getBoundingClientRect();
+              const x = pageDirection === "rtl" ? rect.right - 8 : rect.left + 8;
+              const hit = document.elementFromPoint(x, rect.top + 50);
+              return hit !== null && element.contains(hit);
+            }, direction),
+          ).toBe(true);
           const scrollbarWidth = await body.evaluate(
             (element) => element.getBoundingClientRect().width - element.clientWidth,
           );

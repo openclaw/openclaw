@@ -2,6 +2,7 @@
  * Gateway startup plugin bootstrap tests.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createInfoWarnErrorDebugLogger as createLog } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
@@ -62,6 +63,9 @@ const pluginManifestRegistry = vi.hoisted((): PluginManifestRegistry => ({
   ],
   diagnostics: [],
 }));
+const { makeEmptyPluginMetadataOwners } = await vi.hoisted(
+  () => import("../plugins/plugin-metadata-empty.test-support.js"),
+);
 const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
   const index: PluginMetadataSnapshot["index"] = {
     version: 1,
@@ -86,18 +90,7 @@ const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
     byPluginId: new Map(),
     normalizePluginId: (pluginId) => pluginId,
     declaredProviderOwners: new Map(),
-    owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-      providerAuthContributions: [],
-      modelIdNormalizationPolicies: new Map(),
-    },
+    owners: makeEmptyPluginMetadataOwners(),
     metrics: {
       registrySnapshotMs: 0,
       manifestRegistryMs: 0,
@@ -211,15 +204,6 @@ vi.mock("./server-startup-session-migration.js", () => ({
   runGatewaySessionStartupMaintenance: (params: unknown) =>
     runGatewaySessionStartupMaintenance(params),
 }));
-
-function createLog() {
-  return {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  };
-}
 
 function firstCallArg<T>(mock: { mock: { calls: unknown[][] } }, _type?: (value: T) => T): T {
   const call = mock.mock.calls.at(0);

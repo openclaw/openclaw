@@ -7,6 +7,7 @@ import "../../components/modal-dialog.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { renderPluginOfficialBadge } from "../plugins/plugin-card.tsx";
 import type { SkillsProps } from "./view-types.ts";
 
 export function MarkdownContent(props: {
@@ -101,6 +102,7 @@ export function ClawHubDetailDialog(props: { view: SkillsProps; installLocked: b
                 )}
               </Show>
               <div class="exec-approval-title">{detail()?.skill?.displayName ?? reference()}</div>
+              <Show when={detail()?.skill?.isOfficial}>{renderPluginOfficialBadge()}</Show>
             </Loading>
           </Errored>
         </div>

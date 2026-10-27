@@ -6,7 +6,7 @@ import type {
   WorkerEnvironmentProfileSummary,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
+import { nativeRuntime, createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
   answerConfirmDialog,
@@ -15,6 +15,7 @@ import {
 } from "../../test-helpers/modal-dialog.ts";
 import { stubResizeObserver } from "../../test-helpers/resize-observer.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import {
   createPlacementPane,
   selectPlacementConfiguration,
@@ -26,7 +27,6 @@ import {
   activePlacementSession as placementSession,
   offlineDeviceSession,
   createTestChatPane,
-  createGatewayBrowserClientFixture,
 } from "./chat-pane.test-support.ts";
 
 function activePlacementSession() {
@@ -133,14 +133,7 @@ function repositoryRecoveryFixture(placementState: "local" | undefined) {
           },
         }
       : {}),
-    agentRuntime: {
-      id: "openclaw",
-      cloudPlacementSupported: true,
-      cloudPlacementExecutionMode: "worker-turn",
-      devicePlacementSupported: true,
-      devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-      source: "model",
-    },
+    agentRuntime: { ...nativeRuntime(), devicePlacementSupported: true },
   };
   state.sessionKey = session.key;
   state.currentSessionId = session.sessionId;

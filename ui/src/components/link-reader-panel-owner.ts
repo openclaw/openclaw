@@ -3,7 +3,7 @@ import type {
   ControlUiLinkReaderDocument,
   ControlUiLinkReaderDetailParams,
 } from "../../../src/shared/control-ui-link-reader.js";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { t } from "../i18n/index.ts";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
 import { createDockLayout } from "./dock-layout.ts";

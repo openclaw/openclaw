@@ -30,12 +30,10 @@ import "../styles/agent-create-dialog.css";
 
 registerAgentCreationEnglish();
 
-export type AgentCreateIdentity = { name: string; avatar: string | null };
-
 export function AgentCreateDialog(props: {
   context: ApplicationContext;
   onCancel: () => void;
-  onCreate: (identity: AgentCreateIdentity) => void;
+  onCreate: (identity: { name: string; avatar: string | null }) => void;
 }) {
   const [name, setName] = createSignal("");
   const [avatar, setAvatar] = createSignal<string | null>(null);

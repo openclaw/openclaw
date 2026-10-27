@@ -37,14 +37,7 @@ export function spawnSyncResult(stdout: string, status = 0): SpawnSyncResult {
 }
 const spawnSync = vi.hoisted(() =>
   vi.fn<(command: string, args?: readonly string[], options?: SpawnSyncOptions) => SpawnSyncResult>(
-    () => ({
-      pid: 0,
-      output: [null, "-2147024891", ""],
-      stdout: "-2147024891",
-      stderr: "",
-      status: 1,
-      signal: null,
-    }),
+    () => spawnSyncResult("-2147024891", 1),
   ),
 );
 
@@ -245,6 +238,7 @@ beforeEach(() => {
   findVerifiedGatewayListenerPidsOnPortSync.mockReset().mockReturnValue([]);
   timeState.now = 0;
   vi.spyOn(Date, "now").mockImplementation(() => timeState.now);
+  vi.spyOn(performance, "now").mockImplementation(() => timeState.now);
   spawnSync
     .mockReset()
     .mockImplementation((_exe, args) =>

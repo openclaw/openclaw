@@ -178,7 +178,10 @@ export function createSessionRowAncestorReads(owner: {
   state: () => { cfg: records.Inputs["cfg"]; context: SessionRowReadView["state"]["rowContext"] };
   referenced: (reference: string) => records.Row | undefined;
   lookup: (query: records.Lookup) => records.Row | undefined;
-  prepareExactRows: (queries: readonly records.Lookup[]) => Promise<void> | undefined;
+  prepareExactRows: (
+    queries: readonly records.Lookup[],
+    fromSelection?: boolean,
+  ) => Promise<void> | undefined;
   prepareSelection: (options?: SessionRowSelectionPreparationOptions) => Promise<void> | undefined;
   retainExactPreparation: () => () => void;
   retainArchiveRows: () => { update: (ids: readonly string[]) => void; release: () => void };
@@ -249,9 +252,6 @@ export function createSessionRowAncestorReads(owner: {
       try {
         while (owner.isActive()) {
           try {
-            while (owner.isActive() && owner.membership.needsPreparation(selected)) {
-              await owner.membership.prepare();
-            }
             const prepared = await owner.placementFacts.withPreparedRows<
               T | typeof membershipPending
             >(
@@ -263,6 +263,7 @@ export function createSessionRowAncestorReads(owner: {
                 archivedRows.update(
                   targets.flatMap((query) => {
                     if (
+                      !options?.selection &&
                       isIncognitoSessionKey(
                         resolveStoredSessionKeyForAgentStore({
                           cfg: owner.state().cfg,
@@ -280,7 +281,7 @@ export function createSessionRowAncestorReads(owner: {
                 if (owner.membership.needsPreparation(() => targets)) {
                   return owner.membership.prepare();
                 }
-                return owner.prepareExactRows(targets);
+                return owner.prepareExactRows(targets, Boolean(options?.selection));
               },
               (read, targets) => {
                 if (owner.membership.needsPreparation(() => targets)) {

@@ -12,6 +12,7 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { observeSettlement } from "../../agents/promise-settlement.test-support.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import {
   WorkerTunnelOwnerDisconnectedError,
@@ -211,15 +212,6 @@ function mockPublication(
     transactionCalls,
     publishing: publisher.publishAcceptedManifest(acceptedPublication),
   };
-}
-
-function observeSettlement(promise: Promise<unknown>) {
-  let settled = false;
-  const markSettled = () => {
-    settled = true;
-  };
-  void promise.then(markSettled, markSettled);
-  return () => settled;
 }
 
 function createPublisher(

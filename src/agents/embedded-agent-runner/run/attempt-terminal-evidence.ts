@@ -111,21 +111,6 @@ export function hasAsyncActivity(toolMetas?: readonly { asyncStarted?: boolean }
   return (toolMetas ?? []).some((entry) => entry.asyncStarted === true);
 }
 
-type AcceptedSessionSpawnContinuationAttempt = Pick<
-  EmbeddedRunAttemptResult,
-  | Exclude<keyof TerminalAttemptState, "hasToolMediaBlockReply">
-  | "assistantTexts"
-  | "terminal"
-  | "sourceReplyDelivered"
-  | "preparedTerminalReply"
-  | "sourceReplyDeliveryState"
->;
-
-type AcceptedSessionSpawnContinuationRun = Pick<
-  RunEmbeddedAgentParams,
-  "currentInboundEventKind" | "inputProvenance" | "replyOperation" | "silentExpected"
->;
-
 /**
  * A visible parent that delegates its entire response to completion children or
  * to a still-running detached media run must remain alive for completion delivery.
@@ -133,8 +118,19 @@ type AcceptedSessionSpawnContinuationRun = Pick<
  * terminal ownership instead.
  */
 export function shouldContinueInteractiveAcceptedSessionSpawns(params: {
-  attempt: AcceptedSessionSpawnContinuationAttempt;
-  run: AcceptedSessionSpawnContinuationRun;
+  attempt: Pick<
+    EmbeddedRunAttemptResult,
+    | Exclude<keyof TerminalAttemptState, "hasToolMediaBlockReply">
+    | "assistantTexts"
+    | "terminal"
+    | "sourceReplyDelivered"
+    | "preparedTerminalReply"
+    | "sourceReplyDeliveryState"
+  >;
+  run: Pick<
+    RunEmbeddedAgentParams,
+    "currentInboundEventKind" | "inputProvenance" | "replyOperation" | "silentExpected"
+  >;
 }): boolean {
   const { attempt, run } = params;
   // Only an in-flight media run still owes this turn its result.

@@ -67,7 +67,7 @@ async function installImageGalleries(page: Page) {
     })),
   });
   await page.goto(`${suite.server.baseUrl}chat`);
-  await gateway.waitForRequest("chat.startup");
+  await gateway.waitForRequest("sessions.messages.subscribe");
 }
 
 suite.define(() => {
@@ -115,7 +115,7 @@ suite.define(() => {
     });
 
     await page.goto(`${suite.server.baseUrl}chat`);
-    await gateway.waitForRequest("chat.startup");
+    await gateway.waitForRequest("sessions.messages.subscribe");
 
     const transcriptTrigger = page.getByRole("button", { name: "Open image OpenClaw banner" });
     await transcriptTrigger.waitFor({ state: "visible", timeout: 10_000 });
@@ -370,7 +370,7 @@ suite.define(() => {
       ],
     });
     await page.goto(suite.server.baseUrl + "chat");
-    await gateway.waitForRequest("chat.startup");
+    await gateway.waitForRequest("sessions.messages.subscribe");
     const trigger = exactButton(page, "Open image before.png");
     const lightbox = page.locator("openclaw-image-lightbox");
     const image = lightbox.locator(".image");

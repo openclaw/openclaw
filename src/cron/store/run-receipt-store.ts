@@ -8,7 +8,6 @@ import {
 import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../../infra/sqlite-schema-ensure.js";
 import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
-import { cronStoreKey } from "./key.js";
 import {
   receiptFromRow,
   receiptHandle,
@@ -170,7 +169,7 @@ export function findActiveCronRunReceiptInDatabase(params: {
   storePath: string;
   jobId: string;
 }): CronRunReceiptRecoveryCandidate | undefined {
-  const row = activeRow(params.database, cronStoreKey(params.storePath), params.jobId);
+  const row = activeRow(params.database, params.storePath, params.jobId);
   return row ? receiptHandle(receiptFromRow(row)) : undefined;
 }
 
@@ -178,7 +177,7 @@ export function listActiveCronRunReceiptJobIdsInDatabase(
   database: EngineConnection,
   storePath: string,
 ) {
-  return new Set(activeRow(database, cronStoreKey(storePath)).map((row) => row.job_id));
+  return new Set(activeRow(database, storePath).map((row) => row.job_id));
 }
 
 /** Advances a queued request to its execution start inside the marker transaction. */

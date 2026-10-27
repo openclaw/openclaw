@@ -1,6 +1,9 @@
+import { setImmediate as yieldImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
+import { recordGatewayWsEvent } from "../gateway/server/ws-connection-diagnostics.js";
 import { hasInternalDiagnosticEventInterest } from "../infra/diagnostic-event-listener-presence.js";
 import {
+  getInternalDiagnosticEventSequence,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
@@ -157,6 +160,93 @@ it("keeps worker metric demand live across subscription, diagnostics disablement
     expect(() => diagnostics.onWorkerRequestMetrics?.(received)).toThrow("no longer active");
   } finally {
     request.completed();
+    lease.revoke();
+  }
+});
+
+it("delivers batched WebSocket metrics without allocating diagnostic events and preserves requested snapshots", async () => {
+  const { lease, diagnostics } = createExporterDiagnostics();
+  const received: unknown[][] = [];
+  try {
+    diagnostics.onGatewayWsMetrics?.(() => {
+      throw new Error("Synthetic exporter failure");
+    });
+    diagnostics.onGatewayWsMetrics?.(
+      (event, count, bytes, wireBytes, buckets, labels, sessionEvent, presenceMode) => {
+        received.push([
+          event,
+          count,
+          bytes,
+          wireBytes,
+          Array.from(buckets),
+          labels,
+          sessionEvent,
+          presenceMode,
+        ]);
+      },
+    );
+    const seq = getInternalDiagnosticEventSequence();
+    expect(recordGatewayWsEvent("chat", 256)).toBe(true);
+    recordGatewayWsEvent("chat", 257);
+    recordGatewayWsEvent("chat", 0, undefined, undefined, 42);
+    await yieldImmediate();
+    await waitForDiagnosticEventsDrained();
+    expect(received).toEqual([
+      [
+        "chat",
+        2,
+        513,
+        42,
+        [1, 1, 0, 0, 0, 0, 0, 0, 0],
+        ["256", "512", "1024", "2048", "4096", "8192", "16384", "65536", "+Inf"],
+        undefined,
+        undefined,
+      ],
+    ]);
+    expect(getInternalDiagnosticEventSequence() - seq).toBe(0);
+
+    const events = vi.fn();
+    const unsubscribe = diagnostics.onEvent(events, { include: ["gateway.ws.event"] });
+    recordGatewayWsEvent("chat", 512);
+    await yieldImmediate();
+    await waitForDiagnosticEventsDrained();
+    const snapshot = events.mock.calls[0]![0];
+    expect(snapshot).toMatchObject({
+      type: "gateway.ws.event",
+      event: "chat",
+      count: 1,
+      bytes: 512,
+      frameBytes: {
+        "256": 0,
+        "512": 1,
+        "1024": 1,
+        "2048": 1,
+        "4096": 1,
+        "8192": 1,
+        "16384": 1,
+        "65536": 1,
+        "+Inf": 1,
+      },
+    });
+    recordGatewayWsEvent("chat", 0, undefined, undefined, 0);
+    await yieldImmediate();
+    await waitForDiagnosticEventsDrained();
+    expect(events.mock.calls[1]![0]).toMatchObject({ count: 0, bytes: 0, wireBytes: 0 });
+    expect(events.mock.calls[1]![0].frameBytes).toBeUndefined();
+    expect(snapshot.count).toBe(1);
+    expect(snapshot.frameBytes["512"]).toBe(1);
+    unsubscribe();
+    setDiagnosticsEnabledForProcess(false);
+    expect(recordGatewayWsEvent("chat", 1)).toBe(false);
+    setDiagnosticsEnabledForProcess(true);
+    // Revocation between collection and flush removes the borrowed-data consumer.
+    recordGatewayWsEvent("chat", 1);
+    lease.revoke();
+    await yieldImmediate();
+    expect(received).toHaveLength(3);
+    expect(recordGatewayWsEvent("chat", 1)).toBe(false);
+    expect(() => diagnostics.onGatewayWsMetrics?.(() => {})).toThrow("no longer active");
+  } finally {
     lease.revoke();
   }
 });

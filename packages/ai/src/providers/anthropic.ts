@@ -1,4 +1,3 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { Stream } from "@anthropic-ai/sdk/core/streaming.js";
 import type { RawMessageStreamEvent } from "@anthropic-ai/sdk/resources/messages.js";
 import { getEnvApiKey } from "../env-api-keys.js";
@@ -45,6 +44,7 @@ export type {
 const FINE_GRAINED_TOOL_STREAMING_BETA = "fine-grained-tool-streaming-2025-05-14";
 const INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14";
 const ANTHROPIC_MIN_THINKING_BUDGET_TOKENS = 1024;
+let anthropicSdkModule: Promise<typeof import("@anthropic-ai/sdk")> | undefined;
 
 function getAnthropicCompat(model: Model<"anthropic-messages">) {
   const isFireworks = model.provider === "fireworks";
@@ -116,7 +116,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
     stream,
     options: requestOptions,
     profile: "provider",
-    prepare: () => {
+    prepare: async () => {
       let client = requestOptions?.client;
       let isOAuthToken = false;
       let serverSideFallback = false;
@@ -223,6 +223,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
               )?.[1] ?? "";
           }
         }
+        const { default: Anthropic } = await (anthropicSdkModule ??= import("@anthropic-ai/sdk"));
         client = new Anthropic({
           ...clientOptions,
           apiKey: configuredApiKey,

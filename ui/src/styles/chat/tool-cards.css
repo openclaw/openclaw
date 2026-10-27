@@ -263,6 +263,13 @@
   flex-shrink: 0;
 }
 
+.chat-tool-brand-icon {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+  border-radius: 3px;
+}
+
 .chat-tool-activity-icon {
   width: 16px;
   height: 16px;
@@ -1123,7 +1130,7 @@
 }
 
 .chat-activity-group__label.chat-activity-group__label--live {
-  color: var(--text);
+  color: inherit;
   text-overflow: ellipsis;
 }
 

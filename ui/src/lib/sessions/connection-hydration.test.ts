@@ -8,14 +8,11 @@ import { afterEach, expect, it, vi } from "vitest";
 // @vitest-environment node
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import {
-  GatewayRequestError,
-  type GatewayBrowserClient,
-  type GatewayEventFrame,
-} from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { retryableGatewayError as retryError } from "../../test-helpers/gateway-errors.test-support.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { sessionRequest } from "./hydration-family.test-support.ts";
@@ -37,13 +34,7 @@ afterEach(() => {
 function requestFor(subscribe: () => unknown, list: (params?: Record<string, unknown>) => unknown) {
   return sessionRequest({ "sessions.subscribe": subscribe, "sessions.list": list });
 }
-const retryError = (message: string) =>
-  new GatewayRequestError({
-    code: "UNAVAILABLE",
-    message,
-    retryable: true,
-    retryAfterMs: 100,
-  });
+
 function hydration(request: GatewayBrowserClient["request"]) {
   const harness = createSubscriptionHydrationHarness(request);
   cleanup.push(harness.sessions.dispose);

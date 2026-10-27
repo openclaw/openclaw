@@ -349,6 +349,7 @@ suite.define(() => {
   it("gates unavailable voice capabilities in the microphone picker", () =>
     suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         heldMethods: ["chat.startup", "talk.catalog"],
         historyMessages: [TALK_READY_HISTORY_MESSAGE],
         methodResponses: { "talk.catalog": catalog(false, false) },
@@ -387,6 +388,11 @@ suite.define(() => {
         await waitForTalkReady(page);
 
         const microphone = button(page, "Dictation");
+        const microphoneColors = await microphone.evaluate((element) => ({
+          button: getComputedStyle(element).color,
+          icon: getComputedStyle(element.querySelector("svg")!).color,
+        }));
+        expect(microphoneColors.icon).toBe(microphoneColors.button);
         await microphone.click();
         await gateway.waitForRequest("talk.session.create");
 

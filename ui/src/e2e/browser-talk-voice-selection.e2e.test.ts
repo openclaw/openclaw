@@ -163,7 +163,7 @@ suite.define(() => {
       });
       await expect
         .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
-        .toContain("Saved");
+        .toContain("Apply changes");
       await page.reload();
       await expect.poll(() => voice.inputValue()).toBe("alloy");
     });

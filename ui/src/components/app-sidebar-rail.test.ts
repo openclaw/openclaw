@@ -22,9 +22,11 @@ import { domProbe } from "../test-helpers/dom-probe.ts";
 import { createDataTransferStub } from "../test-helpers/drag-data.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
+import { createMediaQueryList } from "../test-helpers/media-query.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { AppSidebar, getAppSidebarOwner } from "./app-sidebar.tsx";
+import { restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 import { dispatchMousePointer, settleTooltip } from "./tooltip.test-support.ts";
 
@@ -71,16 +73,9 @@ async function click(sidebar: Sidebar, selector: string) {
 }
 
 function mockMobile(matches: (query: string) => boolean) {
-  vi.spyOn(globalThis, "matchMedia").mockImplementation((media) => ({
-    media,
-    matches: matches(media),
-    onchange: null,
-    addListener() {},
-    removeListener() {},
-    addEventListener() {},
-    removeEventListener() {},
-    dispatchEvent: () => true,
-  }));
+  vi.spyOn(globalThis, "matchMedia").mockImplementation((media) =>
+    createMediaQueryList(media, matches(media)),
+  );
 }
 
 function rail(sidebar: Sidebar, entry: string) {
@@ -114,7 +109,7 @@ async function seed(sidebar: Sidebar, rows: Parameters<Sidebar["pinnedSessions"]
   await sidebar.updateComplete;
 }
 function cachedPin(key: string, label = "Saved title") {
-  return { key, label, pinned: true, isChild: false, children: [] };
+  return restoreSnapshotSession({ key, label, pinned: true, isChild: false, children: [] }, "");
 }
 async function pinLookup(key = "agent:other:unloaded", fallback = false) {
   const base = await fixture();
@@ -170,6 +165,7 @@ describe("personal navigation rail", () => {
       [false, false],
     );
     await click(sidebar, '[data-navigation-view="pages"]');
+    await vi.dynamicImportSettled();
     await waitForSolid(() => expect(dom.query(".sidebar-pages")).not.toBeNull());
     expect(dom.query(".sidebar-session-content")).toBeNull();
     expect(dom.query("aside.sidebar")).toBe(frame);

@@ -209,6 +209,10 @@ it.each([
   const batchRunIds = ["completion-run", mixed ? "surviving-sibling" : "already-retired-sibling"];
   await withMailbox(
     async ({ entry, inputs, reserve, database }) => {
+      // Cohort custody is restored after child delivery has settled.
+      entry.delivery = { status: "delivered" };
+      entry.cleanupCompletedAt = entry.execution.endedAt;
+      seedSubagentCompletionOwner({ subagent: entry, databaseOptions: { database } });
       const sibling = {
         ...structuredClone(entry),
         runId: "surviving-sibling",

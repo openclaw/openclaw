@@ -36,3 +36,7 @@ export function createModelFallbackConfig(primary: string, fallbacks: string[]):
     },
   };
 }
+
+export function createFixtureProviderModels(baseUrl: string): OpenClawConfig["models"] {
+  return { providers: { fixture: { api: "openai-completions", baseUrl, models: [] } } };
+}

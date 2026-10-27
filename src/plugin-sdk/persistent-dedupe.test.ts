@@ -37,6 +37,21 @@ it("fails open for invalid keys without recording them", async () => {
   expect(process).toHaveBeenCalledOnce();
 });
 
+it("keeps claim keys frozen and isolated from the caller's mutable keys", async () => {
+  const guard = createGuard();
+  const keys = [" first ", "second", "first"];
+  const claim = await guard.claim({ accountId: "work", keys });
+  assert(claim.kind === "claimed");
+  keys.splice(0, keys.length, "replacement");
+
+  expect(Object.isFrozen(claim.handle.keys)).toBe(true);
+  expect(claim.handle.keys).toEqual(["first", "second"]);
+  await expect(claim.handle.commit()).resolves.toBe(true);
+  await expect(guard.claimKeys("first", "second")).resolves.toEqual({ kind: "duplicate" });
+  const replacement = await guard.own("replacement");
+  replacement.release();
+});
+
 it.each(["first", "second"] as const)("settles only owned keys when %s fails", async (failed) => {
   const guard = createGuard();
   const first = await guard.own("shared", "first-only");

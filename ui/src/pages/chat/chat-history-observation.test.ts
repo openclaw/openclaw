@@ -6,7 +6,7 @@ import { createRouter, definePage } from "@openclaw/uirouter";
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -19,6 +19,7 @@ import {
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { createInitializationContext } from "./chat-application-context.test-support.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
 import type { ChatHistoryResponse } from "./chat-history-snapshot.ts";
@@ -26,11 +27,7 @@ import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
 import { subscribeChatPaneSnapshotInvalidation } from "./chat-pane-startup-subscriptions.ts";
-import {
-  createInitializationContext,
-  createRenderTestChatPane,
-  nativeHistoryMessage,
-} from "./chat-pane.test-support.ts";
+import { createRenderTestChatPane, nativeHistoryMessage } from "./chat-pane.test-support.ts";
 import { createPageState } from "./chat-state-page.ts";
 import {
   refreshChatMetadata,

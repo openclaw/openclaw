@@ -136,7 +136,8 @@
   grid-area: actions;
 }
 
-.hub-page-header--stacked + .settings-workspace {
+/* Keep the stacked-header gap independent of lazy stylesheet order. */
+.content-header.hub-page-header--stacked + .settings-workspace {
   margin-top: 0;
 }
 

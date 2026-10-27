@@ -1213,17 +1213,17 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       config,
     });
     expect(result.ok, JSON.stringify(result)).toBe(true);
-    const expectedSelection = { provider: "anthropic", runtime: "codex" };
-    expect(plannedCompactionPluginSelections(config)).toContainEqual(
-      expect.objectContaining({ ...expectedSelection, modelId: "claude-fallback" }),
-    );
+    const fallback = { provider: "anthropic", modelId: "claude-fallback", agentId: "main" };
+    expect(plannedCompactionPluginSelections(config)).toContainEqual(fallback);
     const admittedConfig = defaultsConfig({
       ...config.agents?.defaults,
       compaction: { model: "anthropic/reloaded-summary" },
     });
-    expect(plannedCompactionPluginSelections(admittedConfig)).toContainEqual(
-      expect.objectContaining({ ...expectedSelection, modelId: "reloaded-summary" }),
-    );
+    expect(plannedCompactionPluginSelections(admittedConfig)).toContainEqual({
+      ...fallback,
+      modelId: "reloaded-summary",
+      runtime: "codex",
+    });
   });
 
   it("revalidates immutable Ultra for each fallback", async () => {

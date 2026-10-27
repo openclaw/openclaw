@@ -4,7 +4,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import postcss, { type Rule } from "postcss";
 import { describe, expect, it } from "vitest";
-import { readThemeBlocks } from "./theme-palette.test-support.ts";
+import {
+  readThemeBlocks,
+  resolveThemes,
+  resolveColor,
+  resolveOpaqueColor,
+  type TokenMap,
+  type RGB,
+  type Color,
+} from "./theme-palette.test-support.ts";
 
 const stylesDir = path.dirname(fileURLToPath(import.meta.url));
 const readStyle = (name: string) => fs.readFileSync(path.join(stylesDir, name), "utf8");
@@ -23,40 +31,6 @@ const AA_NORMAL_TEXT_MIN = 4.5;
 const contrastFloor = (theme: string) => (AAA_THEMES.has(theme) ? 7 : AA_NORMAL_TEXT_MIN);
 const SURFACE_TOKENS = ["--bg", "--bg-elevated", "--bg-muted", "--card", "--panel"] as const;
 
-type TokenMap = Map<string, string>;
-type RGB = readonly [red: number, green: number, blue: number];
-type Color = { rgb: RGB; alpha: number };
-const number = (value = "") => Number.parseFloat(value);
-const channels = (read: (index: 0 | 1 | 2) => number): RGB => [read(0), read(1), read(2)];
-
-/** Compose each selectable theme the way theme.ts layers blocks over :root. */
-function resolveThemes(blocks: Map<string, TokenMap>): Map<string, TokenMap> {
-  const root = blocks.get(":root") ?? new Map();
-  const light = blocks.get(':root:where([data-theme-mode="light"])') ?? new Map();
-  const names = [
-    "dark",
-    "light",
-    ..."openknot dash absolutely tide beacon phosphor crt manuscript rose miami"
-      .split(" ")
-      .flatMap((name) => [name, `${name}-light`]),
-  ];
-  return new Map(
-    names.map((name) => [
-      name,
-      new Map([
-        ...root,
-        ...(name === "light" || name.endsWith("-light") ? light : []),
-        ...(blocks.get(`:root[data-theme="${name}"]`) ?? []),
-      ]),
-    ]),
-  );
-}
-
-function parseHex(hex: string): RGB {
-  const match = required(hex.match(/^#([\da-f]{2})([\da-f]{2})([\da-f]{2})$/iu), hex);
-  return channels((index) => Number.parseInt(match[index + 1] ?? "", 16));
-}
-
 function relativeLuminance(rgb: RGB): number {
   const [red, green, blue] = rgb.map((value) => {
     const channel = value / 255;
@@ -71,110 +45,12 @@ function contrastRatio(foreground: RGB, background: RGB): number {
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 }
 
-function parseAlpha(value: string | undefined): number {
-  return value ? number(value) / (value.endsWith("%") ? 100 : 1) : 1;
-}
-
-function hslToRgb(hue: number, saturation: number, lightness: number): RGB {
-  // CSS Color's HSL-to-sRGB formula, with hue normalized for negative inputs.
-  const amplitude = saturation * Math.min(lightness, 1 - lightness);
-  const channel = (offset: number) => {
-    const k = (offset + (((hue % 360) + 360) % 360) / 30) % 12;
-    return 255 * (lightness - amplitude * Math.max(-1, Math.min(k - 3, 9 - k, 1)));
-  };
-  return [channel(0), channel(8), channel(4)];
-}
-
-function resolveNumber(value: string, tokens: TokenMap): number {
-  const variable = value.match(/^var\((--[\w-]+)\)$/u)?.[1];
-  const resolved = variable ? tokens.get(variable) : value;
-  if (resolved === undefined || !Number.isFinite(number(resolved))) {
-    throw new Error(`could not resolve numeric value "${value}"`);
-  }
-  return number(resolved);
-}
-
-function mixColors(first: Color, firstWeight: number, second: Color): Color {
-  const secondWeight = 1 - firstWeight;
-  const alpha = first.alpha * firstWeight + second.alpha * secondWeight;
-  if (alpha === 0) {
-    return { rgb: [0, 0, 0], alpha };
-  }
-  // CSS color-mix weights translucent operands by their alpha too.
-  const rgb = channels(
-    (index) =>
-      (first.rgb[index] * first.alpha * firstWeight +
-        second.rgb[index] * second.alpha * secondWeight) /
-      alpha,
-  );
-  return { rgb, alpha };
-}
-
-function resolveColor(value: string, tokens: TokenMap, resolving = new Set<string>()): Color {
-  const color = value.trim();
-  if (color.startsWith("#")) {
-    return { rgb: parseHex(color), alpha: 1 };
-  }
-
-  const variable = color.match(/^var\((--[\w-]+)\)$/u)?.[1];
-  if (variable) {
-    if (resolving.has(variable)) {
-      throw new Error(`circular color token "${variable}"`);
-    }
-    const resolved = required(tokens.get(variable), variable);
-    return resolveColor(resolved, tokens, new Set(resolving).add(variable));
-  }
-
-  const rgb = color.match(
-    /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+%?))?\s*\)$/u,
-  );
-  if (rgb) {
-    return {
-      rgb: channels((index) => number(rgb[index + 1])),
-      alpha: parseAlpha(rgb[4]),
-    };
-  }
-
-  const hsl = color.match(
-    /^hsl\(\s*(var\(--[\w-]+\)|-?[\d.]+)\s+([\d.]+)%\s+([\d.]+)%(?:\s*\/\s*([\d.]+%?))?\s*\)$/u,
-  );
-  if (hsl) {
-    return {
-      rgb: hslToRgb(
-        resolveNumber(hsl[1] ?? "", tokens),
-        number(hsl[2]) / 100,
-        number(hsl[3]) / 100,
-      ),
-      alpha: parseAlpha(hsl[4]),
-    };
-  }
-
-  const mix = color.match(
-    /^color-mix\(in srgb,\s*(var\(--[\w-]+\))\s+([\d.]+)%,\s*(var\(--[\w-]+\))\s*\)$/u,
-  );
-  if (mix) {
-    return mixColors(
-      resolveColor(mix[1] ?? "", tokens, resolving),
-      number(mix[2]) / 100,
-      resolveColor(mix[3] ?? "", tokens, resolving),
-    );
-  }
-
-  throw new Error(`could not resolve color "${value}"`);
-}
-
 function composite(color: Color, background: RGB): RGB {
-  return channels(
-    (index) => color.rgb[index] * color.alpha + background[index] * (1 - color.alpha),
-  );
-}
-
-function resolveOpaqueColor(value: string, tokens: TokenMap): RGB {
-  const color = resolveColor(value, tokens);
-  if (color.alpha !== 1) {
-    throw new Error(`expected opaque color "${value}"`);
-  }
-  return color.rgb;
+  return [
+    color.rgb[0] * color.alpha + background[0] * (1 - color.alpha),
+    color.rgb[1] * color.alpha + background[1] * (1 - color.alpha),
+    color.rgb[2] * color.alpha + background[2] * (1 - color.alpha),
+  ];
 }
 
 function cssRules(css: string): Rule[] {
@@ -300,6 +176,11 @@ describe("Control UI theme contrast", () => {
       ["var(--primary-foreground)", "var(--primary-hover)", AA_NORMAL_TEXT_MIN],
       ["var(--destructive-foreground)", "var(--destructive-hover)", AA_NORMAL_TEXT_MIN],
       ["var(--accent-foreground)", "var(--accent)", 3],
+      [
+        "var(--chat-send-foreground, var(--primary-foreground))",
+        "var(--chat-send-hover-bg, color-mix(in srgb, var(--primary) 86%, var(--text-strong)))",
+        3,
+      ],
     ],
     "chat confirmation": (_themeName, tokens, floor) => {
       const fill = tokens.get(readColorToken(readPaint(confirmation, "background")));
@@ -366,19 +247,16 @@ describe("Control UI theme contrast", () => {
       ["background", 1.05],
       ["border", 1.25],
     ] as const) {
-      const name = readColorToken(readPaint(rule, property));
+      const paint = required(readPaint(rule, property).match(/var\(.+\)/u)?.[0], property);
       for (const [theme, tokens] of themes) {
-        const color = tokens.get(name);
-        expect(color, `${theme}: ${name} is not a hex token`).toMatch(/^#/u);
+        const color = resolveColor(paint, tokens);
         for (const hostToken of ["--card", "--bg"]) {
-          const host = tokens.get(hostToken);
-          if (host?.startsWith("#")) {
-            expectFloor(
-              contrastRatio(parseHex(color ?? ""), parseHex(host)),
-              minimum,
-              `${theme}/${hostToken} chip ${property}`,
-            );
-          }
+          const host = resolveOpaqueColor(`var(${hostToken})`, tokens);
+          expectFloor(
+            contrastRatio(composite(color, host), host),
+            minimum,
+            `${theme}/${hostToken} chip ${property}`,
+          );
         }
       }
     }

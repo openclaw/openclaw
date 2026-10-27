@@ -74,7 +74,8 @@ it.each([
 
 it("waits for startup progress rather than claiming preparation before the first status", () => {
   const container = renderChatView({ runActive: true, stream: "" });
-  expect(workingStatus(container)).toContain("Waiting for turn to start…");
+  expect(workingStatus(container)).toContain("Waiting for turn to start");
+  expect(workingStatus(container)).not.toContain("…");
 });
 
 it.each(["submitting", "sending", "waiting-model"] as const)(
@@ -88,7 +89,7 @@ it.each(["submitting", "sending", "waiting-model"] as const)(
         { id: "pending-send", sessionKey: "main", text: "Continue", createdAt: 1, sendState },
       ],
     });
-    expect(workingStatus(container)).toContain("Waiting for turn to start…");
+    expect(workingStatus(container)).toContain("Waiting for turn to start");
     expect(container.querySelector(".chat-send-btn--stop")).toBeNull();
   },
 );

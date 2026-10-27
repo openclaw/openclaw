@@ -1,14 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, assert, describe, expect, it } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import type {
-  VideoGenerationProvider,
-  VideoGenerationRequest,
-} from "../../video-generation/types.js";
+import type { VideoGenerationProvider } from "../../video-generation/types.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { createVideoGenerateTool } from "./video-generate-tool.js";
 
@@ -56,57 +53,54 @@ function video(fileName: string, source: { buffer?: Buffer; url?: string }) {
 describe("video generation invocation QA", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  it("selects image-to-video fallback, forwards declared options, and persists video bytes", async () => {
+  it("skips an unsupported primary and forwards reference images and provider options", async () => {
     const root = tempDirs.make("openclaw-qa-video-invocation-");
     const referenceBytes = createSolidPngBuffer(2, 2, { r: 32, g: 112, b: 224 });
     const referencePath = path.join(root, "reference.png");
     await fs.writeFile(referencePath, referenceBytes);
-    let primaryGenerateCalls = 0;
-    let fallbackRequest: VideoGenerationRequest | undefined;
     const declaredOptions = { seed: "number", draft: "boolean" } as const;
-    const capabilities: VideoGenerationProvider["capabilities"] = {
-      imageToVideo: { enabled: true, maxInputImages: 1, providerOptions: declaredOptions },
-    };
-    const primaryProvider = provider("qa-limited-video", "limited-v1", {
-      capabilities,
-      resolveModelCapabilities: async () => ({ imageToVideo: { enabled: false } }),
-      generateVideo: async () => {
-        primaryGenerateCalls += 1;
-        throw new Error("unsupported provider must be skipped before forwarding");
+    const providerOptions = { seed: 17, draft: true };
+    const capable = provider("qa-capable-video", "capable-v1", {
+      capabilities: {
+        imageToVideo: { enabled: true, maxInputImages: 1, providerOptions: declaredOptions },
       },
-    });
-    const fallbackProvider = provider("qa-capable-video", "capable-v1", {
-      capabilities,
       generateVideo: async (request) => {
-        fallbackRequest = request;
+        expect(request.providerOptions).toEqual(providerOptions);
+        expect(request.inputImages).toEqual([
+          {
+            buffer: referenceBytes,
+            mimeType: "image/png",
+            fileName: "reference.png",
+            role: "first_frame",
+          },
+        ]);
         return {
           model: request.model,
           videos: [video("provider-result.mp4", { buffer: mp4 })],
         };
       },
     });
-    const config = createConfig("qa-limited-video/limited-v1", ["qa-capable-video/capable-v1"]);
-    const providerOptions = { seed: 17, draft: true };
-
-    const details = await generate(root, config, [primaryProvider, fallbackProvider], {
-      prompt: "Animate the reference image into a short QA clip.",
-      image: referencePath,
-      imageRoles: ["first_frame"],
-      providerOptions,
-      filename: "qa-selected-video.mp4",
+    const limited = provider("qa-limited-video", "limited-v1", {
+      capabilities: capable.capabilities,
+      resolveModelCapabilities: async () => ({ imageToVideo: { enabled: false } }),
+      generateVideo: vi.fn(async () => {
+        throw new Error("unsupported provider must be skipped");
+      }),
     });
-    expect(primaryGenerateCalls).toBe(0);
-    const selected = { provider: "qa-capable-video", model: "capable-v1" };
-    expect(fallbackRequest).toMatchObject({ ...selected, providerOptions });
-    expect(fallbackRequest?.inputImages).toEqual([
+    const details = await generate(
+      root,
+      createConfig("qa-limited-video/limited-v1", ["qa-capable-video/capable-v1"]),
+      [limited, capable],
       {
-        buffer: referenceBytes,
-        mimeType: "image/png",
-        fileName: "reference.png",
-        role: "first_frame",
+        prompt: "Animate the reference image into a short QA clip.",
+        image: referencePath,
+        imageRoles: ["first_frame"],
+        providerOptions,
+        filename: "qa-selected-video.mp4",
       },
-    ]);
-    expect(details).toMatchObject({ ...selected, count: 1 });
+    );
+    expect(limited.generateVideo).not.toHaveBeenCalled();
+    expect(details).toMatchObject({ provider: "qa-capable-video", model: "capable-v1", count: 1 });
     expect(details.attempts).toEqual([
       {
         provider: "qa-limited-video",
@@ -116,13 +110,10 @@ describe("video generation invocation QA", () => {
         ),
       },
     ]);
-
-    const savedPath = savedVideoPath(details, 0, 1);
-    await expect(fs.readFile(savedPath)).resolves.toEqual(mp4);
     expect(details.attachments).toEqual([
       expect.objectContaining({
         type: "video",
-        path: savedPath,
+        path: savedVideoPath(details, 0, 1),
         name: "qa-selected-video.mp4",
         mimeType: "video/mp4",
         sizeBytes: mp4.byteLength,

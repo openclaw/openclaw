@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import type { AssistantMessageEvent } from "../llm/types.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { expectObjectFields as expectRecordFields } from "../test-utils/mock-call-assertions.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -281,19 +282,7 @@ export async function runMathSideQuestionAndCaptureContext() {
   return mockArg(mocks.streamSimpleMock, 0, 1);
 }
 
-export function expectRecordFields(
-  record: unknown,
-  expected: Record<string, unknown>,
-): Record<string, unknown> {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
+export { expectRecordFields };
 
 export function streamContext(callIndex = 0): {
   messages?: Array<Record<string, unknown>>;

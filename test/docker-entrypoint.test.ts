@@ -138,13 +138,8 @@ describe.skipIf(process.platform === "win32")("Docker image activation", () => {
       ? { INTERRUPT_DOCTOR: signal }
       : { DOCTOR_EXIT: "78" };
     expect((await f.run(["openclaw.mjs", "gateway"], env)).status).toBe(status);
-    expect(f.read()).toEqual([
-      {
-        args: ["doctor", "--fix", "--non-interactive"],
-        pid: expect.any(Number),
-        parentPid: expect.any(Number),
-        marker: expect.any(String),
-      },
+    expect(f.read().map(({ args, ...event }) => args ?? event)).toEqual([
+      ["doctor", "--fix", "--non-interactive"],
       ...(forwarded ? [{ stopped: true, signal: forwarded }] : []),
     ]);
   });

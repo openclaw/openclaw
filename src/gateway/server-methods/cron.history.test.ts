@@ -479,7 +479,6 @@ it.each(["sharing", "binding", "retention", "transcript owner"] as const)(
                 return applyCronRunHistoryMaintenanceInDatabase(
                   db,
                   plan,
-                  now,
                   prepareCronRunReceiptWriteSchema(db),
                 ).pruned;
               }) === 1;

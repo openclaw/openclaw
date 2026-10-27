@@ -183,7 +183,6 @@ function messageKind(message: unknown, fallback: WorkerMessageKind): WorkerMessa
     case "close":
     case "closed":
     case "release":
-    case "ref":
     case "execution-exit":
     case "error":
     case "messageerror":

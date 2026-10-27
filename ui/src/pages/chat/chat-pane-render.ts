@@ -15,7 +15,7 @@ import {
 import { hasSessionPresenceViewers } from "../../lib/presence-users.ts";
 import { readSessionMethodScopeAccess } from "../../lib/session-method-access.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
 import { isChatBubbleMode } from "./chat-bubble-mode.ts";
@@ -69,7 +69,12 @@ registerChatSessionEnglish();
 const emptyTranscriptItems: [] = [];
 
 export class ChatPaneRuntime extends ChatPaneLayoutRender {
-  render(readProviderReview?: () => ChatProviderReviewOwner | undefined) {
+  private readonly widgetLayout = createChatWidgetLayout();
+
+  render(
+    readProviderReview?: () => ChatProviderReviewOwner | undefined,
+    readRealtimeTalkConversation?: ChatProps["readRealtimeTalkConversation"],
+  ) {
     const state = this.state;
     if (!state) {
       return { layout: null, capabilityDialogs: undefined, providerReviewSource: undefined };
@@ -117,6 +122,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       this.context.runtimeConfig.state,
     );
     const currentAgentId = resolveChatAgentId(state);
+    const sessionScope = scopedAgentParamsForSession(state, state.sessionKey);
+    const widgetTarget = { sessionKey: state.sessionKey, ...sessionScope };
     const catalogKey = parseCatalogSessionKey(state.sessionKey);
     const catalog = catalogKey !== null;
     const selectedAgent = this.context.agents.state.agentsList?.agents.find(
@@ -496,7 +503,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       realtimeTalkDetail: state.realtimeTalk.snapshot.realtimeTalkDetail,
       realtimeTalkInputNotice: state.realtimeTalk.snapshot.realtimeTalkInputNotice,
       realtimeTalkInputLevel: state.realtimeTalk.snapshot.realtimeTalkInputLevel,
-      realtimeTalkConversation: state.realtimeTalk.snapshot.realtimeTalkConversationState.entries,
+      readRealtimeTalkConversation:
+        readRealtimeTalkConversation ??
+        (() => state.realtimeTalk.snapshot.realtimeTalkConversationState.entries),
       realtimeTalkVideoStream: state.realtimeTalk.snapshot.realtimeTalkVideoStream,
       realtimeTalkCameraDevices: state.realtimeTalk.snapshot.realtimeTalkCameraDevices,
       realtimeTalkVideoCapable: state.realtimeTalk.snapshot.realtimeTalkVideoCapable,
@@ -647,15 +656,12 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onRewindMessage: selectedSessionArchived ? undefined : sessionActionCallbacks.onRewindMessage,
       agentsList: state.agentsList,
       currentAgentId,
-      fullMessageAgentId: scopedAgentParamsForSession(state, state.sessionKey).agentId,
+      fullMessageAgentId: sessionScope.agentId,
       loadFullAssistantMessage: createSidebarFullMessageLoader(state, this.context.gateway),
       onSessionSelect: (next) => this.onPaneSessionChange?.(this.paneId, next),
       canvasPluginSurfaceUrl: state.canvasPluginSurfaceUrl,
       boardProvider: board.provider,
-      widgetLayout: createChatWidgetLayout(state.chatMessagesBySession, state, {
-        sessionKey: state.sessionKey,
-        ...scopedAgentParamsForSession(state, state.sessionKey),
-      }),
+      widgetLayout: this.widgetLayout(state.chatMessagesBySession, state, widgetTarget),
       onOpenSidebar: state.handleOpenSidebar,
       onRequestOpenImage: state.beginImageOpen,
       onOpenImage: state.handleOpenImage,

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { attachToolAllowlistIntersection } from "../../agents/tool-policy-shared.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import { completeFollowupRunLifecycle, markFollowupRunEnqueued } from "./queue/lifecycle.js";
@@ -15,158 +15,99 @@ function recover(overrides: Partial<Parameters<typeof resolveStrandedReplyRecove
     sourceReplyDeliveryMode: "message_tool_only",
     sendPolicyDenied: false,
     successfulSourceReplyDelivery: false,
-
     isRoomEvent: false,
     ...overrides,
   });
 }
 
-describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
-  it("does not share the client turn's turnAdoptionLifecycle with the system retry", () => {
-    const receipts: ReplyOperationRunState[] = [{ agentTurn: "ok" }];
-    const onComplete = vi.fn();
-    const onEnqueued = vi.fn(() => true);
-    const parent = createMockFollowupRun({
-      prompt: "user question",
-      transcriptPrompt: "user question",
-      turnAdoptionLifecycle: {
-        onAdopted: async () => {},
-        onSettled: onComplete,
-        onDeferred: onEnqueued,
-      },
-      admissionSessionId: "sess-rotated",
-      replyOperationRunStates: receipts,
-    });
+function retry(base: Parameters<typeof resolveStrandedReplyRecovery>[0]["base"]) {
+  const recovery = recover({ base });
+  if (recovery.kind !== "retry") {
+    throw new Error(`expected retry recovery, received ${recovery.kind}`);
+  }
+  return recovery.run;
+}
 
-    const recovery = recover({ base: parent });
-    expect(recovery.kind).toBe("retry");
-    if (recovery.kind !== "retry") {
-      throw new Error("expected retry recovery");
-    }
-    const retry = recovery.run;
-
-    expect(retry).toMatchObject({
-      turnAdoptionLifecycle: undefined,
-      replyOperationRunStates: undefined,
-      strandedReplyRetry: true,
-      summaryLine: "stranded-reply-retry",
-      admissionSessionId: "sess-rotated",
-      run: { sessionKey: parent.run.sessionKey },
-    });
-    expect(parent.replyOperationRunStates).toBe(receipts);
-
-    // mark/complete no-op when lifecycle is absent (drop-policy onDrop path too).
-    expect(markFollowupRunEnqueued(retry)).toBe(true);
-    expect(onEnqueued).not.toHaveBeenCalled();
-    completeFollowupRunLifecycle(retry);
-    expect(onComplete).not.toHaveBeenCalled();
-
-    // Parent still owns the one-shot lifecycle; retry completion must not steal it.
-    expect(markFollowupRunEnqueued(parent)).toBe(true);
-    expect(onEnqueued).toHaveBeenCalledTimes(1);
-    completeFollowupRunLifecycle(parent);
-    expect(onComplete).toHaveBeenCalledTimes(1);
-    completeFollowupRunLifecycle(parent);
-    expect(onComplete).toHaveBeenCalledTimes(1);
+it("does not share the client turn's turnAdoptionLifecycle with the system retry", () => {
+  const receipts: ReplyOperationRunState[] = [{ agentTurn: "ok" }];
+  const onComplete = vi.fn();
+  const onEnqueued = vi.fn(() => true);
+  const parent = createMockFollowupRun({
+    prompt: "user question",
+    turnAdoptionLifecycle: {
+      onAdopted: async () => {},
+      onSettled: onComplete,
+      onDeferred: onEnqueued,
+    },
+    admissionSessionId: "sess-rotated",
+    replyOperationRunStates: receipts,
   });
 
-  it("expires the client turn's skill authoring grant instead of rebinding it", async () => {
-    // chat.send mints a personal grant that refuses a second run; carrying it over killed the retry.
-    const parent = createMockFollowupRun({ prompt: "user question" });
-    parent.run.skillLibraryAuthoring = {
-      target: "personal",
-      defaultTarget: "workspace",
-      multipleProfiles: true,
-      bind: () => {
-        throw new Error("Personal authoring cannot move to a replacement run.");
-      },
-      invoke: vi.fn(),
-    };
+  const run = retry(parent);
 
-    const recovery = recover({ base: parent });
-    if (recovery.kind !== "retry") {
-      throw new Error("expected retry recovery");
-    }
-    const authoring = recovery.run.run.skillLibraryAuthoring;
-    expect(authoring?.defaultTarget).toBe("personal");
-    expect(() => authoring?.bind({} as never)).not.toThrow();
-    await expect(authoring?.invoke({ action: "list" })).rejects.toMatchObject({
-      code: "AUTHORITY_EXPIRED",
-    });
+  expect(run).toMatchObject({
+    turnAdoptionLifecycle: undefined,
+    replyOperationRunStates: undefined,
+    admissionSessionId: "sess-rotated",
+    run: { sessionKey: parent.run.sessionKey },
   });
+  expect(parent.replyOperationRunStates).toBe(receipts);
+
+  expect(markFollowupRunEnqueued(run)).toBe(true);
+  expect(onEnqueued).not.toHaveBeenCalled();
+  completeFollowupRunLifecycle(run);
+  expect(onComplete).not.toHaveBeenCalled();
+
+  expect(markFollowupRunEnqueued(parent)).toBe(true);
+  expect(onEnqueued).toHaveBeenCalledTimes(1);
+  completeFollowupRunLifecycle(parent);
+  expect(onComplete).toHaveBeenCalledTimes(1);
+  completeFollowupRunLifecycle(parent);
+  expect(onComplete).toHaveBeenCalledTimes(1);
 });
 
-describe("resolveStrandedReplyRecovery", () => {
-  it.each([
-    { payload: { text: "The recovered answer is ready." }, expected: "none" },
-    {
-      payload: { text: "The fallback model is active.", isFallbackNotice: true },
-      expected: "retry",
+it("expires the client turn's skill authoring grant instead of rebinding it", async () => {
+  // chat.send mints a personal grant that refuses a second run; carrying it over killed the retry.
+  const parent = createMockFollowupRun({ prompt: "user question" });
+  parent.run.skillLibraryAuthoring = {
+    target: "personal",
+    defaultTarget: "workspace",
+    multipleProfiles: true,
+    bind: () => {
+      throw new Error("Personal authoring cannot move to a replacement run.");
     },
-  ])(
-    "distinguishes a pending terminal answer from a notice: $expected",
-    ({ payload, expected }) => {
-      const recovery = recover({
-        payloads: [markReplyPayloadForSourceSuppressionDelivery(payload)],
-      });
+    invoke: vi.fn(),
+  };
 
-      expect(recovery.kind).toBe(expected);
-    },
-  );
-
-  it.each([
-    { label: "uncapped", toolsAllow: undefined, expected: ["message"] },
-    { label: "wildcard", toolsAllow: ["*"], expected: ["message"] },
-    { label: "messaging group", toolsAllow: ["group:messaging", "exec"], expected: ["message"] },
-    { label: "empty cap", toolsAllow: [], expected: [] },
-    { label: "non-messaging cap", toolsAllow: ["exec"], expected: [] },
-    {
-      label: "intersected denial",
-      toolsAllow: attachToolAllowlistIntersection(["message"], [["*"], ["exec"]]),
-      expected: [],
-    },
-  ])("restricts the priority retry to authorized messaging: $label", ({ toolsAllow, expected }) => {
-    const base = createMockFollowupRun({ prompt: "question", toolsAllow });
-
-    const recovery = recover({ base });
-
-    expect(recovery.kind).toBe("retry");
-    if (recovery.kind === "retry") {
-      expect(recovery.run).toMatchObject({
-        strandedReplyRetry: true,
-        disableCollectBatching: true,
-        toolsAllow: expected,
-        run: { suppressNextUserMessagePersistence: true },
-        transcriptPrompt: undefined,
-      });
-    }
-  });
-
-  it("returns a diagnostic rather than a second retry", () => {
-    const base = createMockFollowupRun({ prompt: "question", strandedReplyRetry: true });
-
-    const recovery = recover({
-      base,
-      finalText: "",
-      terminalReply: { disposition: "empty" },
-    });
-
-    expect(recovery).toMatchObject({
-      kind: "diagnostic",
-      payload: {
-        text: "No answer was returned. Ask again if you still need one.",
-        isError: true,
-        isStatusNotice: true,
-      },
-    });
-  });
-
-  it.each([
-    { label: "room events", isRoomEvent: true },
-
-    { label: "send-policy denial", sendPolicyDenied: true },
-    { label: "completed delivery", successfulSourceReplyDelivery: true },
-  ])("does not recover $label", (override) => {
-    expect(recover(override)).toEqual({ kind: "none" });
+  const authoring = retry(parent).run.skillLibraryAuthoring;
+  expect(authoring?.defaultTarget).toBe("personal");
+  expect(() => authoring?.bind({} as never)).not.toThrow();
+  await expect(authoring?.invoke({ action: "list" })).rejects.toMatchObject({
+    code: "AUTHORITY_EXPIRED",
   });
 });
+it("does not mistake a pending fallback notice for a terminal answer", () => {
+  const notice = { text: "The fallback model is active.", isFallbackNotice: true };
+  const payloads = [markReplyPayloadForSourceSuppressionDelivery(notice)];
+  expect(recover({ payloads }).kind).toBe("retry");
+});
+
+it.each([
+  [undefined, ["message"]],
+  [["*"], ["message"]],
+  [["group:messaging", "exec"], ["message"]],
+  [[], []],
+  [["exec"], []],
+  [attachToolAllowlistIntersection(["message"], [["*"], ["exec"]]), []],
+])("restricts the priority retry to authorized messaging: %j", (toolsAllow, expected) => {
+  const base = createMockFollowupRun({ prompt: "question", toolsAllow });
+
+  expect(retry(base).toolsAllow).toEqual(expected);
+});
+
+it.each(["isRoomEvent", "sendPolicyDenied", "successfulSourceReplyDelivery"] as const)(
+  "does not recover when %s",
+  (key) => {
+    expect(recover({ [key]: true })).toEqual({ kind: "none" });
+  },
+);

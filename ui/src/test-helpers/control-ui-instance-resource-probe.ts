@@ -4,7 +4,7 @@ import {
 } from "../../../scripts/lib/control-ui-resource-counts.ts";
 import { createProjectionResourceProbe } from "./control-ui-projection-resource-probe.ts";
 
-export type InstanceEventCount = {
+type InstanceEventCount = {
   created: number;
   active: number;
   callbacks: number;

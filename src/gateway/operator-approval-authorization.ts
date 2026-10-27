@@ -3,10 +3,6 @@ import { matchesOperatorApprovalReviewerBinding } from "./operator-approval-revi
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "./operator-scopes.js";
 import type { GatewayClient } from "./server-methods/types.js";
 
-type OperatorApprovalAccessBinding = {
-  reviewerDeviceIds?: readonly string[] | null;
-};
-
 /** Whether a client may inspect safe approval projections. */
 export function canReviewOperatorApproval(client: GatewayClient | null): boolean {
   const scopes = client?.connect.scopes ?? [];
@@ -32,7 +28,9 @@ export function canResolveOperatorApproval(client: GatewayClient | null): boolea
 /** Whether a broadly authorized client may access one bound approval record. */
 export function canAccessOperatorApproval(params: {
   client: GatewayClient | null;
-  binding: OperatorApprovalAccessBinding;
+  binding: {
+    reviewerDeviceIds?: readonly string[] | null;
+  };
   allowApprovalRuntime?: boolean;
 }): boolean {
   const broadlyAuthorized = params.allowApprovalRuntime

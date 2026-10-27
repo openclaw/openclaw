@@ -443,10 +443,10 @@ describe("requester settle dispatch deadline", () => {
     "obsolete original pending",
     "retry settled",
     "retry settled claim",
-  ] as const)("keeps restored retry custody with historical receipts: %s", async (scenario) => {
+  ] as const)("keeps final-attempt custody with historical receipts: %s", async (scenario) => {
     const stableRunId = "announce:requester-settle:main:agent:main:main:settled-child:yield-1";
     const retryRunId =
-      "announce:requester-settle:main:agent:main:main:settled-child:yield-1:retry-1";
+      "announce:requester-settle:main:agent:main:main:settled-child:yield-1:retry-2";
     const obsoleteOriginalPending = scenario === "obsolete original pending";
     const pendingRunId = obsoleteOriginalPending ? stableRunId : retryRunId;
     const historicalRunId = obsoleteOriginalPending ? retryRunId : stableRunId;
@@ -473,7 +473,7 @@ describe("requester settle dispatch deadline", () => {
     child.requesterSettleWake = {
       ...child.requesterSettleWake!,
       status: "dispatching",
-      attemptCount: 2,
+      attemptCount: 3,
       batchRunIds: [child.runId],
     };
     const { completeBatch, params } = dispatchFixture(child);
@@ -499,7 +499,7 @@ describe("requester settle dispatch deadline", () => {
       );
     } else {
       expect(deliver).not.toHaveBeenCalled();
-      expect(child.requesterSettleWake).toMatchObject({ status: "dispatching", attemptCount: 2 });
+      expect(child.requesterSettleWake).toMatchObject({ status: "dispatching", attemptCount: 3 });
     }
     const mailbox = getExistingSessionControllerMailbox(REQUESTER_KEY, REQUESTER_TARGET);
     expect(mailbox?.entries ?? []).toEqual([]);

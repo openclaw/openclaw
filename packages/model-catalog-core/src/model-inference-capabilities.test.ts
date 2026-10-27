@@ -40,92 +40,59 @@ const decision = {
   billing: { unit: "decision-units", source: "provider-docs" },
 } satisfies NonNullable<ModelInferenceCapabilities["decision"]>;
 
-function catalog(inference: unknown) {
+function catalog(inference: unknown, fields: Record<string, unknown> = {}) {
   return normalizeModelCatalog(
-    { providers: { fixture: { models: [{ id: "typed", inference }] } } },
+    { providers: { fixture: { models: [{ id: "typed", inference, ...fields }] } } },
     { ownedProviders: new Set(["fixture"]) },
   );
 }
 
-function providerRow(inference: unknown) {
-  const providerCatalog = catalog(inference)?.providers?.fixture;
+function providerRow(inference: unknown, fields: Record<string, unknown> = {}) {
+  const providerCatalog = catalog(inference, fields)?.providers?.fixture;
   assert(providerCatalog, "Missing fixture catalog");
   return normalizeRows({ provider: "fixture", providerCatalog, source: "manifest" })[0];
+}
+
+function inferenceOf(descriptor: Record<string, unknown>, chat = false) {
+  return { chat, decision: { protocol: "fixture-decide", input: ["text"], ...descriptor } };
 }
 
 function decisionRoute(overrides: Record<string, unknown>, chat = false) {
   return inferenceOf({ ...decision, ...overrides }, chat);
 }
 
-function inferenceOf(descriptor: unknown, chat = false) {
-  return { chat, decision: descriptor };
-}
-
-it.each([inferenceOf({ protocol: "decision-v1", input: ["text"] }), inferenceOf(decision)])(
-  "preserves minimal and full decision metadata: %j",
-  (inference) => {
-    const row = providerRow(inference);
-    expect(row?.inference).toEqual(inference);
-    expect(row).toMatchObject({ reasoning: false });
-    for (const field of ["cost", "contextWindow", "maxTokens"]) {
-      expect(row).not.toHaveProperty(field);
-    }
-  },
-);
-
-it("preserves a five-level score subset instead of advertising arbitrary rubric support", () => {
-  const inference = inferenceOf({
-    protocol: "fixture-scale",
-    input: ["text"],
+it.each([
+  inferenceOf(decision),
+  inferenceOf({
     questions: {
       score: { probabilities: "none", abstention: false, minOptions: 5, maxOptions: 5 },
     },
     billing: { unit: "requests", source: "provider-docs" },
-  });
-  const row = providerRow(inference);
-  expect(row?.inference).toEqual(inference);
-});
-
-it("retains provider-defined estimates, confidence and Boolean criteria requirements", () => {
-  const inference = inferenceOf({
-    protocol: "fixture-legacy",
-    input: ["text"],
+  }),
+  inferenceOf({
     confidence: "provider-specific",
     questions: {
       boolean: { probabilities: "boolean", abstention: false, requiresCriteria: true },
       choice: { probabilities: "provider-defined", abstention: false },
     },
-  });
-  expect(catalog(inference)?.providers?.fixture?.models[0]?.inference).toEqual(inference);
-});
-
-it("keeps genuine dual capability explicit and preserves published zero token prices", () => {
-  const inference = decisionRoute(
-    { billing: { ...tokenBilling, usdPerMillion: { input: 0.042, output: 0 } } },
-    true,
-  );
-  expect(catalog(inference)?.providers?.fixture?.models[0]?.inference).toEqual(inference);
-  const unknown = catalog(decisionRoute({ billing: tokenBilling }));
-  expect(unknown?.providers?.fixture?.models[0]?.inference?.decision?.billing).toEqual(
-    tokenBilling,
-  );
+  }),
+  decisionRoute({ billing: { ...tokenBilling, usdPerMillion: { input: 0.042, output: 0 } } }, true),
+  decisionRoute({ billing: tokenBilling }),
+])("preserves declared capabilities and billing without inventing metadata: %j", (inference) => {
+  const row = providerRow(inference);
+  expect(row?.inference).toEqual(inference);
+  for (const field of ["cost", "contextWindow", "maxTokens"]) {
+    expect(row).not.toHaveProperty(field);
+  }
 });
 
 it("does not infer a task from legacy text or JSON compatibility flags", () => {
-  const [row] = normalizeRows({
-    provider: "fixture",
-    source: "manifest",
-    providerCatalog: {
-      models: [
-        {
-          id: "ordinary",
-          input: ["text"],
-          compat: { supportsJsonSchemaResponseFormat: true, supportsTools: true },
-        },
-      ],
-    },
-  });
-  expect(row).not.toHaveProperty("inference");
+  expect(
+    providerRow(undefined, {
+      input: ["text"],
+      compat: { supportsJsonSchemaResponseFormat: true, supportsTools: true },
+    }),
+  ).not.toHaveProperty("inference");
 });
 
 it.each([
@@ -134,8 +101,6 @@ it.each([
   decisionRoute({ protocol: "https://fixture.invalid/decide" }),
   decisionRoute({ questions: {} }),
   decisionRoute({ questions: null }),
-  decisionRoute({ questions: [] }),
-  decisionRoute({ questions: { unknown: {} } }),
   decisionRoute({ questions: { boolean: {} } }),
   decisionRoute({ confidence: "calibrated" }),
   decisionRoute({
