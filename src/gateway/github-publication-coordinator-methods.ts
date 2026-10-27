@@ -11,6 +11,7 @@ import type {
   RepositoryGitHubPublicationRow,
 } from "../state/github-publication-read.types.js";
 import { readGitHubPublicationSessionLifecycleInWorker } from "../state/github-publication-session-lifecycles.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import {
   assertExpectedSharedGitHubPublisher,
   prepareCurrentGitHubPublicationIdentity,
@@ -430,51 +431,64 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         ),
       );
       const failures: Error[] = [];
-      const blockedWorktrees = new Set<string>();
       if (isStopping?.()) {
         return;
       }
       const placements = await params.placements.getManyAsync(rows.map((row) => row.session_id));
+      const worktrees = new Map<string, PublicationRow[]>();
       for (const row of rows) {
-        if (isStopping?.()) {
-          break;
+        const queue = worktrees.get(row.worktree_id);
+        if (queue) {
+          queue.push(row);
+        } else {
+          worktrees.set(row.worktree_id, [row]);
         }
-        if (
-          blockedWorktrees.has(row.worktree_id) ||
-          pending.has(row.session_id) ||
-          placements.get(row.session_id)?.turnClaim
-        ) {
-          continue;
-        }
-        try {
-          // An executing publication keeps its custody through durable settlement.
-          const execute = (recoveryResult?: SessionGitHubPublicationResult) =>
-            processRow(
-              row,
-              () => {
-                const placement = params.placements.get(row.session_id);
-                return !placement?.turnClaim && !pending.has(row.session_id);
-              },
-              undefined,
-              undefined,
-              recoveryResult,
-            );
-          const result = params.recovery
-            ? await params.recovery.shared.run(row, execute, execute)
-            : await execute();
-          // Cooldown must not let another request overtake this worktree's unsettled effects.
-          if (!result || result.status === "requested" || result.status === "publishing") {
-            blockedWorktrees.add(row.worktree_id);
+      }
+      // GitHub waits on one checkout must not serialize independent recovery queues.
+      const recovered = await runTasksWithConcurrency({
+        limit: 4,
+        tasks: Array.from(worktrees.values(), (queue) => async () => {
+          for (const row of queue) {
+            if (isStopping?.()) {
+              break;
+            }
+            if (pending.has(row.session_id) || placements.get(row.session_id)?.turnClaim) {
+              continue;
+            }
+            try {
+              // An executing publication keeps its custody through durable settlement.
+              const execute = (recoveryResult?: SessionGitHubPublicationResult) =>
+                processRow(
+                  row,
+                  () => {
+                    const placement = params.placements.get(row.session_id);
+                    return !placement?.turnClaim && !pending.has(row.session_id);
+                  },
+                  undefined,
+                  undefined,
+                  recoveryResult,
+                );
+              const result = params.recovery
+                ? await params.recovery.shared.run(row, execute, execute)
+                : await execute();
+              // Cooldown must not let another request overtake this worktree's unsettled effects.
+              if (!result || result.status === "requested" || result.status === "publishing") {
+                break;
+              }
+            } catch (error) {
+              failures.push(
+                new Error(`Publication ${row.request_id}: ${formatErrorMessage(error)}`, {
+                  cause: error,
+                }),
+              );
+              // Later requests cannot overtake this checkout's unfinished Git transaction.
+              break;
+            }
           }
-        } catch (error) {
-          // Later requests for this checkout must not overtake its unfinished Git transaction.
-          blockedWorktrees.add(row.worktree_id);
-          failures.push(
-            new Error(`Publication ${row.request_id}: ${formatErrorMessage(error)}`, {
-              cause: error,
-            }),
-          );
-        }
+        }),
+      });
+      if (recovered.hasError) {
+        throw recovered.firstError;
       }
       // A recoverable index transaction retains its receipt, not the entire queue.
       // Report failures after every independent request has had its turn.
