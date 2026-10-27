@@ -554,6 +554,8 @@ owner and worker tokens, applies a 15-minute grace period to current staging
 directories, and uses a 512 MiB copied-byte budget per pass. The first reclaimed
 directory may exceed that budget, after the same ownership and age checks; the
 pass then stops, so oversized interrupted copies can make progress one at a time.
+Recognized payloads include fs-safe's `.fs-safe-<UUID>.tmp` publication files left
+by interrupted copies, including those inside nested staging directories.
 Active, recent, over-budget, or
 structurally unknown directories remain untouched. Shutdown and the existing
 reclamation deadline stop at directory boundaries, after removal and token

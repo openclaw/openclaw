@@ -20,6 +20,7 @@ import { prepareSqliteReadOnlyLocationSyncInProcess } from "./sqlite-readonly-lo
 import { reclaimAbandonedSqliteSnapshotsAsync } from "./sqlite-snapshot-reclamation.js";
 import { sqliteSnapshotStagingEntrypoints } from "./sqlite-snapshot-staging-runtime.test-support.js";
 import {
+  acquireSqliteSnapshotReadToken,
   createSqliteSnapshotStagingDirectory,
   createSqliteSnapshotStagingDirectorySync,
   createSqliteSnapshotStagingTokenSync,
@@ -204,6 +205,7 @@ it("keeps snapshot bytes fenced after creator release until native reader close 
   const directory = createSqliteSnapshotStagingDirectorySync(cache);
   const location = path.join(directory, "database.sqlite");
   fs.copyFileSync(source, location);
+  ageSnapshotTree(directory);
   const reader = openOpenClawStateReadConnection(source, location, undefined, directory);
   const close = vi.spyOn(reader.database.db, "close").mockImplementationOnce(() => {
     throw new Error("reader close did not finish");
@@ -220,7 +222,6 @@ it("keeps snapshot bytes fenced after creator release until native reader close 
   `);
   try {
     releaseSnapshotTempDirectory(directory);
-    ageSnapshotTree(directory);
     expect(() => reader.close()).toThrow("reader close did not finish");
     expect(() => reconcileSqliteSnapshotRetirement(directory)).toThrow();
     reclaim();
@@ -402,6 +403,63 @@ it("reclaims one oversized abandoned snapshot per pass without starving the next
     }
   }
 });
+
+it.each(["abandoned", "unknown", "malformed", "recent", "live", "symlink"] as const)(
+  "handles %s nested fs-safe snapshot payloads without relaxing reclamation guards",
+  (kind) => {
+    const { cache, source } = createFixture();
+    const parent = path.join(cache, "openclaw-sqlite-readonly-v2-i6lre8");
+    const child = path.join(parent, "openclaw-sqlite-readonly-v2-37qLgI");
+    fs.mkdirSync(child, { recursive: true });
+    for (const directory of [parent, child]) {
+      fs.writeFileSync(path.join(directory, "owner.sqlite"), "");
+    }
+    const payload = path.join(child, ".fs-safe-03b4546f-c812-43a1-a63a-afdd917a6f8a.tmp");
+    const bytes = Buffer.alloc(4 * 1024 * 1024, 0x5a);
+    if (kind === "symlink") {
+      fs.symlinkSync(path.dirname(source), payload, "junction");
+    } else {
+      fs.writeFileSync(payload, bytes);
+    }
+    if (kind === "unknown" || kind === "malformed") {
+      fs.writeFileSync(
+        path.join(
+          child,
+          kind === "unknown" ? "unknown" : ".fs-safe-03b4546f-c812-13a1-a63a-afdd917a6f8a.tmp",
+        ),
+        "preserve",
+      );
+    }
+    ageSnapshotTree(parent, 30 * 60 * 1000);
+    if (kind === "recent") {
+      const now = new Date();
+      fs.utimesSync(payload, now, now);
+    }
+    const release = kind === "live" ? acquireSqliteSnapshotReadToken(child) : undefined;
+    const reports: string[] = [];
+    try {
+      drainReclamation(cache, (message) => reports.push(message));
+      expect(fs.existsSync(parent)).toBe(kind !== "abandoned");
+      if (kind === "abandoned") {
+        expect(reports).toContain(
+          `Reclaimed ${bytes.length} bytes of interrupted SQLite snapshot data.`,
+        );
+      } else {
+        expect(
+          reports.some((message) => message.startsWith("Skipped SQLite snapshot reclamation:")),
+        ).toBe(true);
+        if (kind === "symlink") {
+          expect(fs.lstatSync(payload).isSymbolicLink()).toBe(true);
+        } else {
+          expect(fs.readFileSync(payload).equals(bytes)).toBe(true);
+        }
+      }
+      assertReadable(source);
+    } finally {
+      release?.();
+    }
+  },
+);
 
 it.skipIf(process.platform === "win32")(
   "reclaims abandoned mixed-generation snapshots while preserving live or recent children",
