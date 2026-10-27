@@ -495,7 +495,7 @@ describe("gateway chat metadata auth deadlines", () => {
       );
       expect(onChanged.mock.calls.every(([change]) => change.authChanged === true)).toBe(true);
       const credentialChanges: AuthProfileStore["profiles"][] = [
-        { "acme:primary": { ...original.profiles["acme:primary"]!, key: "replacement-key" } },
+        { "acme:primary": { type: "api_key", provider: "acme", key: "replacement-key" } },
         {},
       ];
       for (const profiles of credentialChanges) {
