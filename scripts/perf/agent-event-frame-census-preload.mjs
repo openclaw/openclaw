@@ -21,8 +21,11 @@ if (isMainThread) {
   const { parse } = require("acorn");
   const NativeALS = hooks.AsyncLocalStorage;
   const NativeResource = hooks.AsyncResource;
+  // oxlint-disable-next-line typescript/unbound-method -- Instrumentation retains the original method; every call supplies its receiver with .call.
   const nativeEnter = NativeALS.prototype.enterWith;
+  // oxlint-disable-next-line typescript/unbound-method -- Instrumentation retains the original method; every call supplies its receiver with .call.
   const nativeRun = NativeALS.prototype.run;
+  // oxlint-disable-next-line typescript/unbound-method -- Instrumentation retains the original method; every call supplies its receiver with .call.
   const nativeScope = NativeResource.prototype.runInAsyncScope;
   const resourceTypes = new WeakMap();
   const stores = new WeakMap();

@@ -20,10 +20,10 @@ function childWithPreload(name: string, source: string, env: NodeJS.ProcessEnv =
     },
   );
   let stderr = "";
-  child.stderr.setEncoding("utf8").on("data", (chunk) => {
+  child.stderr?.setEncoding("utf8").on("data", (chunk) => {
     stderr += chunk;
   });
-  child.stdout.resume();
+  child.stdout?.resume();
   const closed = once(child, "close");
   // A referenced diagnostic channel otherwise hangs forever, including after test failure.
   const deadline = setTimeout(() => child.kill("SIGKILL"), 5_000);
@@ -95,7 +95,7 @@ it("handles census start/stop before releasing the host's last resource", async 
     child.send({ channel: "team-shape-stress", action, output });
     expect((await handled)[0]).toEqual({ handled: action });
   }
-  child.stdin.end();
+  child.stdin?.end();
   expect(await closed, stderr()).toEqual([0, null]);
   const census = JSON.parse(await readFile(path.join(output, "frame-census.json"), "utf8"));
   expect(census.complete).toBe(true);
