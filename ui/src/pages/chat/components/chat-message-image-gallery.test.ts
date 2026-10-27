@@ -356,37 +356,58 @@ function renderMessage(
 }
 
 describe("message attachment image gallery projection", () => {
-  it.each([
-    {
-      format: "MEDIA directives",
-      content:
-        "Introduction\n\n**Before**\nMEDIA:https://example.com/before.png\n\n**After**\nMEDIA:https://example.com/after.png\n\nClosing paragraph",
-    },
-    {
-      format: "mixed image blocks and document-shaped images",
-      content: [
-        { type: "text", text: "Introduction\n\n**Before**" },
-        { type: "image", url: "https://example.com/before.png" },
-        { type: "text", text: "**After**" },
-        createAttachmentBlock(
-          "https://example.com/after.png",
-          "document",
-          "after.png",
-          "application/octet-stream; charset=binary",
-        ),
-        { type: "text", text: "Closing paragraph" },
-      ],
-    },
-  ])(
-    "keeps assistant $format in order and in one image gallery without persisted mirrors",
-    async ({ content }) => {
+  it.each(
+    [
+      {
+        format: "MEDIA directives",
+        content:
+          "Introduction\n\n**Before**\nMEDIA:https://example.com/before.png\n\n**After**\nMEDIA:https://example.com/after.png\n\nClosing paragraph",
+      },
+      {
+        format: "mixed image blocks and document-shaped images",
+        content: [
+          { type: "text", text: "Introduction\n\n**Before**" },
+          { type: "image", url: "https://example.com/before.png" },
+          { type: "text", text: "**After**" },
+          createAttachmentBlock(
+            "https://example.com/after.png",
+            "document",
+            "after.png",
+            "application/octet-stream; charset=binary",
+          ),
+          { type: "text", text: "Closing paragraph" },
+        ],
+      },
+    ].flatMap((fixture) =>
+      [false, true].map((cachedDimensions) => ({ ...fixture, cachedDimensions })),
+    ),
+  )(
+    "keeps assistant $format in one gallery with cached dimensions=$cachedDimensions",
+    async ({ content, cachedDimensions }) => {
       const onOpenImage = vi.fn<(item: ImageLightboxItem) => void>();
+      const images = Object.fromEntries(
+        ["before", "after"].map((name) => [
+          JSON.stringify([null, `https://example.com/${name}.png`, 480]),
+          { width: 480, height: 240, rendition: 480 as const },
+        ]),
+      );
       renderMessage(
         createAssistantMessage(content, {
           timestamp: 1000,
+          __openclaw: { id: "cached-gallery" },
         }),
         "assistant",
-        { onOpenImage },
+        {
+          onOpenImage,
+          displayFacts: cachedDimensions
+            ? {
+                forRow: (id) =>
+                  id === "cached-gallery"
+                    ? { read: () => ({ images }), write: vi.fn() }
+                    : undefined,
+              }
+            : undefined,
+        },
       );
 
       await waitForSolid(() =>
