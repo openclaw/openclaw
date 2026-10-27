@@ -26,6 +26,19 @@ describe("standalone runtime process build graph", () => {
     ).toEqual({ "fixture/shared": "fixture/shared.ts" });
   });
 
+  it("keeps small disk, attachment, and catalog workers out of shared Gateway chunks", () => {
+    const workers = [
+      "config/sessions/disk-budget.worker",
+      "media/attachment-processor.worker",
+      "agents/plugin-model-catalog-read.worker",
+    ];
+    expect(
+      Object.keys(
+        sharedRuntimeProcessBuildEntries(Object.fromEntries(workers.map((name) => [name, name]))),
+      ),
+    ).toHaveLength(0);
+  });
+
   it.each(Object.entries(standaloneRuntimeProcessBuildEntries))(
     "keeps %s out of the Gateway server graph",
     async (name, entry) => {
