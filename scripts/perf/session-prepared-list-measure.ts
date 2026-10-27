@@ -271,7 +271,14 @@ try {
     );
   }
   const children = rows.filter((row) => row.key.startsWith("agent:main:subagent:")).slice(0, 8);
-  const parent = rows.find((row) => row.key.startsWith("agent:main:dashboard:") && row.entry);
+  const collectorParent = fixture.summary.stressTargets?.[0]?.sessionKey;
+  const parent = rows.find(
+    (row) =>
+      row.entry &&
+      (values["collector-presentation"]
+        ? row.key === collectorParent
+        : row.key.startsWith("agent:main:dashboard:")),
+  );
   assert(parent && children.length > 0, "Team fixture must contain child and dashboard rows");
   for (const [index, child] of children.entries()) {
     assert(child.entry);
