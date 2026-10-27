@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import { Agent, request as httpRequest, type IncomingMessage } from "node:http";
 import path from "node:path";
+import { text as readText } from "node:stream/consumers";
 import { afterEach, assert, describe, expect, test, vi, type TestContext } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { waitForGatewayStartup } from "../../test/helpers/gateway-startup.js";
@@ -189,18 +190,18 @@ async function patchHooksConfig(
   expect(changed.ok, changed.error?.message).toBe(true);
 }
 
-async function waitForHookStatus(params: {
-  port: number;
-  path: string;
-  token: string;
-  status: number;
-}): Promise<void> {
+async function waitForHookStatus(
+  port: number,
+  hookPath: string,
+  status: number,
+  token = HOOK_TOKEN,
+): Promise<void> {
   await expect
     .poll(
       async () => {
-        const response = await fetch(`http://127.0.0.1:${params.port}${params.path}`, {
+        const response = await fetch(`http://127.0.0.1:${port}${hookPath}`, {
           method: "POST",
-          headers: hookHeaders(params.token),
+          headers: hookHeaders(token),
           body: "{}",
         });
         await response.arrayBuffer();
@@ -208,7 +209,7 @@ async function waitForHookStatus(params: {
       },
       { timeout: 5_000, interval: 50 },
     )
-    .toBe(params.status);
+    .toBe(status);
 }
 
 async function postOversizedChunkedHook(port: number) {
@@ -233,16 +234,13 @@ async function postOversizedChunkedHook(port: number) {
         req.write("x".repeat(DEFAULT_WEBHOOK_MAX_BODY_BYTES + 1));
         req.end('"}');
         const res = await response.promise;
-        const chunks: Buffer[] = [];
-        for await (const chunk of res) {
-          chunks.push(chunk);
-        }
+        const body = await readText(res);
         events.push("response-end");
         await socketClosed;
         events.push("socket-close");
         return {
           statusCode: res.statusCode,
-          body: Buffer.concat(chunks).toString("utf8"),
+          body,
           connection: res.headers.connection,
           events,
         };
@@ -352,12 +350,7 @@ function withRevokedHook(
                   ? { enabled: false }
                   : { enabled: true, token: ROTATED_HOOK_TOKEN },
               );
-              await waitForHookStatus({
-                port,
-                path: "/hooks/wake",
-                token: HOOK_TOKEN,
-                status: mode === "disable" ? 404 : 401,
-              });
+              await waitForHookStatus(port, "/hooks/wake", mode === "disable" ? 404 : 401);
               if (mode === "rotate") {
                 const control = await postHook(
                   port,
@@ -543,12 +536,7 @@ describe("gateway hook admission", () => {
         token: ROTATED_HOOK_TOKEN,
         path: "/incoming",
       });
-      await waitForHookStatus({
-        port,
-        path: "/incoming/wake",
-        token: ROTATED_HOOK_TOKEN,
-        status: 400,
-      });
+      await waitForHookStatus(port, "/incoming/wake", 400, ROTATED_HOOK_TOKEN);
       const replayedRunId = await hookRunId(
         await postHook(port, "/incoming/agent", message, replayKey, ROTATED_HOOK_TOKEN),
       );
