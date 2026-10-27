@@ -39,6 +39,9 @@ suite.define(() => {
           agentId: "main",
           owner: { agentId: "main", sessionKey },
           schedule: { kind: "every", everyMs: 600_000 },
+          state: {
+            autoDisabled: { reason: "consecutive-failures", atMs: 1, consecutiveErrors: 3 },
+          },
         });
         const gateway = await installMockGateway(page, {
           sessionKey,
@@ -76,6 +79,7 @@ suite.define(() => {
           .getByRole("button", { name: "Review the release Done", exact: true })
           .waitFor();
         await automations.getByText("Scheduled release check", { exact: true }).waitFor();
+        await automations.locator(".chat-summary__automation-attention").waitFor();
         await progress.waitFor();
         await expect
           .poll(() => people.locator(".chat-details-people__preview-avatar").count())
@@ -99,6 +103,7 @@ suite.define(() => {
           .waitFor();
         await automations.locator(":scope > summary").click();
         await automations.getByText("Scheduled release check", { exact: true }).waitFor();
+        expect(await automations.locator(".chat-summary__automation-attention").count()).toBe(1);
         await progress.waitFor();
         expect(await people.locator(".chat-details-people__preview-avatar").count()).toBe(1);
         expect(await details.locator("openclaw-panel-loading-skeleton").count()).toBe(0);

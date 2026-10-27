@@ -397,7 +397,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
             id: job.id,
             name: job.name,
             disabled: !job.enabled || undefined,
-            ...(job.autoDisabled === undefined ? {} : { autoDisabled: job.autoDisabled }),
+            autoDisabled: job.autoDisabled ? true : undefined,
             running:
               inventory.connected() &&
               job.enabled &&
