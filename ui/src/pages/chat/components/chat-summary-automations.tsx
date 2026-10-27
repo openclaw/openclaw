@@ -414,7 +414,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
       : (cached()?.rows ?? []),
   );
   const hasCachedRows = () => inventory.jobs().length > shown();
-  const unavailable = () => inventory.loading() || !inventory.connected();
+  const unavailable = () => inventory.error() || inventory.loading() || !inventory.connected();
   const more = () =>
     cached()?.more ?? (hasCachedRows() || (inventory.hasMore() && !inventory.error()));
   const receipt = createMemo(() =>
@@ -438,7 +438,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
     const count = shown() + 10;
     // Revealing retained rows needs no network request, even during a failed refresh.
     if (!hasCachedRows()) {
-      if (inventory.error() || unavailable() || !inventory.hasMore()) {
+      if (unavailable() || !inventory.hasMore()) {
         return;
       }
       await inventory.loadMore();

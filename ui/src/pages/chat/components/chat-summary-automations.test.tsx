@@ -159,34 +159,54 @@ function component(
 
 afterEach(() => document.body.replaceChildren());
 
-it("retains a visually live continuation button without admitting cached actions", async () => {
-  const request = jobsRequest(
-    ...Array.from({ length: 11 }, (_, index) => job({ id: `job-${index}` })),
-  );
-  const current = component(request, true, true);
-  current.update({
-    desktop: { expanded: true, onExpandedChange: vi.fn() },
-    cached: {
-      total: 11,
-      more: true,
-      rows: [{ id: "job-0", name: "Check the task", running: false, state: "", result: {} }],
-    },
-  });
-  await waitForSolid(() => expect(current.find(".chat-summary__automation-more")).not.toBeNull());
-  const more = current.find<HTMLButtonElement>(".chat-summary__automation-more")!;
-  expect(more.disabled).toBe(false);
-  expect(more.getAttribute("aria-disabled")).toBe("true");
-  more.click();
-  expect(request).not.toHaveBeenCalled();
-  current.publish({ ...current.gateway.snapshot, phase: "connected" });
-  await waitForSolid(() => expect(more.hasAttribute("aria-disabled")).toBe(false));
-  expect(current.find(".chat-summary__automation-more")).toBe(more);
-  more.click();
-  flush();
-  expect(current.element.querySelectorAll(".chat-summary__automation")).toHaveLength(11);
-  expect(request).toHaveBeenCalledOnce();
-  current.unmount();
-});
+it.each([false, true])(
+  "retains a visually live continuation button without admitting cached actions: failed=%s",
+  async (failed) => {
+    vi.useFakeTimers();
+    const request = createGatewayRequestMock();
+    if (failed) {
+      request.mockRejectedValueOnce(new Error("Temporary inventory failure"));
+    }
+    request.mockResolvedValue(
+      page(Array.from({ length: 11 }, (_, index) => job({ id: `job-${index}` }))),
+    );
+    const current = component(request, true, true);
+    try {
+      current.update({
+        desktop: { expanded: true, onExpandedChange: vi.fn() },
+        cached: {
+          total: 11,
+          more: true,
+          rows: [{ id: "job-0", name: "Check the task", running: false, state: "", result: {} }],
+        },
+      });
+      await advance();
+      const more = current.find<HTMLButtonElement>(".chat-summary__automation-more")!;
+      expect(more.disabled).toBe(false);
+      expect(more.getAttribute("aria-disabled")).toBe("true");
+      more.click();
+      expect(request).not.toHaveBeenCalled();
+      current.publish({ ...current.gateway.snapshot, phase: "connected" });
+      await advance();
+      if (failed) {
+        expect(more.getAttribute("aria-disabled")).toBe("true");
+        more.click();
+        expect(request).toHaveBeenCalledOnce();
+        current.cron();
+        await advance();
+      }
+      expect(more.hasAttribute("aria-disabled")).toBe(false);
+      expect(current.find(".chat-summary__automation-more")).toBe(more);
+      more.click();
+      flush();
+      expect(current.element.querySelectorAll(".chat-summary__automation")).toHaveLength(11);
+      expect(request).toHaveBeenCalledTimes(failed ? 2 : 1);
+    } finally {
+      current.unmount();
+      vi.useRealTimers();
+    }
+  },
+);
 
 it("keeps a bounded live preview when desktop rows close before cached props catch up", async () => {
   const remember =
