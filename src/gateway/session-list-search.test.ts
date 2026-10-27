@@ -3,13 +3,16 @@ import { expect, test, vi } from "vitest";
 import { SessionRunStatusSchema } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import { isTerminalSessionStatus, type SessionEntry } from "../config/sessions/types.js";
 import { formatAgentRuntimeLabel } from "../shared/agent-runtime-display.js";
 import { formatGoalSummary } from "../shared/session-goal-display.js";
 import { isSessionRunStateActive } from "../shared/session-run-state.js";
 import { normalizeSessionSearchText } from "../shared/session-search-text.js";
 import { filterSessionEntries, type SessionListFilterParams } from "./session-list-filters.js";
-import { readSessionListSelectionFacts } from "./session-list-target.js";
+import {
+  readSessionListSelectionFacts,
+  type SessionListModelFactsLookup,
+} from "./session-list-target.js";
 import {
   projectGatewaySessionActiveRun,
   projectGatewaySessionRunState,
@@ -47,7 +50,10 @@ test("non-status searches do not project run state for every static miss", () =>
     getModelFacts: () => ({
       selectedModel: { provider: "openai", model: "gpt-4.1", storedOverrideSource: null },
       rowModelIdentity: { provider: "openai", model: "gpt-4.1" },
-      thinkingProjection: { agentRuntime: undefined, acpMeta: undefined },
+      thinkingProjection: {
+        agentRuntime: { id: "openclaw", source: "implicit" },
+        acpMeta: undefined,
+      },
     }),
     configuredAgentIds: new Set(["main"]),
     getRowContext: () => rowContext,
@@ -62,7 +68,9 @@ test("non-status searches do not project run state for every static miss", () =>
 // The original eager predicate is the oracle for query gates and per-call memo keys.
 function eagerSearch(params: SessionListFilterParams, key: string, entry: SessionEntry) {
   const search = normalizeLowercaseStringOrEmpty(params.opts.search);
-  if (!search) return true;
+  if (!search) {
+    return true;
+  }
   const target = params.getTarget(key)!;
   const rowContext = params.getRowContext();
   const storeKey = target.storeKey ?? key;
@@ -144,6 +152,7 @@ test("search preserves the eager predicate's rows and order across vocabulary su
     return items[(seed >>> 0) % items.length]!;
   };
   const statuses = SessionRunStatusSchema.anyOf.map((status) => status.const);
+  const persistedStatuses = statuses.filter(isTerminalSessionStatus);
   const providers = [undefined, "openai", "anthropic"];
   const models = [undefined, "gpt-4.1", "claude-sonnet-4", "vendor/custom"];
   const rows = Array.from({ length: 64 }, (_, index): [string, SessionEntry] => [
@@ -153,12 +162,12 @@ test("search preserves the eager predicate's rows and order across vocabulary su
       updatedAt: index,
       displayName: choose([undefined, "Per-session controls", "München", "한국어"]),
       label: choose([undefined, "Sparse title", "Investigation"]),
-      status: choose([undefined, ...statuses]),
+      status: choose([undefined, ...persistedStatuses]),
       modelProvider: choose(providers),
       model: choose(models),
       providerOverride: choose(providers),
       modelOverride: choose(models),
-      modelOverrideRouteResolution: choose([undefined, "raw", "resolved"] as const),
+      modelOverrideRouteResolution: choose([undefined, "resolved"] as const),
       modelOverrideFallbackOriginProvider: choose(providers),
       modelOverrideFallbackOriginModel: choose(models),
       ...(index % 3
@@ -209,8 +218,8 @@ test("search preserves the eager predicate's rows and order across vocabulary su
       now,
     }),
   });
-  const facts = new Map(
-    rows.map(([key], index) => [
+  const facts = new Map<string, ReturnType<SessionListModelFactsLookup>>(
+    rows.map(([key]): [string, ReturnType<SessionListModelFactsLookup>] => [
       key,
       {
         selectedModel: {
@@ -221,8 +230,8 @@ test("search preserves the eager predicate's rows and order across vocabulary su
         rowModelIdentity: { provider: choose(providers), model: choose(models) },
         thinkingProjection: {
           agentRuntime: {
-            id: choose(["native", "codex", "acp"]),
-            fallback: index % 5 ? undefined : "native",
+            id: choose(["openclaw", "codex", "acp"]),
+            source: "implicit",
           },
           acpMeta: undefined,
         },
@@ -265,7 +274,7 @@ test("search preserves the eager predicate's rows and order across vocabulary su
     "openai/gpt-4.1",
     "anthropic/claude-sonnet-4",
     "vendor/custom",
-    "native (fallback native)",
+    "openclaw",
     "codex",
     "acp",
     "Pursuing goal",
