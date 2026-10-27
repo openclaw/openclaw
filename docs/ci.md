@@ -192,6 +192,8 @@ Shared OpenClawKit Periphery scans restore the same verified Watch RTC libraries
 
 iOS screenshot shards, release qualification, Store Release, and its screenshot-only operation use [larger hosted capacity](/ci/runners). Screenshot capture uses stock simulators and creates and cleans up one at a time; the screenshot-only operation can validate a selected branch without signing or uploading a release. The pairing, chat, and native Overview tests retain their existing assertions and deadlines.
 
+Release qualification disables Spotlight indexing on the disposable runner's Data volume before checkout. After Simulator boot, it requires ten seconds of at least 30% idle host CPU within five minutes before issuing the pairing credential. This keeps first-launch background work out of the Gateway and XCTest deadlines. Local qualification uses the same CPU readiness check and leaves host indexing settings to the operator.
+
 Android screenshot-input PRs and ordinary full manual CI run the existing phone
 and Wear store capture script in one hosted Ubuntu job. The final CI gate requires
 capture to succeed; unit-test-only and documentation changes omit it. See
@@ -325,7 +327,7 @@ When an ordinary PR, push, or scheduled run already selects the public artifact 
 
 When the public artifact build is already selected, current-target browser extension E2E and the selected production deployment fixtures run directly in `build-artifacts`, before mutable built-artifact verifiers. They reuse that exact checkout's public build without an extra checkout, runtime archive, or runner. Native-policy and published-driver consumers wait for this browser proof with the rest of the producer job. Standalone browser selections and frozen targets retain their local runtime build. Real-Gateway fixtures retain their separate private-QA preparation. The native-host, Doctor and SQLite built-CLI verifiers opt into the existing validated worker cache to reuse their identical runtime-only compiled worker graph sequentially within the producer job; TUI retains its separate heap configuration and worker preparation.
 
-Build, QA and test orchestration restore the same [protected Node compile cache](/ci/scope-and-routing/node-test-lanes). The trusted warmer populates build tools before collecting test imports, including the same seven Control UI seed files on Node and the pinned Bun fork in both Linux cache backends; ordinary CI remains restore-only.
+Build, QA and test orchestration restore the same [protected Node compile cache](/ci/scope-and-routing/node-test-lanes). The trusted warmer populates build tools before collecting test imports. Scheduled and push warming use ordinary CI's Bun policy, retaining the runtime owner's Node-only exceptions; explicit workflow dispatches prime both runtimes for full validation. Optional full Node runs may start colder between manual dual-runtime warmings. Both Linux cache backends retain the same seven Control UI seed files on Node and the pinned Bun fork, and hosted tooling and contract seeds keep their existing runtime owners. Ordinary CI remains restore-only.
 
 In-process Gateway test configs use [exclusive plan admission within existing packed jobs](/ci/capacity#measured-shard-weights).
 

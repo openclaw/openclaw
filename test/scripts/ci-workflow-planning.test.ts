@@ -11213,6 +11213,8 @@ describe("ci workflow guards", () => {
       "Control UI E2E suite",
     );
     expect(scenario.if).toBe("matrix.task == 'control-ui'");
+    expect(scenario["timeout-minutes"]).toBe(20);
+    expect(uiE2e["timeout-minutes"]).toBeGreaterThan(scenario["timeout-minutes"]);
     expect(scenario.env).toEqual({
       OPENCLAW_UI_E2E_DIAGNOSTIC_DIR:
         ".artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}",

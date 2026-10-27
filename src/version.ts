@@ -56,11 +56,11 @@ function firstNonEmpty(...values: Array<string | undefined>): string | undefined
   return undefined;
 }
 
-export function readVersionFromPackageJsonForModuleUrl(moduleUrl: string): string | null {
+function readVersionFromPackageJsonForModuleUrl(moduleUrl: string): string | null {
   return readStringFromJsonCandidates(moduleUrl, PACKAGE_JSON_CANDIDATES, "version", true);
 }
 
-export function readVersionFromBuildInfoForModuleUrl(moduleUrl: string): string | null {
+function readVersionFromBuildInfoForModuleUrl(moduleUrl: string): string | null {
   return readStringFromJsonCandidates(moduleUrl, BUILD_INFO_CANDIDATES, "version");
 }
 

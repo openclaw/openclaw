@@ -237,9 +237,16 @@ it.each([
       expect(readPending({ env: state.env })).toEqual([
         expect.objectContaining({ pluginId: fixturePlugin, requiresStateMigration: true }),
       ]);
-      containsObjects(reportIssues(interrupted), {
-        message: expect.stringContaining("Plugin migration obligations changed"),
-      });
+      const retainedIssue = reportIssues(interrupted).find(
+        (issue) => issue.code === "plugin_migration_source_retained",
+      );
+      expect(retainedIssue?.message).toContain(
+        "Plugin migration obligations changed during session archive publication",
+      );
+      expect(retainedIssue?.message).toContain("expected=[]");
+      expect(retainedIssue?.message).toContain("current=[fixture-plugin]");
+      expect(retainedIssue?.message).toContain("changed=[]");
+      expect(retainedIssue?.message).toContain("Retained inputs remain protected");
 
       await editAndDeleteImportedSessions(scope, "edited after interrupted archival");
       expect((await run()).totals.importedEntries).toBe(0);

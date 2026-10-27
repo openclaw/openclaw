@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isMainThread } from "node:worker_threads";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
@@ -103,12 +104,15 @@ export async function appendExpectedSessionTranscriptTurn(
       return result;
     }
   }
+  using phase = observeDiagnosticsTimelinePhases("persist.transcript.ownerAuthority");
   if (requestedOptions.ownerSource) {
-    return appendPreparedSessionTranscriptTurn(scope, requestedOptions, assertOwnedWrite);
+    phase.mark("persist.transcript.append");
+    return await appendPreparedSessionTranscriptTurn(scope, requestedOptions, assertOwnedWrite);
   }
   const ownerSource = await prepareSessionSourceAuthority(assertOwnedWrite);
   const errors: unknown[] = [];
   try {
+    phase.mark("persist.transcript.append");
     return await appendPreparedSessionTranscriptTurn(
       scope,
       { ...requestedOptions, ownerSource },
@@ -118,6 +122,7 @@ export async function appendExpectedSessionTranscriptTurn(
     errors.push(error);
     throw error;
   } finally {
+    phase.mark("persist.transcript.releaseAuthority");
     await releaseSessionSourceAuthorities([ownerSource], errors);
   }
 }

@@ -216,6 +216,9 @@ In either mode, internal QA, research, coding, review, and test lanes use ordina
 <ParamField path="thinking" type="string">
   Override thinking level for the sub-agent run. Not available with `visible: true`.
 </ParamField>
+<ParamField path="cyberAccessProgram" type='"standard" | "daybreak_blue" | "daybreak_red"'>
+  Select the child's OpenAI [cyber Access](/providers/openai/models#chat-access-control): `daybreak_blue` is Blue and `daybreak_red` is Red. When omitted, a same-agent child on the requester's model keeps the requester's saved session Access; a child on another agent or model starts at its model default. The value is saved on the child session like a chat Access selection, and both the OpenClaw runtime and the Codex runtime check it against the child's account and model before every model request, so an unavailable program fails the child run instead of downgrading. Native sub-agents only (hidden or `visible: true`); rejected with `runtime: "acp"`.
+</ParamField>
 <ParamField path="thread" type="boolean" default="false">
   When `true`, requests channel thread binding for this sub-agent session.
 </ParamField>

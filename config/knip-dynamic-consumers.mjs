@@ -113,6 +113,41 @@ function loadedNamespaceMemberNames(source, loaderName) {
   return members;
 }
 
+function lazyRuntimeModuleMemberEdges(source, consumerFile, targetSpecifier) {
+  const specifiersByLoader = new Map(
+    [
+      ...source.matchAll(
+        /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*createLazyRuntimeModule\(\s*\(\s*\)\s*=>\s*import\(\s*["']([^"'\r\n]+)["']\s*\)\s*,?\s*\)\s*;/gu,
+      ),
+    ]
+      .filter(([, , specifier]) => specifier === targetSpecifier)
+      .map(([, loader, specifier]) => [loader, specifier]),
+  );
+  const edges = new Map();
+
+  for (const match of source.matchAll(
+    /\bconst\s*\{([^{}]+)\}\s*=\s*await\s+([A-Za-z_$][\w$]*)\(\s*\)\s*;/gu,
+  )) {
+    const specifier = specifiersByLoader.get(match[2]);
+    if (!specifier) {
+      continue;
+    }
+    const targetFile = path.resolve(path.dirname(consumerFile), specifier);
+    const names = edges.get(targetFile) ?? new Set();
+    for (const binding of match[1].split(",")) {
+      const name = binding.trim().split(/\s*:\s*/u)[0];
+      if (/^[A-Za-z_$][\w$]*$/u.test(name)) {
+        names.add(name);
+      }
+    }
+    if (names.size > 0) {
+      edges.set(targetFile, names);
+    }
+  }
+
+  return edges;
+}
+
 function computedCheckoutNamespaceMemberEdges(source) {
   const sourceDirectories = new Map(
     [
@@ -482,6 +517,34 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
   for (const [targetFile, names] of computedCheckoutNamespaceMemberEdges(
     publishedUpgradeScenario,
   )) {
+    imports.push(namedImport([...names], targetFile, filePath, imports.length));
+  }
+
+  const codexLazyConsumers = [
+    ["extensions/codex/src/native-plugin-tool.ts", "./app-server/binding-connection.js"],
+    ["extensions/codex/src/native-thread-tool.ts", "./app-server/binding-connection.js"],
+    [
+      "extensions/codex/src/session-catalog-list-operation.ts",
+      "./session-catalog-node-adoption.js",
+    ],
+    ["extensions/codex/src/session-catalog-control.ts", "./app-server/shared-client.js"],
+  ];
+  const codexLazyEdges = new Map();
+  for (const [consumerPath, targetSpecifier] of codexLazyConsumers) {
+    const consumerSource = fs.readFileSync(consumerPath, "utf8");
+    for (const [targetFile, memberNames] of lazyRuntimeModuleMemberEdges(
+      consumerSource,
+      consumerPath,
+      targetSpecifier,
+    )) {
+      const names = codexLazyEdges.get(targetFile) ?? new Set();
+      for (const name of memberNames) {
+        names.add(name);
+      }
+      codexLazyEdges.set(targetFile, names);
+    }
+  }
+  for (const [targetFile, names] of codexLazyEdges) {
     imports.push(namedImport([...names], targetFile, filePath, imports.length));
   }
 

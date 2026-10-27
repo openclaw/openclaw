@@ -18,6 +18,7 @@ import { publishTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
+  resizeObservers,
   threadProps,
   transcriptDomState,
 } from "./chat-transcript.test-support.ts";
@@ -142,7 +143,7 @@ describe("conversation position rail", () => {
     resetTranscriptTestDom();
   });
 
-  it.each(["mounted", "off-window", "focused"] as const)(
+  it.each(["mounted", "off-window", "focused", "offset-only"] as const)(
     "publishes current position and keyboard entry together for a %s observer target",
     (scenario) => {
       const { flushFrame, publishVisibility, activeMessage, root, marks } = railFixture(
@@ -161,6 +162,15 @@ describe("conversation position rail", () => {
       expect(current()).toBe(marker("message-79"));
       expect(tabStops()).toEqual([current()]);
 
+      // Consume the initial reveal's trailing frame before testing an offset-only update.
+      if (scenario === "offset-only") {
+        flushFrame();
+      }
+      const resize = [...resizeObservers].find((observer) => observer.observes(marks));
+      assert(resize);
+      const observe = vi.spyOn(resize, "observe");
+      const unobserve = vi.spyOn(resize, "unobserve");
+
       if (scenario === "focused") {
         marks.scrollTop = 40 * 12;
         marks.dispatchEvent(new Event("scroll"));
@@ -174,13 +184,30 @@ describe("conversation position rail", () => {
       const nextId = scenario === "mounted" ? "message-76" : "message-0";
       expect(marker(nextId) !== null).toBe(scenario === "mounted");
       activeMessage.mockReturnValue(nextId);
-      publishVisibility(root.querySelector(".chat-bubble")!);
+      if (scenario === "offset-only") {
+        root.scrollTop += 100;
+        publishTranscriptScroll(root, {
+          type: "offset",
+          delta: 100,
+          scrolling: true,
+          touching: false,
+          programmatic: false,
+        });
+        expect(current()).toBe(marker("message-79"));
+      } else {
+        publishVisibility(root.querySelector(".chat-bubble")!);
+      }
 
       expect(current()).not.toBeNull();
       expect(tabStops()).toEqual([scenario === "focused" ? focused : current()]);
       expect(document.activeElement).toBe(focused);
       flushFrame();
       expect(current()?.dataset.positionMarkerId).toBe(nextId);
+      if (scenario === "offset-only") {
+        expect(observe).not.toHaveBeenCalled();
+        expect(unobserve).not.toHaveBeenCalled();
+        expect(resize.observes(marks)).toBe(true);
+      }
       expect(tabStops()).toEqual([scenario === "focused" ? focused : current()]);
       expect(document.activeElement).toBe(focused);
       expect(marks.querySelectorAll(".chat-position-rail__marker").length).toBeLessThan(50);
@@ -220,15 +247,19 @@ describe("conversation position rail", () => {
     const positions = railPositions(1);
     const { root, marks } = mountRail("agent:main:rail-overflow", positions);
     const rail = root.querySelector<HTMLElement>(".chat-position-rail")!;
+    let viewportHeight = 600;
+    let transcriptHeight = 600;
     Object.defineProperties(root, {
-      clientHeight: { configurable: true, value: 600 },
-      scrollHeight: { configurable: true, value: 600 },
+      clientHeight: { configurable: true, get: () => viewportHeight },
+      scrollHeight: { configurable: true, get: () => transcriptHeight },
     });
     Object.defineProperty(marks, "clientHeight", { configurable: true, value: 12 });
     emitTranscriptResize(marks, 44, 12);
     flushFrame();
     expect(rail.hasAttribute("data-overflow")).toBe(false);
     const resize = (clientHeight: number, scrollHeight: number) => {
+      viewportHeight = clientHeight;
+      transcriptHeight = scrollHeight;
       publishTranscriptScroll(root, {
         type: "resize",
         viewport: { clientHeight, scrollHeight, scrollTop: 0 },

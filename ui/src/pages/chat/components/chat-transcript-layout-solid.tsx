@@ -14,7 +14,11 @@ import {
 } from "../solid-render-lifecycle.ts";
 import { ChatHistoryBoundary } from "./chat-history-boundary.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
-import type { TranscriptContent, TranscriptLayoutProps } from "./chat-transcript-layout.ts";
+import {
+  TranscriptRowKeyContext,
+  type TranscriptContent,
+  type TranscriptLayoutProps,
+} from "./chat-transcript-layout.ts";
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 import { TranscriptMessageElementsContext } from "./chat-transcript-message-elements.ts";
@@ -110,11 +114,16 @@ function TranscriptRows(props: {
                       "chat-virtual-row",
                       { "chat-virtual-row--first": virtualRow().index === 0 },
                     ]}
-                    style={{ "contain-intrinsic-block-size": `${virtualRow().size}px` }}
+                    style={{
+                      "contain-intrinsic-block-size": `${virtualRow().size}px`,
+                      "min-height": `${props.snapshot.layout.rowMinimum(index())}px`,
+                    }}
                     data-index={String(virtualRow().index)}
                     data-virtual-row-key={row()?.key}
                   >
-                    <RowContent value={content()} />
+                    <TranscriptRowKeyContext value={() => row()?.key}>
+                      <RowContent value={content()} />
+                    </TranscriptRowKeyContext>
                   </div>
                 </>
               );

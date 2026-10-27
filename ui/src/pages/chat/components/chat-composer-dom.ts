@@ -447,11 +447,13 @@ export function focusComposerFromChrome(
     .composedPath()
     .some((node) => node instanceof Element && node.matches(COMPOSER_CHROME_INTERACTIVE_SELECTOR));
   if (event.type === "pointerdown" || event.type === "mousedown") {
+    const touch = event instanceof PointerEvent && event.pointerType === "touch";
     // Blank padding otherwise moves focus to the page before click restores it,
     // collapsing and reopening the mobile composer during the same gesture.
+    // WebKit also cancels touch activation when the trigger's pointerdown is cancelled.
     if (
       event.button === 0 &&
-      (target.closest("summary, .oc-menu-trigger") || (connected && !interactive))
+      ((!touch && target.closest("summary, .oc-menu-trigger")) || (connected && !interactive))
     ) {
       event.preventDefault();
     }

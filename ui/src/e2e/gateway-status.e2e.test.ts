@@ -300,7 +300,7 @@ suite.define(() => {
           "Reconnecting… · 2 queued",
         );
         expect(await content.boundingBox()).toEqual(connectedContentBounds);
-        expect((await connectionStatus.boundingBox())!.height).toBe(44);
+        expect((await connectionStatus.boundingBox())!.height).toBe(28);
         const identityStatus = footer.locator(".sidebar-identity-card");
         expect(await identityStatus.isVisible()).toBe(true);
         expect(await identityStatus.getAttribute("data-connection-status")).toBe("reconnecting");
@@ -366,7 +366,7 @@ suite.define(() => {
         await page.keyboard.press("Escape");
         await gateway.setOnline(true);
         await waitForControlUiGatewayReady(page);
-        await connectionStatus.waitFor({ state: "detached" });
+        await connectionStatus.getByText("Connected", { exact: true }).waitFor();
         await expect
           .poll(() => identityStatus.getAttribute("data-connection-status"))
           .toBe("connected");

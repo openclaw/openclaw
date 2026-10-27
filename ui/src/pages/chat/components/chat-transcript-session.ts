@@ -54,7 +54,7 @@ export type TranscriptHeader = {
 };
 
 export type ChatTranscriptSession = {
-  readonly layout: Pick<TranscriptLayoutOwner, "viewportResizePending">;
+  readonly layout: Pick<TranscriptLayoutOwner, "viewportResizePending" | "configureRows" | "ready">;
   readonly entryAnimations: ChatMessageEntryAnimations;
   readonly messageElements: TranscriptMessageElements;
   readonly contentElement: HTMLDivElement | null;
@@ -78,7 +78,6 @@ export type ChatTranscriptSession = {
   /** Returns the sampled loaded message at or preceding the viewport midpoint. */
   activeMessageId(messageIds: readonly string[]): string | null;
   revealMessage(messageId: string): boolean;
-  setContentReady(ready: boolean): void;
   handleFocusIn(event: FocusEvent): void;
   handleFocusOut(event: FocusEvent): void;
 };

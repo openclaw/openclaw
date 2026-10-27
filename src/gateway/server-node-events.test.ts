@@ -687,15 +687,16 @@ describe("agent request events", () => {
   it.each(["voice touch", "agent dispatch", "receipt delivery"] as const)(
     "keeps accepted detached %s visible to suspension",
     async (phase) => {
-      const dispatchGate = createDeferred<never>();
-      const receipt = createDeferred<DurableMessageBatchSendResult>();
-      const touch = createDeferred();
+      const gate = createDeferred();
       if (phase === "voice touch") {
-        touchSession.mockImplementationOnce(() => touch.promise);
+        touchSession.mockImplementationOnce(() => gate.promise);
       } else if (phase === "agent dispatch") {
-        dispatch.mockImplementationOnce(() => dispatchGate.promise);
+        dispatch.mockImplementationOnce(() => gate.promise);
       } else {
-        sendBatch.mockImplementationOnce(() => receipt.promise);
+        sendBatch.mockImplementationOnce(async () => {
+          await gate.promise;
+          return sentDurableMessageBatchResult;
+        });
       }
 
       await runAdmittedNodeEvent(
@@ -717,13 +718,7 @@ describe("agent request events", () => {
 
       await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
       expectSuspendBusyWithRootWork(`${phase}-busy`);
-      if (phase === "voice touch") {
-        touch.resolve();
-      } else if (phase === "agent dispatch") {
-        dispatchGate.resolve(undefined as never);
-      } else {
-        receipt.resolve(sentDurableMessageBatchResult);
-      }
+      gate.resolve();
       await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       expectSuspendReady(`${phase}-ready`);
     },
