@@ -162,6 +162,9 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   if (isCodeModeDiagnosticEnabled()) {
     logCodeModeDiagnostic(log, "activation", {
       runId: attempt.runId,
+      modelProvider: attempt.provider,
+      modelId: attempt.modelId,
+      modelCodeMode: attempt.model.compat?.codeMode ?? null,
       active: codeModeControlsEnabledForRun,
       toolsEnabled,
       rawRun: isRawModelRun,

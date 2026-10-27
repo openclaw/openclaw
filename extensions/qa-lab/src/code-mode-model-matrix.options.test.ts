@@ -57,8 +57,16 @@ describe("Code Mode model matrix options", () => {
     ),
     ...["auto", "direct", "code"].map((mode): [string, string] => [
       `${model} --task invoice-reconciliation --mode ${mode}`,
-      "both explicit direct/code",
+      "paired direct/code or direct/auto",
     ]),
+    ...["node", "quickjs"].map((executor): [string, string] => [
+      `${model} --task repo-invoice-repair --mode direct --mode auto --executor ${executor}`,
+      "omit --executor",
+    ]),
+    [
+      `${model} --task repo-invoice-repair --mode direct --mode auto --mode code`,
+      "paired direct/code or direct/auto",
+    ],
     ...["--skip-build", "constructor", "toString", "__proto__"].map((arg): [string, string] => [
       `${model} ${arg} 1`,
       `Unknown argument: ${arg}`,
@@ -74,6 +82,12 @@ describe("Code Mode model matrix options", () => {
       maxKnownCostUsd: 0.5,
       schedulePath: "/harness/waves.json",
     });
+  });
+
+  it("admits a complete omitted-default Gateway pair without an executor override", () => {
+    expect(
+      parse(`${model} --task repo-invoice-repair --mode direct --mode auto --max-cells 2`),
+    ).toMatchObject({ modes: ["direct", "auto"], maxCells: 2, gatewayExecutor: "node" });
   });
 
   it("rejects output paths outside the repository", () => {

@@ -5,11 +5,99 @@ import * as gatewayFixtures from "../../scripts/lib/code-mode-matrix-gateway-fix
 import {
   collectGatewayMatrixTrace,
   createGatewayMatrixWorkload,
+  evaluateGatewayMatrixActivation,
   evaluateGatewayMatrixInterview,
   evaluateGatewayMatrixTask,
+  parseGatewayMatrixActivationDiagnostic,
   requireGatewayMatrixTools,
   type GatewayMatrixTrace,
 } from "../../scripts/lib/code-mode-matrix-gateway.js";
+
+function activationDiagnostic(overrides: Record<string, unknown> = {}) {
+  return expectDefined(
+    parseGatewayMatrixActivationDiagnostic(
+      `code-mode diagnostic ${JSON.stringify({
+        boundary: "activation",
+        runId: "root-run",
+        active: true,
+        toolsEnabled: true,
+        toolsDisabled: false,
+        rawRun: false,
+        fallbackActive: false,
+        modelProvider: "anthropic",
+        modelId: "fixture-model",
+        modelCodeMode: "preferred",
+        ...overrides,
+      })}`,
+    ),
+    "activation diagnostic",
+  );
+}
+
+it.each([
+  ["preferred", true, true],
+  ["preferred", false, false],
+  ["capable", false, true],
+  ["capable", true, false],
+  [null, false, true],
+  [null, true, false],
+] as const)(
+  "checks Gateway auto against selected tier %s, active=%s",
+  (tier, active, engagement) => {
+    expect(
+      evaluateGatewayMatrixActivation({
+        diagnostics: [activationDiagnostic({ modelCodeMode: tier, active })],
+        rootRunId: "root-run",
+        childRunIds: [],
+        expectedEnabled: "auto",
+        expectedModel: "anthropic/fixture-model",
+      }),
+    ).toMatchObject({ activationComplete: true, engagement, actualCodeMode: active });
+  },
+);
+
+it.each([
+  { modelCodeMode: undefined },
+  { modelCodeMode: "unknown" },
+  { modelProvider: undefined },
+  { modelId: undefined },
+  { modelId: "different-model" },
+  { fallbackActive: true },
+  { toolsEnabled: false },
+  { toolsDisabled: true },
+  { rawRun: true },
+])("withholds Gateway default proof for incomplete or ineligible activation: %j", (overrides) => {
+  expect(
+    evaluateGatewayMatrixActivation({
+      diagnostics: [activationDiagnostic(overrides)],
+      rootRunId: "root-run",
+      childRunIds: [],
+      expectedEnabled: "auto",
+      expectedModel: "anthropic/fixture-model",
+    }),
+  ).toMatchObject({ activationComplete: false, engagement: false });
+});
+
+it.each([false, true])(
+  "preserves explicit Gateway activation=%s without catalog metadata",
+  (active) => {
+    expect(
+      evaluateGatewayMatrixActivation({
+        diagnostics: [
+          activationDiagnostic({
+            active,
+            modelProvider: undefined,
+            modelId: undefined,
+            modelCodeMode: undefined,
+          }),
+        ],
+        rootRunId: "root-run",
+        childRunIds: [],
+        expectedEnabled: active,
+      }),
+    ).toMatchObject({ activationComplete: true, engagement: true, actualCodeMode: active });
+  },
+);
 
 function evaluate(
   task: Parameters<typeof evaluateGatewayMatrixTask>[0]["task"],

@@ -110,6 +110,13 @@ export function parseGatewayMatrixActivationDiagnostic(line: string) {
     toolsDisabled: value.toolsDisabled,
     rawRun: value.rawRun,
     fallbackActive: value.fallbackActive,
+    ...(typeof value.modelProvider === "string" ? { modelProvider: value.modelProvider } : {}),
+    ...(typeof value.modelId === "string" ? { modelId: value.modelId } : {}),
+    ...(value.modelCodeMode === null ||
+    value.modelCodeMode === "preferred" ||
+    value.modelCodeMode === "capable"
+      ? { modelCodeMode: value.modelCodeMode }
+      : {}),
     ...(typeof value.allowlist === "string" ? { allowlist: value.allowlist } : {}),
   };
 }
@@ -118,7 +125,8 @@ export function evaluateGatewayMatrixActivation(params: {
   diagnostics: readonly GatewayMatrixActivationDiagnostic[];
   rootRunId?: string;
   childRunIds: readonly string[];
-  expectedEnabled: boolean;
+  expectedEnabled: boolean | "auto";
+  expectedModel?: string;
 }) {
   const requiredActivationRuns = [
     ...new Set([...(params.rootRunId ? [params.rootRunId] : []), ...params.childRunIds]),
@@ -134,7 +142,16 @@ export function evaluateGatewayMatrixActivation(params: {
     Boolean(params.rootRunId) &&
     requiredActivationRuns.every((runId) =>
       qualifyingActivation.some((entry) => entry.runId === runId),
-    );
+    ) &&
+    (params.expectedEnabled !== "auto" ||
+      qualifyingActivation.every(
+        (entry) =>
+          entry.modelProvider !== undefined &&
+          entry.modelId !== undefined &&
+          `${entry.modelProvider}/${entry.modelId}` === params.expectedModel &&
+          entry.modelCodeMode !== undefined &&
+          !entry.fallbackActive,
+      ));
   return {
     requiredActivationRuns,
     observedActivation,
@@ -143,7 +160,13 @@ export function evaluateGatewayMatrixActivation(params: {
     actualCodeMode: activationComplete && qualifyingActivation.every((entry) => entry.active),
     engagement:
       activationComplete &&
-      qualifyingActivation.every((entry) => entry.active === params.expectedEnabled),
+      qualifyingActivation.every(
+        (entry) =>
+          entry.active ===
+          (params.expectedEnabled === "auto"
+            ? entry.modelCodeMode === "preferred"
+            : params.expectedEnabled),
+      ),
   };
 }
 
@@ -1726,7 +1749,8 @@ export async function runGatewayMatrixCell(
       ledger?.runs
         .filter((run) => run.requesterSessionKey === rootSessionKey)
         .map((run) => run.runId) ?? [],
-    expectedEnabled: params.cell.mode === "code",
+    expectedEnabled: params.cell.mode === "auto" ? "auto" : params.cell.mode === "code",
+    expectedModel: params.cell.model,
   });
   let behavior: Record<string, boolean>;
   if (performance) {
@@ -1870,6 +1894,7 @@ export async function runGatewayMatrixCell(
     },
   };
   await write("evidence.json", {
+    codeModeConfigured: Object.hasOwn(cfg.tools ?? {}, "codeMode"),
     gateway,
     task,
     interview,
