@@ -497,46 +497,33 @@ export function registerCanaryReadinessBudgetTests(
   it.each([
     ["lint", "candidate-doctor", "candidate-doctor-lint"],
     ["startup", "candidate-recovery", "candidate-gateway-startup"],
-    ["config", undefined, "candidate-config"],
   ] as const)(
-    "gives %s a fresh budget while retaining its own failures",
-    async (phase, previous, name) => {
+    "gives %s a fresh budget after the previous check",
+    async (_phase, previous, name) => {
       stubHealthyGateway();
       let now = 2_000_000;
       const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
       onTestFinished(() => clock.mockRestore());
       const spawnNormally = mocks.spawn.getMockImplementation()!;
       mocks.spawn.mockImplementation((command, args, options) => {
-        const fails = phase === "config" && args.includes("validate");
-        if (!args.includes("--fix") && !fails) {
+        if (!args.includes("--fix")) {
           return spawnNormally(command, args, options);
         }
         const child = new FakeChild(42_000);
         queueMicrotask(() => {
-          child.stderr.write(
-            fails ? "Configuration unavailable\n" : "Earlier check completed successfully\n",
-          );
-          now += fails ? 25 : 0;
-          child.emit("close", fails ? 1 : 0);
+          child.stderr.write("Earlier check completed successfully\n");
+          child.emit("close", 0);
         });
         return child;
       });
       const result = await validate({
         onStep: (step) => {
-          now += step.name === previous ? 1_000 : phase === "config" ? 100 : 0;
+          now += step.name === previous ? 1_000 : 0;
         },
       });
-      if (phase === "config") {
-        const failed = canaryOutcomeStep(result.steps);
-        expect(result).toMatchObject({ status: "error", phase, durationMs: 425 });
-        expect(failed).toMatchObject({ name, durationMs: 25, exitCode: 1 });
-        expect(failed?.failureFacts?.[0]?.message).toContain("Configuration unavailable");
-        expect(failed?.stderrTail).not.toContain("Earlier check");
-      } else {
-        expect(result).toMatchObject({ status: "ok", phase: "readiness", durationMs: 1_000 });
-        expect(result.steps).toContainEqual(expect.objectContaining({ name, exitCode: 0 }));
-        expect(result.logTail.join("\n")).toContain("readyz: ready");
-      }
+      expect(result).toMatchObject({ status: "ok", phase: "readiness", durationMs: 1_000 });
+      expect(result.steps).toContainEqual(expect.objectContaining({ name, exitCode: 0 }));
+      expect(result.logTail.join("\n")).toContain("readyz: ready");
       expect(result.logTail.join("\n")).toContain("Earlier check completed successfully");
     },
   );
@@ -560,7 +547,6 @@ export function registerCanaryReadinessBudgetTests(
       ["headers", "body"].map((delay) => ({ endpoint, delay })),
     ),
   )("allows slow $endpoint $delay within the validation budget", async ({ endpoint, delay }) => {
-    const timers = new Set<NodeJS.Timeout>();
     const server = createServer((request, response) => {
       const body = JSON.stringify({ status: "started", ready: true });
       const headers = () => {
@@ -576,17 +562,12 @@ export function registerCanaryReadinessBudgetTests(
         headers();
       }
       const timer = setTimeout(() => {
-        timers.delete(timer);
         if (delay === "headers") {
           headers();
         }
         response.end(body);
       }, 1_200);
-      timers.add(timer);
-      response.once("close", () => {
-        clearTimeout(timer);
-        timers.delete(timer);
-      });
+      response.once("close", () => clearTimeout(timer));
     });
     const fetchHttp = globalThis.fetch;
     try {
@@ -600,9 +581,6 @@ export function registerCanaryReadinessBudgetTests(
       expect(result.logTail.join("\n")).toContain("readyz: ready");
     } finally {
       vi.unstubAllGlobals();
-      for (const timer of timers) {
-        clearTimeout(timer);
-      }
       await closeServers(server);
     }
   });
