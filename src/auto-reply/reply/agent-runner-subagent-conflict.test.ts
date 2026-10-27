@@ -19,7 +19,7 @@ import {
   createMockReplyOperation,
   setupAgentRunnerExecutionTestState,
 } from "./agent-runner-execution.test-support.js";
-import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
+import { createReplyInputAdmission } from "./reply-input-admission.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 const fixture = useSubagentControlFixture();
@@ -38,19 +38,6 @@ it("settles a reply visibly when the reactivation cohort changes before replacem
   const recorder = createUserTurnTranscriptRecorder({
     input: { text: "Continue the completed task", idempotencyKey: "reply-followup:user" },
     target: { ...target, sessionEntry: entry },
-  });
-  const admission = createReplyRestartRecoveryClaimController({
-    ...target,
-    acquireSessionActor: async () => undefined,
-    admissionRunId: "reply-followup",
-    lifecycleGeneration: undefined,
-    getEntry: () => entry,
-    getSessionId: () => target.sessionId,
-    setEntry: (next) => {
-      entry = next;
-    },
-    isRestartAbort: () => false,
-    resolveDeliveryContext: () => undefined,
   });
   await registerSubagentRun({
     runId: "completed-task",
@@ -110,6 +97,16 @@ it("settles a reply visibly when the reactivation cohort changes before replacem
     sessionId: target.sessionId,
   });
   followupRun.userTurnTranscriptRecorder = recorder;
+  const admission = createReplyInputAdmission({
+    followupRun,
+    replyOperation,
+    sessionKey,
+    storePath: target.storePath,
+    sourceTurnId: "reply-followup",
+    setEntry: (next) => {
+      entry = next;
+    },
+  });
   const result = await executePreparedReplyAgentRun({
     ...createMinimalRunAgentTurnParams({
       followupRun,
@@ -134,7 +131,6 @@ it("settles a reply visibly when the reactivation cohort changes before replacem
     typing: createMockTypingController(),
     typingMode: "never",
     getActiveSessionEntry: () => entry,
-    isRestartRecoveryArmed: admission.isArmed,
     onCompactionNoticePayload: () => {},
     resolveVisibleReplyDelivery: async () => false,
     returnWithQueuedFollowupDrain: (value) => value,
