@@ -121,11 +121,23 @@ export async function projectSessionEntryLifecycleMutationInWorker(
       archiveRecovery: prepared.archiveRecovery,
     };
   }
-  return runSessionLifecyclePlanningInWorker(params, "finish", {
-    ...prepared,
+  // The former finish round trip detached caller-owned metadata at this boundary.
+  for (const upsert of upsertedEntries) {
+    if (upsert.routeContext) {
+      upsert.routeContext = structuredClone(upsert.routeContext);
+    }
+    if (upsert.resetBoundary) {
+      upsert.resetBoundary = structuredClone(upsert.resetBoundary);
+    }
+  }
+  return {
+    ...(await runSessionLifecyclePlanningInWorker(params, "finish", {
+      store: prepared.store,
+      selected: prepared.selected,
+      archiveDirectory: params.input.archiveDirectory,
+    })),
     upsertedEntries,
-    archiveDirectory: params.input.archiveDirectory,
-  });
+  };
 }
 
 export function commitSessionLifecycleProjectionInWorker(params: {

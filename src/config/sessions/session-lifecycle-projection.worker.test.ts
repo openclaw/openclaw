@@ -25,6 +25,7 @@ import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
+import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation-run.js";
 import {
   SessionEntryLifecycleUpsertConflictError,
@@ -46,6 +47,7 @@ const delivery = vi.hoisted(() => ({
   beforeCommand: undefined as ((type: string) => Promise<void>) | undefined,
   afterCommit: undefined as ((type: string) => void) | undefined,
   afterReply: undefined as ((type: string, result: unknown) => void) | undefined,
+  requestBytes: [] as Array<{ type: string; bytes: number }>,
 }));
 vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../state/openclaw-agent-execution.js")>();
@@ -66,6 +68,13 @@ vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
             (worker) =>
               operation({
                 execute: async (command, commandOptions) => {
+                  delivery.requestBytes.push({
+                    type:
+                      command.type === "database.domain.publish"
+                        ? command.input.command.type
+                        : command.type,
+                    bytes: serialize(command).byteLength,
+                  });
                   delivery.currentCommand = command.type;
                   try {
                     if (delivery.beforeCommand) {
@@ -92,6 +101,7 @@ afterEach(() => {
   delivery.afterCommit = undefined;
   delivery.afterReply = undefined;
   delivery.currentCommand = "";
+  delivery.requestBytes = [];
   vi.restoreAllMocks();
 });
 
@@ -255,6 +265,59 @@ function maintenanceFixture() {
     },
   };
 }
+
+it("keeps upsert comparison snapshots on the host during removal planning", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = maintenanceFixture();
+    const prompt = "synthetic lifecycle instructions ".repeat(1500);
+    const resetBoundary = {
+      context: "clear" as const,
+      reason: "reset" as const,
+      cwd: "/synthetic/workspace",
+      boundaryId: "captured-reset",
+    };
+    replaceSessionEntrySync(f.scope, {
+      ...f.initial,
+      skillsSnapshot: { prompt, skills: [] },
+    });
+    await applySessionEntryLifecycleMutation({
+      ...f.scope,
+      skipMaintenance: true,
+      removals: [{ sessionKey: f.siblingKey }],
+      upserts: [
+        {
+          sessionKey: f.scope.sessionKey,
+          resetBoundary,
+          entry: {
+            ...f.read()!,
+            label: "retained",
+            skillsSnapshot: { prompt: `${prompt} updated`, skills: [] },
+          },
+        },
+      ],
+      withCommit: async (run) => {
+        resetBoundary.boundaryId = "caller-mutated-reset";
+        return run(() => {});
+      },
+    });
+    const requests = delivery.requestBytes.filter(({ type }) => type === "finish");
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.bytes).toBeLessThan(Buffer.byteLength(prompt) + 4096);
+    expect(f.read()).toMatchObject({
+      label: "retained",
+      skillsSnapshot: { prompt: `${prompt} updated` },
+    });
+    expect(f.read(f.siblingKey)).toBeUndefined();
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: f.scope.storePath });
+    expect(
+      readTranscriptEventRows(database, f.initial.sessionId).map((row) =>
+        JSON.parse(row.eventJson),
+      ),
+    ).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "reset", id: "captured-reset" })]),
+    );
+  });
+});
 
 async function runMaintenanceDrift(
   f: ReturnType<typeof maintenanceFixture>,
