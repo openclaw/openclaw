@@ -1905,8 +1905,8 @@ importers:
   extensions/muse:
     dependencies:
       '@muse-code/sdk':
-        specifier: 1.4.11
-        version: 1.4.11(@types/node@26.6.5)
+        specifier: 1.4.10
+        version: 1.4.10(@types/node@26.6.5)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -4889,8 +4889,8 @@ packages:
     resolution: {integrity: sha512-juG5VWh4qAivzTAeMzvY9xs9HY5rAcr2E4I7tiSSCokRFi7XIZCAu92ZkSTsIj1OPceCifL3cpfteP3pDT9/QQ==}
     engines: {node: '>=14.0.0'}
 
-  '@muse-code/sdk@1.4.11':
-    resolution: {integrity: sha512-/6pblfm1gN96L4c6DZpNIl4TQn+x/PQJ4H0xoqNyJ6Kb+HmSm4FdflydB2MM0iCnPz6Wx2l2r95mmrGDTtvVhw==}
+  '@muse-code/sdk@1.4.10':
+    resolution: {integrity: sha512-J4/rcbNPFnvn8fo4wm1FAwKzInzbkKcLe9gJk5xeq6pGjk5Q4LrqRz7k/F0G3g6a6ilpegVL/11InJysYUAMWQ==}
     engines: {node: '>=20'}
     peerDependencies:
       '@types/node': '>=20'
@@ -13209,7 +13209,7 @@ snapshots:
 
   '@mozilla/readability@0.6.0': {}
 
-  '@muse-code/sdk@1.4.11(@types/node@26.6.5)':
+  '@muse-code/sdk@1.4.10(@types/node@26.6.5)':
     optionalDependencies:
       '@types/node': 26.6.5
 
