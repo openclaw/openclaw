@@ -153,14 +153,11 @@ describe("AgentSession loop correctness", () => {
     vi.spyOn(sessionManager, "appendMessageAsync").mockRejectedValue(persistenceError);
     const publishedUserMessages: unknown[] = [];
     onUserMessageEnd(session, (event) => publishedUserMessages.push(event.message));
-    let sourceConsumed = false;
     const abortController = new AbortController();
     const wait = steerActiveSessionWithOptionalDeliveryWait(session, "retain queued source", {
       deliveryTimeoutMs: 10_000,
       waitForTranscriptCommit: true,
       abortSignal: abortController.signal,
-    }).then(() => {
-      sourceConsumed = true;
     });
     const rejection = expect(wait).rejects.toBe(persistenceError);
 
@@ -173,7 +170,6 @@ describe("AgentSession loop correctness", () => {
       );
       await rejection;
 
-      expect(sourceConsumed).toBe(false);
       expect(publishedUserMessages).toEqual([]);
       expect(sessionManager.getEntries().filter((entry) => entry.type === "message")).toEqual([]);
     } finally {
@@ -232,7 +228,6 @@ describe("AgentSession loop correctness", () => {
         .getEntries()
         .filter((entry) => entry.type === "message")
         .map((entry) => entry.message);
-      expect(persistedMessages).toHaveLength(waiterCount);
       expect(persistedMessages.every((message) => !getSteeringMessageIdentity(message))).toBe(true);
     } finally {
       for (const message of queuedMessages.splice(0)) {

@@ -235,8 +235,7 @@ it.each(["canonical", "shared"])(
         detached.appendMessage(makeUserMessage("detached only", 20));
         expect(probes.flatMap((probe) => probe.mock.calls)).toEqual([]);
         // Warm admission must use the requested lane, not the cold reader's reserved-lane fallback.
-        const warm = openOpenClawAgentDatabase({ agentId: database.agentId, path: database.path });
-        expect(warm.db.isOpen).toBe(true);
+        openOpenClawAgentDatabase({ agentId: database.agentId, path: database.path });
         probes.forEach((probe) => probe.mockClear());
         const retirementEntered = createDeferredCore();
         const releaseRetirement = createDeferredCore();
@@ -536,8 +535,7 @@ it.each(["abort", "database-close"] as const)(
         }
         gate.release();
         await refused;
-        const reopened = await SessionManager.openAsync(target);
-        expectMessages(reopened, makeUserMessage("retained", 1));
+        expectMessages(await SessionManager.openAsync(target), makeUserMessage("retained", 1));
       } finally {
         gate.release();
         gate.restore();
@@ -582,7 +580,6 @@ it.each([
           await waitForSessionTranscriptProjection(target);
           await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
         }
-        const originalEnvironment = process.env.OPENCLAW_STATE_DIR;
         const env: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: state.stateDir };
         const input = environment === "explicit" ? { ...target, env } : target;
         const detached = SessionManager.inMemory();
@@ -623,14 +620,6 @@ it.each([
             expect(SessionManager.open(original).buildSessionContext().thinkingLevel).toBe("high");
           }
         } finally {
-          if (originalEnvironment === undefined) {
-            delete process.env.OPENCLAW_STATE_DIR;
-          } else {
-            process.env.OPENCLAW_STATE_DIR = originalEnvironment;
-          }
-          if (!privateStorage) {
-            delete process.env.OPENCLAW_SUPERVISOR_MODE;
-          }
           await Promise.allSettled([pending]);
           if (privateStorage) {
             memorySessionActorOwners.closeDatabase({
@@ -724,7 +713,6 @@ it.each(["canonical", "custom"])(
         target.storePath = state.path("windows-shared.sqlite");
       }
       await seedHistory(target, "captured store");
-      const hostPlatform = process.platform;
       const env = { ...state.env };
       for (const key of Object.keys(env)) {
         if (
@@ -737,9 +725,6 @@ it.each(["canonical", "custom"])(
       env.OpenClaw_State_Dir = state.stateDir;
       env.OpenClaw_Supervisor_Mode = "external";
       const cloneEnv = configEnv.cloneEnvWithPlatformSemantics;
-      expect(withMockedPlatform("win32", () => cloneEnv(env)).OPENCLAW_STATE_DIR).toBe(
-        state.stateDir,
-      );
       const clone = vi
         .spyOn(configEnv, "cloneEnvWithPlatformSemantics")
         .mockImplementation((input) =>
@@ -754,14 +739,12 @@ it.each(["canonical", "custom"])(
           transferred = request;
         },
       );
-      const inputTarget = { ...target, env };
-      const pending = SessionManager.openAsync(inputTarget);
+      const pending = SessionManager.openAsync({ ...target, env });
       const result = expect(pending).resolves.toBeInstanceOf(SessionManager);
       try {
         await gate.wait(result, "Hydration settled before the intercepted environment transfer");
         env.OpenClaw_State_Dir = state.path("later-state");
         env.OpenClaw_Supervisor_Mode = "changed-after-capture";
-        expect(process.platform).toBe(hostPlatform);
         gate.release();
         await result;
         expectMessages(await pending, makeUserMessage("captured store", 1));

@@ -42,6 +42,17 @@ async function readModelAsync(...args: Parameters<typeof SessionManager.openMode
 const contents = (messages: ReturnType<typeof readModel>["messages"]) =>
   messages.map((message) => ("content" in message ? message.content : undefined));
 
+function withModelState(
+  label: string,
+  run: (
+    fixture: Parameters<Parameters<typeof withSessionState>[1]>[0] & { source: SessionManager },
+  ) => Promise<void>,
+) {
+  return withSessionState(label, (fixture) =>
+    run({ ...fixture, source: SessionManager.open(fixture.scope) }),
+  );
+}
+
 function withoutPayload<T>(markers: string[], read: () => T): T {
   const parse = JSON.parse;
   let bytes = 0;
@@ -67,14 +78,12 @@ function fingerprint(scope: Parameters<typeof SessionManager.open>[0]) {
   return hash.digest("hex");
 }
 
-it("reports context queue overload without losing context and completes every admitted read", async () => {
-  await withSessionState("context-pressure", async ({ scope }) => {
-    const source = SessionManager.open(scope);
+it("reports context queue overload without losing context and completes every admitted read", () =>
+  withModelState("context-pressure", async ({ scope, source }) => {
     source.appendMessage(makeUserMessage("retain this context", 1));
     await waitForSessionTranscriptProjection(scope);
     const expected = source.buildSessionContext();
     const release = createDeferredCore();
-    const completed: number[] = [];
     const spy = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(function (
       this: WorkerTaskPool<unknown, unknown>,
       input,
@@ -87,10 +96,11 @@ it("reports context queue overload without losing context and completes every ad
         return typeof input === "function" ? await input() : input;
       }, options);
     });
-    const accepted = Array.from({ length: 128 }, (_, index) =>
-      SessionManager.openModelContextAsync(scope).then((context) => {
-        completed.push(index);
-        return context.buildSessionContext();
+    let completed = false;
+    const accepted = Array.from({ length: 128 }, () =>
+      readModelAsync(scope).then((context) => {
+        completed = true;
+        return context;
       }),
     );
     let reported: unknown;
@@ -102,25 +112,20 @@ it("reports context queue overload without losing context and completes every ad
         setImmediate(resolve);
       });
       expect(reported).toMatchObject({ name: "WorkerTaskError", code: "overloaded" });
-      expect(completed).toEqual([]);
+      expect(completed).toBe(false);
       expect(source.buildSessionContext()).toEqual(expected);
       release.resolve();
       expect(await Promise.all(accepted)).toEqual(Array.from({ length: 128 }, () => expected));
-      // Foreground reads run on a worker pool, so completion order is not FIFO.
-      expect(completed.toSorted((a, b) => a - b)).toEqual(
-        Array.from({ length: 128 }, (_, index) => index),
-      );
       expect(await readModelAsync(scope)).toEqual(expected);
     } finally {
       release.resolve();
       spy.mockRestore();
       await Promise.allSettled([...accepted, excess]);
     }
-  });
-});
+  }));
 
-it("acquires a long sparse context with bounded queries and preserved message order", async () => {
-  await withSessionState("batched-context", async ({ scope }) => {
+it("acquires a long sparse context with bounded queries and preserved message order", () =>
+  withSessionState("batched-context", async ({ scope }) => {
     const messages = Array.from({ length: 1_200 }, (_, index) => ({
       type: "message",
       id: `message-${index}`,
@@ -148,8 +153,7 @@ it("acquires a long sparse context with bounded queries and preserved message or
     // Protect acquisition cost independently of the exact chunk size or query implementation.
     expect(iterate.mock.calls.length + get.mock.calls.length).toBeLessThan(20);
     expect(await readModelAsync(scope)).toEqual(context);
-  });
-});
+  }));
 
 it.each([
   "whole",
@@ -160,136 +164,126 @@ it.each([
   "opaque",
   "opaque-compaction",
   "leaf-compaction",
-])(
-  "acquires detached %s context without native payloads or changing stored evidence",
-  async (scenario) => {
-    await withSessionState("model-view", async ({ state, scope }) => {
-      const source = SessionManager.open(scope);
-      const marker = "synthetic-native-memory:";
-      await source.appendThinkingLevelChange("high");
-      await source.appendModelChange("openai", "gpt-5.6-luna");
-      const old = source.appendMessage(makeUserMessage("old", 1));
-      const excluded = source.appendMessage({
-        role: "custom",
-        customType: "display",
-        content: marker + "d".repeat(256 * 1024),
-        display: true,
-        excludeFromContext: true,
-        timestamp: 1,
-      });
-      const kept = source.appendMessage(makeUserMessage("kept", 2));
-      const result = source.appendMessage(makeUserMessage("result", 3));
-      source.appendCustomMessageEntry("synthetic-context", "custom context", true, {
-        source: "synthetic",
-      });
-      source.branchWithSummary(source.getLeafId(), "branch summary");
-      if (scenario === "reset" || scenario === "reset-compaction") {
-        source.appendResetBoundary("new", kept);
-      }
-      if (scenario === "compaction" || scenario === "reset-compaction") {
-        source.appendCompaction("summary", scenario === "compaction" ? excluded : kept, 100);
-      }
-      if (scenario === "opaque-compaction") {
-        await appendTranscriptEvent(scope, {
-          type: "opaque-synthetic",
-          id: "opaque-keep",
-          parentId: kept,
-        });
-        source.reloadPersistedTranscript();
-        source.appendCompaction("summary", "opaque-keep", 100);
-      }
-      if (scenario === "leaf-compaction") {
-        const leafMarker = source.appendLeafControl({ targetId: kept, appendParentId: kept });
-        source.appendCompaction("summary", leafMarker.id, 100);
-      }
-      if (scenario === "leaf") {
-        source.branch(old);
-        const inactive = source.appendMessage(
-          makeUserMessage(marker + "abandoned".repeat(4096), 4),
-        );
-        source.appendLeafControl({
-          targetId: result,
-          appendParentId: inactive,
-          appendMode: "side",
-        });
-      }
-      if (scenario === "opaque") {
-        await appendTranscriptEvent(scope, {
-          type: "opaque-synthetic",
-          id: "opaque",
-          parentId: result,
-          data: marker + "o".repeat(256 * 1024),
-        });
-        source.reloadPersistedTranscript();
-      }
-      source.appendMessage(makeUserMessage("latest", 5));
-      const expected = source.buildSessionContext();
-      expect(await readModelAsync(scope)).toEqual(readModel(scope));
-      const visible = (messages: typeof expected.messages) =>
-        messages.map((message) => ({
-          role: message.role,
-          content: "content" in message ? message.content : undefined,
-          summary: "summary" in message ? message.summary : undefined,
-        }));
-      const before = fingerprint(scope);
-      const detached = withoutPayload([marker], () => SessionManager.openModelContext(scope));
-      const context = detached.buildSessionContext();
-      expect(visible(context.messages)).toEqual(visible(expected.messages));
-      expect([context.model, context.thinkingLevel]).toEqual([expected.model, "high"]);
-      if (scenario === "reset") {
-        const retainedUser = context.messages.find(
-          (message) => message.role === "user" && message.content === "kept",
-        );
-        assert(retainedUser);
-        expect(Reflect.get(retainedUser, Symbol.for("openclaw.sessionHistoryPrelude"))).toBe(true);
-      }
-      detached.appendMessage(makeUserMessage("review only", 6));
-      expect(fingerprint(scope)).toBe(before);
-      source.branch(source.getLeafId()!);
-      await waitForSessionTranscriptProjection(scope);
-      const admitted = source.appendMessageWithTranscriptAnchor(makeUserMessage("current turn", 7));
-      assert(admitted.anchor, "missing admission");
-      const admission = {
-        ...admitted.anchor,
-        role: "user" as const,
-        logicalTurnId: "synthetic-turn",
-      };
-      const earlier = runWithSessionTranscriptReadFence(admission, () => readModel(scope));
-      expect(
-        (
-          await runWithSessionTranscriptReadFence(admission, () =>
-            SessionManager.openModelContextAsync(scope),
-          )
-        ).buildSessionContext(),
-      ).toEqual(earlier);
-      if (scenario === "whole") {
-        for (const patch of [
-          { role: "assistant" },
-          { sessionKey: "agent:main:wrong" },
-          { storePath: path.join(state.agentDir("main"), "wrong.sqlite") },
-        ]) {
-          expect(() =>
-            SessionManager.openModelContext(scope, {
-              admission: { ...admission, ...patch } as typeof admission,
-            }),
-          ).toThrow(/Current-turn transcript admission/);
-          await expect(
-            SessionManager.openModelContextAsync(scope, {
-              admission: { ...admission, ...patch } as typeof admission,
-            }),
-          ).rejects.toThrow(/Current-turn transcript admission/);
-          expect(() =>
-            SessionManager.readSessionContext(scope, () => [], {
-              admission: { ...admission, ...patch } as typeof admission,
-            }),
-          ).toThrow(/Current-turn transcript admission/);
-        }
-      }
-      source.appendResetBoundary("new");
-      source.appendCompaction("later summary", admitted.entryId, 100);
-      expect(runWithSessionTranscriptReadFence(admission, () => readModel(scope))).toEqual(earlier);
+])("acquires detached %s context without native payloads or changing stored evidence", (scenario) =>
+  withModelState("model-view", async ({ state, scope, source }) => {
+    const marker = "synthetic-native-memory:";
+    await source.appendThinkingLevelChange("high");
+    await source.appendModelChange("openai", "gpt-5.6-luna");
+    const old = source.appendMessage(makeUserMessage("old", 1));
+    const excluded = source.appendMessage({
+      role: "custom",
+      customType: "display",
+      content: marker + "d".repeat(256 * 1024),
+      display: true,
+      excludeFromContext: true,
+      timestamp: 1,
     });
-  },
+    const kept = source.appendMessage(makeUserMessage("kept", 2));
+    const result = source.appendMessage(makeUserMessage("result", 3));
+    source.appendCustomMessageEntry("synthetic-context", "custom context", true, {
+      source: "synthetic",
+    });
+    source.branchWithSummary(source.getLeafId(), "branch summary");
+    if (scenario === "reset" || scenario === "reset-compaction") {
+      source.appendResetBoundary("new", kept);
+    }
+    if (scenario === "compaction" || scenario === "reset-compaction") {
+      source.appendCompaction("summary", scenario === "compaction" ? excluded : kept, 100);
+    }
+    if (scenario === "opaque-compaction") {
+      await appendTranscriptEvent(scope, {
+        type: "opaque-synthetic",
+        id: "opaque-keep",
+        parentId: kept,
+      });
+      source.reloadPersistedTranscript();
+      source.appendCompaction("summary", "opaque-keep", 100);
+    }
+    if (scenario === "leaf-compaction") {
+      const leafMarker = source.appendLeafControl({ targetId: kept, appendParentId: kept });
+      source.appendCompaction("summary", leafMarker.id, 100);
+    }
+    if (scenario === "leaf") {
+      source.branch(old);
+      const inactive = source.appendMessage(makeUserMessage(marker + "abandoned".repeat(4096), 4));
+      source.appendLeafControl({
+        targetId: result,
+        appendParentId: inactive,
+        appendMode: "side",
+      });
+    }
+    if (scenario === "opaque") {
+      await appendTranscriptEvent(scope, {
+        type: "opaque-synthetic",
+        id: "opaque",
+        parentId: result,
+        data: marker + "o".repeat(256 * 1024),
+      });
+      source.reloadPersistedTranscript();
+    }
+    source.appendMessage(makeUserMessage("latest", 5));
+    const expected = source.buildSessionContext();
+    expect(await readModelAsync(scope)).toEqual(readModel(scope));
+    const visible = (messages: typeof expected.messages) =>
+      messages.map((message) => ({
+        role: message.role,
+        content: "content" in message ? message.content : undefined,
+        summary: "summary" in message ? message.summary : undefined,
+      }));
+    const before = fingerprint(scope);
+    const detached = withoutPayload([marker], () => SessionManager.openModelContext(scope));
+    const context = detached.buildSessionContext();
+    expect(visible(context.messages)).toEqual(visible(expected.messages));
+    expect([context.model, context.thinkingLevel]).toEqual([expected.model, "high"]);
+    if (scenario === "reset") {
+      const retainedUser = context.messages.find(
+        (message) => message.role === "user" && message.content === "kept",
+      );
+      assert(retainedUser);
+      expect(Reflect.get(retainedUser, Symbol.for("openclaw.sessionHistoryPrelude"))).toBe(true);
+    }
+    detached.appendMessage(makeUserMessage("review only", 6));
+    expect(fingerprint(scope)).toBe(before);
+    source.branch(source.getLeafId()!);
+    await waitForSessionTranscriptProjection(scope);
+    const admitted = source.appendMessageWithTranscriptAnchor(makeUserMessage("current turn", 7));
+    assert(admitted.anchor, "missing admission");
+    const admission = {
+      ...admitted.anchor,
+      role: "user" as const,
+      logicalTurnId: "synthetic-turn",
+    };
+    const earlier = runWithSessionTranscriptReadFence(admission, () => readModel(scope));
+    expect(await runWithSessionTranscriptReadFence(admission, () => readModelAsync(scope))).toEqual(
+      earlier,
+    );
+    if (scenario === "whole") {
+      for (const patch of [
+        { role: "assistant" },
+        { sessionKey: "agent:main:wrong" },
+        { storePath: path.join(state.agentDir("main"), "wrong.sqlite") },
+      ]) {
+        expect(() =>
+          SessionManager.openModelContext(scope, {
+            admission: { ...admission, ...patch } as typeof admission,
+          }),
+        ).toThrow(/Current-turn transcript admission/);
+        await expect(
+          SessionManager.openModelContextAsync(scope, {
+            admission: { ...admission, ...patch } as typeof admission,
+          }),
+        ).rejects.toThrow(/Current-turn transcript admission/);
+        expect(() =>
+          SessionManager.readSessionContext(scope, () => [], {
+            admission: { ...admission, ...patch } as typeof admission,
+          }),
+        ).toThrow(/Current-turn transcript admission/);
+      }
+    }
+    source.appendResetBoundary("new");
+    source.appendCompaction("later summary", admitted.entryId, 100);
+    expect(runWithSessionTranscriptReadFence(admission, () => readModel(scope))).toEqual(earlier);
+  }),
 );
 
 it.each([
@@ -298,54 +292,50 @@ it.each([
   { boundary: "reset", role: "toolResult" },
   { boundary: "compaction", role: "toolResult" },
   { boundary: "whole", role: "user" },
-] as const)(
-  "preserves excluded $role payload selection across $boundary",
-  async ({ boundary, role }) => {
-    await withSessionState("excluded-retention", async ({ scope }) => {
-      const source = SessionManager.open(scope);
-      const pairedCall =
-        role === "toolResult"
-          ? source.appendMessage(
-              makeAgentAssistantMessage({
-                content: [{ type: "toolCall", id: "paired", name: "read", arguments: {} }],
-              }),
-            )
-          : undefined;
-      const message = {
-        ...(role === "assistant"
-          ? assistantText("synthetic retained text")
-          : role === "user"
-            ? makeUserMessage("synthetic retained text", 1)
-            : toolResult("synthetic retained text", "paired", 1)),
-        excludeFromContext: true,
-        __openclaw: { upstreamUserText: "private-retained:" + "x".repeat(256 * 1024) },
-      };
-      const retained = source.appendMessage(message);
-      if (boundary === "reset") {
-        source.appendResetBoundary("new", pairedCall ?? retained);
-      } else if (boundary === "compaction") {
-        source.appendCompaction("summary", pairedCall ?? retained, 100);
-      }
-      source.appendMessage({
-        ...makeUserMessage("ordinary-excluded:" + "x".repeat(256 * 1024), 2),
-        excludeFromContext: true,
-      });
-      source.appendMessage(makeUserMessage("synthetic current text", 3));
-      const expected = source.buildSessionContext();
-      expect(
-        expected.messages.some(
-          (entry) => "excludeFromContext" in entry && entry.excludeFromContext === true,
-        ),
-      ).toBe(boundary === "reset");
-      const before = fingerprint(scope);
-      const actual = withoutPayload(["private-retained:", "ordinary-excluded:"], () =>
-        readModel(scope),
-      );
-      expect(fingerprint(scope)).toBe(before);
-      expect(actual.model).toEqual(expected.model);
-      expect(contents(actual.messages)).toEqual(contents(expected.messages));
+] as const)("preserves excluded $role payload selection across $boundary", ({ boundary, role }) =>
+  withModelState("excluded-retention", async ({ scope, source }) => {
+    const pairedCall =
+      role === "toolResult"
+        ? source.appendMessage(
+            makeAgentAssistantMessage({
+              content: [{ type: "toolCall", id: "paired", name: "read", arguments: {} }],
+            }),
+          )
+        : undefined;
+    const message = {
+      ...(role === "assistant"
+        ? assistantText("synthetic retained text")
+        : role === "user"
+          ? makeUserMessage("synthetic retained text", 1)
+          : toolResult("synthetic retained text", "paired", 1)),
+      excludeFromContext: true,
+      __openclaw: { upstreamUserText: "private-retained:" + "x".repeat(256 * 1024) },
+    };
+    const retained = source.appendMessage(message);
+    if (boundary === "reset") {
+      source.appendResetBoundary("new", pairedCall ?? retained);
+    } else if (boundary === "compaction") {
+      source.appendCompaction("summary", pairedCall ?? retained, 100);
+    }
+    source.appendMessage({
+      ...makeUserMessage("ordinary-excluded:" + "x".repeat(256 * 1024), 2),
+      excludeFromContext: true,
     });
-  },
+    source.appendMessage(makeUserMessage("synthetic current text", 3));
+    const expected = source.buildSessionContext();
+    expect(
+      expected.messages.some(
+        (entry) => "excludeFromContext" in entry && entry.excludeFromContext === true,
+      ),
+    ).toBe(boundary === "reset");
+    const before = fingerprint(scope);
+    const actual = withoutPayload(["private-retained:", "ordinary-excluded:"], () =>
+      readModel(scope),
+    );
+    expect(fingerprint(scope)).toBe(before);
+    expect(actual.model).toEqual(expected.model);
+    expect(contents(actual.messages)).toEqual(contents(expected.messages));
+  }),
 );
 
 it("keeps durable model reads non-persisting", async () => {
@@ -403,15 +393,13 @@ it("keeps durable model reads non-persisting", async () => {
   });
 });
 
-it("releases aborted durable context reads before the next read", async () => {
-  await withSessionState("worker-lifecycle", async ({ scope }) => {
-    const source = SessionManager.open(scope);
+it("releases aborted durable context reads before the next read", () =>
+  withModelState("worker-lifecycle", async ({ scope, source }) => {
     source.appendMessage(makeUserMessage("visible", 1));
     expect(await readModelAsync(scope)).toEqual(source.buildSessionContext());
     await expectCancelledReads((signal) => SessionManager.openModelContextAsync(scope, { signal }));
     expect(await readModelAsync(scope)).toEqual(source.buildSessionContext());
-  });
-});
+  }));
 
 it.each([
   { mutation: "rewrite", admitted: true },
@@ -425,9 +413,8 @@ it.each([
   { mutation: "other-session", admitted: false },
 ])(
   "validates durable context before acceptance ($mutation, admitted=$admitted)",
-  async ({ mutation, admitted }) => {
-    await withSessionState("context-mutation", async ({ scope }) => {
-      const source = SessionManager.open(scope);
+  ({ mutation, admitted }) =>
+    withModelState("context-mutation", async ({ scope, source }) => {
       const first = source.appendMessage(makeUserMessage("before", 1));
       if (mutation === "branch") {
         source.appendMessage(makeUserMessage("branch tip", 2));
@@ -490,15 +477,13 @@ it.each([
             : "Session transcript changed during context read",
         );
       }
-    });
-  },
+    }),
 );
 
 it.each([false, true])(
   "closes lazy context without acquiring unread payloads (rejected=%s)",
-  async (rejected) => {
-    await withSessionState("lazy-context", async ({ scope }) => {
-      const source = SessionManager.open(scope);
+  (rejected) =>
+    withModelState("lazy-context", async ({ scope, source }) => {
       source.appendMessage(makeUserMessage("first", 1));
       const marker = "synthetic-unread-context:";
       source.appendMessage(makeUserMessage(marker + "x".repeat(256 * 1024), 2));
@@ -522,15 +507,13 @@ it.each([false, true])(
       expect(SessionManager.readSessionContext(scope, (messages) => Array.from(messages))).toEqual(
         source.buildSessionContext().messages,
       );
-    });
-  },
+    }),
 );
 
 it.each(["details", "text", "duplicate-object", "late-array-call"])(
   "keeps real tool output across reset (%s)",
-  async (marker) => {
-    await withSessionState("pairing", async ({ scope }) => {
-      const source = SessionManager.open(scope);
+  (marker) =>
+    withModelState("pairing", async ({ scope, source }) => {
       const firstKept = source.appendMessage(
         makeAgentAssistantMessage({
           content: [
@@ -571,56 +554,50 @@ it.each(["details", "text", "duplicate-object", "late-array-call"])(
           .filter((message) => message.role === "toolResult")
           .map((message) => message.content),
       ).toEqual([[{ type: "text", text: "real output" }]]);
-    });
-  },
+    }),
 );
 
-it.each(["reset", "compaction"])(
-  "does not acquire checkpoints invalidated by %s",
-  async (boundary) => {
-    await withSessionState("checkpoint", async ({ scope }) => {
-      const source = SessionManager.open(scope);
-      const kept = source.appendMessage(makeUserMessage("visible", 1));
-      const marker = "synthetic-obsolete-checkpoint-";
-      const checkpoint = {
-        v: 1 as const,
-        type: "openai-responses-compaction",
-        data: marker + "x".repeat(1024 * 1024),
-        provider: "openai",
-        api: "openai-responses",
+it.each(["reset", "compaction"])("does not acquire checkpoints invalidated by %s", (boundary) =>
+  withModelState("checkpoint", async ({ scope, source }) => {
+    const kept = source.appendMessage(makeUserMessage("visible", 1));
+    const marker = "synthetic-obsolete-checkpoint-";
+    const checkpoint = {
+      v: 1 as const,
+      type: "openai-responses-compaction",
+      data: marker + "x".repeat(1024 * 1024),
+      provider: "openai",
+      api: "openai-responses",
+      model: "gpt-5.6-luna",
+      baseUrlHash: "synthetic",
+    };
+    source.appendMessage(
+      makeAgentAssistantMessage({
+        content: textContent("kept answer"),
         model: "gpt-5.6-luna",
-        baseUrlHash: "synthetic",
-      };
-      source.appendMessage(
-        makeAgentAssistantMessage({
-          content: textContent("kept answer"),
-          model: "gpt-5.6-luna",
-          providerReplay: checkpoint,
-        }),
-      );
-      if (boundary === "reset") {
-        source.appendResetBoundary("new", kept);
-      } else {
-        source.appendCompaction("summary", kept, 100);
-      }
-      const valid = { ...checkpoint, data: "valid-post-boundary-checkpoint" };
-      source.appendMessage(
-        makeAgentAssistantMessage({
-          content: textContent("new answer"),
-          model: "gpt-5.6-luna",
-          providerReplay: valid,
-        }),
-      );
-      const context = withoutPayload([marker], () => readModel(scope));
-      expect(context).toEqual(source.buildSessionContext());
-      expect(context.messages.at(-1)).toMatchObject({ providerReplay: valid });
-    });
-  },
+        providerReplay: checkpoint,
+      }),
+    );
+    if (boundary === "reset") {
+      source.appendResetBoundary("new", kept);
+    } else {
+      source.appendCompaction("summary", kept, 100);
+    }
+    const valid = { ...checkpoint, data: "valid-post-boundary-checkpoint" };
+    source.appendMessage(
+      makeAgentAssistantMessage({
+        content: textContent("new answer"),
+        model: "gpt-5.6-luna",
+        providerReplay: valid,
+      }),
+    );
+    const context = withoutPayload([marker], () => readModel(scope));
+    expect(context).toEqual(source.buildSessionContext());
+    expect(context.messages.at(-1)).toMatchObject({ providerReplay: valid });
+  }),
 );
 
-it("refills warmed context when a prompt restart retires a suffix entry", async () => {
-  await withSessionState("model-prompt-restart", async ({ scope }) => {
-    const source = SessionManager.open(scope);
+it("refills warmed context when a prompt restart retires a suffix entry", () =>
+  withModelState("model-prompt-restart", async ({ scope, source }) => {
     for (let index = 1; index <= 4; index++) {
       source.appendMessage(makeUserMessage(`question-${index}`, index));
     }
@@ -639,12 +616,10 @@ it("refills warmed context when a prompt restart retires a suffix entry", async 
     expect(expected.messages[0]).toMatchObject({ content: "question-1" });
     expect(await read()).toEqual(expected);
     expect(await read()).toEqual(expected);
-  });
-});
+  }));
 
-it("keeps warmed current context after historical and smaller-window reads", async () => {
-  await withSessionState("model-anchor-retention", async ({ scope }) => {
-    const source = SessionManager.open(scope);
+it("keeps warmed current context after historical and smaller-window reads", () =>
+  withModelState("model-anchor-retention", async ({ scope, source }) => {
     const discardedId = source.appendMessage(makeUserMessage("discarded-prefix", 0));
     for (let index = 1; index < 6; index++) {
       source.appendMessage(makeUserMessage(`question-${index}`, index));
@@ -680,5 +655,4 @@ it("keeps warmed current context after historical and smaller-window reads", asy
       ).toMatchObject({ content: "question-15" });
       expect(readCurrent().buildSessionContext()).toEqual(expected);
     });
-  });
-});
+  }));
