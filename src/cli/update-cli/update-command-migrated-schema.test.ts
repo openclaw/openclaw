@@ -241,7 +241,7 @@ it.each([
     const artifacts = envKey ? [file, `${file}-wal`, `${file}-shm`] : [file];
     const before = await Promise.all(artifacts.map((artifact) => fs.readFile(artifact)));
     if (envKey) {
-      expect(before[1].length).toBeGreaterThan(32);
+      expect(before[1]?.length).toBeGreaterThan(32);
     }
     const generations = readUpdateDatabaseGenerations([file]);
     const schemaVersions = [{ path: file, userVersion: OPENCLAW_STATE_SCHEMA_VERSION }];
