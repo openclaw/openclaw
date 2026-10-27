@@ -7,11 +7,11 @@ import {
 } from "../../lib/protocol-validators.generated/transcript.js";
 import { listen } from "../../lib/reactive/listener.ts";
 import * as json from "../../lib/snapshot-json.ts";
-import { chatSessionStateSnapshotSchema } from "./chat-session-state-snapshot.ts";
 import {
   chatHeaderSharingSnapshotSchema,
   chatHeaderViewersSnapshotSchema,
 } from "./chat-header-viewers-snapshot.ts";
+import { chatSessionStateSnapshotSchema } from "./chat-session-state-snapshot.ts";
 import {
   getSessionCacheValue,
   MAX_CACHED_CHAT_SESSIONS,

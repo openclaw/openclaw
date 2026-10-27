@@ -31,6 +31,7 @@ import {
 } from "./session-snapshot-invalidation.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
+import { CHAT_SNAPSHOT_PROJECTION_VERSION } from "./session-snapshot-projection.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 /* @vitest-environment jsdom */
 import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
@@ -99,7 +100,11 @@ async function persist(store: SessionSnapshotStore, cacheKey: string, value: Cha
   writeSnapshotFixture(store, cacheKey, value);
   await store.flush();
 }
-const envelope = (cacheKey: string, value: ChatSessionSnapshot, projectionVersion = 6) => ({
+const envelope = (
+  cacheKey: string,
+  value: ChatSessionSnapshot,
+  projectionVersion = CHAT_SNAPSHOT_PROJECTION_VERSION,
+) => ({
   projectionVersion,
   sessionKey: cacheKey,
   savedAt: 1,
