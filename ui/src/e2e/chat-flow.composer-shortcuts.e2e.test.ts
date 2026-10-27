@@ -224,8 +224,10 @@ suite.define(() => {
     const expectDraft = async (text: string, aborts = 0) => {
       expect(await composer.inputValue()).toBe(text);
       expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
-      await expectRequestCountStable(gateway, "chat.send", 1);
-      await expectRequestCountStable(gateway, "chat.abort", aborts);
+      await Promise.all([
+        expectRequestCountStable(gateway, "chat.send", 1),
+        expectRequestCountStable(gateway, "chat.abort", aborts),
+      ]);
     };
     await preview.waitFor({ state: "visible" });
     await expectQuote();
