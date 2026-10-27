@@ -1,5 +1,6 @@
 // Owner-level Team-shaped list workload; transport/tool-turn proof stays in team-shape-stress.ts.
 // Run on an approved quiet host with --expose-gc --import ./scripts/tsx.mjs.
+// --collector-presentation adds prepared event rows for an unrestricted operator.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -14,7 +15,10 @@ import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js
 import type { SubagentRunRecord } from "../../src/agents/subagents/registry/subagent-registry.types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { GatewayClient } from "../../src/gateway/server-methods/types.js";
-import type { SessionsListResult } from "../../src/gateway/session-utils.types.js";
+import type {
+  GatewaySessionRow,
+  SessionsListResult,
+} from "../../src/gateway/session-utils.types.js";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 import { generateTeamShapeStressFixture } from "./team-shape-stress-fixture.ts";
 
@@ -31,6 +35,7 @@ const { values } = parseArgs({
     golden: { type: "string" },
     "sort-rows": { type: "string" },
     "sort-workload": { type: "boolean", default: false },
+    "collector-presentation": { type: "boolean", default: false },
   },
 });
 assert(values["state-dir"], "--state-dir must name a new synthetic directory");
@@ -98,24 +103,34 @@ Date.now = () => clock;
 
 const cases: SessionsListParams[] = [];
 const profileId = "team-shape-profile-0";
-const viewer: GatewayClient | undefined = values["sort-workload"]
-  ? {
-      connect: {
-        minProtocol: PROTOCOL_VERSION,
-        maxProtocol: PROTOCOL_VERSION,
-        client: { id: "openclaw-control-ui", version: "bench", platform: "bench", mode: "webchat" },
-        role: "operator",
-        scopes: ["operator.read", "operator.write"],
-      },
-      authenticatedUserProfile: {
-        profileId,
-        displayName: null,
-        hasAvatar: false,
-        updatedAt: anchor,
-      },
-      preparedSessionProfile: { profileId, aliases: new Set([profileId]), role: null },
-    }
-  : undefined;
+const viewer: GatewayClient | undefined =
+  values["sort-workload"] || values["collector-presentation"]
+    ? {
+        connect: {
+          minProtocol: PROTOCOL_VERSION,
+          maxProtocol: PROTOCOL_VERSION,
+          client: {
+            id: "openclaw-control-ui",
+            version: "bench",
+            platform: "bench",
+            mode: "webchat",
+          },
+          role: "operator",
+          scopes: [
+            "operator.read",
+            "operator.write",
+            ...(values["collector-presentation"] ? ["operator.admin"] : []),
+          ],
+        },
+        authenticatedUserProfile: {
+          profileId,
+          displayName: null,
+          hasAvatar: false,
+          updatedAt: anchor,
+        },
+        preparedSessionProfile: { profileId, aliases: new Set([profileId]), role: null },
+      }
+    : undefined;
 for (const archived of [false, true, "all"] as const) {
   for (const agentId of ["main", undefined]) {
     for (const offset of [0, 50]) {
@@ -184,7 +199,7 @@ if (values.mode === "verify") {
   }
 }
 
-function canonicalResult(result: SessionsListResult): string {
+function canonicalResult(result: SessionsListResult | GatewaySessionRow): string {
   const omitted = new Set(["ts", "rowsRevision", "rowRevision", "runtimeMs", "snapshotAt"]);
   return JSON.stringify(result, (key, value: unknown) => {
     if (omitted.has(key)) {
@@ -336,11 +351,25 @@ try {
     }
     return digest.digest("hex");
   };
+  const { withPreparedEventRow } = await import("../../src/gateway/session-event-prepared-row.js");
+  const { prepareProjectedSessionPresentation } =
+    await import("../../src/gateway/session-row-presentation.js");
+  const { getSessionRowSelectionMetrics } = await import("../../src/infra/gateway-work-metrics.js");
+  const exactCalls = () =>
+    getSessionRowSelectionMetrics().selections.reduce(
+      (total, value) => total + (value.kind === "exact" ? value.calls : 0),
+      0,
+    );
   const initialGolden = await capture();
   let sequence = 0;
   let listCpuMicros = 0;
   let updateCpuMicros = 0;
   let returnedRows = 0;
+  let presentationCpuMicros = 0;
+  let presentationSelections = 0;
+  let collectorChildren = 0;
+  const eventResponses =
+    values.mode === "verify" && values["collector-presentation"] ? createHash("sha256") : undefined;
   const responses = values.mode === "verify" ? createHash("sha256") : undefined;
   const run = async (count: number, measured: boolean) => {
     for (let index = 0; index < count; index++) {
@@ -365,6 +394,28 @@ try {
       let used = process.threadCpuUsage(before);
       if (measured) {
         updateCpuMicros += used.user + used.system;
+      }
+      if (values["collector-presentation"]) {
+        await withPreparedEventRow(projection, { agentId: "main", key: parent.key }, (prepared) => {
+          assert(prepared);
+          const calls = exactCalls();
+          const presentationBefore = process.threadCpuUsage();
+          const row = prepareProjectedSessionPresentation(prepared, viewer, clock).snapshot({
+            agentId: "main",
+            key: parent.key,
+          }).row;
+          const presentationUsed = process.threadCpuUsage(presentationBefore);
+          assert(
+            row?.swarm?.groups[0]?.children?.length,
+            "Collector fixture must expose child detail",
+          );
+          eventResponses?.update(canonicalResult(row));
+          if (measured) {
+            presentationCpuMicros += presentationUsed.user + presentationUsed.system;
+            presentationSelections += exactCalls() - calls;
+            collectorChildren += row.swarm.groups[0].children.length;
+          }
+        });
       }
       before = process.threadCpuUsage();
       const result = await read(sequence++);
@@ -415,6 +466,7 @@ try {
     initial: initialGolden,
     final: await capture(),
     ...(responses ? { responses: responses.digest("hex") } : {}),
+    ...(eventResponses ? { collectorRows: eventResponses.digest("hex") } : {}),
   };
   if (values.golden) {
     assert.deepEqual(golden, JSON.parse(readFileSync(values.golden, "utf8")));
@@ -426,6 +478,10 @@ try {
     cpuProfile: values["cpu-profile"],
     reconciliation: values.reconciliation,
     sortWorkload: values["sort-workload"],
+    collectorPresentation: values["collector-presentation"],
+    presentationCpuMsPerCall: presentationCpuMicros / 1000 / iterations,
+    presentationSelectionsPerCall: presentationSelections / iterations,
+    collectorChildrenPerCall: collectorChildren / iterations,
     sessions,
     iterations,
     warmup,

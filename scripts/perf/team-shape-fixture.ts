@@ -202,7 +202,13 @@ export async function generateTeamShapeFixture(options: ReturnType<typeof parseT
         : {}),
       agents: {
         ...(options.teamStress
-          ? { ownership: "explicit" as const, defaults: { systemAgent: { agentId: "main" } } }
+          ? {
+              ownership: "explicit" as const,
+              defaults: {
+                systemAgent: { agentId: "main" },
+                subagents: { archiveAfterMinutes: 24 * 60 },
+              },
+            }
           : {}),
         entries: Object.fromEntries(
           (options.teamStress ? ["main", "reviewer", "researcher", "planner"] : ["main"]).map(

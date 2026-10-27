@@ -320,6 +320,8 @@ it("seeds the stress category mix with readable collector parents and settled un
       .get(String(row?.session_id));
     expect(Number(transcript?.n)).toBeGreaterThan(1);
   }
-  const agents = readJson(path.join(stateDir, "openclaw.json")).agents.entries;
+  const agentConfig = readJson(path.join(stateDir, "openclaw.json")).agents;
+  expect(agentConfig.defaults.subagents.archiveAfterMinutes).toBeGreaterThanOrEqual(120);
+  const agents = agentConfig.entries;
   expect(Object.keys(agents).toSorted()).toEqual(["main", "planner", "researcher", "reviewer"]);
 });

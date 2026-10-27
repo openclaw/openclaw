@@ -39,7 +39,8 @@ belong to `main`. Transcripts contain 128 MiB of deterministic, incompressible
 message content with a skewed size distribution. This reproduces session shape,
 not a byte-for-byte copy of a production database. Retained runs are settled collectors
 spread over the first 64 parent sessions, matching the timestamp-churn targets. Their
-completions span the last 30 minutes so normal collector retention preserves the cohort.
+completions span the last 30 minutes. The existing collector retention setting is 24 hours
+in this synthetic fixture so timing/allocation AB/BA passes keep the same cohort.
 Their bounded child summaries exercise exact-row event preparation and recipient visibility;
 plain subagents do not enter that path. Four projects, disabled cron
 entries, user profiles, participants, approvals, and delivered run records use
