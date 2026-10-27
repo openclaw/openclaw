@@ -53,6 +53,7 @@ const WRITE_TOOLS = new Set([
   "knowledge_remember",
   "knowledge_relink",
   "knowledge_edit_body",
+  "knowledge_extract_section",
   "knowledge_reconcile_evidence",
   "knowledge_save_page",
   "knowledge_correct",
@@ -254,6 +255,7 @@ export function createKnowledgeService(
       annotate: agentChange("annotate"),
       reconcile_evidence: agentChange("reconcileEvidence"),
       edit_body: agentChange("editBody"),
+      extract_section: agentChange("extractSection"),
       timeline: (input, context) =>
         call("timeline", false, () => emptyChronicle(input))(input, context),
       chronicle_day: (input, context) =>

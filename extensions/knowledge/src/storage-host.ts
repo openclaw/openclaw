@@ -4,10 +4,12 @@ import { catalogFacts } from "./catalog.js";
 import { inspectRecord, inspectOntology } from "./inspection.js";
 import { mergeCandidates as findMergeCandidates } from "./merge.js";
 import type { LoadedRecord } from "./model.js";
+import type { Receipt } from "./mutation-contract.js";
 import type { StoreConfig } from "./real-vault.js";
 import { withinBudget } from "./response-budget.js";
 import { eligible } from "./retrieval.js";
 import { AUTHORITY_REVOKED, type HostMessage, type WorkerMessage } from "./storage-protocol.js";
+import { PageBudgetError } from "./storage-types.js";
 import { KnowledgeStorage } from "./storage.js";
 
 type Storage = KnowledgeStorage;
@@ -16,6 +18,17 @@ type Access = VaultAccess;
 type In<T> = T extends (input: infer I, ...rest: never[]) => unknown ? I : never;
 
 const revision = (r: Pick<LoadedRecord, "revision" | "hash">) => `${r.revision}:${r.hash}`;
+// Operations that write page prose return a page-budget rejection as their receipt.
+const budgeted = async (work: Promise<Receipt>) => {
+  try {
+    return await work;
+  } catch (error) {
+    if (error instanceof PageBudgetError) {
+      return error.receipt;
+    }
+    throw error;
+  }
+};
 const attribution = (origin?: string, who?: string) =>
   `Origin: ${origin || "not recorded"}; attribution: ${who || "not recorded"}.`;
 
@@ -27,8 +40,12 @@ export const operations = {
   verify: (s: Storage, a: Access, input: In<Storage["verify"]>) => s.verify(input, a),
   sourceCheck: (s: Storage, a: Access, input: In<Storage["sourceCheck"]>) =>
     s.sourceCheck(input, a),
-  batch: (s: Storage, a: Access, input: In<Storage["batch"]>) => s.batch(input, a, "agent"),
-  editBody: (s: Storage, a: Access, input: In<Storage["editBody"]>) => s.editBody(input, a),
+  batch: (s: Storage, a: Access, input: In<Storage["batch"]>) =>
+    budgeted(s.batch(input, a, "agent")),
+  editBody: (s: Storage, a: Access, input: In<Storage["editBody"]>) =>
+    budgeted(s.editBody(input, a)),
+  extractSection: (s: Storage, a: Access, input: In<Storage["extractSection"]>) =>
+    budgeted(s.extractSection(input, a)),
   reconcileEvidence: (s: Storage, a: Access, input: In<Storage["reconcileEvidence"]>) =>
     s.reconcileEvidence(input, a),
   annotate: (s: Storage, a: Access, input: In<Storage["annotate"]>) =>
@@ -43,7 +60,7 @@ export const operations = {
   recent: (s: Storage, a: Access, input: In<Storage["recent"]>) => s.recent(input, a),
   attach: (s: Storage, a: Access, input: In<Storage["attach"]>) => s.attach(input, a),
   save: (s: Storage, a: Access, input: { value: In<Storage["save"]>; actor: string }) =>
-    s.save(input.value, a, input.actor),
+    budgeted(s.save(input.value, a, input.actor)),
   createClaim: (
     s: Storage,
     a: Access,
@@ -63,7 +80,8 @@ export const operations = {
   correct: (s: Storage, a: Access, input: In<Storage["correct"]>) => s.correct(input, a, "agent"),
   withdraw: (s: Storage, a: Access, input: In<Storage["withdraw"]>) =>
     s.withdraw(input, a, "agent"),
-  merge: (s: Storage, a: Access, input: In<Storage["merge"]>) => s.merge(input, a, "agent"),
+  merge: (s: Storage, a: Access, input: In<Storage["merge"]>) =>
+    budgeted(s.merge(input, a, "agent")),
   unmerge: (s: Storage, a: Access, input: In<Storage["unmerge"]>) => s.unmerge(input, a, "agent"),
   recall: (s: Storage, a: Access, input: In<Storage["recall"]>) => s.recall(input, a, "agent"),
   connections: (s: Storage, a: Access, input: In<Storage["connections"]>) =>

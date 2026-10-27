@@ -22,6 +22,7 @@ import {
   type WriteKind,
   type Receipt,
 } from "./mutation-contract.js";
+import { DEFAULT_HUB_PERCENTILE, pageBudgetRejection } from "./page-budget.js";
 import { PublicationFiles, type FileChange } from "./publication-files.js";
 import { recordPath } from "./record-path.js";
 import { withdrawnIds, eligible } from "./retrieval.js";
@@ -31,7 +32,14 @@ import {
   recordSourceDependencies,
 } from "./source-records.js";
 import { StorageJournal } from "./storage-journal.js";
-import { canonical, scopeKey, blocked, type Plan, type Prepared } from "./storage-types.js";
+import {
+  canonical,
+  scopeKey,
+  blocked,
+  PageBudgetError,
+  type Plan,
+  type Prepared,
+} from "./storage-types.js";
 import type { SampleVault } from "./vault.js";
 import { digest } from "./vault.js";
 /** Validation and journaled acceptance of planned publications, plus single-record writes. */
@@ -460,6 +468,35 @@ export class StoragePublication extends StorageJournal {
     const scope = scopeKey(access.scope);
     this.hook("before-accept");
     access.assertCurrent();
+    // Every page-body write reaches this point, so the budget has one owner. The
+    // transaction below fences the same snapshot the budget was measured against.
+    const rejection = pageBudgetRejection({
+      changes: [
+        { before: prepared.previous, after: prepared.record },
+        ...(prepared.additional ?? []),
+      ],
+      records: prepared.data.records,
+      current: () =>
+        this.store.withDatabase((db) =>
+          eligible(prepared.data, withdrawnIds(db, this.retrievalBinding(access)), false),
+        ),
+      hubPercentile: this.config.hubPercentile ?? DEFAULT_HUB_PERCENTILE,
+    });
+    if (rejection) {
+      const target = prepared.previous;
+      throw new PageBudgetError({
+        requestId,
+        state: "rejected",
+        id: target?.id ?? "",
+        path: target?.path ?? "",
+        revision: target?.revision ?? 0,
+        hash: target?.hash ?? "",
+        at: new Date().toISOString(),
+        message: rejection.message,
+        indexed: false,
+        budget: rejection.budget,
+      });
+    }
     this.transaction("knowledge.accept", (db) => {
       const rival = this.row(db, scope, requestId);
       if (rival) {
@@ -623,6 +660,11 @@ export class StoragePublication extends StorageJournal {
         receipt.targetId = prepared.merge.targetId;
         receipt.reason = prepared.merge.reason;
         receipt.merge = prepared.merge.report;
+      }
+      if (prepared.extract) {
+        receipt.operation = "extract";
+        receipt.targetId = prepared.extract.targetId;
+        receipt.reason = prepared.extract.reason;
       }
       const plan: Plan = {
         descriptors,

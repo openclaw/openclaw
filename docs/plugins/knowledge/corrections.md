@@ -91,7 +91,8 @@ or a source states it), merge them instead of correcting each claim:
   the survivor.
 - The survivor gains the absorbed title and aliases, tags, evidence, and fields
   it lacks. Its own field values win; conflicts are reported. Bodies are never
-  merged automatically; supply `body` to write a combined one.
+  merged automatically; supply `body` to write a combined one. A combined body
+  is subject to the [page budget](/plugins/knowledge/tools#page-budgets).
 - New writes that reference a merged page are rejected with the survivor's ID.
 - Chains resolve up to 8 hops to an active page. Cycles, dead ends, and longer
   chains are invalid, and records that name them are hidden.

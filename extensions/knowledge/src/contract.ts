@@ -42,6 +42,7 @@ import { MaintenanceStatus } from "./maintenance-contract.js";
 import { text } from "./model.js";
 import {
   AnnotateInput,
+  ExtractSectionInput,
   SavePage,
   ClaimInput,
   RelationshipInput,
@@ -55,6 +56,7 @@ import {
   GitStatus,
   requestId,
 } from "./mutation-contract.js";
+import { HUB_PAGE_BUDGET_CHARS, PAGE_BUDGET_CHARS } from "./page-budget.js";
 import { QueryFreshness } from "./query-freshness.js";
 import { RecentInput, RecentOutput } from "./recent.js";
 import { RelinkInput, RelinkOutput } from "./relink-contract.js";
@@ -79,6 +81,8 @@ import { TextWindowInput, TextWindowContent, RecoveryContent } from "./text-wind
 const empty = Type.Object({}, { additionalProperties: false });
 const issue = Type.Object({ path: text(500), code: text(80), message: text(1000) });
 const record = CardSummary;
+const chars = (n: number) => n.toLocaleString("en-US");
+const BUDGET_NOTE = ` Page bodies have a size budget: ${chars(HUB_PAGE_BUDGET_CHARS)} characters for hub pages (the most-linked pages), ${chars(PAGE_BUDGET_CHARS)} otherwise. Growth past it returns a receipt with state=rejected and budget (sizes, hub degree, largest sections, connected candidates) and saves nothing; same-size and shrinking edits always succeed. Extract sections with knowledge_extract_section; claims are never limited.`;
 const issues = Type.Array(issue, { maxItems: 1000 });
 const MergeCandidate = Type.Object(
   {
@@ -154,7 +158,8 @@ export const contract = defineFeatureContract({
     publish_batch: {
       kind: "action",
       description:
-        "Publish 1–25 items; max 1 MiB. Unique item keys: 1–40 characters, start with lowercase a-z, then only a-z, 0-9, _ or - (e.g. morgan_hale, not MorganHale). Refs must match keys exactly. Batch-level UUID, vault ID, ontology hash. Refs: @key; body links: [[@key|label]]. Upload evidence first; no inline source. Page edit: existing id + revision + hash. Arrays/fields replace; omitted preserves. Validate all, then journal. Retry: same UUID + payload, or knowledge_resume. Source unchanged: old receipt; new payload ignored. Source changed: reconcile, set expectedPreviousRequestId. Receipt state/Git applies to all items. No dedup, correction or rollback.",
+        "Publish 1–25 items; max 1 MiB. Unique item keys: 1–40 characters, start with lowercase a-z, then only a-z, 0-9, _ or - (e.g. morgan_hale, not MorganHale). Refs must match keys exactly. Batch-level UUID, vault ID, ontology hash. Refs: @key; body links: [[@key|label]]. Upload evidence first; no inline source. Page edit: existing id + revision + hash. Arrays/fields replace; omitted preserves. Validate all, then journal. Retry: same UUID + payload, or knowledge_resume. Source unchanged: old receipt; new payload ignored. Source changed: reconcile, set expectedPreviousRequestId. Receipt state/Git applies to all items. No dedup, correction or rollback." +
+        BUDGET_NOTE,
       input: BatchInput,
       output: Receipt,
       tool: { name: "knowledge_publish_batch", label: "Publish knowledge batch" },
@@ -217,15 +222,25 @@ export const contract = defineFeatureContract({
     edit_body: {
       kind: "action",
       description:
-        "Edit one exact active-page body range without resending the record. Read knowledge_record view=content first; start inclusive/end exclusive are UTF-16 offsets in the full body (not raw Markdown/frontmatter). start=end inserts, empty replacement deletes. Maximum replacement 48,000 characters; complete request remains bounded. Mandatory observed vault/revision/hash/ontology fences reject stale edits. Preserves unrelated metadata/evidence; publishes a normal revision/history/receipt. The complete UTF-8 record including frontmatter must fit 5,000,000 bytes. Reuse identical requestId/payload after uncertainty; no implicit rebasing or fuzzy matching.",
+        "Edit one exact active-page body range without resending the record. Read knowledge_record view=content first; start inclusive/end exclusive are UTF-16 offsets in the full body (not raw Markdown/frontmatter). start=end inserts, empty replacement deletes. Maximum replacement 48,000 characters; complete request remains bounded. Mandatory observed vault/revision/hash/ontology fences reject stale edits. Preserves unrelated metadata/evidence; publishes a normal revision/history/receipt. The complete UTF-8 record including frontmatter must fit 5,000,000 bytes. Reuse identical requestId/payload after uncertainty; no implicit rebasing or fuzzy matching." +
+        BUDGET_NOTE,
       input: EditBodyInput,
       output: Receipt,
       tool: { name: "knowledge_edit_body", label: "Edit knowledge body" },
     },
+    extract_section: {
+      kind: "action",
+      description:
+        "Move one heading section of an active page to a new page or an existing connected page (linked either way or by a typed relationship) in one fenced publication. Use it to shrink a page over its body budget instead of truncating. The section moves verbatim, links still resolve, and source evidence it quotes or names is carried. The source keeps the heading plus your one-line summary and a link to the destination. Claims the section links to that name the source as a subject get the destination as primary subject; the source stays only when the claim names it. Supply sectionStart (heading offset) from a budget rejection or fresh read and fresh source/destination fences. Nothing changes unless every record validates. Reuse identical requestId/payload after uncertainty.",
+      input: ExtractSectionInput,
+      output: Receipt,
+      tool: { name: "knowledge_extract_section", label: "Extract knowledge section" },
+    },
     save_page: {
       kind: "action",
       description:
-        "Create or edit a page in the authorized scope. requestId must be a generated lowercase UUID, never a source ID or slug; it may be omitted only during a host pre-compaction memory flush, when Knowledge derives it from the flush ID and normalized title. Creates omit id/expectedRevision/expectedHash; edits require all three from knowledge_record. Reuse requestId and identical payload for retries; inspect knowledge_mutation after an uncertain result. Calls share a serialized service lane, not a multi-record transaction. Aliases, tags, dependencies and fields replace their collections when supplied (empty clears); omission preserves on edit. Optional expectedOntologyFingerprint fences the observed schema. Append file evidence returned by knowledge_attach using attachments (no count cap). Legacy source text remains supported; saved pages are immediately available with no approval step. A published receipt is a completed save; accepted publication conflicts retain recovery material and block publication. Requests rejected before acceptance are not saved.",
+        "Create or edit a page in the authorized scope. requestId must be a generated lowercase UUID, never a source ID or slug; it may be omitted only during a host pre-compaction memory flush, when Knowledge derives it from the flush ID and normalized title. Creates omit id/expectedRevision/expectedHash; edits require all three from knowledge_record. Reuse requestId and identical payload for retries; inspect knowledge_mutation after an uncertain result. Calls share a serialized service lane, not a multi-record transaction. Aliases, tags, dependencies and fields replace their collections when supplied (empty clears); omission preserves on edit. Optional expectedOntologyFingerprint fences the observed schema. Append file evidence returned by knowledge_attach using attachments (no count cap). Legacy source text remains supported; saved pages are immediately available with no approval step. A published receipt is a completed save; accepted publication conflicts retain recovery material and block publication. Requests rejected before acceptance are not saved." +
+        BUDGET_NOTE,
       input: SavePage,
       output: Receipt,
       tool: { name: "knowledge_save_page", label: "Save knowledge page" },
@@ -281,7 +296,7 @@ export const contract = defineFeatureContract({
     merge: {
       kind: "action",
       description:
-        "Agent-only identity merge of two pages of the same type confirmed to be one entity (the user said so, or a source states it). The absorbed page becomes merged and its ID resolves to the survivor everywhere: claims, relationships, links, Timeline and lookups that name it count toward the survivor, and nothing is rewritten. The survivor gains the absorbed title and aliases, tags, missing fields and evidence; its own field values win (conflicts are reported). Supply both pages' current revision/hash from knowledge_record, a reason, optional retained identity evidence, and optionally a new title or a combined body (bodies are never merged automatically). Never merge on name similarity alone; see knowledge_diagnostics mergeCandidates. Undo with knowledge_unmerge. Reuse identical request/payload for retries.",
+        "Agent-only identity merge of two pages of the same type confirmed to be one entity (the user said so, or a source states it). The absorbed page becomes merged and its ID resolves to the survivor everywhere: claims, relationships, links, Timeline and lookups that name it count toward the survivor, and nothing is rewritten. The survivor gains the absorbed title and aliases, tags, missing fields and evidence; its own field values win (conflicts are reported). Supply both pages' current revision/hash from knowledge_record, a reason, optional retained identity evidence, and optionally a new title or a combined body (bodies are never merged automatically). Never merge on name similarity alone; see knowledge_diagnostics mergeCandidates. Undo with knowledge_unmerge. Reuse identical request/payload for retries. A combined body is subject to the page budget.",
       input: MergeInput,
       output: Receipt,
       tool: { name: "knowledge_merge", label: "Merge duplicate pages" },
