@@ -46,6 +46,8 @@ export function AttachmentPreview(
 ) {
   const entries = createMemo(() => {
     void props.readRevision;
+    // Draft props notify membership changes; reconcile with the synchronous owner.
+    void props.attachments;
     const attachments = currentAttachments(props);
     const reads =
       props.attachmentReads?.project(attachments) ??
