@@ -5,7 +5,7 @@
 .chat-talk-input-picker__menu {
   border: 1px solid var(--chat-composer-popover-border, var(--overlay-border));
   border-radius: var(--chat-composer-popover-radius, var(--radius-lg));
-  background: var(--chat-composer-popover-background, var(--bg-elevated));
+  background: var(--popover);
   box-shadow: var(--overlay-shadow);
   corner-shape: superellipse(1.5);
 }

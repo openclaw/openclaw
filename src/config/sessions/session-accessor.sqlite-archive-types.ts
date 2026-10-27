@@ -28,7 +28,7 @@ export type SessionColdExternalization = {
   archive: Omit<SessionColdArchive, "archive_blob">;
   envelopeBytes: number;
 };
-export type SessionColdOversized = {
+type SessionColdOversized = {
   sessionId: string;
   lowerBoundBytes: number;
 };

@@ -12,7 +12,10 @@ import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { parsePackageRootArg } from "./lib/package-root-args.mts";
 
 // Keep headroom for small dependency updates, but reject shared Gateway chunks.
-const budgets = { "agents/identity-file.worker.js": 220 };
+const budgets = {
+  "agents/identity-file.worker.js": 220,
+  "extensions/codex/catalog-page.worker.js": 100,
+};
 
 /** @param {string} packageRoot */
 export async function checkWorkerModuleBudget(packageRoot) {
@@ -20,6 +23,10 @@ export async function checkWorkerModuleBudget(packageRoot) {
   try {
     for (const [entry, budget] of Object.entries(budgets)) {
       const filename = path.join(packageRoot, "dist", entry);
+      // Published root packages omit separately installed plugins.
+      if (entry.startsWith("extensions/") && !fs.existsSync(filename)) {
+        continue;
+      }
       fs.accessSync(filename);
       const worker = new Worker(
         `const {parentPort, workerData} = require("node:worker_threads");

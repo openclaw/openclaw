@@ -10,6 +10,7 @@
 // chunk graph. Neither mode is a full Gateway load test. Census excludes this benchmark module.
 // State-read uses its admit handshake without opening a DB; transcript resolves an explicit
 // agent path. Git reads a real synthetic repository; Code Mode evaluates an arithmetic cell.
+// Catalog decodes 16 rows with 64 KiB previews (~1 MiB), beyond its owner's inline threshold.
 // Counters are exact isolate allocation/thread CPU (Node 26.12+), not process RSS or host CPU.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -311,7 +312,19 @@ if (!isMainThread) {
     if (name === "catalog-page") {
       const id = 2 ** 52 + 1;
       return {
-        bytes: Buffer.from(JSON.stringify({ id, result: { data: [], nextCursor: null } })),
+        bytes: Buffer.from(
+          JSON.stringify({
+            id,
+            result: {
+              data: Array.from({ length: 16 }, (_, index) => ({
+                id: `synthetic-${index}`,
+                preview: "Synthetic preview ".padEnd(64 * 1024, "x"),
+                source: "cli",
+              })),
+              nextCursor: null,
+            },
+          }),
+        ),
         route: { id, kind: "list" },
         remainingRows: 100,
       };
@@ -387,7 +400,13 @@ if (!isMainThread) {
       assert.equal(Buffer.from(reply).subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
     } else if (name === "catalog-page") {
       assert.deepEqual(reply.failures, []);
-      assert.deepEqual(reply.message.result.data, []);
+      assert.equal(reply.message.result.data.length, 16);
+      for (const [index, row] of reply.message.result.data.entries()) {
+        assert.equal(row.id, `synthetic-${index}`);
+        assert.equal(row.source, "cli");
+        assert(row.preview.startsWith("Synthetic preview "));
+        assert(row.preview.length <= 500);
+      }
     } else if (name === "code-mode-node") {
       assert.equal(reply.status, "completed", JSON.stringify(reply));
       assert.equal(reply.value.json, "8128");
