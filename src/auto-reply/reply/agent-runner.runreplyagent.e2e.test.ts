@@ -3584,14 +3584,16 @@ describe("runReplyAgent typing", () => {
   });
 
   it.each([
-    ["direct chats", "direct", "whatsapp", true, "on"],
-    ["direct chats with verbosity off", "direct", "whatsapp", true, "off"],
-    ["internal clients", "direct", "webchat", true, "on"],
-    ["group chats", "group", "whatsapp", false, "on"],
-    ["channels", "channel", "whatsapp", false, "on"],
+    ["direct chats", "direct", "whatsapp", true, "on", undefined],
+    ["direct chats with notices explicitly enabled", "direct", "whatsapp", true, "on", true],
+    ["direct chats with notices disabled", "direct", "whatsapp", false, "off", false],
+    ["direct chats with verbosity off", "direct", "whatsapp", true, "off", undefined],
+    ["internal clients", "direct", "webchat", true, "on", undefined],
+    ["group chats", "group", "whatsapp", false, "on", true],
+    ["channels", "channel", "whatsapp", false, "on", undefined],
   ] as const)(
     "controls fallback notices for %s without changing state or lifecycle",
-    async (_label, chatType, messageProvider, noticeVisible, verbose) => {
+    async (_label, chatType, messageProvider, noticeVisible, verbose, modelFallbackNotices) => {
       const { sessionStore, storePath } = await makeSessionFixture();
       let callCount = 0;
 
@@ -3636,7 +3638,10 @@ describe("runReplyAgent typing", () => {
               ChatType: chatType,
               MessageSid: `fallback-${++turnIndex}`,
             },
-            runOverrides: { messageProvider },
+            runOverrides: {
+              messageProvider,
+              config: { messages: { modelFallbackNotices } },
+            },
           }).run();
         const phases: string[] = [];
         const off = onAgentEvent((evt) => {
@@ -3735,6 +3740,7 @@ describe("runReplyAgent typing", () => {
       try {
         const { run } = createMinimalRun({
           resolvedVerboseLevel: "on",
+          runOverrides: { config: { messages: { modelFallbackNotices: false } } },
           sessionEntry,
           sessionStore,
           sessionKey: "main",

@@ -227,6 +227,13 @@ test("preserves exact non-empty cert and key path bytes", () => {
   expect(validated({ gateway: { tls } }).gateway?.tls).toEqual(tls);
 });
 
+test.each([true, false])("accepts model fallback notices %s", (modelFallbackNotices) => {
+  expect(validateConfigObjectRaw({ messages: { modelFallbackNotices } })).toMatchObject({
+    ok: true,
+    config: { messages: { modelFallbackNotices } },
+  });
+});
+
 test.each([
   [{ visibleReplies: true }, { visibleReplies: "automatic" }],
   [{ groupChat: { visibleReplies: false } }, { groupChat: { visibleReplies: "message_tool" } }],
@@ -239,6 +246,7 @@ test.each([
 
 test.each([
   [{ visibleReplies: "visible" }, "messages.visibleReplies"],
+  [{ modelFallbackNotices: "false" }, "messages.modelFallbackNotices"],
   [{ groupChat: { unmentionedInbound: true } }, "messages.groupChat.unmentionedInbound"],
 ])("rejects unsupported messages %j at %s", (messages, path) => {
   expect(validateConfigObjectRaw({ messages })).toMatchObject({

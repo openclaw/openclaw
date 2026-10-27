@@ -1,5 +1,6 @@
 export const MESSAGE_FIELD_LABELS: Record<string, string> = {
   messages: "Messages",
+  "messages.modelFallbackNotices": "Model Fallback Notices",
   "messages.visibleReplies": "Visible Replies",
   "messages.responsePrefix": "Outbound Response Prefix",
   "messages.usageTemplate": "Usage Footer Template",

@@ -72,6 +72,7 @@ const ResponseUsageModeSchema = z.enum(["on", "off", "tokens", "full"]);
 
 export const MessagesSchema = z
   .strictObject({
+    modelFallbackNotices: z.boolean().optional(),
     visibleReplies: VisibleRepliesSchema.optional(),
     responsePrefix: z.string().optional(),
     usageTemplate: z.union([z.string(), z.record(z.string(), z.unknown())]).optional(),
