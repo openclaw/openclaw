@@ -73,8 +73,9 @@ class ToastOwner {
   private remainingMs = 0;
   private deadline = 0;
   private hovered = false;
-  private timerSyncPending = false;
+  private presentationSyncPending = false;
   private homeLayer: HTMLElement | undefined;
+  private stopPlacementSync: (() => void) | undefined;
 
   hover(hovered: boolean) {
     this.hovered = hovered;
@@ -89,7 +90,10 @@ class ToastOwner {
 
   connect() {
     connectedHosts.add(this.host);
-    if (!this.host.closest("openclaw-modal-dialog")) {
+    this.stopPlacementSync?.();
+    this.stopPlacementSync = undefined;
+    const inModal = Boolean(this.host.closest("openclaw-modal-dialog"));
+    if (!inModal) {
       const parent = this.host.parentElement;
       // Document roots survive app teardown and must not resurrect removed hosts.
       this.homeLayer =
@@ -98,10 +102,23 @@ class ToastOwner {
           ? (parent ?? undefined)
           : undefined;
     }
-    this.host.style.display = "contents";
-    this.host.dataset.toastPlacement = this.host.parentElement?.matches(".shell")
-      ? "shell"
-      : "overlay";
+    // Modal layers can be siblings of the shell. Keep its responsive chrome
+    // offset while the host is away, then return to ordinary CSS inheritance.
+    const homeLayer = this.homeLayer;
+    if (inModal && homeLayer) {
+      const syncPlacement = () =>
+        this.host.style.setProperty(
+          "--app-toast-shell-top",
+          getComputedStyle(homeLayer).getPropertyValue("--app-toast-shell-top"),
+        );
+      syncPlacement();
+      this.stopPlacementSync = listen(window, "resize", syncPlacement);
+    } else {
+      this.host.style.removeProperty("--app-toast-shell-top");
+    }
+    this.host.popover = "manual";
+    this.host.dataset.toastPlacement = this.homeLayer?.matches(".shell") ? "shell" : "overlay";
+    this.syncPresentation();
     // Moving the light-DOM host can drop focus without a focusout event.
     this.hovered = this.body?.matches(":hover") ?? false;
     this.syncDismissTimer();
@@ -118,6 +135,8 @@ class ToastOwner {
     if (this.host.isConnected) {
       return;
     }
+    this.stopPlacementSync?.();
+    this.stopPlacementSync = undefined;
     connectedHosts.delete(this.host);
     if (this.host.closest("openclaw-modal-dialog") && this.restorePresentationLayer()) {
       return;
@@ -172,14 +191,28 @@ class ToastOwner {
     }
   }
 
-  afterPropertyChange() {
-    if (this.timerSyncPending) {
+  private syncPresentation() {
+    if (!this.host.isConnected) {
       return;
     }
-    this.timerSyncPending = true;
+    // Stay inside the modal's non-inert subtree, but escape its transformed
+    // containing block so fixed toast coordinates still refer to the viewport.
+    if (this.host.toast) {
+      this.host.showPopover();
+    } else {
+      this.host.hidePopover();
+    }
+  }
+
+  afterPropertyChange() {
+    if (this.presentationSyncPending) {
+      return;
+    }
+    this.presentationSyncPending = true;
     queueMicrotask(() => {
       void this.host.updateComplete.then(() => {
-        this.timerSyncPending = false;
+        this.presentationSyncPending = false;
+        this.syncPresentation();
         this.syncDismissTimer();
       });
     });
