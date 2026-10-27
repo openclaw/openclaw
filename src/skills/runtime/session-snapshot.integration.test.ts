@@ -24,6 +24,7 @@ import { readWorkspaceSkillSources } from "../loading/workspace-skill-source-rea
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import type { SkillSnapshot } from "../types.js";
 import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "./refresh-state.js";
+import * as skillsRefresh from "./refresh.js";
 import {
   recordRemoteSkillNodeInfo,
   removeRemoteNodeSkills,
@@ -204,12 +205,21 @@ it("does not revive an ineligible source during cold snapshot hydration", async 
   expect(names(original.discoverySkills)).toEqual(["env-probe", "visible"]);
   const saved = persist(original);
   vi.stubEnv("W8_SKILL_ENV_FIXTURE", undefined);
+  const project = skillsRefresh.projectSkillSnapshot;
+  let selectedSkills: SkillSnapshot["discoverySkills"];
+  vi.spyOn(skillsRefresh, "projectSkillSnapshot").mockImplementation(async (input) => {
+    const projected = await project(input);
+    selectedSkills = projected.discoverySkills;
+    return projected;
+  });
   const { snapshot } = await params.resolve({
     existingSnapshot: expectDefined(saved, "saved snapshot"),
   });
   expect(snapshot.prompt).toBe(original.prompt);
   expect(names(snapshot.resolvedSkills)).toEqual(["visible"]);
   expect(names(snapshot.discoverySkills)).toEqual(["visible"]);
+  // Discovery already excluded the ineligible source; hydration retains that selection.
+  expect(snapshot.discoverySkills).toBe(selectedSkills);
 });
 
 it("discovers newly installed dependencies for fresh sessions without rewriting active snapshots", async () => {

@@ -31,7 +31,6 @@ import {
 } from "./code-mode.js";
 import {
   createCodeModeHarness,
-  fakeTool,
   mcpTool,
   pluginTool,
   resetCodeModeTestState,
@@ -52,6 +51,7 @@ import { prepareInstalledSkillCatalog } from "./installed-skill-runtime.js";
 import { createReadTool } from "./sessions/index.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { readToolInputSchema } from "./sessions/tools/tool-schemas.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
 import { addClientToolsToToolCatalog, restrictToolSearchCatalog } from "./tool-search-catalog.js";
 import { clearToolSearchCatalog } from "./tool-search.js";

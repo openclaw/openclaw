@@ -1,7 +1,6 @@
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
-import type { RequesterSettleWakeBatchState } from "../announce/subagent-announce.requester-settle-state.js";
 import type {
   PendingFinalDeliveryPayload,
   SubagentCompletionDeliveryState,
@@ -101,6 +100,22 @@ export function projectSubagentRunForSessionList(entry: SubagentRunRecord): Suba
   };
 }
 
+export function shouldPreserveSubagentForMaintenance(entry: SubagentRunMaintenanceRecord): boolean {
+  if (entry.killReconciliation || entry.killIntent) {
+    // Reconciliation tombstones own provider results until completion or cancellation settles.
+    return true;
+  }
+  if (typeof entry.cleanupCompletedAt === "number") {
+    return false;
+  }
+  return (
+    typeof entry.execution.endedAt !== "number" ||
+    (entry.expectsCompletionMessage === true && entry.delivery?.status !== "delivered") ||
+    entry.delivery?.status === "pending" ||
+    isDeliverySuspended(entry)
+  );
+}
+
 /** Copy only protection facts; live memory retains its existing, unnormalized semantics. */
 export function projectSubagentRunForMaintenance(
   entry: SubagentRunRecord,
@@ -186,6 +201,10 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
       sessionLifecycleRevision: normalizeOptionalString(killIntent.sessionLifecycleRevision),
       suppressTaskDelivery: killIntent.suppressTaskDelivery === true ? true : undefined,
     };
+  }
+  // Only the durable session queue can retain in-progress delivery across restart.
+  if (entry.delivery?.status === "in_progress" && !entry.delivery.queueId) {
+    entry.delivery = { ...entry.delivery, status: "pending" };
   }
   // cleanupHandled is an in-process lock; after restart, unfinished cleanup must
   // retry unless durable cleanup completion was recorded.
@@ -329,7 +348,7 @@ export const loadPendingFinalDeliveryPayload = (
 
 export function transitionRequesterSettleWakeState(
   entry: SubagentRunRecord,
-  state: RequesterSettleWakeBatchState,
+  state: Omit<RequesterSettleWakeState, "retireAfterSettle">,
 ): void {
   entry.requesterSettleWake = {
     ...state,

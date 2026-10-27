@@ -1,27 +1,22 @@
 // Control UI tests cover session goal behavior.
 import { describe, expect, it } from "vitest";
-import type { SessionGoal } from "../api/types.ts";
+import { createSessionGoalFixture } from "../../../src/gateway/session-goal.test-support.js";
 import {
   formatGoalDetail,
   formatGoalElapsed,
   formatGoalSummary,
   goalElapsedMs,
-} from "./session-goal.ts";
+} from "../../../src/shared/session-goal-display.js";
+import type { SessionGoal } from "../api/types.ts";
 
 function buildGoal(overrides: Partial<SessionGoal> = {}): SessionGoal {
-  return {
-    schemaVersion: 1,
-    id: "goal-1",
-    objective: "Ship the web goal indicator",
-    status: "active",
-    createdAt: 1,
+  return createSessionGoalFixture("goal-1", "Ship the web goal indicator", {
     updatedAt: 2,
     tokenStart: 100,
     tokensUsed: 12_400,
     tokenBudget: 50_000,
-    continuationTurns: 0,
     ...overrides,
-  };
+  });
 }
 
 describe("session goal formatting", () => {

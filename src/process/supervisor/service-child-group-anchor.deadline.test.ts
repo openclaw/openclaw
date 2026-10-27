@@ -1,0 +1,84 @@
+import fs from "node:fs";
+import path from "node:path";
+import { performance } from "node:perf_hooks";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createAnchorFixture } from "./anchor-protocol.test-support.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+// Preload injected into the anchor subprocess via `--import`; it wraps Date.now
+// so that a marker file (written by the test after cleanup starts) sustains a
+// persistent wall-clock offset for the whole retirement window. performance.now
+// is untouched, which is exactly the split the fix relies on.
+const CLOCK_STEP_PRELOAD = fileURLToPath(
+  new URL("./service-child-group-anchor.clock-step.preload.mjs", import.meta.url),
+);
+
+// The anchor command keeps a descendant that ignores SIGTERM alive, so after the
+// root command exits the process group is still non-empty and the anchor's
+// cleanup loop keeps re-reading the retirement budget instead of draining
+// immediately. This is what makes a pre-fix wall-clock deadline observable.
+const PERSIST_GROUP_SCRIPT = `
+const { spawn } = require("child_process");
+spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{}); setInterval(()=>{},1000);"], { stdio: "ignore" });
+setInterval(() => {}, 1000);
+`;
+
+async function runClockStep(offsetMs: number) {
+  const dir = tempDirs.make("anchor-clock-step-");
+  const stepFile = path.join(dir, "step");
+  const { child, generation, send, exited, onMessage } = createAnchorFixture({
+    preload: CLOCK_STEP_PRELOAD,
+    env: { ANCHOR_TEST_STEP_FILE: stepFile, ANCHOR_TEST_OFFSET: String(offsetMs) },
+  });
+  let cancelAt = 0;
+  let closingAfterCancel = -1;
+  onMessage((message) => {
+    if (message.type === "ready") {
+      setTimeout(() => {
+        cancelAt = performance.now();
+        send({ type: "cancel", signal: "SIGTERM" });
+      }, 1_500);
+    } else if (message.type === "root-result") {
+      // Land the jump after the budget is seeded but before retirement.
+      setTimeout(() => {
+        fs.writeFileSync(stepFile, "step");
+      }, 500);
+    } else if (message.type === "closing") {
+      closingAfterCancel = (performance.now() - cancelAt) / 1000;
+    }
+  });
+  child.send({
+    type: "start",
+    generation,
+    command: process.execPath,
+    args: ["-e", PERSIST_GROUP_SCRIPT],
+    env: {},
+    stdinMode: "pipe-closed",
+    controlFd: 3,
+    lineageFd: 4,
+    acknowledgeClosing: true,
+  });
+  const result = await exited;
+  child.kill("SIGKILL");
+  return { result, closingAfterCancel };
+}
+
+// Integration-level regression through the real anchor subprocess: a sustained
+// forward wall-clock jump during cleanup must not collapse the retirement
+// budget. Post-fix the anchor closes only after the full ~5s term grace
+// (monotonic time); pre-fix the Date.now deadline collapses ~0.5s after the
+// jump and SIGKILLs early. Skipped on Windows (POSIX process-group model).
+describe("service-child-group-anchor clock-step regression", () => {
+  it.skipIf(process.platform === "win32")(
+    "keeps retirement on monotonic time under a forward wall-clock jump",
+    async () => {
+      const { result, closingAfterCancel } = await runClockStep(60_000);
+      expect(result.signal).toBe("SIGKILL");
+      expect(closingAfterCancel).toBeGreaterThan(4.5);
+    },
+    30_000,
+  );
+});

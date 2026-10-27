@@ -105,6 +105,8 @@ Per-session `/queue` options apply to queued delivery. The `debounce` option als
 - `drop: "old"`: drop the oldest queued entries as needed, without preserving summaries.
 - `drop: "new"`: reject the newest message when the queue is already full.
 
+Gateway followup and collect debounce windows measure elapsed time, so wall-clock corrections do not shorten or extend them.
+
 The queue uses a built-in 500ms debounce. `cap` defaults to `20`, and `drop` defaults to `summarize`.
 
 ## Steer and streaming
@@ -197,6 +199,11 @@ access cancels the collected turn and blocks further effects.
   prompt and its attachments. The cancellation record prevents replay after
   reconnect. Stop and timeout cancellations keep their recovery messages.
 
+After a successful session reset, an unsent follow-up reply retained for retry
+still belongs to the original session generation. Recovery does not replay it
+into the reset session. Recovery without a reset and replies to new turns
+continue normally.
+
 Gateway-backed clients (including `openclaw tui`) forward mid-run prompts and
 let the Gateway apply the queue mode. Esc/`/stop` uses a session-scoped abort
 so lost local handles cannot leave a still-queued prompt running.
@@ -218,6 +225,10 @@ Other connected clients can display the accepted input while it waits, without w
 In `collect` mode, appending the combined
 turn and marking its source inputs consumed happen in one transaction. A browser
 reconnect can reconcile those source inputs even if it missed their final events.
+
+An unrelated announcement does not consume another active request's accepted input or include it
+in its model context. The original request keeps that input, including inputs combined by collect
+mode, for its own continuation.
 
 The chat displays recorded non-Web client sources separately from the sender, for example `Alice · via CLI`. Web sources are omitted from these labels, including in collected messages that also contain input from another client.
 Reported app names describe the submitting client; they do not establish a human identity or grant permissions.

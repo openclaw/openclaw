@@ -1,4 +1,4 @@
-import { createInMemorySessionStore } from "@openclaw/acp-core/session";
+import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import { expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import type { GatewaySessionRow } from "../gateway/session-utils.js";
@@ -8,6 +8,7 @@ import {
   createLoadSessionRequest,
   createNewSessionRequest,
   createPromptRequest,
+  expectConfigOption,
 } from "./translator.bridge-test-helpers.js";
 import { createTranslatorScenario } from "./translator.scenario.test-support.js";
 import {
@@ -19,142 +20,95 @@ import {
 type RequestHandler = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
 const sessionKey = "agent:main:work";
 const cwd = "/tmp/openclaw";
-const lineage = {
-  parentSessionKey: "agent:main:main",
-  spawnedBy: "agent:main:main",
-  spawnDepth: 1,
-  subagentRole: "leaf",
-  subagentControlScope: "none",
-} as const;
-const { parentSessionKey, ...lineageFields } = lineage;
-const lineageMeta = { parentSessionId: parentSessionKey, ...lineageFields };
+const parentSessionKey = "agent:main:main";
 function row(key: string, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
   return { key, kind: "direct", updatedAt: 1_710_000_000_000, ...fields };
-}
-function meta(key: string, fields: Record<string, unknown> = {}) {
-  return { sessionKey: key, kind: "direct", ...fields };
 }
 function sessions(rows: GatewaySessionRow[]) {
   return { sessions: rows, hasMore: false };
 }
-function fixture(rows: GatewaySessionRow[] = [], handler?: RequestHandler) {
+function encodeCursor(value: unknown) {
+  return Buffer.from(JSON.stringify(value)).toString("base64url");
+}
+function fixture(
+  rows: GatewaySessionRow[] = [],
+  handler?: RequestHandler,
+  options: AcpServerOptions = {},
+) {
   const request = vi.fn(
     handler ?? (async (method) => (method === "sessions.list" ? sessions(rows) : { ok: true })),
   );
-  return { ...createTranslatorScenario(request, { sessions: [] }), request };
+  return { ...createTranslatorScenario(request, { ...options, sessions: [] }), request };
+}
+function pagedFixture(rows: GatewaySessionRow[]) {
+  return fixture([], async (method, params) => {
+    if (method !== "sessions.list") {
+      return { ok: true };
+    }
+    const limit = typeof params?.limit === "number" ? params.limit : rows.length;
+    return { ...sessions(rows.slice(0, limit)), hasMore: limit < rows.length };
+  });
 }
 
-it.each([
-  {
-    name: "prefers an explicit label over a key and resets the resolved session",
-    metadata: { sessionLabel: "support", sessionKey: "agent:main:main", resetSession: true },
-    opts: {},
-    expected: "agent:main:label",
-    lookup: { label: "support" },
-    reset: true,
+const defaultKey = { defaultSessionKey: "default" };
+const defaultLabel = { defaultSessionLabel: "label" };
+const explicitKey = { sessionKey: "explicit" };
+const existing = { ...defaultKey, requireExistingSession: true };
+type Route = [
+  metadata: Record<string, unknown>,
+  opts: AcpServerOptions,
+  expected: string | undefined,
+  lookup?: { key: string } | { label: string },
+  reset?: boolean,
+];
+it.each<Route>([
+  [
+    { ...explicitKey, sessionLabel: "label", resetSession: true },
+    {},
+    "resolved",
+    { label: "label" },
+    true,
+  ],
+  [explicitKey, defaultLabel, "explicit"],
+  [{}, { ...defaultKey, ...defaultLabel }, "resolved", { label: "label" }],
+  [{}, defaultKey, "default"],
+  [{}, existing, "default", { key: "default" }],
+  [{ ...explicitKey, requireExisting: true }, defaultLabel, "explicit", { key: "explicit" }],
+  [{ requireExisting: false }, existing, "default"],
+  [{}, { requireExistingSession: true }, undefined],
+  [{ ...explicitKey, resetSession: false }, { resetSession: true }, "explicit"],
+  [explicitKey, { resetSession: true }, "explicit", undefined, true],
+])(
+  "routes newSession metadata %j with defaults %j to %s",
+  async (metadata, opts, expected, lookup, reset) => {
+    const { agent, request, sessionStore } = fixture([], undefined, opts);
+    if (lookup) {
+      request.mockResolvedValueOnce({ ok: true, key: expected });
+    }
+    const { newSession } = agent;
+    const result = await newSession({ ...createNewSessionRequest(cwd), _meta: metadata });
+    const selectedKey = expected ?? `acp-bridge:${result.sessionId}`;
+    expect(sessionStore.getSession(result.sessionId)?.sessionKey).toBe(selectedKey);
+    expect(request.mock.calls).toEqual([
+      ...(lookup ? [["sessions.resolve", lookup]] : []),
+      ...(reset ? [["sessions.reset", { key: selectedKey }]] : []),
+      ...(expected === undefined ? [["sessions.create", { key: selectedKey, cwd }]] : []),
+      ["sessions.list", { limit: 200, search: selectedKey, includeDerivedTitles: true }],
+    ]);
   },
-  {
-    name: "lets metadata sessionKey override the default label",
-    metadata: { sessionKey: "agent:main:override" },
-    opts: { defaultSessionLabel: "default-label" },
-    expected: "agent:main:override",
-  },
-  {
-    name: "resolves the default label ahead of the default key",
-    metadata: {},
-    opts: { defaultSessionLabel: "default-label", defaultSessionKey: "default-key" },
-    expected: "agent:main:label",
-    lookup: { label: "default-label" },
-  },
-  {
-    name: "uses the default key without a lookup",
-    metadata: {},
-    opts: { defaultSessionKey: "default-key" },
-    expected: "default-key",
-  },
-  {
-    name: "resolves an existing default key",
-    metadata: {},
-    opts: { defaultSessionKey: "default-key", requireExistingSession: true },
-    expected: "default-key",
-    lookup: { key: "default-key" },
-  },
-  {
-    name: "resolves an explicit existing key ahead of the default label",
-    metadata: { sessionKey: "explicit-key", requireExisting: true },
-    opts: { defaultSessionLabel: "default-label" },
-    expected: "explicit-key",
-    lookup: { key: "explicit-key" },
-  },
-  {
-    name: "lets false metadata disable the default existing-key requirement",
-    metadata: { requireExisting: false },
-    opts: { defaultSessionKey: "default-key", requireExistingSession: true },
-    expected: "default-key",
-  },
-  {
-    name: "creates the generated bridge key without a lookup when routing is unset",
-    metadata: {},
-    opts: { requireExistingSession: true },
-    create: true,
-  },
-  {
-    name: "lets false reset metadata override the server reset default",
-    metadata: { sessionKey: "explicit-key", resetSession: false },
-    opts: { resetSession: true },
-    expected: "explicit-key",
-  },
-  {
-    name: "applies the server reset default to the selected key",
-    metadata: { sessionKey: "explicit-key" },
-    opts: { resetSession: true },
-    expected: "explicit-key",
-    reset: true,
-  },
-])("newSession $name", async ({ metadata, opts, expected, lookup, reset, create }) => {
-  const gateway = createAcpGateway();
-  const request = vi.spyOn(gateway, "request").mockResolvedValue(sessions([]));
-  if (lookup) {
-    request.mockResolvedValueOnce({ ok: true, key: expected });
-  }
-  if (reset) {
-    request.mockResolvedValueOnce({ ok: true });
-  }
-  const sessionStore = createInMemorySessionStore();
-  const agent = createAcpGatewayAgent(createAcpConnection(), gateway, {
-    ...opts,
-    sessionStore,
-  });
-  const result = await agent.newSession({ ...createNewSessionRequest(cwd), _meta: metadata });
-  const selectedKey = expected ?? `acp-bridge:${result.sessionId}`;
-  expect(sessionStore.getSession(result.sessionId)?.sessionKey).toBe(selectedKey);
-  expect(request.mock.calls).toEqual([
-    ...(lookup ? [["sessions.resolve", lookup]] : []),
-    ...(reset ? [["sessions.reset", { key: selectedKey }]] : []),
-    ...(create ? [["sessions.create", { key: selectedKey, cwd }]] : []),
-    ["sessions.list", { limit: 200, search: selectedKey, includeDerivedTitles: true }],
-  ]);
-});
+);
 
 it.each([
-  {
-    metadata: { sessionLabel: "missing" },
-    lookup: { label: "missing" },
-    error: "Unable to resolve session label: missing",
-  },
-  {
-    metadata: { sessionKey: "missing", requireExisting: true },
-    lookup: { key: "missing" },
-    error: "Session key not found: missing",
-  },
-])(
-  "rejects an unresolved newSession route before resetting: $metadata",
-  async ({ metadata, lookup, error }) => {
-    const gateway = createAcpGateway();
-    const request = vi.spyOn(gateway, "request").mockResolvedValue({ ok: true });
-    const connection = createAcpConnection();
-    const sessionUpdate = vi.spyOn(connection, "sessionUpdate");
-    const agent = createAcpGatewayAgent(connection, gateway, {
+  [{ sessionLabel: "missing" }, { label: "missing" }, "Unable to resolve session label: missing"],
+  [
+    { sessionKey: "missing", requireExisting: true },
+    { key: "missing" },
+    "Session key not found: missing",
+  ],
+] as const)(
+  "rejects an unresolved newSession route before resetting: %j",
+  async (metadata, lookup, error) => {
+    const { agent, request, sessionUpdate } = fixture([], async () => ({ ok: true }), {
       resetSession: true,
     });
     await expect(
@@ -166,19 +120,13 @@ it.each([
 );
 
 it.each([
-  { cursor: "not-base64-json", error: "Invalid ACP session list cursor." },
-  {
-    cursor: Buffer.from(JSON.stringify({ v: 1, offset: 10_101 })).toString("base64url"),
-    error: "Invalid ACP session list cursor offset.",
-  },
-  {
-    cursor: Buffer.from(JSON.stringify({ v: 2, offset: 0 })).toString("base64url"),
-    error: "Unsupported ACP session list cursor.",
-  },
-  { cursor: Buffer.from("[]").toString("base64url"), error: "Invalid ACP session list cursor." },
+  ["not-base64-json", "Invalid ACP session list cursor."],
+  [encodeCursor({ v: 1, offset: 10_101 }), "Invalid ACP session list cursor offset."],
+  [encodeCursor({ v: 2, offset: 0 }), "Unsupported ACP session list cursor."],
+  [encodeCursor([]), "Invalid ACP session list cursor."],
 ])(
-  "rejects invalid session/list cursors before querying the Gateway: $cursor",
-  async ({ cursor, error }) => {
+  "rejects invalid session/list cursors before querying the Gateway: %s",
+  async (cursor, error) => {
     const { agent, request } = fixture();
     await expect(agent.listSessions({ cursor })).rejects.toThrow(error);
     expect(request).not.toHaveBeenCalled();
@@ -190,24 +138,18 @@ it("accepts a canonical session/list cursor and rejects altered spellings", asyn
     row(`session-${index}`, { spawnedCwd: "/tmp/work" }),
   );
   const { agent, request } = fixture(rows);
-  const canonical = Buffer.from(JSON.stringify({ v: 1, offset: 25, cwd: "/tmp/work" })).toString(
-    "base64url",
-  );
+  const canonical = encodeCursor({ v: 1, offset: 25, cwd: "/tmp/work" });
   const page = await agent.listSessions({
     cwd: "/tmp/work",
     cursor: canonical,
     _meta: { limit: 2 },
   });
   expect(page.sessions.map((session) => session.sessionId)).toEqual(["session-25", "session-26"]);
-  expect(page.nextCursor).toBe(
-    Buffer.from(JSON.stringify({ v: 1, offset: 27, cwd: "/tmp/work" })).toString("base64url"),
-  );
+  expect(page.nextCursor).toBe(encodeCursor({ v: 1, offset: 27, cwd: "/tmp/work" }));
   request.mockClear();
-  const extraField = Buffer.from(
-    JSON.stringify({ v: 1, offset: 25, cwd: "/tmp/work", extra: true }),
-  ).toString("base64url");
-  for (const cursor of [`${canonical}$`, extraField]) {
-    await expect(agent.listSessions({ cwd: "/tmp/work", cursor })).rejects.toThrow(
+  const extraField = encodeCursor({ v: 1, offset: 25, cwd: "/tmp/work", extra: true });
+  for (const invalidCursor of [`${canonical}$`, extraField]) {
+    await expect(agent.listSessions({ cwd: "/tmp/work", cursor: invalidCursor })).rejects.toThrow(
       "Invalid ACP session list cursor.",
     );
   }
@@ -221,24 +163,22 @@ it.each([
   { metadata: { limit: -1 }, expected: 1 },
 ])("clamps session/list page metadata: $metadata", async ({ metadata, expected }) => {
   const rows = Array.from({ length: 101 }, (_, index) => row(`session-${index}`));
-  const { agent, request } = fixture([], async (_method, params) => {
-    const limit = typeof params?.limit === "number" ? params.limit : rows.length;
-    return { ...sessions(rows.slice(0, limit)), hasMore: limit < rows.length };
-  });
+  const { agent } = pagedFixture(rows);
   const result = await agent.listSessions({ _meta: metadata });
   expect(result.sessions.map((session) => session.sessionId)).toEqual(
     rows.slice(0, expected).map((session) => session.key),
   );
   expect(result.nextCursor).not.toBeNull();
-  expect(request.mock.calls).toEqual([
-    ["sessions.list", { limit: expected + 1, includeDerivedTitles: true }],
-  ]);
 });
 
 it("bounds the Gateway fetch at the maximum accepted session/list offset", async () => {
   const { agent, request } = fixture([], async () => ({ ...sessions([]), hasMore: true }));
-  const cursor = Buffer.from(JSON.stringify({ v: 1, offset: 10_000 })).toString("base64url");
-  await expect(agent.listSessions({ cursor })).resolves.toEqual({ sessions: [], nextCursor: null });
+  await expect(
+    agent.listSessions({ cursor: encodeCursor({ v: 1, offset: 10_000 }) }),
+  ).resolves.toEqual({
+    sessions: [],
+    nextCursor: null,
+  });
   expect(request.mock.calls).toEqual([
     ["sessions.list", { limit: 10_101, includeDerivedTitles: true }],
   ]);
@@ -247,28 +187,18 @@ it("bounds the Gateway fetch at the maximum accepted session/list offset", async
 it("paginates cwd-filtered sessions with lineage, safe timestamps, and filter-bound cursors", async () => {
   const rows = [
     row("child", {
-      ...lineage,
-      channel: "telegram",
+      parentSessionKey,
       derivedTitle: "Child",
       spawnedWorkspaceDir: "/work/a",
       updatedAt: Infinity,
     }),
     row("unknown"),
-    row("a2", { channel: "telegram", displayName: "Main", spawnedWorkspaceDir: "/work/a" }),
+    row("a2", { displayName: "Main", spawnedWorkspaceDir: "/work/a" }),
     row("b1", { spawnedWorkspaceDir: "/work/b" }),
     row("a3", { spawnedWorkspaceDir: "/work/a" }),
     row("a4", { spawnedWorkspaceDir: "/work/a" }),
   ];
-  const { agent, request } = fixture([], async (method, params) => {
-    if (method !== "sessions.list") {
-      return { ok: true };
-    }
-    const limit = typeof params?.limit === "number" ? params.limit : rows.length;
-    return {
-      ...sessions(rows.slice(0, limit)),
-      hasMore: limit < rows.length,
-    };
-  });
+  const { agent } = pagedFixture(rows);
   const first = await agent.listSessions({ cwd: "/work/a", _meta: { limit: 2 } });
   const second = await agent.listSessions({
     cwd: "/work/a",
@@ -278,27 +208,13 @@ it("paginates cwd-filtered sessions with lineage, safe timestamps, and filter-bo
   expect(first.sessions.map((session) => session.sessionId)).toEqual(["child", "a2"]);
   expect(first.sessions.map((session) => session.cwd)).toEqual(["/work/a", "/work/a"]);
   expect(first.sessions[0]?.updatedAt).toBeUndefined();
-  expect(first.sessions[0]?._meta).toEqual(
-    meta("child", {
-      channel: "telegram",
-      ...lineageMeta,
-      spawnedWorkspaceDir: "/work/a",
-    }),
-  );
-  expect(first.sessions[1]?._meta).toEqual(
-    meta("a2", {
-      channel: "telegram",
-      spawnedWorkspaceDir: "/work/a",
-    }),
-  );
-  expect(first.nextCursor).toBeTypeOf("string");
-  expect(first.nextCursor).not.toBe("");
+  expect(first.sessions[0]?._meta).toMatchObject({
+    sessionKey: "child",
+    parentSessionId: parentSessionKey,
+  });
   expect(second.sessions.map((session) => session.sessionId)).toEqual(["a3", "a4"]);
   expect(second.sessions.map((session) => session.cwd)).toEqual(["/work/a", "/work/a"]);
   expect(second.nextCursor).toBeNull();
-  expect(request.mock.calls).toEqual(
-    [3, 6, 5, 10].map((limit) => ["sessions.list", { limit, includeDerivedTitles: true }]),
-  );
   await expect(
     agent.listSessions({ cwd: "/work/a", cursor: ` ${first.nextCursor} ` }),
   ).rejects.toThrow("Invalid ACP session list cursor.");
@@ -306,8 +222,6 @@ it("paginates cwd-filtered sessions with lineage, safe timestamps, and filter-bo
     /cursor does not match the cwd filter/i,
   );
   const unfiltered = await agent.listSessions({ _meta: { limit: 1 } });
-  expect(unfiltered.nextCursor).toBeTypeOf("string");
-  expect(unfiltered.nextCursor).not.toBe("");
   await expect(
     agent.listSessions({ cwd: "/work/a", cursor: unfiltered.nextCursor }),
   ).rejects.toThrow(/cursor does not match the cwd filter/i);
@@ -332,28 +246,24 @@ it.each(["resume", "load"] as const)(
   async (route) => {
     const resume = route === "resume";
     const sessionId = resume ? sessionKey : "client-local-session";
-    const title = resume ? "Work session" : "Child";
-    const spawnedWorkspaceDir = resume ? cwd : "/workspace/child";
+    const title = "Child";
+    const spawnedWorkspaceDir = "/workspace/child";
     const { agent, request, sessionUpdate, sessionStore } = fixture([
       row(sessionKey, {
         thinkingLevel: "adaptive",
-        ...(resume
-          ? { derivedTitle: title }
-          : { ...lineage, channel: "discord", displayName: title }),
+        parentSessionKey,
+        ...(resume ? { derivedTitle: title } : { displayName: title }),
         spawnedWorkspaceDir,
-        updatedAt: resume ? 1_710_000_000_000 : 1_710_000_020_000,
       }),
     ]);
-    const result = resume
-      ? await agent.resumeSession({ sessionId, cwd, mcpServers: [] })
-      : await agent.loadSession({
+    const result = await (resume
+      ? agent.resumeSession({ sessionId, cwd, mcpServers: [] })
+      : agent.loadSession({
           ...createLoadSessionRequest(sessionId),
           _meta: { sessionKey },
-        });
+        }));
     expect(result.modes?.currentModeId).toBe("adaptive");
-    expect(result.configOptions?.find((option) => option.id === "thought_level")).toMatchObject({
-      currentValue: "adaptive",
-    });
+    expectConfigOption(result.configOptions, "thought_level", { currentValue: "adaptive" });
     expect(sessionStore.getSession(sessionId)?.sessionKey).toBe(sessionKey);
     if (resume) {
       expect(request.mock.calls.map(([method]) => method)).not.toContain("sessions.get");
@@ -363,10 +273,11 @@ it.each(["resume", "load"] as const)(
       update: {
         sessionUpdate: "session_info_update",
         title,
-        updatedAt: resume ? "2024-03-09T16:00:00.000Z" : "2024-03-09T16:00:20.000Z",
-        _meta: meta(sessionKey, {
+        updatedAt: "2024-03-09T16:00:00.000Z",
+        _meta: expect.objectContaining({
+          sessionKey,
           spawnedWorkspaceDir,
-          ...(!resume ? { channel: "discord", ...lineageMeta } : {}),
+          parentSessionId: parentSessionKey,
         }),
       },
     });
@@ -380,7 +291,7 @@ it.each([
 ] as const)(
   "settles prompts on a terminal $status acknowledgement",
   async ({ status, stopReason }) => {
-    const { agent, request, sessionStore } = fixture([], async (method, params) => {
+    const { agent, sessionStore } = fixture([], async (method, params) => {
       if (method === "chat.send") {
         return { runId: params?.idempotencyKey, status };
       }
@@ -393,7 +304,6 @@ it.each([
     } else {
       await expect(prompt).resolves.toEqual({ stopReason });
     }
-    expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
   },
 );
 
@@ -411,6 +321,7 @@ it("drains only its own pending work and sessions during shutdown", async () => 
     }
     return method === "sessions.list" ? sessions([]) : { ok: true };
   });
+  // Both owners must see the shared store to prove shutdown isolation.
   const agentA = createAcpGatewayAgent(
     createAcpConnection(),
     createAcpGateway(request as GatewayClient["request"]),

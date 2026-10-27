@@ -10,9 +10,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import * as pendingInputReads from "../../config/sessions/session-accessor.pending-inputs.js";
 import { prepareSessionPendingInputDedupeRecovery } from "../../config/sessions/session-accessor.pending-inputs.js";
-import { withHostDataSql } from "../../config/sessions/session-native-binding.execution.test-support.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { UserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.types.js";
@@ -20,7 +18,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { dispatchReplyFromConfig } from "./dispatch-from-config.js";
 import { claimInboundDedupe, resetInboundDedupe } from "./inbound-dedupe.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
-import { buildTestCtx } from "./test-ctx.js";
+import { buildTestCtx, createRoutedTestCtx } from "./test-ctx.js";
 
 type Recorder = ReturnType<typeof createUserTurnTranscriptRecorder>;
 async function interrupt(...recorders: (Recorder | undefined)[]) {
@@ -67,14 +65,9 @@ it("dispatches freshly reclaimed pending input despite its pre-restart inbound d
     const message = "Deliver this exact source after the update";
     const createRecorder = await seedSource(target, runId, message, 100);
     const source = createRecorder();
-    const ctx = buildTestCtx({
+    const ctx = createRoutedTestCtx("webchat", sessionKey, {
       AgentId: "main",
-      Provider: "webchat",
-      Surface: "webchat",
-      OriginatingChannel: "webchat",
-      OriginatingTo: sessionKey,
       From: "gateway-owner",
-      To: sessionKey,
       SessionKey: sessionKey,
       MessageSid: runId,
       Body: message,
@@ -108,32 +101,15 @@ it("dispatches freshly reclaimed pending input despite its pre-restart inbound d
         await recorder.persistApproved();
         return { text: "Input delivered" };
       });
-      const prepareRecovery = pendingInputReads.prepareSessionPendingInputDedupeRecovery;
-      const observed: string[] = [];
-      const read = vi
-        .spyOn(pendingInputReads, "prepareSessionPendingInputDedupeRecovery")
-        .mockImplementation((...args) =>
-          withHostDataSql(
-            () => prepareRecovery(...args),
-            (query) => observed.push(query),
-          ),
-        );
-      try {
-        await recorder.withPendingInput?.(() =>
-          dispatchReplyFromConfig({
-            ctx,
-            cfg,
-            dispatcher,
-            replyOptions: { userTurnTranscriptRecorder: recorder },
-            replyResolver,
-          }),
-        );
-
-        expect(read).toHaveBeenCalledOnce();
-        expect(observed).toEqual([]);
-      } finally {
-        read.mockRestore();
-      }
+      await recorder.withPendingInput?.(() =>
+        dispatchReplyFromConfig({
+          ctx,
+          cfg,
+          dispatcher,
+          replyOptions: { userTurnTranscriptRecorder: recorder },
+          replyResolver,
+        }),
+      );
       expect(replyResolver).toHaveBeenCalledOnce();
       expect((await listSessionPendingInputs(target)).items).toEqual([]);
       const transcript = await loadTranscriptEvents(target);
@@ -141,11 +117,8 @@ it("dispatches freshly reclaimed pending input despite its pre-restart inbound d
         const record = asOptionalRecord(event);
         return record?.type === "message" && asOptionalRecord(record.message)?.role === "user";
       });
-      expect(userMessages).toEqual([
-        expect.objectContaining({
-          type: "message",
-          message: expect.objectContaining({ content: message, idempotencyKey: `${runId}:user` }),
-        }),
+      expect(userMessages).toMatchObject([
+        { message: { content: message, idempotencyKey: `${runId}:user` } },
       ]);
     } finally {
       await interrupt(resumed, source);

@@ -1,5 +1,37 @@
 import { describe, expect, it } from "vitest";
-import { throwIfSettledRejected, throwSettledAggregate } from "./error-graph-internal.js";
+import {
+  materializeErrorStack,
+  throwIfSettledRejected,
+  throwSettledAggregate,
+} from "./error-graph-internal.js";
+
+describe("materializeErrorStack", () => {
+  it("does not replace failures when diagnostic properties cannot be read or written", () => {
+    const frozen = Object.freeze(
+      Object.defineProperty(new TypeError("frozen failure"), "stack", {
+        value: "TypeError: frozen failure",
+        writable: false,
+      }),
+    );
+    const opaque = new Error("opaque failure");
+    Object.defineProperties(opaque, {
+      stack: {
+        get: () => {
+          throw new Error("stack unavailable");
+        },
+        set: undefined,
+      },
+      cause: {
+        get: () => {
+          throw new Error("cause unavailable");
+        },
+      },
+    });
+    for (const error of [frozen, opaque]) {
+      expect(() => materializeErrorStack(error)).not.toThrow();
+    }
+  });
+});
 
 describe("throwIfSettledRejected", () => {
   it("accepts empty or successful work", () => {

@@ -67,6 +67,7 @@ import {
   type DoctorLintPluginStateRunner,
 } from "./doctor-lint-state-snapshot.js";
 import { isPostCoreConvergencePass, isUpdateDoctorLintPass } from "./doctor/shared/update-phase.js";
+import { collectRecoveryDiskUsage, formatRecoveryDiskUsage } from "./recovery-disk-usage.js";
 
 type DoctorLintStateView = {
   coreChecks?: readonly DoctorHealthCheck[];
@@ -546,12 +547,14 @@ async function executeDoctorLint(
         (isUpdateDoctorLintPass(stateView.sourceEnv) && finding.severity === "warning")),
   );
   const exitCode = exitCodeFromFindings(findings, sevMin);
+  const recoveryCopies = collectRecoveryDiskUsage({ cfg, env: stateView.sourceEnv });
   return {
     checksRun: result.checksRun,
     checksSkipped: result.checksSkipped,
     exitCode,
     findings: visible,
     databaseStores,
+    recoveryCopies,
     warnings,
     cleanupWarnings: stateView.cleanupWarnings,
     writeOutput() {
@@ -562,11 +565,15 @@ async function executeDoctorLint(
           checksSkipped: result.checksSkipped,
           findings: visible,
           databaseStores: databaseStores.length ? databaseStores : undefined,
+          recoveryCopies,
           // Ordinary reports include settled cleanup warnings; rehearsal workers report before disposal.
           warnings: [...warnings, ...(stateView.cleanupWarnings ?? [])],
         });
         return;
       }
+      process.stdout.write(
+        `Recovery copies (read-only): ${formatRecoveryDiskUsage(recoveryCopies)}\n`,
+      );
       const displayed = [...visible, ...warnings, ...(stateView.cleanupWarnings ?? [])];
       process.stdout.write(
         `doctor --lint: ran ${result.checksRun} check(s), ${displayed.length} finding(s)\n`,

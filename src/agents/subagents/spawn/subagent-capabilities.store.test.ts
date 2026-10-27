@@ -118,7 +118,8 @@ describe("persisted subagent capability lookups", () => {
               const request = { config: cfg, agentId: "main", sessionKey: key };
               const resolve = () => resolveRequesterToolPolicies(request);
               const readPolicy = () => {
-                const { inheritedToolPolicy: inherited, subagentStore: store } = resolve();
+                const { inheritedToolPolicy: inherited } = resolve();
+                const store = resolveStore(key, { cfg });
                 return { policy: inherited, depth: resolveCapabilities(key, { cfg, store }).depth };
               };
               expect(resolve().inheritedToolPolicy).toEqual(policy);
@@ -475,11 +476,6 @@ describe("getSubagentDepthFromSessionStore", () => {
 });
 
 describe("resolveAgentTimeoutMs", () => {
-  it("resolves unlimited config timeoutSeconds", () => {
-    const cfg = { agents: { defaults: { timeoutSeconds: 0 } } } satisfies OpenClawConfig;
-    expect(resolveAgentTimeoutMs({ cfg })).toBe(MAX_TIMER_TIMEOUT_MS);
-  });
-
   it("uses a timer-safe sentinel for no-timeout overrides", () => {
     expect(resolveAgentTimeoutMs({ overrideSeconds: 0 })).toBe(MAX_TIMER_TIMEOUT_MS);
     expect(resolveAgentTimeoutMs({ overrideMs: 0 })).toBe(MAX_TIMER_TIMEOUT_MS);

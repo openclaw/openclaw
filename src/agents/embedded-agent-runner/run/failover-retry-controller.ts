@@ -14,7 +14,10 @@ import {
 } from "../../failover-error.js";
 import { hasLongWindowRateLimitEvidence } from "../../failover/retry-evidence.js";
 import type { FailoverReason } from "../../failover/signal.js";
-import { renderRateLimitRetryExhaustion } from "../../failover/user-copy.js";
+import {
+  renderRateLimitRecoveryStopped,
+  renderRateLimitRetryExhaustion,
+} from "../../failover/user-copy.js";
 import { isConfigBackedInlineProviderApiKey } from "../../model-auth.js";
 import { log } from "../logger.js";
 import type { TraceAttempt } from "../types.js";
@@ -28,6 +31,7 @@ const MAX_OUTPUT_LIMIT_RETRIES = 1;
 const MAX_TRANSIENT_RETRY_TIME_MS = 90_000;
 const TRANSIENT_RETRY_BASE_DELAY_MS = 1_000;
 const TRANSIENT_RETRY_MAX_DELAY_MS = 30_000;
+const RATE_LIMIT_RETRY_MAX_DELAY_MS = 60_000;
 
 function resolveTransientRetryDelayMs(params: {
   retryNumber: number;
@@ -43,24 +47,23 @@ function resolveTransientRetryDelayMs(params: {
   if (remainingMs <= 0 || params.retryAfterMs === Infinity) {
     return undefined;
   }
+  const maxDelayMs = params.rateLimit
+    ? RATE_LIMIT_RETRY_MAX_DELAY_MS
+    : TRANSIENT_RETRY_MAX_DELAY_MS;
   const exponentialMs = Math.min(
-    TRANSIENT_RETRY_MAX_DELAY_MS,
+    maxDelayMs,
     TRANSIENT_RETRY_BASE_DELAY_MS * 2 ** Math.max(0, params.retryNumber - 1),
   );
-  const jitteredMs = Math.min(
-    TRANSIENT_RETRY_MAX_DELAY_MS,
-    Math.round(exponentialMs * (0.5 + Math.random())),
-  );
+  const jitteredMs = Math.min(maxDelayMs, Math.round(exponentialMs * (0.5 + Math.random())));
   const providerTiming = Number.isFinite(params.retryAfterMs);
   const retryAfterMs = providerTiming ? Math.max(0, Math.ceil(params.retryAfterMs ?? 0)) : 0;
-  // Like the provider SDKs, a rate limit waits exactly the provider's timing;
-  // jittered exponential backoff applies only when the provider gives none.
-  const delayMs =
-    params.rateLimit && providerTiming ? retryAfterMs : Math.max(jitteredMs, retryAfterMs);
+  // Provider timing is a floor for jittered backoff: short rate-limit hints under
+  // sustained org saturation exhaust the budget in seconds and synchronize sessions.
+  const delayMs = Math.max(jitteredMs, retryAfterMs);
   return delayMs <= remainingMs ? delayMs : undefined;
 }
 
-const MAX_RATE_LIMIT_ATTEMPTS = 10;
+const MAX_RATE_LIMIT_ATTEMPTS = 16;
 const MAX_OVERLOAD_PROFILE_ROTATIONS = 1;
 const MAX_RATE_LIMIT_PROFILE_ROTATIONS = 1;
 const RETRY_SLEEP_CHUNK_MS = 24 * 60 * 60 * 1000;
@@ -439,7 +442,14 @@ export function createEmbeddedRunFailoverRetryController(input: {
       } catch {
         log.warn("transient retry status callback failed; continuing retry");
       }
-      const closeRetryWait = params.onRetryWait?.(Date.now() + delayMs, params.abortSignal);
+      const closeRetryWait = params.onRetryWait?.(
+        Date.now() + delayMs,
+        params.abortSignal,
+        // A watchdog stop during this backoff reports the limit with this copy.
+        rateLimit
+          ? { rateLimitStopMessage: renderRateLimitRecoveryStopped(retryCount) }
+          : undefined,
+      );
       let completed = false;
       try {
         // Provider floors can exceed one native timer; protect the whole wait.

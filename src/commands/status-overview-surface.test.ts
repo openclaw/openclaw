@@ -4,6 +4,7 @@ import {
   baseStatusExpectedUpdateChannelLabel,
   baseStatusOverviewSurface,
 } from "./status.test-support.ts";
+import { createMacosAppInstallOwner } from "./test-runtime-config-helpers.js";
 
 describe("status-overview-surface", () => {
   it("shows the app owner and its update hint without offering a package update", () => {
@@ -12,12 +13,7 @@ describe("status-overview-surface", () => {
         root: "/Applications/OpenClaw.app/Contents/Resources/openclaw",
         installKind: "host",
         packageManager: "unknown",
-        installOwner: {
-          schemaVersion: 1,
-          owner: "macos-app",
-          displayName: "OpenClaw.app",
-          updateHint: "Update OpenClaw.app to update this Gateway.",
-        },
+        installOwner: createMacosAppInstallOwner(),
       },
     });
 

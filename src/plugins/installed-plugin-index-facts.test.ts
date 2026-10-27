@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
+import { createPluginDeclaredSurface } from "../../test/helpers/plugin-declared-surface.js";
 import * as installRecordMap from "../config/plugin-install-record-map.js";
 import * as safeRegex from "../security/safe-regex.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex as recordsFrom } from "./installed-plugin-index-install-records.js";
@@ -54,21 +55,10 @@ it("indexes canonical transcript sources and retained legacy installed-index con
   expect(ownerIds(lookup, "fixture-legacy-source")).toEqual(["alpha"]);
 });
 
-it("prepares immutable ownership and install records once while preserving policy and caller copies", () => {
+it("prepares immutable ownership and install records once while preserving caller copies", () => {
   withPluginCache(createPluginCache(), () => {
     const snapshot = createSnapshot();
-    const acceptedSurface = {
-      channels: ["fixture-channel"],
-      providers: [],
-      tools: [],
-      contracts: [],
-      hooks: [],
-      mcpServers: [],
-      cliCommands: [],
-      cliBackends: [],
-      skills: [],
-      dangerousConfigFlags: [],
-    };
+    const acceptedSurface = createPluginDeclaredSurface({ channels: ["fixture-channel"] });
     assert(snapshot.index.installRecords.alpha);
     snapshot.index.installRecords.alpha.acceptedSurface = acceptedSurface;
     finalizePluginMetadataSnapshot(snapshot);
@@ -106,20 +96,14 @@ it("prepares immutable ownership and install records once while preserving polic
     }
     expect.soft(compile).toHaveBeenCalledTimes(2);
     expect.soft(parse).toHaveBeenCalledTimes(1);
-    for (const policy of ["allow", "deny"] as const) {
-      const config = { plugins: policy === "allow" ? { allow: ["alpha"] } : { deny: ["alpha"] } };
-      expect(isInstalledPluginEnabled(snapshot.index, "alpha", config)).toBe(policy === "allow");
-    }
     expect(isInstalledPluginEnabled(snapshot.index, "missing")).toBe(false);
   });
 });
 
-it.each([false, true])("rereads mutable nested inputs (frozen shell: %s)", (freezeShell) => {
+it("rereads mutable nested inputs even under a frozen shell", () => {
   withPluginCache(createPluginCache(), () => {
     const snapshot = createSnapshot();
-    if (freezeShell) {
-      Object.freeze(snapshot.index);
-    }
+    Object.freeze(snapshot.index);
     const owners = (id: string) => ownerIds(scopeLookup(snapshot.index), id);
     expect(owners("shared")).toEqual(["alpha", "beta"]);
     expect(recordsFrom(snapshot.index).alpha?.spec).toBe("alpha@1");

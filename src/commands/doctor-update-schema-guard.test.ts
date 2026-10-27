@@ -8,6 +8,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
 import { installPrivateUpdateHandoffStore } from "../../test/helpers/private-update-handoff-store.js";
+import { writeFixtureJsonSync } from "../cli/cli-fixtures.test-support.js";
 import { waitForCliSignalExit, waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
 import { resolveStateDir } from "../config/paths.js";
 import * as backupCreate from "../infra/backup-create.js";
@@ -129,10 +130,7 @@ async function legacyAgentFixture(postCore: boolean) {
   // The guard's install discovery sees an isolated package, not the test checkout.
   const root = path.join(resolveStateDir(), "npm", "candidate");
   fs.mkdirSync(root, { recursive: true });
-  fs.writeFileSync(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", version: VERSION }),
-  );
+  writeFixtureJsonSync(path.join(root, "package.json"), { name: "openclaw", version: VERSION });
   vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(root);
   const agent = openOpenClawAgentDatabase({ agentId: "main" });
   const pathname = agent.path;

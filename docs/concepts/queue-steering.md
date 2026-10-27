@@ -146,12 +146,18 @@ after the sending turn finishes. Access revocation can still block an input
 before its transcript commit.
 
 A visible message or send acknowledgment does not mean the active runtime has
-consumed it. The Control UI shows specific notices when an accepted message is
+consumed it. Gateway chat sends acknowledge saved input custody without waiting
+for steering admission behind older queued messages or for the active turn to end.
+Steering and followup delivery retain their original order, and later events report
+the input's outcome. The Control UI shows specific notices when an accepted message is
 waiting for worker setup or workspace sync.
 A steer sent while a turn is creating its worktree or preparing its runtime stays
 pending for that turn. Once the runtime is ready, OpenClaw checks whether it can
 accept the input. If the turn ends or cannot accept it, the message stays queued
 for a followup.
+An input already accepted by an embedded run is settled promptly if preparation
+ends before it can be consumed, such as when a policy hook blocks the run. Saved
+interrupted input follows the existing recovery rules.
 Messages waiting for a followup turn appear in the queue above the composer,
 including when the Gateway queues a message that could not be steered. They stay
 there across reconnects until consumed or canceled, without being sent again.

@@ -228,6 +228,7 @@ export async function persistCliSessionBindingResult(
   params: CliSessionStoreTarget & {
     result: EmbeddedAgentRunResult;
     expectedSession?: InternalSessionEntry;
+    preserveBinding?: boolean;
     assertSettlementCurrent: SessionSourceAssertion;
     abortSignal?: AbortSignal;
   },
@@ -242,8 +243,26 @@ export async function persistCliSessionBindingResult(
       expectedSession,
       preserveActivity: true,
       skipMaintenance: true,
-      update: (entry) =>
-        applyCliSessionBindingResult(entry, params.provider, params.result.meta.agentMeta),
+      update: (entry) => {
+        const meta = params.result.meta.agentMeta;
+        if (!params.preserveBinding) {
+          return applyCliSessionBindingResult(entry, params.provider, meta);
+        }
+        const binding = getCliSessionBinding(entry, params.provider);
+        const resultBinding = meta?.cliSessionBinding;
+        const transcriptCursor = resultBinding?.transcriptCursor;
+        if (
+          meta?.clearCliSessionBinding === true ||
+          !binding ||
+          binding.sessionId !== resultBinding?.sessionId ||
+          !transcriptCursor
+        ) {
+          return false;
+        }
+        // Preserved completions acknowledge input only in the native session they resumed.
+        setCliSessionBinding(entry, params.provider, { ...binding, transcriptCursor });
+        return true;
+      },
       assertCommitAllowed: composeSessionSourceAssertion(
         [params.assertSettlementCurrent],
         (assertSource) =>
@@ -254,6 +273,37 @@ export async function persistCliSessionBindingResult(
           ),
       ),
     });
+  });
+}
+
+/**
+ * A directly stopped first turn has no settled result, but its flushed native session is
+ * the chat's only continuity. The turn owner still guards the write; caller abort does not,
+ * and an existing binding is never replaced.
+ */
+export async function persistStoppedFirstCliSessionInStore(
+  params: CliSessionStoreTarget & {
+    binding: CliSessionBinding;
+    expectedSession?: InternalSessionEntry;
+    assertSettlementCurrent: SessionSourceAssertion;
+  },
+): Promise<void> {
+  if (!params.expectedSession || getCliSessionBinding(params.expectedSession, params.provider)) {
+    return;
+  }
+  await patchCliSessionBindingInStore({
+    ...params,
+    expectedSession: params.expectedSession,
+    preserveActivity: true,
+    skipMaintenance: true,
+    assertCommitAllowed: params.assertSettlementCurrent,
+    update: (entry) => {
+      if (getCliSessionBinding(entry, params.provider)) {
+        return false;
+      }
+      setCliSessionBinding(entry, params.provider, params.binding);
+      return true;
+    },
   });
 }
 

@@ -51,7 +51,7 @@ export function createGithubCopilotDynamicModelHooks() {
   async function loadCatalog(
     ctx: GithubCopilotCatalogContext,
     auth: Awaited<ReturnType<typeof resolveFirstGithubToken>>,
-    headers: ReturnType<typeof buildCopilotRuntimeHeaders>,
+    headers: Record<string, string>,
   ) {
     const { resolveCopilotRuntimeAuth } = await import("./register.runtime.js");
     const { apiKey: copilotApiToken, baseUrl } = await resolveCopilotRuntimeAuth({

@@ -13,6 +13,26 @@ These semantics keep selection-time and runtime auth behavior aligned. They are 
 - `openclaw models status --probe`
 - `openclaw doctor` auth checks (`doctor-auth`)
 
+## Account status in Models
+
+In **Settings → Models**, OAuth access-token expiry is separate from sign-in
+health. **Access token expires in…** or **Access token expired** describes the
+short-lived token, not necessarily the saved sign-in. The page does not infer
+refresh support from OAuth alone. **Ready** requires a ready catalog result;
+without that evidence, an account reporting only access-token expiry remains
+**Credentials configured**.
+
+A missing OAuth credential shows **Sign in again**. A refresh marker whose outcome
+is not distinguished by the status response shows **Sign-in unavailable**, not a
+claim that another login is required. A provider authentication rejection shows
+**Credentials rejected** and takes precedence over expiry information. The card-wide
+result does not identify the rejected credential, so it does not prescribe OAuth
+sign-in or change recovery advice for an unrelated saved account. Static token
+expiry keeps its warning. Externally managed credentials remain identified as
+such, rather than being declared healthy just because another tool manages them.
+Provider-reported quota exhaustion and temporary rate-limit errors remain usage
+or connection results, not sign-out instructions.
+
 <a id="stable-probe-reason-codes" />
 
 ## Stable check reason codes
@@ -107,6 +127,12 @@ writing.
 OAuth upserts recheck the current local or inherited credential after admission,
 before applying the existing generation-replacement rules.
 
+Cooldown, blocked, and disabled windows update the current availability view
+without replacing prepared plugin generations. Selection reads the committed
+windows immediately; bursts of availability changes coalesce metadata notifications
+without announcing a model catalog change. Credential, profile membership, order,
+and ownership changes still invalidate the prepared runtime before its next use.
+
 Runtime auth-store updates keep their read, merge, encode, and commit in the
 existing SQLite worker. Update callbacks execute at most once against the
 transaction's current rows; live owner admission is checked again before commit.
@@ -172,6 +198,9 @@ directory, environment, or source still replaces it.
 Detached connection, cron, heartbeat, and hook callbacks retain that Gateway's
 read-only worker scope without inheriting startup or request authority. Shutdown
 refuses late callbacks before they can create another reader.
+Auth-file observation reuses the current Gateway's reader binding, including
+directories discovered later by temporary requests. Publications stop when those
+Gateway readers close; the next Gateway generation rebinds retained observers.
 Usage bookkeeping invalidates later cache reuse while admitted reads can finish
 their snapshots. Credential, selection, ownership, and lifecycle changes still
 invalidate in-flight preparation.
@@ -279,6 +308,21 @@ failures remain fail-closed. Where an owner already retains a rotated result for
 storage retry, it retries that storage operation, not the old token exchange.
 External tool homes retain their own refresh authority; this contract does not
 transfer their credentials into OpenClaw ownership.
+
+## Long-running custom transport requests
+
+The embedded run auth owner can supply a versioned, optional `requestAuth`
+capability to provider `createStreamFn` factories. A participating transport
+resolves it before each physical request, including private continuations, so a
+captured attempt bearer cannot hide canonical renewal or rotation. Resolution
+locks the original profile and account instead of trying another identity. Run
+closure, auth selection changes, automation revocation and cancellation refuse
+credentials, including after awaited preparation. Existing native OAuth owners
+still own refresh grants and independent durable settlement.
+
+Legacy hosts and entrypoints without this capability retain captured-key
+behavior; ordinary just-in-time refresh between separate runs does not imply
+renewal within one attempt. See [custom transport request credentials](/plugins/sdk-provider-plugins#per-request-credentials-in-custom-transports).
 
 ## Plugin SDK OAuth validation
 

@@ -64,7 +64,7 @@ it.each([
         : observed;
     });
     vi.useFakeTimers();
-    const options = { timeoutMs, signal: undefined };
+    const options = { timeoutMs };
     const pending =
       scope === "kind"
         ? resolveKind(root, options)
@@ -82,7 +82,7 @@ it.each([
   },
 );
 
-it("classifies roots, aliases and nested packages with two Git probes", async () => {
+it("classifies checkout roots, aliases and nested packages", async () => {
   const base = makeRoot();
   const root = path.join(base, "repo");
   const alias = path.join(base, "alias");
@@ -91,31 +91,19 @@ it("classifies roots, aliases and nested packages with two Git probes", async ()
   await fs.symlink(root, alias, process.platform === "win32" ? "junction" : "dir");
   await fs.mkdir(nested, { recursive: true });
   await fs.writeFile(path.join(nested, "package.json"), '{"name":"openclaw"}');
-  const runCommand = vi.spyOn(processExec, "runCommandWithTimeout");
-
   await expect(resolveKind(root)).resolves.toBe("git");
   await expect(resolveKind(alias)).resolves.toBe("git");
+  const command = vi.spyOn(processExec, "runCommandWithTimeout");
   await expect(resolveKind(nested)).resolves.toBe("package");
-
-  expect(runCommand).toHaveBeenCalledTimes(2);
+  expect(command).not.toHaveBeenCalled();
 });
 
-it.each(["absent", "invalid-file", "invalid-directory"])(
-  "does not treat a %s Git marker as a checkout",
-  async (marker) => {
-    const root = makeRoot();
-    await fs.writeFile(path.join(root, "package.json"), '{"name":"openclaw"}');
-    if (marker === "invalid-file") {
-      await fs.writeFile(path.join(root, ".git"), "not a Git directory pointer\n");
-    } else if (marker === "invalid-directory") {
-      await fs.mkdir(path.join(root, ".git"));
-    }
-
-    const runCommand = vi.spyOn(processExec, "runCommandWithTimeout");
-    await expect(resolveKind(root)).resolves.toBe("package");
-    expect(runCommand).toHaveBeenCalledTimes(marker === "absent" ? 0 : 1);
-  },
-);
+it("does not treat an invalid Git marker as a checkout", async () => {
+  const root = makeRoot();
+  await fs.writeFile(path.join(root, "package.json"), '{"name":"openclaw"}');
+  await fs.writeFile(path.join(root, ".git"), "not a Git directory pointer\n");
+  await expect(resolveKind(root)).resolves.toBe("package");
+});
 
 it("honors GIT_DIR and GIT_WORK_TREE without a marker", async () => {
   const base = makeRoot();

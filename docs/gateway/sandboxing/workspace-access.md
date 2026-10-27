@@ -73,8 +73,9 @@ Host recovery snapshots retain host data under their existing rules, but
 restoration does not admit that data to the guest. Use the
 session's managed GitHub publication action to publish accepted changes; host credentials are not
 copied into the sandbox. The runtime-owned `.openclaw/sandbox-skills` subtree
-is excluded from workspace reconciliation and publication; other project content
-under `.openclaw` is retained. Its empty mount targets are created by the host
+is excluded from workspace reconciliation and publication, as is the scratch
+directory described below. Other project content under `.openclaw` is retained.
+Its empty mount targets are created by the host
 workspace owner before container allocation, while the skill mounts remain
 read-only. This also keeps normal retention cleanup independent of container
 user-namespace ownership.
@@ -84,7 +85,11 @@ At the checkout root, `.cache/vitest/`, `.cache/bun-transpiler/`, `.cache/opencl
 that produced them, along with `.artifacts/vitest-workers/` compiler outputs,
 `.artifacts/vitest-worker-cache/` retained compiler outputs,
 `.artifacts/vitest-shard-timings.json` scheduling samples, and
-`.artifacts/dist-artifacts.lock/` ownership files.
+`.artifacts/dist-artifacts.lock/` ownership files. The root `.openclaw/tmp/`
+scratch directory also stays local, including downloaded toolchains and browsers.
+Scratch remains available to later commands in the same runtime, but is not
+synchronized or restored onto another runtime. Save durable outputs outside it;
+other `.openclaw/` content and nested project fixtures still reconcile.
 Synchronization and recovery of older pending results exclude these exact paths,
 so dependency and test-tool downloads do not count as authored workspace results.
 Other guest-created files under `.cache/`, `.local/`, and `.artifacts/` still
@@ -92,16 +97,31 @@ reconcile, including nested paths and explicit staged inputs; an ignore
 rule alone does not make a file disposable. Source changes cannot remove a
 runtime-owned lock subtree by replacing its parent directory.
 
+Changed user files remain limited to 64 MiB each. If one exceeds the limit, reduce
+it or move it outside synchronization before retrying; repeated messages cannot
+resolve the size violation. For a newly created local sandbox file,
+[`openclaw sandbox recover`](/cli/sandbox#openclaw-sandbox-recover) preserves the
+file outside synchronization so the next turn can settle the remaining edits.
+
 Local managed guest workspaces also exclude disposable `.artifacts/build-all-cache/`
 build snapshots and `.artifacts/build-cache-inputs/` temporary receipts. Original
 inputs admitted from the host source or its Git index remain protected even within
 those roots. Guest Git metadata cannot admit generated files as original inputs.
 The same input custody applies during capture, synchronization and recovery without
-changing saved manifest bytes. This build-cache policy does not change native-node
-or SSH workspace synchronization. Older archives can lack the original index
+changing saved manifest bytes. Older archives can lack the original index
 membership of saved files. Exact cache-root paths in the owned archive remain
 restored inputs; new generated paths under the same directories are still excluded.
 An ambiguous older cache file may therefore remain preserved.
+
+For Git-backed native-node and SSH workspaces, worker-side captures also exclude
+new generated files under those two build-cache roots. Tracked files, ignored
+files explicitly selected by `.worktreeinclude`, and exact inputs recorded in a
+prior capture remain part of the workspace. Ordinary `.artifacts/` reports still
+synchronize, and unreadable authored files still fail capture. Plain workspaces
+keep their existing capture policy even when staging creates Git metadata.
+Older remote manifests can contain cache files whose origin is unknown; those
+exact paths remain preserved. This does not change the initial Gateway-source
+snapshot policy or remove previously retained cache files.
 
 If you are a guest, you can ask the agent:
 
@@ -217,6 +237,9 @@ Generated skill copies carry their own Git ignore rule, so ordinary Git discover
 omits them while tracked changes and other project files remain visible.
 The Gateway refreshes its own mirrored copies even when an earlier copy inherited
 read-only directory permissions; no manual permission repair is needed.
+Unchanged skill snapshots reuse their mirrored copies. When supporting files
+change, the Gateway reconciles regular skill trees incrementally: changed files
+are replaced, removed files are pruned, and unchanged copies are retained.
 SSH and OpenShell shell execution relies on the remote host or OpenShell policy
 for filesystem restrictions; `workspaceAccess` alone does not make remote shell
 paths read-only.

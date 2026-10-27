@@ -1,3 +1,4 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { isRecord } from "../../utils.js";
@@ -455,10 +456,30 @@ function hasCronCreateSignal(value: Record<string, unknown>): boolean {
   );
 }
 
+export function prepareCronToolArguments(args: unknown): unknown {
+  if (
+    !isRecord(args) ||
+    (args.action !== "add" && args.action !== "update") ||
+    args.job === undefined ||
+    isRecord(args.job)
+  ) {
+    return args;
+  }
+  const parsedJob = typeof args.job === "string" ? safeParseJsonRecord(args.job) : undefined;
+  if (parsedJob) {
+    return { ...args, job: parsedJob };
+  }
+  const prepared = { ...args };
+  readCronToolJob(prepared, args.action);
+  // Execution must still recognize a recovered update and reject empty patches.
+  prepared.job = undefined;
+  return prepared;
+}
+
 export function readCronToolJob(params: Record<string, unknown>, action: "add" | "update") {
   let recovered = false;
   // Models sometimes flatten job fields beside action; create requires a schedule/payload signal.
-  if (!params.job || (isRecord(params.job) && Object.keys(params.job).length === 0)) {
+  if (!isRecord(params.job) || Object.keys(params.job).length === 0) {
     const synthetic = recoverCronObjectFromFlatParams(params);
     if (synthetic.found && (action === "update" || hasCronCreateSignal(synthetic.value))) {
       params.job = synthetic.value;
@@ -466,7 +487,7 @@ export function readCronToolJob(params: Record<string, unknown>, action: "add" |
     }
   }
   if (!isRecord(params.job)) {
-    throw new Error("job required");
+    throw new Error("job required: provide an object or usable flat job fields");
   }
   return {
     job: canonicalizeCronToolObject(params.job),

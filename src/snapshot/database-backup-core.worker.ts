@@ -110,9 +110,9 @@ export async function exportPostgresBackup(params: {
           .prepare("SELECT total_changes() AS n")
           .get()?.n;
         sanitizeOpenClawGlobalStateSnapshot(db);
-        const { embedSessionColdArchivesInSnapshot } =
-          await import("../config/sessions/session-cold-storage-backup.js");
-        await embedSessionColdArchivesInSnapshot({
+        const { embedSessionColdArchivesInSnapshotInWorker } =
+          await import("../config/sessions/session-cold-storage-backup.worker.js");
+        await embedSessionColdArchivesInSnapshotInWorker({
           database: db,
           sourceStorePath: params.sourcePath,
         });

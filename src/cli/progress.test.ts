@@ -98,12 +98,7 @@ describe("cli progress", () => {
 
   it("does not render progress updates after the reporter is finished", () => {
     const { writes, stream } = captureOutput(false);
-    const reporter = progress({
-      label: "Indexing memory...",
-      total: 10,
-      stream,
-      fallback: "log",
-    });
+    const reporter = progress({ label: "Indexing memory...", total: 10, stream, fallback: "log" });
     reporter.done();
     reporter.setLabel("Late progress");
     reporter.setPercent(50);
@@ -152,9 +147,7 @@ describe("cli progress", () => {
 
   it("unregisters a delayed tty progress line when done before start", () => {
     const { writes: firstWrites, stream: firstStream } = captureOutput();
-    const secondWrite = vi.fn();
-    const secondStream = createOutput(true, secondWrite);
-
+    const { writes: secondWrites, stream: secondStream } = captureOutput();
     const delayed = lineProgress("Delayed", firstStream, 10_000);
     delayed.done();
 
@@ -162,14 +155,17 @@ describe("cli progress", () => {
     next.done();
 
     expect(firstWrites).toStrictEqual([]);
-    expect(secondWrite).toHaveBeenCalledWith(theme.accent("Next"));
+    expect(secondWrites).toContain(theme.accent("Next"));
   });
 
   it.each(["resolve", "reject"] as const)(
     "releases the line after work callbacks %s",
     async (outcome) => {
       const { writes: events, stream } = captureOutput();
-      const oscSupported = supportsOscProgress(process.env);
+      const osc = (state: number) =>
+        supportsOscProgress(process.env) ? [`\x1b]9;4;${state};0\x1b\\`] : [];
+      const clearLine = "\r\x1b[2K";
+      const render = (label: string) => [...osc(3), clearLine, theme.accent(label)];
       const error = new Error("work failed");
       const work = withProgress({ label: "Work", stream, fallback: "line" }, async (reporter) => {
         onTestFinished(() => reporter.done());
@@ -187,15 +183,11 @@ describe("cli progress", () => {
         await expect(work).resolves.toBe("value");
       }
       expect(events).toEqual([
-        ...(oscSupported ? ["\x1b]9;4;3;0\x1b\\"] : []),
-        "\r\x1b[2K",
-        theme.accent("Work"),
+        ...render("Work"),
         "callback",
-        ...(oscSupported ? ["\x1b]9;4;3;0\x1b\\"] : []),
-        "\r\x1b[2K",
-        theme.accent("Updated"),
-        ...(oscSupported ? ["\x1b]9;4;0;0\x1b\\"] : []),
-        "\r\x1b[2K",
+        ...render("Updated"),
+        ...osc(0),
+        clearLine,
       ]);
       lineProgress("Next", stream);
       expect(events.at(-1)).toBe(theme.accent("Next"));

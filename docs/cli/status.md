@@ -44,6 +44,10 @@ openclaw status --usage --agent work
 | `--timeout <ms>`        | Check timeout in milliseconds (default: `60000`).                                                               |
 | `--verbose` / `--debug` | Also print the raw Gateway target resolution before the report.                                                 |
 
+`status --all` neutralizes terminal controls in channel and agent labels, account
+tables, and channel issue diagnostics. Embedded tabs and line breaks in these
+values display as visible escapes; report styling and multiline store guidance remain.
+
 Status starts one monotonic check deadline when the command begins. Local readiness, Gateway status, provider usage, and deep health consume the remaining allowance. Remote targets and explicit Gateway URLs skip local readiness but keep the same deadline. Local checks report the observed startup phase while waiting. If the Gateway is still starting when the budget expires, status reports “still starting” instead of unreachable and skips deep channel checks. JSON keeps the status report and adds `gateway.readiness: "still-starting"` and `gateway.startupPhase`. An explicit `--timeout` limits that shared allowance.
 
 When no matching Gateway service or live foreground owner exists and its port is
@@ -165,6 +169,23 @@ not clear the recorded warning. Use `openclaw update status` for a fresh check
 and the last update run, or run `openclaw update` again. `openclaw status --deep`
 also fetches for that check; it does not change the ledger. See
 [Release channels](/install/development-channels#checking-current-status).
+
+## Recovery-copy disk usage
+
+The **Recovery copies (local)** row and JSON `recoveryCopies` report logical bytes
+and copy counts in `total` and `byKind.updateCaptures`, `doctorCaptures`, and
+`migrationOriginals`. Each contains `retirable`, `protected`, and
+`unmanifestedOrOrphan` counts and logical bytes. This is local to the CLI's selected
+state, even when its Gateway target is remote; it never deletes anything.
+
+The scan bounds filesystem entries, metadata bytes, and elapsed time. When any
+bound or unreadable input prevents a complete inventory, `incomplete: true`,
+`measurement: "partial"`, and `incompleteReasons` identify an estimate of observed
+bytes, not a full accounting. Eligibility that could not be checked remains
+protected. Large history databases are not copied just for status. Limits never
+make the command fail. Use `openclaw update cleanup --dry-run` for the detailed
+inventory and [explicit retirement](/cli/update/repair-and-recovery#explicitly-retire-an-unmanifested-original).
+Logical bytes do not measure physical blocks or guarantee reclaimed space.
 
 ## Status timing
 

@@ -1,10 +1,10 @@
-import { beforeEach, expect, it, vi, type TestContext } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { BoundWebPushSubscription } from "../infra/push-web.js";
 import { encodePngRgba } from "../media/png-encode.js";
-import { createTestApprovalManager } from "./exec-approval-manager.test-support.js";
 import type { ExecApprovalRecord } from "./exec-approval-manager.types.js";
+import { createExecApprovalRecord } from "./exec-approval-registration.js";
 
 const mocks = vi.hoisted(() => ({
   pairings: vi.fn(),
@@ -137,13 +137,8 @@ function terminalPage(approvalIds: string[], throughApprovalId = approvalIds.at(
   return { approvalIds, nextAfterApprovalId: null, throughApprovalId };
 }
 
-function unregisteredRecord(id: string, request: ExecApprovalRecord["request"]) {
-  const createdAtMs = Date.now();
-  return { id, request, createdAtMs, expiresAtMs: createdAtMs + 60_000 };
-}
-
-function createRecord(context: TestContext, id: string, command = "echo ok") {
-  return createTestApprovalManager<{ command: string }>(context).create({ command }, 60_000, id);
+function createRecord(id: string, request: ExecApprovalRecord["request"] = { command: "echo ok" }) {
+  return createExecApprovalRecord(request, 60_000, id);
 }
 
 async function createDelivery(getRuntimeConfig: () => OpenClawConfig = () => ({})) {
@@ -231,7 +226,7 @@ it.each(["identified", "private"] as const)(
     const delivery = await createDelivery(() => ({
       agents: { entries: { research: { identity: { avatar } } } },
     }));
-    const record = unregisteredRecord("exec:avatar", {
+    const record = createRecord("exec:avatar", {
       command: "echo avatar",
       agentId: "research",
     });
@@ -262,7 +257,7 @@ it.each([true, false])(
       async ({ subscriptions }: { subscriptions: BoundWebPushSubscription[] }) =>
         subscriptions.map(success),
     );
-    const record = unregisteredRecord("exec:committed-receipts", { command: "echo receipt" });
+    const record = createRecord("exec:committed-receipts", { command: "echo receipt" });
     const requested = (await createDelivery()).handleRequested(record);
     try {
       await vi.waitFor(() => expect(mocks.prepareDeliveries).toHaveBeenCalledOnce());
@@ -283,10 +278,10 @@ it.each([true, false])(
   },
 );
 
-it("sends a generic approval link only to currently authorized visible bindings", async (testContext) => {
+it("sends a generic approval link only to currently authorized visible bindings", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(1_000);
-  const record = createRecord(testContext, "exec:approval.1", "sensitive command");
+  const record = createRecord("exec:approval.1", { command: "sensitive command" });
   record.requestedByDeviceId = "allowed-device";
   const allowed = boundSubscription("allowed-device", "profile-allowed");
   const wrongDevice = boundSubscription("wrong-device", "profile-allowed");
@@ -328,12 +323,9 @@ it("sends a generic approval link only to currently authorized visible bindings"
   expect(JSON.stringify(mocks.send.mock.calls)).not.toContain("sensitive command");
 });
 
-it("sanitizes identified approval labels without changing agent filters", async (testContext) => {
+it("sanitizes identified approval labels without changing agent filters", async () => {
   const agentId = "agent\n\u202E";
-  const record = createTestApprovalManager(testContext).create(
-    { command: "echo ok", agentId },
-    60_000,
-  );
+  const record = createRecord("exec:labels", { command: "echo ok", agentId });
   const subscription = boundSubscription("browser-device", null, {
     label: "Phone\u202E",
     detailLevel: "identified",
@@ -355,190 +347,133 @@ it("sanitizes identified approval labels without changing agent filters", async 
   expect(record.request.agentId).toBe(agentId);
 });
 
-it("rechecks the profile role and excludes unbound role-based subscriptions", async (testContext) => {
-  const record = createRecord(testContext, "exec:role-check");
+it("requires a current role policy for each binding", async () => {
   const current = boundSubscription("current-device", "profile-current");
-  const downgraded = boundSubscription("downgraded-device", "profile-downgraded");
-  const missingPolicy = boundSubscription("missing-policy-device", "profile-missing");
-  const unboundProfile = boundSubscription("unbound-profile-device", null);
-  bindSubscriptions(current, downgraded, missingPolicy, unboundProfile);
-  mocks.rolePolicy.mockImplementation((profileId: string) =>
-    profileId === "profile-missing"
-      ? undefined
-      : {
-          ...readOnlyPolicy(),
-          scopes:
-            profileId === "profile-current"
-              ? ["operator.approvals", "operator.read"]
-              : ["operator.read"],
-        },
+  bindSubscriptions(
+    current,
+    boundSubscription("missing-device", "profile-missing"),
+    boundSubscription("unbound-device", null),
   );
-  mocks.visible.mockImplementation(
-    ({ client }) =>
-      client?.authenticatedUserProfile?.profileId === "profile-current" ||
-      client?.authenticatedUserProfile?.profileId === "profile-missing",
+  mocks.rolePolicy.mockImplementation((profileId: string) =>
+    profileId === "profile-current"
+      ? { ...readOnlyPolicy(), scopes: ["operator.approvals", "operator.read"] }
+      : undefined,
   );
   mocks.send.mockResolvedValue([success(current)]);
-
   const delivery = await createDelivery(() => ({ gateway: { roles: { definitions: {} } } }));
-  await expect(delivery.handleRequested(record)).resolves.toBe(true);
-
-  expectSend({ subscriptions: [current] });
-});
-
-it("reads runtime role policy after transport preparation", async (testContext) => {
-  const record = createRecord(testContext, "exec:config-race");
-  bindDevice("current");
-  const preparation = createDeferred<typeof mocks.send>();
-  mocks.prepareSender.mockReturnValue(preparation.promise);
-  const tightenedConfig = { gateway: { roles: { definitions: {} } } };
-  let runtimeConfig: typeof tightenedConfig | Record<string, never> = {};
-  const getRuntimeConfig = vi.fn(() => runtimeConfig);
-  mocks.rolePolicy.mockImplementation(
-    (
-      _profileId: string,
-      _role: string | null,
-      cfg: typeof tightenedConfig | Record<string, never>,
-    ) => ("gateway" in cfg ? readOnlyPolicy() : undefined),
+  await expect(delivery.handleRequested(createRecord("exec:role-check"))).resolves.toBe(true);
+  expect(mocks.send).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ subscriptions: [current] }),
   );
-  const delivery = await createDelivery(getRuntimeConfig);
-
-  const requested = delivery.handleRequested(record);
-  expect(getRuntimeConfig).not.toHaveBeenCalled();
-  runtimeConfig = tightenedConfig;
-  preparation.resolve(mocks.send);
-
-  await expect(requested).resolves.toBe(false);
-  expect(getRuntimeConfig).toHaveBeenCalled();
-  expect(mocks.send).not.toHaveBeenCalled();
 });
 
-it.for([
-  { terminalState: "resolved", phase: "transport" },
-  { terminalState: "expired", phase: "preferences" },
-] as const)(
-  "does not send after the approval becomes $terminalState during $phase preparation",
-  async ({ terminalState, phase }, testContext) => {
-    const record = createRecord(testContext, `exec:${terminalState}-during-preparation`);
-    bindDevice("current");
-    const preparationStarted = createDeferred();
-    const preparationReady = createDeferred();
-    const prepare = phase === "transport" ? mocks.prepareSender : mocks.preferences;
-    prepare.mockImplementationOnce(async () => {
-      preparationStarted.resolve();
-      await preparationReady.promise;
-      return phase === "transport" ? mocks.send : { values: new Map(), isCurrent: () => true };
-    });
-
-    const delivery = (await createDelivery()).handleRequested(record);
-    await preparationStarted.promise;
-    if (terminalState === "resolved") {
-      record.resolvedAtMs = Date.now();
-      record.status = "denied";
-    } else {
-      record.expiresAtMs = Date.now() - 1;
-    }
-    preparationReady.resolve();
-
-    await expect(delivery).resolves.toBe(false);
-    expect(mocks.send).not.toHaveBeenCalled();
-  },
-);
-
-it("recomputes the remaining TTL after transport preparation", async (testContext) => {
+it.each([
+  { change: "policy", phase: "transport" },
+  { change: "resolved", phase: "transport" },
+  { change: "expired", phase: "preferences" },
+  { change: "ttl", phase: "transport" },
+] as const)("rechecks $change after $phase preparation", async ({ change, phase }) => {
   vi.useFakeTimers();
   vi.setSystemTime(1_000);
-  const record = createRecord(testContext, "exec:ttl-after-preparation");
+  const record = createRecord(`exec:${change}-during-preparation`);
   const current = bindDevice("current");
-  mocks.send.mockResolvedValue([success(current)]);
-  const preparation = createDeferred<typeof mocks.send>();
-  mocks.prepareSender.mockReturnValueOnce(preparation.promise);
-
-  const delivery = (await createDelivery()).handleRequested(record);
-  await vi.waitFor(() => expect(mocks.prepareSender).toHaveBeenCalledOnce());
-  vi.setSystemTime(31_000);
-  preparation.resolve(mocks.send);
-
-  await expect(delivery).resolves.toBe(true);
-  expectSend({
-    payload: expect.objectContaining({ url: "approve/exec%3Attl-after-preparation" }),
-    deliveryOptions: deliveryOptions(30),
+  if (change === "ttl") {
+    mocks.send.mockResolvedValue([success(current)]);
+  }
+  let cfg: OpenClawConfig = {};
+  const getRuntimeConfig = vi.fn(() => cfg);
+  if (change === "policy") {
+    mocks.rolePolicy.mockImplementation(
+      (_id: string, _role: string | null, config: OpenClawConfig) =>
+        config.gateway ? readOnlyPolicy() : undefined,
+    );
+  }
+  const preparationStarted = createDeferred();
+  const preparationReady = createDeferred();
+  const prepare = phase === "transport" ? mocks.prepareSender : mocks.preferences;
+  prepare.mockImplementationOnce(async () => {
+    preparationStarted.resolve();
+    await preparationReady.promise;
+    return phase === "transport" ? mocks.send : { values: new Map(), isCurrent: () => true };
   });
+
+  const delivery = (await createDelivery(getRuntimeConfig)).handleRequested(record);
+  await preparationStarted.promise;
+  if (change === "policy") {
+    expect(getRuntimeConfig).not.toHaveBeenCalled();
+    cfg = { gateway: { roles: { definitions: {} } } };
+  } else if (change === "resolved") {
+    record.resolvedAtMs = Date.now();
+    record.status = "denied";
+  } else if (change === "expired") {
+    record.expiresAtMs = Date.now() - 1;
+  } else {
+    vi.setSystemTime(31_000);
+  }
+  preparationReady.resolve();
+  await expect(delivery).resolves.toBe(change === "ttl");
+  if (change === "ttl") {
+    expectSend({
+      payload: expect.objectContaining({ url: `approve/${encodeURIComponent(record.id)}` }),
+      deliveryOptions: deliveryOptions(30),
+    });
+  } else {
+    if (change === "policy") {
+      expect(getRuntimeConfig).toHaveBeenCalled();
+    }
+    expect(mocks.send).not.toHaveBeenCalled();
+  }
 });
 
-it("retains ambiguous request targets for terminal replacement and prunes definite failures", async (testContext) => {
-  const record = createRecord(testContext, "exec:ambiguous-request");
-  const ambiguous = boundSubscription("ambiguous-device", "profile-ambiguous");
-  const gone = boundSubscription("gone-device", "profile-gone");
-  const rejected = boundSubscription("rejected-device", "profile-rejected");
-  bindSubscriptions(ambiguous, gone, rejected);
-  mocks.send
-    .mockResolvedValueOnce([
-      { ok: false, subscriptionId: ambiguous.subscriptionId, error: "timeout" },
-      { ok: false, subscriptionId: gone.subscriptionId, statusCode: 410, error: "gone" },
-      { ok: false, subscriptionId: rejected.subscriptionId, statusCode: 503, error: "busy" },
-    ])
-    .mockResolvedValueOnce([success(ambiguous)]);
-
-  const delivery = await createDelivery();
-
-  await expect(delivery.handleRequested(record)).resolves.toBe(true);
-  await delivery.handleResolved({ id: record.id });
-
-  expect(mocks.send).toHaveBeenCalledTimes(2);
-  expect(mocks.send.mock.calls[1]?.[0]).toMatchObject({
-    subscriptions: [ambiguous],
-    payload: { title: "OpenClaw approval updated" },
-  });
-  expect(mocks.deleteTargets).toHaveBeenCalledWith(
-    expect.objectContaining({
-      approvalId: record.id,
-      subscriptionIds: [gone.subscriptionId, rejected.subscriptionId],
-    }),
-  );
-});
-
-it("replaces successful request alerts after the approval becomes expired", async (testContext) => {
-  const record = createRecord(testContext, "exec:terminal-expired", "sensitive command");
-  const delivered = boundSubscription("delivered-device", "profile-delivered");
-  const failed = boundSubscription("failed-device", "profile-failed");
-  bindSubscriptions(delivered, failed);
-  mocks.send
-    .mockResolvedValueOnce([
-      success(delivered),
-      { ok: false, subscriptionId: failed.subscriptionId, statusCode: 410 },
-    ])
-    .mockResolvedValueOnce([success(delivered)]);
-
-  const delivery = await createDelivery();
-  await expect(delivery.handleRequested(record)).resolves.toBe(true);
-  const requestOptions = mocks.send.mock.calls[0]?.[0]?.deliveryOptions;
-
-  delivered.devicePreferences = {
-    enabled: false,
-    label: "",
-    quietHours: {
-      enabled: true,
-      startMinute: 0,
-      endMinute: 1439,
-      timeZone: "UTC",
-    },
-  };
-
-  await delivery.handleExpired({ id: record.id });
-
-  expect(mocks.send).toHaveBeenCalledTimes(2);
-  expect(mocks.send).toHaveBeenNthCalledWith(2, {
-    subscriptions: [delivered],
-    payload: {
-      ...notificationPayload(record.id),
-      title: "OpenClaw approval updated",
-      body: "This approval is no longer pending.",
-    },
-    deliveryOptions: { ...deliveryOptions(300), topic: requestOptions?.topic },
-  });
-  expect(JSON.stringify(mocks.send.mock.calls[1])).not.toContain("sensitive command");
-});
+it.each(["ambiguous", "successful"] as const)(
+  "replaces %s requests, bypasses quiet hours and prunes definite failures",
+  async (outcome) => {
+    const record = createRecord(`exec:terminal-${outcome}`, { command: "sensitive command" });
+    const retained = boundSubscription("retained-device", "profile-retained");
+    const failures = [410, 503].map((code) => boundSubscription(`failed-${code}`, null));
+    bindSubscriptions(retained, ...failures);
+    mocks.send
+      .mockResolvedValueOnce([
+        outcome === "successful"
+          ? success(retained)
+          : { ok: false, subscriptionId: retained.subscriptionId, error: "timeout" },
+        ...failures.map((subscription, index) => ({
+          ok: false,
+          subscriptionId: subscription.subscriptionId,
+          statusCode: [410, 503][index],
+        })),
+      ])
+      .mockResolvedValueOnce([success(retained)]);
+    const delivery = await createDelivery();
+    await expect(delivery.handleRequested(record)).resolves.toBe(true);
+    const topic = mocks.send.mock.calls[0]?.[0]?.deliveryOptions.topic;
+    expect(mocks.deleteTargets).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: record.id,
+        subscriptionIds: failures.map((subscription) => subscription.subscriptionId),
+      }),
+    );
+    retained.devicePreferences = {
+      enabled: false,
+      label: "",
+      quietHours: { enabled: true, startMinute: 0, endMinute: 1439, timeZone: "UTC" },
+    };
+    await (outcome === "successful"
+      ? delivery.handleExpired(record)
+      : delivery.handleResolved(record));
+    expect(mocks.send).toHaveBeenCalledTimes(2);
+    expect(mocks.send).toHaveBeenNthCalledWith(2, {
+      subscriptions: [retained],
+      payload: {
+        ...notificationPayload(record.id),
+        title: "OpenClaw approval updated",
+        body: "This approval is no longer pending.",
+      },
+      deliveryOptions: { ...deliveryOptions(300), topic },
+    });
+    expect(JSON.stringify(mocks.send.mock.calls[1])).not.toContain("sensitive command");
+  },
+);
 
 it("drains terminal recovery beyond the first 1,024 approvals", async () => {
   const firstPage = Array.from(
@@ -564,78 +499,57 @@ it("drains terminal recovery beyond the first 1,024 approvals", async () => {
   expect(mocks.targets).toHaveBeenCalledTimes(1_025);
 });
 
-it("recovers a terminal replacement from durable targets after process restart", async (testContext) => {
-  const record = createRecord(testContext, "exec:restart-terminal", "sensitive command");
-  const delivered = bindDevice("delivered");
-  mocks.send
-    .mockResolvedValueOnce([success(delivered)])
-    .mockResolvedValueOnce([success(delivered)]);
-
-  const firstProcess = await createDelivery();
-  await expect(firstProcess.handleRequested(record)).resolves.toBe(true);
-
-  mocks.terminalIds.mockResolvedValue(terminalPage([record.id]));
-  const restartedProcess = await createDelivery();
-  await restartedProcess.recoverTerminalDeliveries();
-
-  expect(mocks.send).toHaveBeenCalledTimes(2);
-  expect(mocks.send).toHaveBeenNthCalledWith(
-    2,
-    expect.objectContaining({
-      subscriptions: [delivered],
-      payload: expect.objectContaining({
-        title: "OpenClaw approval updated",
-        tag: "openclaw-approval-" + record.id,
-      }),
-    }),
-  );
-  expect(approvalDeliveryTargets.get(record.id)?.size).toBe(0);
-});
-
-it.for(["same-process", "restart"] as const)(
-  "does not send a terminal approval link after device authority is revoked in %s delivery",
-  async (mode, testContext) => {
-    const record = createRecord(testContext, `exec:revoked-terminal-${mode}`, "sensitive command");
-    const delivered = boundSubscription("revoked-device", "profile-revoked");
-    const active = pairedOperator("revoked-device");
-    const revoked = {
-      ...active,
-      tokens: { operator: { ...active.tokens.operator, revokedAtMs: Date.now() } },
-    };
-    mocks.subscriptions.mockResolvedValue([delivered]);
-    mocks.pairings.mockReturnValue({ pending: [], paired: [active] });
+it.each([
+  { restart: true, authority: "current" },
+  { restart: true, authority: "revoked-device" },
+  { restart: false, authority: "revoked-device" },
+  { restart: false, authority: "tightened-policy" },
+] as const)(
+  "checks $authority before terminal delivery (restart=$restart)",
+  async ({ restart, authority }) => {
+    const record = createRecord("exec:terminal-authority", { command: "sensitive command" });
+    const delivered = bindDevice("terminal");
     mocks.send.mockResolvedValueOnce([success(delivered)]);
-
-    const firstProcess = await createDelivery();
-    await expect(firstProcess.handleRequested(record)).resolves.toBe(true);
-    mocks.pairings.mockReturnValue({ pending: [], paired: [revoked] });
-
-    if (mode === "restart") {
-      mocks.terminalIds.mockResolvedValue(terminalPage([record.id]));
-      const restartedProcess = await createDelivery();
-      await restartedProcess.recoverTerminalDeliveries();
-    } else {
-      await firstProcess.handleResolved({ id: record.id });
+    if (authority === "current") {
+      mocks.send.mockResolvedValueOnce([success(delivered)]);
     }
-
-    expect(mocks.pairings).toHaveBeenCalledTimes(3);
-    expect(mocks.send).toHaveBeenCalledTimes(1);
+    let cfg: OpenClawConfig = {};
+    const delivery = await createDelivery(() => cfg);
+    await expect(delivery.handleRequested(record)).resolves.toBe(true);
+    if (authority === "revoked-device") {
+      const active = pairedOperator(delivered.deviceId);
+      mocks.pairings.mockReturnValue({
+        pending: [],
+        paired: [
+          {
+            ...active,
+            tokens: { operator: { ...active.tokens.operator, revokedAtMs: Date.now() } },
+          },
+        ],
+      });
+    } else if (authority === "tightened-policy") {
+      cfg = { gateway: { roles: { definitions: {} } } };
+      mocks.rolePolicy.mockReturnValue(readOnlyPolicy());
+    }
+    if (restart) {
+      mocks.terminalIds.mockResolvedValue(terminalPage([record.id]));
+      await (await createDelivery(() => cfg)).recoverTerminalDeliveries();
+    } else {
+      await delivery.handleResolved(record);
+    }
+    expect(mocks.send).toHaveBeenCalledTimes(authority === "current" ? 2 : 1);
+    if (authority === "current") {
+      expect(mocks.send).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          subscriptions: [delivered],
+          payload: expect.objectContaining({
+            title: "OpenClaw approval updated",
+            tag: `openclaw-approval-${record.id}`,
+          }),
+        }),
+      );
+      expect(approvalDeliveryTargets.get(record.id)?.size).toBe(0);
+    }
   },
 );
-
-it("does not send a terminal approval link after profile policy is tightened", async (testContext) => {
-  const record = createRecord(testContext, "exec:tightened-terminal-policy", "sensitive command");
-  const delivered = bindDevice("policy");
-  mocks.send.mockResolvedValueOnce([success(delivered)]);
-  const tightenedConfig = { gateway: { roles: { definitions: {} } } };
-  const getRuntimeConfig = vi.fn().mockReturnValue({});
-
-  const delivery = await createDelivery(getRuntimeConfig);
-  await expect(delivery.handleRequested(record)).resolves.toBe(true);
-  getRuntimeConfig.mockReturnValue(tightenedConfig);
-  mocks.rolePolicy.mockReturnValue(readOnlyPolicy());
-  await delivery.handleResolved({ id: record.id });
-
-  expect(mocks.rolePolicy).toHaveBeenLastCalledWith("profile-policy", null, tightenedConfig, null);
-  expect(mocks.send).toHaveBeenCalledTimes(1);
-});

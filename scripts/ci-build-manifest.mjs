@@ -279,6 +279,10 @@ const runNodeFastOnly =
   !toolingOwnerChange &&
   parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE_FAST_ONLY);
 const runNodeFull = runNode && !runNodeFastOnly;
+const runBuiltSourceVerifiers =
+  runNodeFull &&
+  !frozenTarget &&
+  changedPaths?.includes("scripts/test-built-source-verifiers.mts") === true;
 // release-fast-lane: label-admitted narrow gate for release tooling PRs.
 // Canonical PR CI only; declined runs keep every ordinary decision.
 const releaseFastLaneLabel = parseCiEnvFlag(process.env.OPENCLAW_CI_RELEASE_FAST_LANE_LABEL);
@@ -455,11 +459,11 @@ const includeReleaseOnlyUiTests =
     !isCanonicalRepository ||
     compatibilityTarget ||
     changedPaths === null);
-// Ordinary CI shares eight 16-class browser jobs; full inventories retain
-// twelve. Private source-server projects keep their own one-worker limit.
+// Match four observed CPUs per 16-class job while retaining 24 worker slots.
+// Private source-server projects remain serial.
 const compactUiE2e = supportsUiE2eProjects && !includeReleaseOnlyUiTests;
 let uiE2eJobCount = compactUiE2e
-  ? 9
+  ? 7
   : supportsUiE2eProjects
     ? 13
     : usesHostedRunnerProfile
@@ -834,7 +838,7 @@ if (runtimePullRequest && runNodeFull) {
     selectedTestTargets,
     // Changed compiler plans validate every consuming graph, with full fallback on ambiguity.
     dedicatedCoreTypeChecks: runNodeFull,
-    dedicatedBuildArtifacts: false,
+    dedicatedBuildArtifacts: runBuiltSourceVerifiers,
     dedicatedNativeChecks: { macos: runMacos, ios: runIosBuild, android: runAndroid },
     includeReleaseOnlyToolingShards: false,
     includeReleaseOnlyRuntimeTests,
@@ -1085,6 +1089,7 @@ const runPostgresConformance =
             postgresConformancePaths.some((pattern) => matchesGlob(file, pattern)),
         ))));
 const runBuildArtifacts =
+  runBuiltSourceVerifiers ||
   publishedDriverUpdate ||
   (runMacosSwift && existsSync("apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift")) ||
   (runNodeFull &&
@@ -1095,6 +1100,17 @@ const runBuildArtifacts =
       runDiscordComponentProof ||
       runGatewayWatch ||
       selectedTuiPty));
+// Reuse only an already-selected public build; frozen and standalone browser plans
+// keep their local preparation without adding a serial build dependency.
+const reuseBrowserExtensionBuild =
+  runBrowserExtensionE2e && runBuildArtifacts && !frozenTarget && !compatibilityTarget;
+// Keep dispatch/frozen locale jobs separate for release diagnostics and historical tooling.
+const reuseControlUiI18nSetup =
+  runControlUiI18n &&
+  runBuildArtifacts &&
+  ["pull_request", "push", "schedule"].includes(workflowEventName) &&
+  !frozenTarget &&
+  !compatibilityTarget;
 const runControlUiPerformance =
   !releaseFastLane &&
   (runNodeFull || runUiTests) &&
@@ -1614,6 +1630,7 @@ const manifest = {
   run_skills_python: runSkillsPython,
   run_windows: runWindows,
   run_build_artifacts: runBuildArtifacts,
+  run_built_source_verifiers: runBuiltSourceVerifiers,
   run_proof_tier: runProofTier,
   run_browser_native_host: runBrowserNativeHost,
   run_doctor_plugin_index: runDoctorPluginIndex,
@@ -1701,6 +1718,7 @@ const manifest = {
   run_docs_content: !(ordinaryPullRequest && docsOnly && rootProseOnly),
   run_format_check: runFormatCheck,
   run_control_ui_i18n: runControlUiI18n,
+  reuse_control_ui_i18n_setup: reuseControlUiI18nSetup,
   run_ui_tests: runUiTests,
   run_ui_webkit: runUiWebkit,
   ui_test_runtime_policy: uiTestRuntimePolicy,
@@ -1723,7 +1741,8 @@ const manifest = {
     ),
   ),
   run_control_ui_performance: runControlUiPerformance,
-  run_ui_e2e: runUiE2e,
+  run_ui_e2e: runControlUiE2e || (runBrowserExtensionE2e && !reuseBrowserExtensionBuild),
+  reuse_browser_extension_build: reuseBrowserExtensionBuild,
   run_ui_real_gateway: runUiRealGateway,
   ui_e2e_matrix: createMatrix(
     Array.from({ length: uiE2eJobCount }, (_, index) => {
@@ -1733,10 +1752,12 @@ const manifest = {
         shard_count: uiE2eJobCount,
         task: shard === uiE2eJobCount ? "browser-extension" : "control-ui",
         vitest_shard_count: uiE2eJobCount - 1,
-        vitest_max_workers: compactUiE2e ? 3 : 2,
+        vitest_max_workers: compactUiE2e ? 4 : 2,
       };
     }).filter((row) =>
-      row.task === "browser-extension" ? runBrowserExtensionE2e : runControlUiE2e,
+      row.task === "browser-extension"
+        ? runBrowserExtensionE2e && !reuseBrowserExtensionBuild
+        : runControlUiE2e,
     ),
   ),
   run_native_i18n: runNativeI18n,
@@ -1871,7 +1892,7 @@ if (hybridHostedEligible) {
     "control-ui-performance": count(manifest.run_control_ui_performance),
     "published-driver-update": count(manifest.run_published_driver_update),
     "native-i18n": count(manifest.run_native_i18n),
-    "control-ui-i18n": count(manifest.run_control_ui_i18n),
+    "control-ui-i18n": count(manifest.run_control_ui_i18n && !manifest.reuse_control_ui_i18n_setup),
     "checks-baseline-ratchets": count(hostedRatchets && manifest.run_baseline_ratchets),
     "checks-fast-core": count(
       manifest.run_checks_fast_core,

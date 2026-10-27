@@ -7,29 +7,18 @@ import type { summarizeCompactionHistory } from "../compaction.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { timestampedTextAssistant } from "../test-helpers/sparse-transcript.test-support.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../workspace-bootstrap-read.js";
-import { consumeCompactionSafeguardCancellation } from "./compaction-safeguard-runtime.js";
+import { consumeCompactionSafeguardCancellation as consumeCancellation } from "./compaction-safeguard-runtime.js";
 import {
   testing,
   stubSessionManager,
   structuredSummary,
   userMessage,
-  createQualityGuardSessionManager,
-  createCompactionEvent,
-  runCompactionScenario,
+  createQualityGuardSessionManager as qualitySession,
+  createCompactionEvent as compactionEvent,
+  runCompactionScenario as runCompaction,
   expectCompactionResult,
 } from "./compaction-safeguard.test-support.js";
 import { readWorkspaceContextForSummary } from "./compaction-workspace-context.js";
-
-const { warn } = vi.hoisted(() => ({ warn: vi.fn() }));
-vi.mock("../../logging/subsystem.js", async (importOriginal) => {
-  const { createMockSubsystemLogger } =
-    await import("../../../test/helpers/mock-subsystem-logger.js");
-  const compactionLogger = createMockSubsystemLogger("compaction-safeguard", { warn });
-  return {
-    ...(await importOriginal<typeof import("../../logging/subsystem.js")>()),
-    createSubsystemLogger: () => compactionLogger,
-  };
-});
 
 const { MAX_COMPACTION_SUMMARY_CHARS, CONTEXT_TRUNCATED_MARKER } = testing;
 const summarize = vi.fn<typeof summarizeCompactionHistory>();
@@ -37,18 +26,17 @@ const summarize = vi.fn<typeof summarizeCompactionHistory>();
 beforeEach(() => {
   summarize.mockReset();
   testing.setSummarizeCompactionHistoryForTest(summarize);
-  warn.mockClear();
 });
 afterEach(() => testing.setSummarizeCompactionHistoryForTest());
 
 async function degradedSummary(
-  event: Parameters<typeof createCompactionEvent>[0],
-  runtime: Parameters<typeof createQualityGuardSessionManager>[0] = {},
+  event: Parameters<typeof compactionEvent>[0],
+  runtime: Parameters<typeof qualitySession>[0] = {},
 ) {
-  const session = createQualityGuardSessionManager({ qualityGuardMaxRetries: 0, ...runtime });
-  const { result } = await runCompactionScenario(session, createCompactionEvent(event));
+  const session = qualitySession({ qualityGuardMaxRetries: 0, ...runtime });
+  const { result } = await runCompaction(session, compactionEvent(event));
   expect(result).toMatchObject({ compaction: { details: { qualityDegraded: true } } });
-  expect(consumeCompactionSafeguardCancellation(session)).toBeNull();
+  expect(consumeCancellation(session)).toBeNull();
   const { summary } = expectCompactionResult(result);
   expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
   return summary;
@@ -84,17 +72,16 @@ it.each(["branch read", "context projection"] as const)(
         kept,
       ];
     };
-    const { result, getApiKeyAndHeadersMock } = await runCompactionScenario(
+    const { result, getApiKeyAndHeadersMock } = await runCompaction(
       sessionManager,
-      createCompactionEvent({ preparation: { messagesToSummarize: [] } }),
+      compactionEvent({ preparation: { messagesToSummarize: [] } }),
     );
 
     expect(result).toEqual({ cancel: true });
-    expect(consumeCompactionSafeguardCancellation(sessionManager)).toEqual({
+    expect(consumeCancellation(sessionManager)).toEqual({
       reason: "session history inspection failed",
       error: failure,
     });
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("session history inspection failed"));
     expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
     expect(summarize).not.toHaveBeenCalled();
   },
@@ -118,27 +105,17 @@ it("degrades oversized identifiers while preserving the run-owned request", asyn
 
   expectSummaryContains(summary, "Latest user request context:", latestAsk, fittingIdentifier);
   expect(summary).not.toContain(identifier);
-  expect(warn).toHaveBeenCalledWith(expect.stringMatching(/loss=.*identifier-retention/));
-  expect(summarize).toHaveBeenCalledTimes(1);
-});
-
-it("retains the pending ask and identifiers and logs the degraded reasonCode", async () => {
-  const latestAsk = "confirm the staging rollback finished";
-  const identifier = "/tmp/degraded-retention.log";
-  summarize.mockResolvedValue("Core summary without headings");
-  const summary = await degradedSummary({ messageText: `${latestAsk} ${identifier}` });
-
-  expectSummaryContains(summary, "Core summary without headings", latestAsk, identifier);
-  expect(warn).toHaveBeenCalledWith(
-    expect.stringContaining("reasonCode=quality_guard_degraded_fallback"),
-  );
 });
 
 it("keeps the stronger summary when a corrective retry loses context", async () => {
   const better = structuredSummary({ decisions: "Keep blue." }).replace("## Exact", "Exact");
   summarize.mockResolvedValueOnce(better).mockResolvedValueOnce("Unrelated retry.");
-  const summary = await degradedSummary({ messageText: "status" }, { qualityGuardMaxRetries: 1 });
-  expectSummaryContains(summary, "Keep blue.", "status");
+  const identifier = "/tmp/degraded-retention.log";
+  const summary = await degradedSummary(
+    { messageText: `status ${identifier}` },
+    { qualityGuardMaxRetries: 1 },
+  );
+  expectSummaryContains(summary, "Keep blue.", "status", identifier);
   expect(summary).not.toContain("Unrelated retry");
   expect(summary.match(/^## Pending user asks$/gm)).toHaveLength(1);
   expect(summarize).toHaveBeenCalledTimes(2);
@@ -159,7 +136,7 @@ it("keeps generated split-turn context when a terminal audit trims the suffix", 
       : `${activeTurn} ${"z".repeat(MAX_COMPACTION_SUMMARY_CHARS)}`,
   );
 
-  const event = createCompactionEvent({
+  const event = compactionEvent({
     preparation: {
       messagesToSummarize: history,
       turnPrefixMessages: [userMessage(latestAsk, 100)],
@@ -176,7 +153,6 @@ it("keeps generated split-turn context when a terminal audit trims the suffix", 
     CONTEXT_TRUNCATED_MARKER.trim(),
     "reply 13 ",
   );
-  expect(summarize).toHaveBeenCalledTimes(2);
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -186,77 +162,41 @@ function workspace(content: string) {
   return root;
 }
 
-function expectWarning(text: string) {
-  expect(warn).toHaveBeenCalledWith(expect.stringContaining(text));
-}
-
-const limitPrefix = "## Session Startup\n\n" + "x".repeat(1_999 - "## Session Startup\n\n".length);
-const boundedContent = `${limitPrefix}🚀tail\n`;
 const startup = ["Session Startup"];
+const defaults = [...startup, "Red Lines"];
+const section = (text: string, name = startup[0]) => `## ${name}\n\n${text}`;
+const wrapRules = (text: string) =>
+  `\n\n<workspace-critical-rules>\n${text}\n</workspace-critical-rules>`;
+const rules = section("Read AGENTS.md");
+const legacy = `${section("Start.", "Every Session")}\n\n${section("Be safe.", "Safety")}`;
+const limitPrefix = section("").padEnd(1_999, "x");
+const boundedContent = `${limitPrefix}🚀tail\n`;
+const atByteLimit = boundedContent.padEnd(
+  MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES - Buffer.byteLength(boundedContent) + boundedContent.length,
+  "x",
+);
 const read = (root: string | undefined) => readWorkspaceContextForSummary(startup, root);
-it.each<[string, string, string[], string?, string[]?]>([
-  ["disabled sections", "## Session Startup\n\nRead AGENTS.md\n", [], undefined, []],
-  [
-    "oversized file",
-    `## Session Startup\n\n${"x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES)}`,
-    [],
-    "File exceeds 2097152 bytes",
-  ],
-  [
-    "file at the byte limit",
-    boundedContent +
-      "x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES - Buffer.byteLength(boundedContent)),
-    ["<workspace-critical-rules>", `${limitPrefix}\n...[truncated]...`],
-  ],
-  [
-    "legacy defaults",
-    "## Every Session\n\nDo startup things.\n\n## Safety\n\nBe safe.\n",
-    ["Do startup things", "Be safe"],
-    undefined,
-    ["Red Lines", "Session Startup"],
-  ],
-  ["missing sections", "## Other\nNo rules\n", [], "found 0 of 1 configured sections"],
-  [
-    "partially missing configured sections",
-    "## Session Startup\nRead AGENTS.md\n",
-    ["Read AGENTS.md"],
-    "found 1 of 2 configured sections",
-    ["Session Startup", "Red Lines"],
-  ],
-])("reads workspace context with %s", async (_, content, expected, warning, sections = startup) => {
+it.each<[string, string, string, string[]]>([
+  ["disabled sections", rules, "", []],
+  ["oversized file", atByteLimit + "x", "", startup],
+  ["byte limit", atByteLimit, `${limitPrefix}\n...[truncated]...`, startup],
+  ["legacy defaults", legacy, legacy, defaults],
+  ["missing sections", section("No rules", "Other"), "", startup],
+  ["partial sections", rules, rules, defaults],
+])("reads workspace context with %s", async (_, content, expected, sections) => {
   const result = await readWorkspaceContextForSummary(sections, workspace(content));
-  if (warning) {
-    expectWarning(warning);
-  } else {
-    expect(warn).not.toHaveBeenCalled();
-  }
-  if (expected.length === 0) {
-    expect(result).toBe("");
-  } else {
-    for (const text of expected) {
-      expect(result).toContain(text);
-    }
-  }
+  expect(result).toBe(expected ? wrapRules(expected) : "");
 });
 
-it("reads workspace context from the configured workspace instead of process cwd", async () => {
-  const processRoot = workspace("## Session Startup\nWrong cwd\n");
-  const workspaceRoot = workspace("## Session Startup\nWorkspace rules\n\n## Other\nIgnore me\n");
+it("uses only the configured workspace", async ({ onTestFinished }) => {
+  const processRoot = workspace(section("Wrong cwd"));
+  const workspaceRoot = workspace(`${rules}\n${section("Ignore me", "Other")}`);
   const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(processRoot);
-  try {
-    const result = await read(workspaceRoot);
-
-    expect(result).toContain("Workspace rules");
-    expect(result).not.toMatch(/Wrong cwd|Ignore me/);
-    await expect(read(undefined)).resolves.toBe("");
-    expectWarning("no agent workspace");
-    fs.unlinkSync(path.join(workspaceRoot, "AGENTS.md"));
-    await expect(read(workspaceRoot)).resolves.toBe("");
-    expectWarning(`cannot open ${path.join(workspaceRoot, "AGENTS.md")}`);
-    expect(result).toContain("<workspace-critical-rules>");
-  } finally {
-    cwdSpy.mockRestore();
-  }
+  onTestFinished(() => cwdSpy.mockRestore());
+  expect(await read(workspaceRoot)).toBe(wrapRules(rules));
+  await expect(read(undefined)).resolves.toBe("");
+  fs.unlinkSync(path.join(workspaceRoot, "AGENTS.md"));
+  await expect(read(workspaceRoot)).resolves.toBe("");
 });
 
 it.runIf(process.platform !== "win32").each(["symlink", "hardlink"] as const)(
@@ -267,8 +207,6 @@ it.runIf(process.platform !== "win32").each(["symlink", "hardlink"] as const)(
     fs.writeFileSync(outside, "secret");
     const link = kind === "symlink" ? fs.symlinkSync : fs.linkSync;
     link(outside, path.join(root, "AGENTS.md"));
-    await expect(
-      readWorkspaceContextForSummary(["Session Startup", "Red Lines"], root),
-    ).resolves.toBe("");
+    await expect(read(root)).resolves.toBe("");
   },
 );

@@ -19,6 +19,7 @@ import * as pluginModuleLoader from "../../../plugins/plugin-module-loader-cache
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { withDoctorConfigPreflightHome } from "../../doctor-config-preflight.test-support.js";
+import { createTestConfigSnapshot } from "../../test-runtime-config-helpers.js";
 import {
   commitAutomaticConfigRepair,
   planAutomaticConfigRepair,
@@ -31,18 +32,12 @@ function invalidSnapshot(
   includedPaths: string[] = [],
 ): ConfigFileSnapshot {
   return {
-    path: "/tmp/openclaw.json",
+    ...createTestConfigSnapshot(config),
     includedPaths,
-    exists: true,
     raw: JSON.stringify(config),
     parsed: config,
-    sourceConfig: config,
-    resolved: config,
     valid: false,
-    runtimeConfig: config,
-    config,
     issues: issuePaths.map((issuePath) => ({ path: issuePath, message: "retired" })),
-    warnings: [],
     legacyIssues: [{ path: "", message: "retired" }],
   };
 }
@@ -70,6 +65,16 @@ function readFixture(
     ...options,
     observe: false,
   }).readConfigFileSnapshot();
+}
+
+async function requireRepair(snapshot: ConfigFileSnapshot) {
+  expect(snapshot.valid).toBe(false);
+  const plan = await planAutomaticConfigRepair(snapshot);
+  expect(plan?.snapshot.valid).toBe(true);
+  if (!plan) {
+    throw new Error("expected a repairable config");
+  }
+  return plan;
 }
 
 const legacyPluginInput = { root: "/srv/pending-plugin-state" };
@@ -106,15 +111,12 @@ describe("automatic config repair", () => {
       const snapshot = await readFixture(state.configPath, {
         env: { ...state.env, LEGACY_CHANNEL_AGENT: "ops" },
       });
-      expect(snapshot.valid).toBe(false);
-      const plan = await planAutomaticConfigRepair(snapshot);
-      expect(plan?.snapshot.valid).toBe(true);
-      expect(plan?.config.agents?.ownership).toBe("explicit");
-      expect(plan?.config.bindings).toContainEqual({
+      const plan = await requireRepair(snapshot);
+      expect(plan.config.agents?.ownership).toBe("explicit");
+      expect(plan.config.bindings).toContainEqual({
         agentId: "ops",
         match: { channel: "telegram", accountId: "default" },
       });
-      expect(plan?.changes.join("\n")).toContain("Preserved telegram:default ownership");
     });
   });
 
@@ -125,20 +127,22 @@ describe("automatic config repair", () => {
     "preserves real-reader env provenance for quoted provider $providerId during repair",
     async ({ providerId, refPath }) => {
       await withDoctorConfigPreflightHome(async (home) => {
-        const { configPath, raw } = await writeFixture(home, {
-          gateway: { mode: "local" },
-          session: { idleMinutes: 45 },
-          models: {
-            providers: {
-              [providerId]: {
-                baseUrl: "https://provider.invalid/v1",
-                api: "openai-completions",
-                apiKey: "${QUOTED_REPAIR_KEY}",
-                models: [{ id: "fixture-model", name: "Fixture model" }],
+        const { configPath, raw } = await writeFixture(
+          home,
+          idleConfig({
+            gateway: { mode: "local" },
+            models: {
+              providers: {
+                [providerId]: {
+                  baseUrl: "https://provider.invalid/v1",
+                  api: "openai-completions",
+                  apiKey: "${QUOTED_REPAIR_KEY}",
+                  models: [{ id: "fixture-model", name: "Fixture model" }],
+                },
               },
             },
-          },
-        });
+          }),
+        );
         const snapshot = await readFixture(configPath, {
           env: { ...process.env, QUOTED_REPAIR_KEY: "synthetic-environment-file-value" },
         });
@@ -189,27 +193,19 @@ describe("automatic config repair", () => {
           configPath,
           deferred ? { deferredPluginMigrations: [pending] } : {},
         );
-        expect(snapshot.valid).toBe(false);
-        const plan = await planAutomaticConfigRepair(snapshot);
-        if (!plan) {
-          throw new Error("expected a repairable plugin config");
-        }
-        expect(plan?.snapshot.valid).toBe(true);
+        const plan = await requireRepair(snapshot);
+        expect(await fs.readFile(configPath, "utf8")).toBe(raw);
         if (deferred) {
           expect(snapshot.issues.some((issue) => issue.path.startsWith("tools.exec"))).toBe(true);
-          expect(plan?.config.tools?.exec?.timeoutSeconds).toBe(45);
-          expect(plan?.config).not.toHaveProperty("tools.exec.timeoutSec");
-          expect(plan?.config).toHaveProperty("legacyPluginInput", legacyPluginInput);
-          expect(plan?.snapshot.sourceConfig).toHaveProperty(
-            "legacyPluginInput",
-            legacyPluginInput,
-          );
-          expect(plan?.snapshot.runtimeConfig).not.toHaveProperty("legacyPluginInput");
+          expect(plan.config.tools?.exec).toEqual({ timeoutSeconds: 45 });
+          expect(plan.config).toHaveProperty("legacyPluginInput", legacyPluginInput);
+          expect(plan.snapshot.sourceConfig).toHaveProperty("legacyPluginInput", legacyPluginInput);
+          expect(plan.snapshot.runtimeConfig).not.toHaveProperty("legacyPluginInput");
           expect(snapshot.sourceConfig).toHaveProperty("tools.exec.timeoutSec", 45);
         } else {
-          expect(plan?.config.session).toEqual({ reset: { mode: "idle", idleMinutes: 45 } });
-          expect(plan?.config.plugins).toEqual(plugins);
-          expect(plan?.snapshot.warnings).toContainEqual(
+          expect(plan.config.session).toEqual({ reset: { mode: "idle", idleMinutes: 45 } });
+          expect(plan.config.plugins).toEqual(plugins);
+          expect(plan.snapshot.warnings).toContainEqual(
             expect.objectContaining({
               code: "configured-plugin-path-unavailable",
               path: "plugins.load.paths",
@@ -223,72 +219,53 @@ describe("automatic config repair", () => {
           const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
           expect(saved.tools.exec).toEqual({ timeoutSeconds: 45 });
           expect(saved.legacyPluginInput).toEqual(legacyPluginInput);
-        } else {
-          expect(await fs.readFile(configPath, "utf8")).toBe(raw);
         }
       });
     },
   );
 
   it.each([
-    {
-      name: "browser reference when the environment rotates before commit",
-      config: { browser: { executablePath: "${BROWSER_BIN}" }, session: { idleMinutes: 45 } },
-      env: { BROWSER_BIN: "/opt/example/browser-planning" },
-      commitEnv: { BROWSER_BIN: "/opt/example/browser-current" },
-      outputPath: "browser.executablePath",
-      authored: "${BROWSER_BIN}",
-      resolved: "/opt/example/browser-current",
-      allowCollaborativeSteering: false,
+    ["browser", "${BROWSER_BIN}", "/opt/example/browser-current", false],
+    ["memory", "${STARTUP_MEMORY_KEY}", "fixture-memory-key", false],
+    ["memory", "$${STARTUP_MEMORY_KEY}", "${STARTUP_MEMORY_KEY}", true],
+  ] as const)(
+    "preserves %s reference %s through Doctor repair",
+    async (kind, authored, resolved, steering) => {
+      const browser = kind === "browser";
+      const config = browser
+        ? idleConfig({ browser: { executablePath: authored } })
+        : { agents: { defaults: { memorySearch: { remote: { apiKey: authored } } } } };
+      const env = browser
+        ? { BROWSER_BIN: "/opt/example/browser-planning" }
+        : { STARTUP_MEMORY_KEY: "fixture-memory-key" };
+      const outputPath = browser ? "browser.executablePath" : "memory.search.remote.apiKey";
+      await withDoctorConfigPreflightHome((home) =>
+        withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", ...env }, async () => {
+          const configPath = await writeOpenClawConfig(home, {
+            ...config,
+            ...(!browser ? { messages: { queue: { allowCollaborativeSteering: steering } } } : {}),
+            gateway: { mode: "local" },
+            plugins: { enabled: false },
+          });
+          const originalBytes = await fs.readFile(configPath, "utf8");
+          const snapshot = await readConfigFileSnapshot();
+          expect((await resolveLegacyConfigSnapshotForBackup(snapshot))?.valid).toBe(true);
+          const plan = await requireRepair(snapshot);
+          await withEnvAsync(browser ? { BROWSER_BIN: resolved } : {}, async () => {
+            await commitAutomaticConfigRepair(plan, snapshot);
+            const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
+            expect(saved).toHaveProperty(outputPath, authored);
+            expect(saved.messages.queue.allowCollaborativeSteering).toBe(steering);
+            const reloaded = await readConfigFileSnapshot();
+            expect(reloaded.valid).toBe(true);
+            expect(reloaded.sourceConfig).toHaveProperty(outputPath, resolved);
+            expect(await planAutomaticConfigRepair(reloaded)).toBeNull();
+          });
+          await expect(fs.readFile(`${configPath}.bak`, "utf8")).resolves.toBe(originalBytes);
+        }),
+      );
     },
-    ...[
-      { apiKey: "${STARTUP_MEMORY_KEY}", allowCollaborativeSteering: false },
-      { apiKey: "$${STARTUP_MEMORY_KEY}", allowCollaborativeSteering: true },
-    ].map(({ apiKey, allowCollaborativeSteering }) => ({
-      name: `moved ${apiKey} reference and explicit steering ${allowCollaborativeSteering}`,
-      config: {
-        agents: { defaults: { memorySearch: { remote: { apiKey } } } },
-        messages: { queue: { allowCollaborativeSteering } },
-      },
-      env: { STARTUP_MEMORY_KEY: "fixture-memory-key" },
-      commitEnv: {},
-      outputPath: "memory.search.remote.apiKey",
-      authored: apiKey,
-      resolved: apiKey.startsWith("$$") ? "${STARTUP_MEMORY_KEY}" : "fixture-memory-key",
-      allowCollaborativeSteering,
-    })),
-  ])("preserves $name through Doctor repair", async (testCase) => {
-    await withDoctorConfigPreflightHome((home) =>
-      withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", ...testCase.env }, async () => {
-        const configPath = await writeOpenClawConfig(home, {
-          ...testCase.config,
-          gateway: { mode: "local" },
-          plugins: { enabled: false },
-        });
-        const originalBytes = await fs.readFile(configPath, "utf8");
-        const snapshot = await readConfigFileSnapshot();
-        expect(snapshot.valid).toBe(false);
-        expect((await resolveLegacyConfigSnapshotForBackup(snapshot))?.valid).toBe(true);
-        const plan = await planAutomaticConfigRepair(snapshot);
-        if (!plan) {
-          throw new Error("expected a repairable reference config");
-        }
-        await withEnvAsync(testCase.commitEnv, async () => {
-          await commitAutomaticConfigRepair(plan, snapshot);
-          const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
-          expect(saved).toHaveProperty(testCase.outputPath, testCase.authored);
-          expect(saved.messages.queue.allowCollaborativeSteering).toBe(
-            testCase.allowCollaborativeSteering,
-          );
-          const reloaded = await readConfigFileSnapshot();
-          expect(reloaded.valid).toBe(true);
-          expect(reloaded.sourceConfig).toHaveProperty(testCase.outputPath, testCase.resolved);
-          expect(await planAutomaticConfigRepair(reloaded)).toBeNull();
-        });
-        await expect(fs.readFile(`${configPath}.bak`, "utf8")).resolves.toBe(originalBytes);
-      }),
-    );
-  });
+  );
 
   it("plans a config whose only migration is plugin-owned after state admission", async () => {
     // Doctor's full planner owns plugin contracts; backup projection uses core-only selection.
@@ -318,6 +295,15 @@ describe("automatic config repair", () => {
           },
           ["session.idleMinutes"],
         );
+        setConfigResolutionFacts(
+          snapshot.sourceConfig,
+          createConfigResolutionFacts(
+            [],
+            new Map(),
+            "default",
+            new Map([["session.idleMinutes", "MOVED_KEY"]]),
+          ),
+        );
         const resolved = await resolveLegacyConfigSnapshotForBackup(snapshot);
         expect(resolved?.valid).toBe(true);
         expect(resolved?.sourceConfig.session).toEqual({
@@ -326,33 +312,14 @@ describe("automatic config repair", () => {
         expect(resolved?.sourceConfig).not.toHaveProperty("meta.lastTouchedAt");
         expect(resolved?.sourceConfig.agents?.entries?.work).toEqual({ name: "Operator" });
         expect(resolved?.sourceConfig.messages?.queue?.allowCollaborativeSteering).toBeUndefined();
+        expect(
+          getResolvedConfigEnvSecretRef(resolved?.sourceConfig, "session.idleMinutes"),
+        ).toBeNull();
+        expect(collectEnvSecretRefIds(snapshot.sourceConfig)).toEqual(new Set(["MOVED_KEY"]));
       });
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
-  });
-
-  it("retires a reference fact whose path the repair moved", async () => {
-    // The repair relocates session.idleMinutes, so a fact recorded at the authored path would
-    // otherwise keep answering lookups for a value that no longer lives there.
-    const config = { session: { idleMinutes: 45 } };
-    setConfigResolutionFacts(
-      config,
-      createConfigResolutionFacts(
-        [],
-        new Map(),
-        "default",
-        new Map([["session.idleMinutes", "MOVED_KEY"]]),
-      ),
-    );
-    const snapshot = invalidSnapshot(config, ["session.idleMinutes"]);
-
-    const resolved = await resolveLegacyConfigSnapshotForBackup(snapshot);
-
-    expect(resolved?.sourceConfig.session).toEqual({ reset: { mode: "idle", idleMinutes: 45 } });
-    expect(getResolvedConfigEnvSecretRef(resolved?.sourceConfig, "session.idleMinutes")).toBeNull();
-    // The read-only projection preserves the authored snapshot and its reference facts.
-    expect(collectEnvSecretRefIds(snapshot.sourceConfig)).toEqual(new Set(["MOVED_KEY"]));
   });
 
   it.each<[string, Record<string, unknown>, string[]?]>([

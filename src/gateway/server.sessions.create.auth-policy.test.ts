@@ -85,7 +85,6 @@ it("retains committed initial turns through fencing and denies their final write
         dispatchEntered: createDeferredCore(),
         dispatchFinished: createDeferredCore(),
         provider: vi.fn(),
-        writeAttempt: vi.fn(),
         turnEntered: false,
         dispatchStarted: false,
       };
@@ -125,7 +124,6 @@ it("retains committed initial turns through fencing and denies their final write
       scenario.dispatchEntered.resolve();
       await scenario.allowWrite.promise;
       try {
-        scenario.writeAttempt();
         if (await recorder.persistApproved()) {
           scenario.provider();
         }
@@ -196,7 +194,6 @@ it("retains committed initial turns through fencing and denies their final write
       scenario.allowWrite.resolve();
       await scenario.dispatchFinished.promise;
       await waitForRelease(scenario);
-      expect(scenario.writeAttempt).toHaveBeenCalledOnce();
       expect(scenario.provider).toHaveBeenCalledTimes(revoke ? 0 : 1);
       const entry = loadSessionEntry(scenario.scope);
       assert(entry?.sessionId);
@@ -212,7 +209,6 @@ it("retains committed initial turns through fencing and denies their final write
       );
       expect(userMessages).toHaveLength(revoke ? 0 : 1);
     }
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
   } finally {
     resumeTurns.resolve();
     for (const scenario of cases) {

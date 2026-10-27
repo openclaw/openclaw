@@ -116,7 +116,7 @@ export function DeviceUpdates(props: {
               <SettingsToggleRow
                 title={t("updates.device.automatic")}
                 checked={checked()}
-                disabled={saving()}
+                saving={saving()}
                 description={saving() ? t("common.saving") : undefined}
                 onChange={(value) => void changeAutomatic(value)}
               />

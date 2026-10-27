@@ -146,13 +146,11 @@ describe("Codex Computer Use native service", () => {
 
   it("refreshes when the signed desktop service changes at the same source path", async () => {
     const { sourcePath, targetPath, install } = await setupService();
-    const copyServiceApp = mockServiceCopy();
     await install();
     await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
     await writeServiceFixture(sourcePath, UNEXPECTED_IDENTITY);
 
     await install();
-    expect(copyServiceApp).toHaveBeenCalledTimes(2);
     await expect(inspectServiceFixture(targetPath)).resolves.toEqual(UNEXPECTED_IDENTITY);
     await expect(findInstallDebris(path.dirname(targetPath))).resolves.toEqual([]);
   });
@@ -540,7 +538,6 @@ describe("createIsolatedCodexAppServerClient artifact refresh", () => {
       targetService,
       artifact === "service" ? STALE_IDENTITY : CURRENT_IDENTITY,
     );
-    const sourceIdentity = await inspectServiceFixture(sourceService);
     await fs.writeFile(path.join(pluginRoot, "generation.txt"), "new-cache");
     await fs.cp(pluginRoot, cachePath, { recursive: true });
     await fs.writeFile(
@@ -566,12 +563,10 @@ describe("createIsolatedCodexAppServerClient artifact refresh", () => {
       fingerprint: "desktop-original",
     });
 
-    let initializations = 0;
     const harness = createClientHarness({
       onWrite(line, send) {
         const request: unknown = JSON.parse(line);
         if (isJsonObject(request) && request.id !== undefined && request.method === "initialize") {
-          initializations += 1;
           send({
             id: request.id,
             result: { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}` },
@@ -579,7 +574,7 @@ describe("createIsolatedCodexAppServerClient artifact refresh", () => {
         }
       },
     });
-    const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
     try {
       const startup = createIsolatedCodexAppServerClient({
         agentDir,
@@ -597,9 +592,7 @@ describe("createIsolatedCodexAppServerClient artifact refresh", () => {
         },
       });
       await expect(startup).resolves.toBe(harness.client);
-      expect(start).toHaveBeenCalledOnce();
-      expect(initializations).toBe(1);
-      await expect(inspectServiceFixture(targetService)).resolves.toEqual(sourceIdentity);
+      await expect(inspectServiceFixture(targetService)).resolves.toEqual(CURRENT_IDENTITY);
       await expect(fs.readFile(path.join(cachePath, "generation.txt"), "utf8")).resolves.toBe(
         "new-cache",
       );

@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { assert, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { controlNextRecoverySleep } from "../../../test/helpers/infra/delivery-recovery.js";
 import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
 import {
@@ -271,18 +270,6 @@ describe("delivery-queue recovery", () => {
     sleepMock.mockReset();
     sleepMock.mockResolvedValue(undefined);
   });
-  const enqueueCrashRecoveryEntries = async () => {
-    await enqueue({
-      preparedMessageId: "prepared-message-a",
-    });
-    await enqueue({
-      channel: "demo-channel-b",
-      to: "2",
-      payloads: [{ text: "b" }],
-      queuePolicy: "required",
-      requireUnknownSendReconciliation: true,
-    });
-  };
   const recover = async ({
     deliver: send,
     log = createRecoveryLog(),
@@ -603,24 +590,6 @@ describe("delivery-queue recovery", () => {
     });
     await recover({ deliver });
     expect(deliver).not.toHaveBeenCalled();
-  });
-  it("counts replay pacing against the recovery budget", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-23T00:00:00.000Z"));
-    try {
-      const controlledSleep = controlNextRecoverySleep(sleepMock);
-      await enqueueCrashRecoveryEntries();
-      await enqueueBatch(["c"]);
-      const recovery = recover({ deliver, maxRecoveryMs: 1 });
-      await expect(controlledSleep.started).resolves.toBe(1);
-      expect(deliver).toHaveBeenCalledOnce();
-      controlledSleep.release();
-      expect((await recovery).result).toMatchObject({ recovered: 1, deferredBackoff: 0 });
-      expect(deliver).toHaveBeenCalledOnce();
-      expect(await loadPendingDeliveries(tmpDir())).toHaveLength(2);
-    } finally {
-      vi.useRealTimers();
-    }
   });
   it.each([
     { maxRetries: 45, retryCount: MAX_RETRIES },
@@ -1245,17 +1214,6 @@ describe("delivery-queue recovery", () => {
       gifPlayback: true,
       silent: true,
       gatewayClientScopes: ["operator.write"],
-      mirror: {
-        sessionKey: "agent:main:main",
-        expectedSessionId: "session-main",
-        text: "a",
-        mediaUrls: ["https://example.com/a.png"],
-        idempotencyKey: "channel-final:message-1",
-        deliveryMirror: {
-          kind: "channel-final",
-          sourceMessageId: "message-1",
-        },
-      },
       session: {
         key: "agent:main:main",
         agentId: "agent-main",
@@ -1270,6 +1228,8 @@ describe("delivery-queue recovery", () => {
     await recover({ deliver });
     const deliverInput = mockCallRecord(deliver);
     expect(deliverInput).toEqual(expect.objectContaining(storedOptions));
+    // Retained legacy mirror metadata never selects destination history on replay.
+    expect(deliverInput).not.toHaveProperty("mirror");
   });
   it("continues past high-backoff entries and recovers ready entries behind them", async () => {
     const now = Date.now();

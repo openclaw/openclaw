@@ -8,6 +8,7 @@ import {
 import { createManagedHandoffProcessIdentityReader as processReader } from "./update-managed-service-handoff-process.js";
 import { inspectUpdateRepairDriverAdmission } from "./update-run-activity.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
+import { createUpdateRunRecordFixture } from "./update-run-record.test-support.js";
 
 const readProcessAncestry = vi.hoisted(() =>
   vi.fn<typeof import("@openclaw/proc-safe/identity").readProcessAncestry>(),
@@ -62,28 +63,17 @@ function mockIdentities(updaterStart = originalStart) {
   readProcessIdentity.mockImplementation((pid) => identities.get(pid) ?? null);
 }
 function updateRun(pid: number, start = repairStart, previous?: [number, number]): UpdateRunRecord {
-  return {
-    runId,
+  return createUpdateRunRecordFixture(runId, {
     createdAtMs: originalStart,
     updatedAtMs: repairStart,
-    trigger: "cli",
     phase: "validating",
     status: "running",
-    reason: null,
     origin: {
       driver: driver(pid, start),
       ...(previous ? { previousDrivers: [driver(...previous)] } : {}),
     },
-    target: {},
-    before: {},
-    after: {},
-    steps: [],
-    verification: {},
-    repair: [],
-    confirmedAtMs: null,
     finishedAtMs: null,
-    downtimeMs: null,
-  };
+  });
 }
 
 // Keep unverified fixtures outside identities cached by earlier cases.

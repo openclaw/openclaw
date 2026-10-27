@@ -199,9 +199,11 @@ function createSharedStateWorkerBackend(
   ) => {
     const { receipt, transactionEnvironment, ...options } = transactionOptions;
     const openedDatabase = open();
+    // Waiting for the host must not hold the writer lock. The commit grant still
+    // revalidates authority after the transaction's current-row checks.
+    requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
     return write(
       (database) => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
         const result = operation(database);
         requestSqliteWorkerOperationAdmission({
           stage: "commit",

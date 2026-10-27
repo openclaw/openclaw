@@ -7,6 +7,7 @@ import { notifyBrowserAuthRestored } from "../../../app/browser-http.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
+import { mediaTicketPayload } from "../../../test-helpers/control-ui-attachment-fixtures.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
@@ -196,6 +197,13 @@ function createManagedImagePane(
   );
 }
 
+async function renderAndSettle(...renderers: Array<() => void>) {
+  for (const render of renderers) {
+    render();
+  }
+  await vi.advanceTimersByTimeAsync(0);
+}
+
 function abortableFetch() {
   let signal: AbortSignal | undefined;
   const request = vi.fn(
@@ -218,11 +226,7 @@ function abortableFetch() {
 }
 
 function ticketResponse(mediaTicket: string, expiresInMs = 90_000) {
-  return Response.json({
-    available: true,
-    mediaTicket,
-    mediaTicketExpiresAt: new Date(Date.now() + expiresInMs).toISOString(),
-  });
+  return Response.json(mediaTicketPayload(mediaTicket, expiresInMs));
 }
 
 function createAvailabilityPane(
@@ -278,8 +282,7 @@ describe("chat media resource lifecycle", () => {
       undefined,
       "image/gif",
     );
-    rerender();
-    await vi.advanceTimersByTimeAsync(0);
+    await renderAndSettle(rerender);
     const retry = Array.from(container.querySelectorAll("button")).find((button) =>
       button.textContent?.includes("Retry"),
     );
@@ -303,8 +306,7 @@ describe("chat media resource lifecycle", () => {
     const fetchMock = vi.fn(async () => new Response(null, { status: 503 }));
     vi.stubGlobal("fetch", fetchMock);
     const { container, rerender } = createManagedImagePane(source);
-    rerender();
-    await vi.advanceTimersByTimeAsync(0);
+    await renderAndSettle(rerender);
     expect(container.textContent).toContain("Retry");
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
@@ -339,11 +341,9 @@ describe("chat media resource lifecycle", () => {
       vi.stubGlobal("fetch", fetchMock);
       const options = { sessionKey: "first-session", connectionEpoch: 1, resolveArtifactDownload };
       const { container, rerender } = createImagePane(() => [{ artifactId }], options);
-      rerender();
-      await vi.advanceTimersByTimeAsync(0);
+      await renderAndSettle(rerender);
       options.sessionKey = "second-session";
-      rerender();
-      await vi.advanceTimersByTimeAsync(0);
+      await renderAndSettle(rerender);
       expect(container.querySelector("img")?.getAttribute("src")).toBe(blobUrl);
       oldImage.resolve({ url: "data:image/png;base64,b2xk" });
       await vi.advanceTimersByTimeAsync(0);
@@ -351,8 +351,7 @@ describe("chat media resource lifecycle", () => {
       expect(container.querySelector("img")?.getAttribute("src")).toBe(blobUrl);
 
       options.connectionEpoch = 2;
-      rerender();
-      await vi.advanceTimersByTimeAsync(0);
+      await renderAndSettle(rerender);
       expect(resolveArtifactDownload.mock.calls.map(([params]) => params)).toEqual([
         { sessionKey: "first-session", artifactId, variant: "thumbnail", previewWidth: 480 },
         { sessionKey: "second-session", artifactId, variant: "thumbnail", previewWidth: 480 },
@@ -398,9 +397,7 @@ describe("chat media resource lifecycle", () => {
       });
     const { container: protectedPane, rerender: renderProtected } = pane("protected");
     const { container: openPane, rerender: renderOpen } = pane("unprotected");
-    renderProtected();
-    renderOpen();
-    await vi.advanceTimersByTimeAsync(0);
+    await renderAndSettle(renderProtected, renderOpen);
 
     expect(protectedPane.querySelector("img")).toBeNull();
     expect(
@@ -540,8 +537,7 @@ describe("chat media resource lifecycle", () => {
     expect(container.querySelectorAll(".chat-message-image")).toHaveLength(2);
 
     sources = [firstSource];
-    rerender();
-    await vi.advanceTimersByTimeAsync(0);
+    await renderAndSettle(rerender);
 
     expect(isChatMediaResourceCurrent(firstResource)).toBe(true);
     expect(isChatMediaResourceCurrent(secondResource)).toBe(false);
@@ -567,8 +563,7 @@ describe("chat media resource lifecycle", () => {
       );
     });
 
-    rerender();
-    await vi.advanceTimersByTimeAsync(0);
+    await renderAndSettle(rerender);
     const originalResource = managedImageResource(source);
     expect(originalResource.subscribers.size).toBe(1);
 
@@ -593,14 +588,12 @@ describe("chat media resource lifecycle", () => {
       { url: source, alt: "Managed image" },
     ]);
 
-    rerender();
-    await vi.advanceTimersByTimeAsync(0);
+    await renderAndSettle(rerender);
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     setConnected(false);
     source = managedImageSource();
-    rerender();
-    await vi.advanceTimersByTimeAsync(0);
+    await renderAndSettle(rerender);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
@@ -622,9 +615,7 @@ describe("chat media resource lifecycle", () => {
     vi.stubGlobal("fetch", fetchMock);
     const first = createManagedImagePane(source);
     const second = createManagedImagePane(source);
-    first.rerender();
-    second.rerender();
-    await vi.advanceTimersByTimeAsync(0);
+    await renderAndSettle(first.rerender, second.rerender);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(second.container.querySelector(".chat-message-image")).toBeNull();
@@ -659,9 +650,7 @@ describe("chat media resource lifecycle", () => {
     const first = createAvailabilityPane(source, "split-pane-token");
     const second = createAvailabilityPane(source, "split-pane-token");
 
-    first.rerender();
-    second.rerender();
-    await vi.advanceTimersByTimeAsync(0);
+    await renderAndSettle(first.rerender, second.rerender);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     for (const pane of [first, second]) {
@@ -699,8 +688,7 @@ describe("chat media resource lifecycle", () => {
     expectTicket(second, "second-pane-ticket");
     releaseChatMediaResourceOwner(first.rerender);
     const remounted = createAvailabilityPane(source, "shared-token", "full");
-    remounted.rerender();
-    await vi.advanceTimersByTimeAsync(0);
+    await renderAndSettle(remounted.rerender);
     expectTicket(remounted, "current-policy-ticket");
   });
 
@@ -708,15 +696,13 @@ describe("chat media resource lifecycle", () => {
     const source = `/tmp/openclaw/${crypto.randomUUID()}.png`;
     installTicketFetch(["ticket-before-unmount"], ["ticket-after-remount"]);
     const first = createAvailabilityPane(source, "idle-ticket-token");
-    first.rerender();
-    await vi.advanceTimersByTimeAsync(0);
+    await renderAndSettle(first.rerender);
     expect(first.latest?.status).toBe("available");
     releaseChatMediaResourceOwner(first.rerender);
     await vi.advanceTimersByTimeAsync(90_001);
 
     const remounted = createAvailabilityPane(source, "idle-ticket-token");
-    remounted.rerender();
-    await vi.advanceTimersByTimeAsync(0);
+    await renderAndSettle(remounted.rerender);
     expectTicket(remounted, "ticket-after-remount");
   });
 
@@ -728,14 +714,12 @@ describe("chat media resource lifecycle", () => {
     const source = `/tmp/openclaw/${crypto.randomUUID()}.png`;
     for (let index = 0; index < 64; index++) {
       const pane = createAvailabilityPane(index === 0 ? source : `${source}-${index}`, "original");
-      pane.rerender();
-      await vi.advanceTimersByTimeAsync(0);
+      await renderAndSettle(pane.rerender);
       releaseChatMediaResourceOwner(pane.rerender);
     }
     let authToken = "replacement";
     const pane = createAvailabilityPane(source, () => authToken);
-    pane.rerender();
-    await vi.advanceTimersByTimeAsync(0);
+    await renderAndSettle(pane.rerender);
     authToken = "original";
     pane.rerender();
     await vi.advanceTimersByTimeAsync(60_000);
@@ -760,8 +744,7 @@ describe("chat media resource lifecycle", () => {
 
     const pane = createAvailabilityPane(source, "transient-refresh-token");
 
-    pane.rerender();
-    await vi.advanceTimersByTimeAsync(0);
+    await renderAndSettle(pane.rerender);
     await vi.advanceTimersByTimeAsync(30_000);
     expect(pane.latest?.status).toBe("available");
     await vi.advanceTimersByTimeAsync(5_000);
@@ -791,8 +774,7 @@ describe("chat media resource lifecycle", () => {
 
     const pane = createAvailabilityPane(source, "expired-refresh-token");
 
-    pane.rerender();
-    await vi.advanceTimersByTimeAsync(0);
+    await renderAndSettle(pane.rerender);
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -848,9 +830,7 @@ describe("chat media resource lifecycle", () => {
     const { rerender: rerenderFirst } = createManagedImagePane(source);
     const { rerender: rerenderSecond } = createManagedImagePane(source);
 
-    rerenderFirst();
-    rerenderSecond();
-    await vi.advanceTimersByTimeAsync(0);
+    await renderAndSettle(rerenderFirst, rerenderSecond);
 
     releaseChatMediaResourceOwner(rerenderFirst);
     expect(pending.signal?.aborted).toBe(false);
@@ -880,11 +860,9 @@ describe("chat media resource lifecycle", () => {
     const options = { authToken: "old-token" };
     const { container, rerender } = createManagedImagePane(source, options);
 
-    rerender();
-    await vi.advanceTimersByTimeAsync(0);
+    await renderAndSettle(rerender);
     options.authToken = "new-token";
-    rerender();
-    await vi.advanceTimersByTimeAsync(0);
+    await renderAndSettle(rerender);
 
     expect(previousSignal?.aborted).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(2);

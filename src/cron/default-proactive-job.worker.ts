@@ -8,8 +8,6 @@ import {
   readDefaultProactiveJobReceiptInDatabase,
   recordDefaultProactiveJobInDatabase,
 } from "./proactive-job-receipt.kernel.js";
-import { cronStoreKey } from "./store/key.js";
-import { resolveCronJobsStorePathInDatabase } from "./store/paths.js";
 import { loadCronRows, loadedCronStoreFromRows, upsertCronJobRow } from "./store/row-codec.js";
 import type {
   CronRuntimeMutationContracts,
@@ -24,10 +22,9 @@ export function provisionDefaultProactiveJobInWorker(
   return runOpenClawStateWriteTransaction(
     (writer) => {
       const { db } = writer;
-      const storePath = resolveCronJobsStorePathInDatabase(db, input.storePath, env);
-      const storeKey = cronStoreKey(storePath);
+      const storeKey = input.storeKey;
       const rows = loadCronRows(db, storeKey);
-      const receipt = readDefaultProactiveJobReceiptInDatabase(db, storePath, input.agentId);
+      const receipt = readDefaultProactiveJobReceiptInDatabase(db, storeKey, input.agentId);
       assertAgentDeletionRecoveryHoldPredicate(writer, input.recoveryHoldPredicate);
       let outcome: CronRuntimeMutationContracts["cron.provisionDefaultProactive"]["outcome"];
       if (receipt) {
@@ -51,7 +48,7 @@ export function provisionDefaultProactiveJobInWorker(
         }
         const nextOrder = rows.reduce((maximum, row) => Math.max(maximum, row.sort_order), -1) + 1;
         const job = upsertCronJobRow(db, storeKey, input.planned, nextOrder);
-        recordDefaultProactiveJobInDatabase(db, storePath, input.agentId, job.id, job.createdAtMs);
+        recordDefaultProactiveJobInDatabase(db, storeKey, input.agentId, job.id, job.createdAtMs);
         outcome = { storeKey, created: true, job };
       }
       return { outcome };

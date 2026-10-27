@@ -1,12 +1,17 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import * as base64 from "@openclaw/media-core/base64";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { cancelTrackedResponse } from "../../test/helpers/provider-http.js";
+import { makeStallingStream } from "../infra/http-body.test-support.js";
 import { stubFetchResponse } from "../test-utils/camera-url-test-helpers.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 
 type PublishOutputFileAtomically =
   typeof import("./output-file.runtime.js").publishOutputFileAtomically;
 type FsOpen = typeof import("node:fs/promises").open;
+
+vi.mock("@openclaw/media-core/base64", { spy: true });
 
 const fsMocks = vi.hoisted(() => ({
   actualOpen: undefined as FsOpen | undefined,
@@ -77,22 +82,6 @@ async function expectOutput(dir: string, out: string, content: string | Buffer) 
     expect((await fs.stat(out)).mode & 0o777).toBe(0o640);
   }
   expect(await fs.readdir(dir)).toEqual([path.basename(out)]);
-}
-
-function cancelTrackedResponse(init?: ResponseInit) {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode("ignored"));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
 }
 
 describe("nodes camera helpers", () => {
@@ -226,9 +215,8 @@ describe("nodes camera helpers", () => {
   it("rejects oversized base64 payloads before writing", async () => {
     await withCameraTempDir(async (dir) => {
       const out = path.join(dir, "x.bin");
-      await expect(camera.writeBase64ToFile(out, "aGk=", { maxBytes: 1 })).rejects.toThrow(
-        /exceeds max/i,
-      );
+      vi.mocked(base64.estimateBase64DecodedBytes).mockReturnValueOnce(250 * 1024 * 1024 + 1);
+      await expect(camera.writeBase64ToFile(out, "aGk=")).rejects.toThrow(/exceeds max/i);
       await expect(fs.stat(out)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
@@ -312,16 +300,11 @@ describe("nodes camera helpers", () => {
     "preserves output on URL write failure when cancellation rejects=%s",
     async (cancelFails) => {
       let canceled = false;
-      const stream = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(Buffer.from("partial-camera"));
-        },
-        cancel() {
-          canceled = true;
-          if (cancelFails) {
-            throw new Error("injected cancel failure");
-          }
-        },
+      const stream = makeStallingStream([Buffer.from("partial-camera")], () => {
+        canceled = true;
+        if (cancelFails) {
+          throw new Error("injected cancel failure");
+        }
       });
       stubFetchResponse(new Response(stream, { status: 200 }));
       await withCameraTempDir(async (dir) => {

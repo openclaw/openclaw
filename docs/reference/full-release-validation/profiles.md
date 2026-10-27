@@ -68,6 +68,7 @@ Use `rerun_group` to avoid repeating unrelated release boxes:
 | `plugin-prerelease` | Plugin Prerelease child only.                                                                                                                      |
 | `install-smoke`     | Install Smoke through release checks.                                                                                                              |
 | `cross-os`          | Cross-OS release checks.                                                                                                                           |
+| `windows-node`      | Candidate package with stable/prerelease Windows-node release artifacts and pinned main source.                                                    |
 | `live-e2e`          | Repo/live E2E and Docker release-path validation.                                                                                                  |
 | `package`           | Package Acceptance.                                                                                                                                |
 | `qa-parity`         | QA parity, runtime-pair/restart, and runtime tool coverage.                                                                                        |

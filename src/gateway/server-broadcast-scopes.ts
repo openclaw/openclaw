@@ -27,13 +27,14 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   chat: [SESSION_READ_SCOPE],
   // This keyless, redacted invalidation tells session readers to refresh their own projection.
   "chat.metadata.changed": [SESSION_READ_SCOPE],
-  "board.changed": [READ_SCOPE],
-  "board.command": [READ_SCOPE],
+  "board.changed": [SESSION_READ_SCOPE],
+  "board.command": [SESSION_READ_SCOPE],
   "progressCard.changed": [SESSION_READ_SCOPE],
   "ui.command": [READ_SCOPE],
   "chat.send_timing": [READ_SCOPE],
   "chat.side_result": [SESSION_READ_SCOPE],
   cron: [READ_SCOPE],
+  "cron.inventory.changed": [READ_SCOPE],
   health: [],
   "exec.approval.requested": [APPROVALS_SCOPE],
   "exec.approval.resolved": [APPROVALS_SCOPE],
@@ -175,7 +176,7 @@ export function hasEventScope(
     return false;
   }
   const role = client.connect.role ?? "operator";
-  const scopes = Array.isArray(client.connect.scopes) ? client.connect.scopes : [];
+  const scopes = client.connect.scopes ?? [];
   const required = EVENT_SCOPE_GUARDS[event];
   const pluginScope =
     explicitPluginScope || (!required && event.startsWith("plugin.") ? WRITE_SCOPE : undefined);

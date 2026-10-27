@@ -23,6 +23,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { startGenericEmbeddingServer } from "./embeddings-http.test-helpers.js";
 import { startOpenAiCompatGatewayServer } from "./openai-compatible-http.test-helpers.js";
+import { browserProxyAuth } from "./server.auth.test-helpers.js";
 import {
   installGatewayTestHooks,
   resetTestPluginRegistry,
@@ -459,14 +460,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
       async () => {
         const previousAuth = testState.gatewayAuth;
-        const auth = {
-          mode: "trusted-proxy" as const,
-          trustedProxy: {
-            userHeader: "x-forwarded-user",
-            requiredHeaders: ["x-forwarded-proto"],
-            allowLoopback: true,
-          },
-        };
+        const auth = browserProxyAuth();
         testState.gatewayAuth = auth;
         let server: Awaited<ReturnType<typeof startOpenAiCompatGatewayServer>> | undefined;
         try {
@@ -670,24 +664,20 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       createProvider.mockResolvedValueOnce(makeProvider({ id: "local", model: "local-embed" }));
     }
     // Concurrent provider admission needs distinct connections; each socket owns serial requests.
-    const firstPromise = post(
-      { input: "first" },
-      {
-        connection: "close",
-        ...(modelOverride ? { "x-openclaw-model": "openai/model-a" } : {}),
-      },
-    );
+    const request = (input: string, model: string) =>
+      post(
+        { input },
+        {
+          connection: "close",
+          ...(modelOverride ? { "x-openclaw-model": model } : {}),
+        },
+      );
+    const firstPromise = request("first", "openai/model-a");
     cleanup.requests.push(firstPromise);
     await waitForProviderEntry(cleanup.started, firstPromise);
     expect(closeProvider).toHaveBeenCalledTimes(1);
     const secondEntered = cleanup.watchAdmission();
-    const secondPromise = post(
-      { input: "second" },
-      {
-        connection: "close",
-        ...(modelOverride ? { "x-openclaw-model": "openai/model-b" } : {}),
-      },
-    );
+    const secondPromise = request("second", "openai/model-b");
     cleanup.requests.push(secondPromise);
     await waitForProviderEntry(secondEntered, secondPromise);
     expect(createProvider).toHaveBeenCalledTimes(1);

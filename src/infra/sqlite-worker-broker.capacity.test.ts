@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { linkSync } from "node:fs";
 import { expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
+import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -146,25 +147,21 @@ it.each(["queued", "reused"] as const)("bounds and drains pending %s opens", asy
 it("admits cold shared state while an agent opens, with one shared input budget", async () => {
   const admission = inputAdmission();
   const finishAgent = createDeferredCore();
-  const sharedStarted = createDeferredCore();
-  const finishShared = createDeferredCore();
+  const sharedGate = createEnteredGate();
   const openShared = <T>(bytes: number, run: () => Promise<T>) =>
     admission.open(bytes, run, undefined, undefined, true);
   const agent = admission.open(512, () => finishAgent.promise);
-  const shared = openShared(512, async () => {
-    sharedStarted.resolve();
-    await finishShared.promise;
-  });
+  const shared = openShared(512, sharedGate.wait);
   try {
-    await sharedStarted.promise;
+    await sharedGate.entered;
     await expect(admission.open(1, async () => {})).rejects.toMatchObject({ code: "overloaded" });
-    finishShared.resolve();
+    sharedGate.release();
     await shared;
     expect(admission.retainedBytes).toBe(512);
     await expect(openShared(513, async () => {})).rejects.toMatchObject({ code: "overloaded" });
     await expect(openShared(512, async () => "shared reopened")).resolves.toBe("shared reopened");
   } finally {
-    finishShared.resolve();
+    sharedGate.release();
     finishAgent.resolve();
     await Promise.all([agent, shared]);
   }

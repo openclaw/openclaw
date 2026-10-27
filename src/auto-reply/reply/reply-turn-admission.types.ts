@@ -40,6 +40,8 @@ export type ReplyTurnAdmissionParams = {
   sessionKey: string;
   sessionId: string;
   expectedSessionId?: string;
+  /** Preserve a refused pre-execution admission’s physical owner during source reselection. */
+  expectedDatabaseIncarnation?: string;
   /** Observed predecessors, from oldest to newest. */
   expectedActiveOperations?: readonly ReplyOperation[];
   storePath?: string;

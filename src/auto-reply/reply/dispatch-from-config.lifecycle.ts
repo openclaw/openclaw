@@ -28,11 +28,13 @@ import {
 } from "../command-turn-context.js";
 import { isExplicitCommandTurnContext } from "../command-turn-detection.js";
 import { isActiveRunSafeCommandTurn } from "../commands-registry.js";
+import { waitForReplyDispatcherSettlement } from "../dispatch-dispatcher.js";
 import {
   createAbortAwareDispatcher,
   DispatchReplyOperationAbortedError,
   isDispatchReplyOperationAbortedError,
 } from "./dispatch-from-config.abort.js";
+import { deferLifecycleBlockedDispatchClaim } from "./dispatch-from-config.claim-retry.js";
 import {
   resolveDispatchResetAdmission,
   shouldLetSlackRoutedThreadBypassBusyReplyOperation,
@@ -64,6 +66,7 @@ export function createDispatchReplyOperationCoordinator(
 ) {
   let dispatchReplyOperation: ReplyOperation | undefined;
   let admittedExpectedSessionId: string | undefined;
+  let admittedDatabaseIncarnation: string | undefined;
   let dispatchAbortOperation: ReplyOperation | undefined;
   let preDispatchAbortOperation: ReplyOperation | undefined;
   let preDispatchLifecycleAdmission: SessionEffectRef | undefined;
@@ -115,6 +118,10 @@ export function createDispatchReplyOperationCoordinator(
     await Promise.allSettled(Array.from(dispatchLifecycleWork.delivery));
     await waitForReplyDispatcherIdle(params.dispatcher);
   };
+  const waitForDispatchSettlement = async (): Promise<void> => {
+    await Promise.allSettled(Array.from(dispatchLifecycleWork.delivery));
+    await waitForReplyDispatcherSettlement(params.dispatcher);
+  };
 
   const releasePreDispatchLifecycleAdmission = async (
     afterWorkBarrier?: () => PromiseLike<unknown>,
@@ -162,7 +169,7 @@ export function createDispatchReplyOperationCoordinator(
     removePreDispatchLifecycleAbortListener?.();
     const onAbort = () => {
       void releasePreDispatchLifecycleAdmission(() =>
-        waitForReplyDispatcherIdle(params.dispatcher),
+        waitForReplyDispatcherSettlement(params.dispatcher),
       );
     };
     abortSignal.addEventListener("abort", onAbort, { once: true });
@@ -441,6 +448,7 @@ export function createDispatchReplyOperationCoordinator(
           params.initialDispatchReplyOperation,
         ].filter((operation): operation is ReplyOperation => operation !== undefined),
         storePath: params.operationSessionStoreEntry.storePath,
+        expectedDatabaseIncarnation: admittedDatabaseIncarnation,
         kind: replyTurnKind,
         resetTriggered: dispatchResetTriggered,
         allowRestartTombstoneParentFork,
@@ -463,6 +471,14 @@ export function createDispatchReplyOperationCoordinator(
         }
       }
     } catch (error) {
+      const deferred = await deferLifecycleBlockedDispatchClaim(error, mailboxClaim);
+      if (deferred) {
+        if (input?.abortSignal.aborted || input?.retirementRequested) {
+          return { status: "aborted" };
+        }
+        admittedDatabaseIncarnation ??= deferred.databaseIncarnation;
+        return await ensureDispatchReplyOperation(phase, hasPluginOwnedBinding);
+      }
       if (mailboxClaim) {
         releaseSessionControllerClaim(mailboxClaim);
       }
@@ -656,7 +672,7 @@ export function createDispatchReplyOperationCoordinator(
   };
 
   const completeDispatchReplyOperation = () => {
-    void releasePreDispatchLifecycleAdmission(() => waitForReplyDispatcherIdle(params.dispatcher));
+    void releasePreDispatchLifecycleAdmission(waitForDispatchSettlement);
     const operation = dispatchReplyOperation;
     if (!operation) {
       return;
@@ -665,10 +681,14 @@ export function createDispatchReplyOperationCoordinator(
     const complete = () => {
       if (params.replyOptions?.internalEventExecution) {
         // Source-owned effects retain the admitted operation until delivery settles.
-        const settle = () => operation.complete();
+        const settle = () =>
+          operation.completeWithAfterClearBarrier(
+            waitForReplyDispatcherSettlement(params.dispatcher),
+            timeoutPolicy,
+          );
         void waitForDispatchDelivery().then(settle, settle);
       } else {
-        operation.completeWithAfterClearBarrier(waitForDispatchDelivery(), timeoutPolicy);
+        operation.completeWithAfterClearBarrier(waitForDispatchSettlement(), timeoutPolicy);
       }
     };
     // Abort races the resolver, not its bookkeeping. Retain this exact owner

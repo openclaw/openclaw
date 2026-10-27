@@ -680,4 +680,157 @@ class ChatMessageContentParsingTest {
       parseChatMessageContents(message),
     )
   }
+
+  @Test
+  fun inboundPhotoRequiresCanonicalReferenceAndBecomesLoadable() {
+    val source = "media://inbound/photo---af3c4068.jpg"
+    val pathSource = "media://inbound/path-photo.jpg"
+    val message =
+      Json
+        .parseToJsonElement(
+          """{"content":"See attached.","__openclaw":{"media":[
+        {"url":"$source","kind":"image","contentType":"image/jpeg","fileName":"photo.jpg"},
+        {"path":"$pathSource","kind":"image","contentType":"image/png","fileName":"path-photo.jpg"},
+        {"url":"media://inbound/..","kind":"image","contentType":"image/png"},
+        {"url":"media://inbound/%2e%2e","kind":"image","contentType":"image/png"},
+        {"url":"https://example.com/photo.png","kind":"image","contentType":"image/png"},
+        {"url":"media://inbound/diagram.svg","kind":"image","contentType":"image/svg+xml"}
+      ]}}""",
+        ).jsonObject
+    val parsed = parseChatMessageContents(message)
+    assertEquals(
+      listOf(
+        ChatMessageContent(type = "text", text = "See attached."),
+        ChatMessageContent(type = "image", mimeType = "image/jpeg", fileName = "photo.jpg", url = source),
+        ChatMessageContent(type = "image", mimeType = "image/png", fileName = "path-photo.jpg", url = pathSource),
+      ),
+      parsed,
+    )
+    assertEquals(listOf(source, pathSource), parsed.drop(1).map { it.imageLoadKey() })
+  }
+
+  @Test
+  fun legacyAndCanonicalVoiceFactsDoNotDuplicateTheVoiceRow() {
+    // Fails on 797dc1f: the legacy row won the overlap and dropped the canonical duration and size.
+    val message =
+      Json
+        .parseToJsonElement(
+          """{"role":"user","content":"hi","MediaPaths":["/tmp/voice.m4a"],"MediaTypes":["audio/mp4"],"__openclaw":{"media":[
+            {"url":"media://inbound/voice.m4a","contentType":"audio/mp4","kind":"audio","fileName":"voice.m4a","durationMs":76000,"sizeBytes":4096,"transcribed":true}
+          ]}}""",
+        ).jsonObject
+
+    assertEquals(
+      listOf(
+        ChatMessageContent(type = "text", text = "hi"),
+        ChatMessageContent(type = "audio", mimeType = "audio/mp4", fileName = "voice.m4a", sizeBytes = 4096, durationMs = 76_000, transcribed = true),
+      ),
+      parseChatMessageContents(message),
+    )
+  }
+
+  @Test
+  fun structuredVoiceContentRetainsCanonicalTranscriptionAndMetadata() {
+    val message =
+      Json
+        .parseToJsonElement(
+          """{"role":"user","content":[
+            {"type":"text","text":"📝 \"actual spoken words\""},
+            {"type":"audio","mimeType":"audio/mp4","fileName":"voice.m4a","url":"media://inbound/voice.m4a"}
+          ],"__openclaw":{"media":[
+            {"kind":"audio","contentType":"audio/mp4","fileName":"voice.m4a","durationMs":76000,"sizeBytes":4096,"transcribed":true}
+          ]}}""",
+        ).jsonObject
+
+    assertEquals(
+      listOf(
+        ChatMessageContent(type = "text", text = "📝 \"actual spoken words\""),
+        ChatMessageContent(
+          type = "audio",
+          mimeType = "audio/mp4",
+          fileName = "voice.m4a",
+          url = "media://inbound/voice.m4a",
+          sizeBytes = 4096,
+          durationMs = 76_000,
+          transcribed = true,
+        ),
+      ),
+      parseChatMessageContents(message),
+    )
+  }
+
+  @Test
+  fun legacyOnlyVoiceRowKeepsTranscribedIndexes() {
+    val message =
+      Json
+        .parseToJsonElement(
+          """{"role":"user","content":"hi","MediaPaths":["/tmp/photo.jpg","/tmp/voice.m4a"],"MediaTypes":["image/jpeg","audio/mp4"],"MediaTranscribedIndexes":[1]}""",
+        ).jsonObject
+
+    assertEquals(
+      listOf(
+        ChatMessageContent(type = "text", text = "hi"),
+        ChatMessageContent(type = "audio", mimeType = "audio/mp4", fileName = "voice.m4a", transcribed = true),
+      ),
+      parseChatMessageContents(message),
+    )
+  }
+
+  @Test
+  fun canonicalAudioKindWithoutAMimeTypeKeepsTheVoiceRow() {
+    // Fails on 797dc1f: a bare `kind: "audio"` fact was discarded because contentType was absent.
+    val message =
+      Json
+        .parseToJsonElement(
+          """{"role":"user","content":"hi","__openclaw":{"media":[
+            {"kind":"audio","fileName":"voice.m4a","durationMs":76000},
+            {"kind":"audio","contentType":"image/jpeg","fileName":"not-audio.jpg"}
+          ]}}""",
+        ).jsonObject
+
+    assertEquals(
+      listOf(
+        ChatMessageContent(type = "text", text = "hi"),
+        ChatMessageContent(type = "audio", fileName = "voice.m4a", durationMs = 76_000),
+      ),
+      parseChatMessageContents(message),
+    )
+  }
+
+  @Test
+  fun bareCanonicalAudioFactIsNotDedupedAgainstTheTextPart() {
+    // Fails on 9a45be72: the text part's null MIME/filename matched the bare audio fact and dropped it.
+    val message =
+      Json
+        .parseToJsonElement(
+          """{"role":"user","content":"hi","__openclaw":{"media":[{"kind":"audio","durationMs":76000}]}}""",
+        ).jsonObject
+
+    assertEquals(
+      listOf(
+        ChatMessageContent(type = "text", text = "hi"),
+        ChatMessageContent(type = "audio", durationMs = 76_000),
+      ),
+      parseChatMessageContents(message),
+    )
+  }
+
+  @Test
+  fun historyRefreshKeepsThePhotoAndVoiceNoteAfterTranscription() {
+    val message =
+      Json
+        .parseToJsonElement(
+          """{"role":"user","content":"See attached.\n📝 \"A synthetic voice note.\"","__openclaw":{"media":[
+          {"url":"media://inbound/photo.jpg","contentType":"image/jpeg","kind":"image","fileName":"photo.jpg"},
+          {"url":"media://inbound/voice.m4a","contentType":"audio/mp4","kind":"audio","fileName":"voice.m4a","durationMs":5000,"transcribed":true}
+        ]}}""",
+        ).jsonObject
+
+    val content = parseChatMessageContents(message)
+
+    assertEquals(listOf("text", "image", "audio"), content.map { it.type })
+    assertEquals("media://inbound/photo.jpg", content[1].url)
+    assertEquals("voice.m4a", content[2].fileName)
+    assertEquals(5_000L, content[2].durationMs)
+  }
 }

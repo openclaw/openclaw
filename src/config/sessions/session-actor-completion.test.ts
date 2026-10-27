@@ -15,6 +15,7 @@ import type {
 } from "./session-actor-contract.js";
 import { withActor, type Fixture, type Mutation } from "./session-actor-worker.test-support.js";
 import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { timedMessageEvent } from "./transcript-message.test-support.js";
 
 // mock-isolation: Actor ownership proof must not schedule unrelated background maintenance.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -190,25 +191,19 @@ it("retains stale recap text but skips another session's recap without losing co
           id: f.scope.sessionId,
           timestamp: "2026-01-01T00:00:00Z",
         },
-        {
-          type: "message",
-          id: "recapped-message",
-          parentId: null,
-          timestamp: "2026-01-01T00:00:01Z",
-          message: { role: "user", content: "Summarize this input" },
-        },
+        timedMessageEvent("recapped-message", null, "2026-01-01T00:00:01Z", {
+          role: "user",
+          content: "Summarize this input",
+        }),
       ]);
     });
     const activitySummary = recap(f, "The original input", "recapped-message");
     runSqliteImmediateTransactionSync(f.database.db, () =>
       appendTranscriptEventsInTransaction(f.database, f.scope, [
-        {
-          type: "message",
-          id: "newer-message",
-          parentId: "recapped-message",
-          timestamp: "2026-01-01T00:00:02Z",
-          message: { role: "assistant", content: "New content after the recap started" },
-        },
+        timedMessageEvent("newer-message", "recapped-message", "2026-01-01T00:00:02Z", {
+          role: "assistant",
+          content: "New content after the recap started",
+        }),
       ]),
     );
     const candidates = [

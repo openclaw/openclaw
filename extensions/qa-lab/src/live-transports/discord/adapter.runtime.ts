@@ -21,7 +21,6 @@ import {
 import { createDiscordQaScenarioEnvironment } from "./scenario-environment.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
-type FactoryContext = Parameters<AdapterFactory["create"]>[0];
 type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
 
 function discordSnowflakeForTimestamp(timestampMs: number) {
@@ -30,7 +29,7 @@ function discordSnowflakeForTimestamp(timestampMs: number) {
 }
 
 export async function createDiscordQaTransportAdapter(
-  context: FactoryContext,
+  context: Parameters<AdapterFactory["create"]>[0],
 ): Promise<AdapterDefinition> {
   const options = context.adapterOptions ?? {};
   const lease = await acquireQaCredentialLease({

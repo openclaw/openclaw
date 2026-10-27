@@ -67,12 +67,7 @@ const legacyContract =
 const launcherContract =
   legacyContract + declareWorker("GITHUB_EXEC_LAUNCHER_PATH", '"github-exec-launcher.mjs"');
 const legacyArtifacts = ["worker.mjs", "workspace-rsync-receiver.mjs"];
-const currentArtifacts = [
-  "github-exec-launcher.mjs",
-  "service-child-group-anchor.mjs",
-  "service-child-relay.mjs",
-  ...legacyArtifacts,
-];
+const currentArtifacts = ["github-exec-launcher.mjs", ...legacyArtifacts];
 const currentContract = declareWorker("ARTIFACT_PATHS", JSON.stringify(currentArtifacts));
 const packageManifest = { name: "openclaw", version: "2026.9.1", files: ["dist"] };
 const nodeArgs = (toolingRoot: string) =>
@@ -95,7 +90,6 @@ function createPackedTargetFixture(command: CommandFixture) {
     "dist/run-gateway.js": "const GATEWAY_AUTH_MODES = []; function addGatewayRunCommand() {}",
   };
   writeFiles(packedRoot, packedFiles);
-  mkdirSync(join(root, "scripts/lib"), { recursive: true });
   writeFiles(root, {
     "package.json": packageJson,
     "src/worker/worker-deploy-entry.ts": "export {};\n",
@@ -109,6 +103,18 @@ function writeWorkerArtifacts(packedRoot: string, artifacts: string[]) {
     packedRoot,
     Object.fromEntries(artifacts.map((name) => [`dist/worker/${name}`, "export {};"])),
   );
+}
+
+function runReleaseCheck(
+  command: CommandFixture,
+  root: string,
+  toolingRoot: string,
+  args: string[] = [],
+) {
+  return command.run(process.execPath, [...nodeArgs(toolingRoot), ...args], {
+    cwd: root,
+    env: nodeEnv(toolingRoot),
+  });
 }
 
 describe("release-check", () => {
@@ -181,9 +187,8 @@ describe("release-check", () => {
       });
       const moduleUrl = pathToFileURL(join(toolingRoot, "scripts/release-check.ts")).href;
       const npmInventoryGuard = join(root, "reject-npm-inventory.cjs");
-      writeFileSync(
-        npmInventoryGuard,
-        `const childProcess = require("node:child_process");
+      writeFiles(root, {
+        "reject-npm-inventory.cjs": `const childProcess = require("node:child_process");
 const original = childProcess.execFileSync;
 childProcess.execFileSync = function (...args) {
   if (Array.isArray(args[1]) && args[1].includes("pack") && args[1].includes("--dry-run")) {
@@ -193,27 +198,20 @@ childProcess.execFileSync = function (...args) {
 };
 require("node:module").syncBuiltinESMExports();
 `,
-      );
-      const runtimeArgs = nodeArgs(toolingRoot);
-      const fixtureEnv = nodeEnv(toolingRoot);
+      });
       diagnostics.stage("sparse-import-probe");
-      const probe = await command.run(
-        process.execPath,
-        [
-          ...runtimeArgs,
-          "--input-type=module",
-          "--eval",
-          `import { readFileSync } from "node:fs";\n` +
-            `const { createPackedPluginSdkTypescriptSmokeProject } = await import(${JSON.stringify(moduleUrl)});\n` +
-            `createPackedPluginSdkTypescriptSmokeProject({ consumerDir: "consumer", packageSpec: "file:fixture.tgz" });\n` +
-            `console.log(JSON.stringify({\n` +
-            `  execArgv: process.execArgv,\n` +
-            `  fixture: readFileSync("consumer/src/index.ts", "utf8"),\n` +
-            `  setupConsumer: readFileSync("consumer/src/packed-plugin-sdk-setup-consumer.ts", "utf8")\n` +
-            `}));`,
-        ],
-        { cwd: root, encoding: "utf8", env: fixtureEnv },
-      );
+      const probe = await runReleaseCheck(command, root, toolingRoot, [
+        "--input-type=module",
+        "--eval",
+        `import { readFileSync } from "node:fs";
+const { createPackedPluginSdkTypescriptSmokeProject } = await import(${JSON.stringify(moduleUrl)});
+createPackedPluginSdkTypescriptSmokeProject({ consumerDir: "consumer", packageSpec: "file:fixture.tgz" });
+console.log(JSON.stringify({
+  execArgv: process.execArgv,
+  fixture: readFileSync("consumer/src/index.ts", "utf8"),
+  setupConsumer: readFileSync("consumer/src/packed-plugin-sdk-setup-consumer.ts", "utf8")
+}));`,
+      ]);
       expectExit(probe, 0);
       const { execArgv, ...smokeProject } = JSON.parse(probe.stdout);
       if (!process.versions.bun) {
@@ -232,15 +230,13 @@ require("node:module").syncBuiltinESMExports();
       writeWorkerArtifacts(packedRoot, legacyArtifacts);
       const tarball = join(root, "target.tgz");
       create({ cwd: root, file: tarball, gzip: true, sync: true }, ["package"]);
-      if (!process.versions.bun) {
-        runtimeArgs.unshift("--require", npmInventoryGuard);
-      }
       diagnostics.stage("legacy three-file contract requires the launcher");
-      const result = await command.run(
-        process.execPath,
-        [...runtimeArgs, join(toolingRoot, "scripts/release-check.ts"), "--tarball", tarball],
-        { cwd: root, encoding: "utf8", env: fixtureEnv },
-      );
+      const result = await runReleaseCheck(command, root, toolingRoot, [
+        ...(process.versions.bun ? [] : ["--require", npmInventoryGuard]),
+        join(toolingRoot, "scripts/release-check.ts"),
+        "--tarball",
+        tarball,
+      ]);
       expectExit(result, 1, [workerMissing], [packing]);
     });
   });
@@ -283,14 +279,13 @@ require("node:module").syncBuiltinESMExports();
         "junction",
       );
       writeWorkerArtifacts(root, legacyArtifacts);
-      const args = [...nodeArgs(process.cwd()), resolve("scripts/release-check.ts")];
-      const runReleaseCheck = () =>
-        command.run(process.execPath, args, { cwd: root, env: nodeEnv(process.cwd()) });
-      const unprepared = await runReleaseCheck();
+      const run = () =>
+        runReleaseCheck(command, root, process.cwd(), [resolve("scripts/release-check.ts")]);
+      const unprepared = await run();
       expectExit(unprepared, 1, ["missing prepared Control UI .gz asset"], [packing]);
 
       writeFileSync(join(root, "dist/control-ui/assets/app.js.gz"), "prepared gzip fixture");
-      const result = await runReleaseCheck();
+      const result = await run();
       expectExit(result, 1, [packing, workerMissing], [badLinker]);
       // Live npm updater coverage is not a packaging gate.
       expect({
@@ -307,22 +302,17 @@ require("node:module").syncBuiltinESMExports();
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const cases: Array<[string, string, string[], string?, ("missing" | "present")?]> = [
-        ["legacy two-file contract", legacyContract, legacyArtifacts],
         [
           "current array overrides obsolete paths",
           currentContract + declareWorker("OBSOLETE_PATH", '"../obsolete.mjs"'),
           currentArtifacts,
         ],
-        ["legacy missing launcher", launcherContract, legacyArtifacts, workerMissing],
-        ["legacy launcher", launcherContract, ["github-exec-launcher.mjs", ...legacyArtifacts]],
-        ...["service-child-group-anchor.mjs", "service-child-relay.mjs"].map(
-          (missing): [string, string, string[], string] => [
-            `current array requires ${missing}`,
-            currentContract,
-            currentArtifacts.filter((artifact) => artifact !== missing),
-            `Worker deploy artifact dist/worker/${missing} is missing.`,
-          ],
-        ),
+        [
+          "current array requires every declared artifact",
+          currentContract,
+          currentArtifacts.slice(1),
+          workerMissing,
+        ],
         [
           "locator requires metadata",
           legacyContract,
@@ -364,17 +354,15 @@ require("node:module").syncBuiltinESMExports();
           expect(errors, name).not.toHaveBeenCalled();
         }
       }
-      const invalidPaths: Array<[string, string]> = [
-        ['""', "must be a non-empty path string."],
-        ['"../worker/main.mjs"', "must be a normalized relative path within dist/worker."],
-      ];
       const invalidContracts: Array<[string, string]> = [
-        ...["ENTRY_PATH", "ARTIFACT_PATHS"].flatMap((name) =>
-          invalidPaths.map(([value, error]): [string, string] => [
-            declareWorker(name, name === "ENTRY_PATH" ? value : `["worker.mjs", ${value}]`),
-            `release-check: target worker artifact WORKER_BUNDLE_${name}${name === "ENTRY_PATH" ? "" : "[1]"} ${error}`,
-          ]),
-        ),
+        [
+          declareWorker("ENTRY_PATH", '""'),
+          "release-check: target worker artifact WORKER_BUNDLE_ENTRY_PATH must be a non-empty path string.",
+        ],
+        [
+          declareWorker("ARTIFACT_PATHS", '["../worker/main.mjs"]'),
+          "release-check: target worker artifact WORKER_BUNDLE_ARTIFACT_PATHS[0] must be a normalized relative path within dist/worker.",
+        ],
         ...["undefined", "[]"].map((value): [string, string] => [
           legacyContract + declareWorker("ARTIFACT_PATHS", value),
           "release-check: target WORKER_BUNDLE_ARTIFACT_PATHS must be a non-empty array.",
@@ -430,15 +418,13 @@ require("node:module").syncBuiltinESMExports();
       ["/tmp/openclaw-gateway-client.tgz", "/tmp/openclaw-gateway-protocol.tgz"],
       false,
     );
-    const manifest: {
-      dependencies?: Record<string, string>;
-      private?: boolean;
-    } = JSON.parse(readText(root, "package.json"));
-    expect(manifest).toMatchObject({ private: true });
-    expect(manifest.dependencies).toEqual({
-      "@openclaw/gateway-client": "file:///tmp/openclaw-gateway-client.tgz",
-      "@openclaw/gateway-protocol": "file:///tmp/openclaw-gateway-protocol.tgz",
-      openclaw: "file:///tmp/openclaw.tgz",
+    expect(JSON.parse(readText(root, "package.json"))).toEqual({
+      private: true,
+      dependencies: {
+        "@openclaw/gateway-client": "file:///tmp/openclaw-gateway-client.tgz",
+        "@openclaw/gateway-protocol": "file:///tmp/openclaw-gateway-protocol.tgz",
+        openclaw: "file:///tmp/openclaw.tgz",
+      },
     });
   });
 

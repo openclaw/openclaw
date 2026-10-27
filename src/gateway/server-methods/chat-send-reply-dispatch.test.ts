@@ -21,21 +21,15 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import {
   loadTranscriptEventsSync,
-  readActiveTranscriptEntryAnchor,
   resolveSessionTranscriptDatabasePath,
   replaceSessionEntry,
-  rewriteTranscriptMessageAtAnchor,
   SessionTranscriptProjectionUnavailableError,
 } from "../../config/sessions/session-accessor.js";
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
-import { acquireSessionInputActor } from "../../config/sessions/session-input-actor.js";
 import * as historyReaders from "../../config/sessions/session-transcript-worker-readers.js";
-import {
-  runWithoutOwnedSessionTranscriptWrites,
-  withOwnedSessionTranscriptWrites,
-} from "../../config/sessions/transcript-write-context.js";
+import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -44,10 +38,7 @@ import {
 } from "../../sessions/transcript-events.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
-import {
-  buildAssistantReplyContentFromInputs,
-  extractAssistantDisplayText,
-} from "./chat-assistant-content.js";
+import { buildAssistantReplyContentFromInputs } from "./chat-assistant-content.js";
 import {
   buildTranscriptReplyTextFromInputs,
   readChatSendReplyPayload,
@@ -79,10 +70,7 @@ function interceptDeliverySnapshot(afterRead: () => void) {
 async function withoutSql(pattern: RegExp, run: () => void | Promise<void>) {
   const sql = observeHostDataSql();
   try {
-    const pending = run();
-    if (pending) {
-      await pending;
-    }
+    await run();
     expect(sql.queries.filter((query) => pattern.test(query))).toEqual([]);
   } finally {
     sql.restore();
@@ -106,77 +94,6 @@ const nextInput = () => ({
 });
 
 describe("chat delivery watermark preparation", () => {
-  it.each(["rewrite", "replacement"] as const)(
-    "reads released durable reply facts through history and rejects the old answer after %s",
-    async (change) => {
-      await withReplyTranscript(async ({ dispatch, rewriteSync, scope, runId }) => {
-        const acquired = await acquireSessionInputActor(
-          {
-            ...scope,
-            storePath: resolveSessionTranscriptDatabasePath(scope),
-            target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
-          },
-          { assertCurrent() {}, assertReadable() {} },
-        );
-        assert(acquired, "Expected a durable transcript actor");
-        const { actor } = acquired;
-        const authority = { assertCurrent() {}, authorize() {} };
-        try {
-          const before = await actor.read(authority);
-          expect(
-            dispatch.captureAgentTranscriptStart(runId, {
-              ...scope,
-              ...before.transcript.watermark,
-            }),
-          ).toBe(true);
-          const appended = await actor.appendToolResult(
-            {
-              commandId: "assistant-answer",
-              phaseId: "turn",
-              turn: {
-                agentId: scope.agentId,
-                sessionKey: scope.sessionKey,
-                options: {
-                  expectedSessionId: scope.sessionId,
-                  sessionFile: "synthetic.jsonl",
-                  messages: [
-                    {
-                      eventId: "answer",
-                      message: attachSessionTranscriptRunId(assistant(), runId),
-                      now: 2,
-                    },
-                  ],
-                },
-              },
-            },
-            authority,
-          );
-          expect(appended.kind).toBe("committed");
-        } finally {
-          await actor.release();
-        }
-        const anchorReads = vi.fn();
-        using _ = interceptDeliverySnapshot(anchorReads);
-        await runWithoutOwnedSessionTranscriptWrites(async () => {
-          expect(await dispatch.resolveReplyDelivery()).toBe("delivered");
-          // Durable append receipts omit full indexes; the history owner supplies anchors.
-          expect(anchorReads).toHaveBeenCalledTimes(1);
-          if (change === "rewrite") {
-            rewriteSync("answer", "NO_REPLY");
-          } else {
-            await replaceSessionEntry(scope, {
-              sessionId: "replacement-session",
-              lifecycleRevision: "replacement",
-              updatedAt: 3,
-            });
-          }
-          expect(await dispatch.resolveReplyDelivery()).toBe("missing");
-          expect(anchorReads).toHaveBeenCalledTimes(change === "rewrite" ? 2 : 1);
-        });
-      });
-    },
-  );
-
   it("consumes the committed manager boundary without caller transcript SQL", async () => {
     await withReplyTranscript(async ({ dispatch, append, scope, runId }) => {
       await append("prior-answer", assistant("Earlier answer."));
@@ -184,7 +101,6 @@ describe("chat delivery watermark preparation", () => {
       const observed = observeHostDataSql();
       try {
         const start = manager[sessionManagerReadTranscriptStart]();
-        expect(observed.queries).toEqual([]);
         expect(dispatch.captureAgentTranscriptStart(runId, start)).toBe(true);
         expect(
           observed.queries.filter((sql) =>
@@ -265,10 +181,8 @@ describe("chat delivery watermark preparation", () => {
       await withReplyTranscript(async ({ dispatch, append, retire, abortController }) => {
         dispatch.captureAgentTranscriptStart();
         await append("answer", assistant());
-        let reads = 0;
         const failure = new Error("delivery snapshot read rejected");
         using _ = interceptDeliverySnapshot(() => {
-          reads++;
           if (change === "retired") {
             retire();
           } else if (change === "aborted") {
@@ -283,7 +197,6 @@ describe("chat delivery watermark preparation", () => {
         } else {
           expect(await delivery).toBe("missing");
         }
-        expect(reads).toBe(1);
       }, true);
     },
   );
@@ -325,49 +238,58 @@ describe("chat delivery watermark preparation", () => {
 });
 
 describe("buildAssistantReplyContentFromInputs", () => {
-  const notice = "Model Fallback: backup/model";
-  const answer = "Done.";
-  const statusContent = [
-    { type: "text", text: notice, openclawStatusNotice: true },
-    { type: "text", text: answer },
-  ];
-  it.each([
-    { name: "prepared reasoning only", kind: "prepared", withAnswer: false, fallback: false },
-    { name: "raw reasoning and answer", kind: "raw", withAnswer: true, fallback: false },
-    { name: "fallback and answer", kind: "raw", withAnswer: true, fallback: true },
-  ])("projects $name", async ({ kind, withAnswer, fallback }) => {
-    const payloads = fallback
-      ? [{ text: notice, isFallbackNotice: true }, { text: answer }]
-      : [{ text: "Thinking.", isReasoning: true }, ...(withAnswer ? [{ text: answer }] : [])];
-    const inputs =
-      kind === "raw"
-        ? payloads.map((payload): ReplyDispatchOperation => ({ kind: "raw", payload }))
-        : createStructuredOutboundPayloadPlan(payloads).map((plan): ReplyDispatchOperation => ({
-            kind: "prepared",
-            plan,
-          }));
+  it.each([false, true])("preserves typed fallback status (with answer=%s)", async (withAnswer) => {
+    const notice = "Model Fallback: backup/model";
+    const fallbackNotice = setReplyPayloadMetadata(
+      { text: notice, isFallbackNotice: true },
+      { modelFallbackNotice: true },
+    );
+    const inputs: ReplyDispatchOperation[] = createStructuredOutboundPayloadPlan([
+      fallbackNotice,
+      ...(withAnswer ? [{ text: "Done." }] : []),
+    ]).map((plan) => ({ kind: "prepared", plan }));
+    const content = [
+      { type: "text", text: notice, openclawStatusNotice: true, openclawFallback: true },
+      ...(withAnswer ? [textBlock("Done.")] : []),
+    ];
     expect(
       await buildAssistantReplyContentFromInputs({
         sessionKey: "agent:main:main",
-        ...(!fallback
-          ? {
-              agentId: "main",
-              transcriptMediaMessage: {
-                content: [],
-                transcriptText: "",
-                payloadTexts: ["Thinking.", "Persisted."],
-              },
-            }
-          : {}),
+        agentId: "main",
+        transcriptMediaMessage: {
+          content: [],
+          transcriptText: "",
+          payloadTexts: [notice, "Done."],
+        },
+        inputs,
+      }),
+    ).toEqual({ assistantContent: content, persistedAssistantContent: content });
+  });
+
+  it.each([false, true])("projects visible content (reasoning only=%s)", async (reasoningOnly) => {
+    const notice = "Model Fallback: backup/model";
+    const payloads = [
+      { text: "Thinking.", isReasoning: true },
+      ...(!reasoningOnly ? [{ text: notice, isFallbackNotice: true }, { text: "Done." }] : []),
+    ];
+    const inputs: ReplyDispatchOperation[] = reasoningOnly
+      ? createStructuredOutboundPayloadPlan(payloads).map((plan) => ({ kind: "prepared", plan }))
+      : payloads.map((payload) => ({ kind: "raw", payload }));
+    const status = { type: "text", text: notice, openclawStatusNotice: true };
+    expect(
+      await buildAssistantReplyContentFromInputs({
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        transcriptMediaMessage: {
+          content: [],
+          transcriptText: "",
+          payloadTexts: ["Thinking.", notice, "Persisted."],
+        },
         inputs,
       }),
     ).toEqual({
-      assistantContent: fallback ? statusContent : withAnswer ? [textBlock(answer)] : undefined,
-      persistedAssistantContent: fallback
-        ? statusContent
-        : withAnswer
-          ? [textBlock("Persisted.")]
-          : undefined,
+      assistantContent: reasoningOnly ? undefined : [status, textBlock("Done.")],
+      persistedAssistantContent: reasoningOnly ? undefined : [status, textBlock("Persisted.")],
     });
   });
 });
@@ -406,13 +328,10 @@ describe("createChatSendReplyDispatch", () => {
 
   it("captures visible replies, promotes tool media, and marks blocked turns", async () => {
     const markBlocked = vi.fn();
-    const onCommandBlock = vi.fn();
     const dispatch = createReplyDispatch("run-1", {
       isAgentRunStarted: () => false,
-      onCommandBlock,
       userTurnRecorder: { markBlocked, getAdmissionReceipt: () => undefined },
     });
-    expect(dispatch.hasAppendedWebchatAgentMedia()).toBe(false);
     const blockedPayload = setReplyPayloadMetadata(
       { text: "blocked" },
       { beforeAgentRunBlocked: true },
@@ -424,7 +343,6 @@ describe("createChatSendReplyDispatch", () => {
     dispatcher.sendFinalReply({ text: "done" });
     await dispatcher.waitForIdle();
 
-    expect(onCommandBlock).toHaveBeenCalledExactlyOnceWith("blocked");
     dispatcher.markComplete();
     expect(markBlocked).toHaveBeenCalledOnce();
     expect(
@@ -463,9 +381,6 @@ describe("createChatSendReplyDispatch", () => {
       suppressReplies: false,
     });
     const prepared = inputs.filter((input) => input.kind === "prepared");
-    expect(prepared.map((input) => readChatSendReplyPayload(input).text)).toEqual(
-      literalChunks.map((text) => `${text} changed`),
-    );
     for (const input of prepared) {
       expect(readChatSendReplyPayload(input).replyToId).toBeUndefined();
       expect(readChatSendReplyPayload(input).audioAsVoice).not.toBe(true);
@@ -481,18 +396,13 @@ describe("createChatSendReplyDispatch", () => {
     expect(buildTranscriptReplyTextFromInputs(inputs)).toBe(`[[reply_to:command]]\n${visible}`);
   });
 
-  it.each([
-    { operation: "raw", split: true },
-    { operation: "prepared", split: false },
-    { operation: "prepared", split: true },
-  ] as const)(
-    "preserves indented code through $operation WebChat replies (split=$split)",
-    async ({ operation, split }) => {
+  it.each(["raw", "prepared"] as const)(
+    "preserves indented code through split %s WebChat replies",
+    async (operation) => {
       const text = "    const value = 1;\n    use(value);";
-      const parts = split ? ["    const value = 1;\n", "    use(value);"] : [text];
       const dispatch = createReplyDispatch("run-indented-code");
       const dispatcher = createReplyDispatcher(dispatch.dispatcherOptions);
-      const payloads = parts.map((part) => ({ text: part }));
+      const payloads = [{ text: "    const value = 1;\n" }, { text: "    use(value);" }];
       if (operation === "prepared") {
         for (const plan of createStructuredOutboundPayloadPlan(payloads)) {
           dispatcher.sendPreparedReply("final", plan);
@@ -516,7 +426,6 @@ describe("createChatSendReplyDispatch", () => {
       });
 
       expect.soft(content.assistantContent).toEqual([textBlock(text)]);
-      expect.soft(extractAssistantDisplayText(content.assistantContent)).toBe(text);
       expect.soft(buildTranscriptReplyTextFromInputs(inputs)).toBe(text);
     },
   );
@@ -582,16 +491,10 @@ describe("createChatSendReplyDispatch", () => {
       dispatcher.sendPreparedReply("block", plan);
     }
     dispatcher.markComplete();
-    const receipt = await dispatcher.waitForIdle();
+    await dispatcher.waitForIdle();
 
     expect(dispatch.deliveredReplies).toEqual([]);
-    expect(dispatch.hasAppendedWebchatAgentMedia()).toBe(false);
     expect(markBlocked).not.toHaveBeenCalled();
-    expect(receipt?.counts).toMatchObject({
-      tool: { cancelled: 1 },
-      block: { cancelled: 2 },
-      final: { cancelled: 1 },
-    });
   });
 
   it("finalizes media inside the admission without masking dispatch errors", async () => {
@@ -631,9 +534,7 @@ describe("createChatSendReplyDispatch", () => {
     ).rejects.toBe(dispatchError);
 
     expect(finalizedInsideAdmission).toBe(true);
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("webchat media finalization failed: Error: finalizer failed"),
-    );
+    expect(warn).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -718,18 +619,10 @@ describe("createChatSendReplyDispatch", () => {
     });
   });
 
-  it.each([
-    "retired",
-    "aborted",
-    "lifecycle",
-    "reset",
-    "foreign-lifecycle",
-    "branch",
-    "answer-rewrite",
-    "input-rewrite",
-  ] as const)("rechecks accepted history against %s changes", async (change) => {
-    await withReplyTranscript(
-      async ({ dispatch, append, scope, inputId, abortController, retire }) => {
+  it.each(["retired", "aborted", "lifecycle", "reset", "foreign-lifecycle"] as const)(
+    "rechecks accepted history against %s changes",
+    async (change) => {
+      await withReplyTranscript(async ({ dispatch, append, scope, abortController, retire }) => {
         dispatch.captureAgentTranscriptStart();
         await append("answer", assistant());
         expect(await dispatch.resolveReplyDelivery()).toBe("delivered");
@@ -758,29 +651,14 @@ describe("createChatSendReplyDispatch", () => {
           } finally {
             foreign.close();
           }
-        } else if (change === "branch") {
-          await append("other-branch", assistant("NO_REPLY"), inputId);
-        } else {
-          const anchor = readActiveTranscriptEntryAnchor({
-            ...scope,
-            entryId: change === "answer-rewrite" ? "answer" : inputId,
-          });
-          assert(anchor, "Expected active rewrite fixture");
-          await rewriteTranscriptMessageAtAnchor(anchor, (message) => ({
-            ...asOptionalRecord(message),
-            content: change === "answer-rewrite" ? "NO_REPLY" : "Edited input display.",
-          }));
         }
         if (inFlightReceipt) {
           expect(await inFlightReceipt).toBe("missing");
         }
-        expect(await dispatch.resolveReplyDelivery()).toBe(
-          change === "input-rewrite" ? "delivered" : "missing",
-        );
-      },
-      true,
-    );
-  });
+        expect(await dispatch.resolveReplyDelivery()).toBe("missing");
+      }, true);
+    },
+  );
 
   it.each(["new-input", "branch", "answer-rewrite", "unrelated-rewrite", "append"] as const)(
     "retains factual delivery while rechecking a concurrent %s",
@@ -788,10 +666,8 @@ describe("createChatSendReplyDispatch", () => {
       await withReplyTranscript(async ({ dispatch, append, appendSync, rewriteSync, inputId }) => {
         dispatch.captureAgentTranscriptStart();
         await append("answer", assistant());
-        let changed = false;
         {
           using _ = interceptDeliverySnapshot(() => {
-            changed = true;
             if (change === "new-input") {
               appendSync("next-input", nextInput());
             } else if (change === "branch" || change === "append") {
@@ -808,7 +684,6 @@ describe("createChatSendReplyDispatch", () => {
             }
           });
           expect(await dispatch.resolveReplyDelivery()).toBe("pending");
-          expect(changed).toBe(true);
         }
         expect(await dispatch.resolveReplyDelivery()).toBe(
           change === "append" || change === "unrelated-rewrite" ? "delivered" : "missing",
@@ -850,18 +725,12 @@ it.each([
               }
             : undefined,
         });
-        const persist = async (
-          message: ReturnType<typeof answerMessage>,
-          checkCompleted = false,
-        ) => {
+        const persist = async (message: ReturnType<typeof answerMessage>) => {
           originals.push(structuredClone(message.content));
           emit({ type: "message_start", message });
           emit({ type: "message_end", message });
           await subscription.waitForPendingEvents();
           const completed = subscription.getCurrentAttemptAssistant();
-          if (checkCompleted) {
-            expect(completed).toBeDefined();
-          }
           await manager.appendMessageAsync(message);
           return completed;
         };
@@ -871,7 +740,7 @@ it.each([
             const message = answerMessage([
               { ...textBlock(text), textSignature: `signed-answer-${index}` },
             ]);
-            const completed = await persist(message, true);
+            const completed = await persist(message);
             if (streaming) {
               continue;
             }

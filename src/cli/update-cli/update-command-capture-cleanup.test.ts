@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createMissingConfigRecoveryManifest } from "../../commands/update-recovery-manifest.test-support.js";
 import { resolveUpdateCaptureRoot } from "../../infra/update-capture-paths.js";
 import {
   UPDATE_CAPTURE_PRIVACY_MARKER,
@@ -13,6 +14,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import { updateCleanupCommand } from "./cleanup.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -41,32 +43,14 @@ function writeCapture(root: string, name: string, sealed: boolean, marked = true
 
 function writeSealedCapture(root: string, runId: string, createdAt: string): string {
   const directory = writeCapture(root, runId, true);
-  fs.writeFileSync(
+  writeFixtureJsonSync(
     path.join(directory, "manifest.json"),
-    JSON.stringify({
-      schemaVersion: 2,
-      kind: "update-recovery",
-      generation: { kind: "baseline" },
-      databases: [],
+    createMissingConfigRecoveryManifest({
       runId,
       installRoot: root,
       stateDir: path.dirname(root),
       configPath: path.join(root, "config.json"),
-      configPaths: [path.join(root, "config.json")],
-      creator: { host: "fixture", pid: 1, startIdentity: "1" },
-      drivers: [],
       createdAt,
-      roots: [path.join(root, "config.json")],
-      excludedRoots: [],
-      protectedPaths: [path.join(root, "config.json")],
-      entries: [
-        {
-          kind: "missing",
-          sourcePath: path.join(root, "config.json"),
-          sqlite: false,
-          directory: false,
-        },
-      ],
     }),
   );
   return directory;

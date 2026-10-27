@@ -5,6 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 import type { LegacyStateMigrationPlan } from "../infra/state-migrations.types.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../infra/update-control-plane-sentinel.js";
 import { getUpdateRun } from "../infra/update-run-ledger.js";
@@ -13,6 +14,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
+import { writeFixtureJson } from "./cli-fixtures.test-support.js";
 import { formatCliProcessFailure, runCliProcessChild } from "./cli-process-child.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -71,28 +73,20 @@ function runPreview(root: string, command = "update") {
 
 async function snapshotTree(root: string): Promise<string[]> {
   const snapshot: string[] = [];
-  const walk = async (directory: string, relativeDirectory: string): Promise<void> => {
-    const entries = await fs.readdir(directory, { withFileTypes: true });
-    entries.sort((left, right) => left.name.localeCompare(right.name));
-    for (const entry of entries) {
-      const relativePath = path.posix.join(relativeDirectory, entry.name);
-      const absolutePath = path.join(directory, entry.name);
-      if (entry.isDirectory()) {
-        snapshot.push(`d ${relativePath}`);
-        await walk(absolutePath, relativePath);
-        continue;
-      }
-      if (entry.isSymbolicLink()) {
-        snapshot.push(`l ${relativePath} ${await fs.readlink(absolutePath)}`);
-        continue;
-      }
-      const hash = createHash("sha256")
-        .update(await fs.readFile(absolutePath))
-        .digest("hex");
-      snapshot.push(`f ${relativePath} ${hash}`);
+  for (const { relativePath, dirent } of await listDirectoryTreeStrict(root)) {
+    const absolutePath = path.join(root, relativePath);
+    if (dirent.isDirectory()) {
+      snapshot.push(`d ${relativePath}`);
+    } else if (dirent.isSymbolicLink()) {
+      snapshot.push(`l ${relativePath} ${await fs.readlink(absolutePath)}`);
+    } else {
+      snapshot.push(
+        `f ${relativePath} ${createHash("sha256")
+          .update(await fs.readFile(absolutePath))
+          .digest("hex")}`,
+      );
     }
-  };
-  await walk(root, "");
+  }
   return snapshot;
 }
 
@@ -560,13 +554,10 @@ it.each([
     const pluginDir = path.join(root, "worker-plugin");
     if (scenario.plugin) {
       await fs.mkdir(pluginDir);
-      await fs.writeFile(
-        path.join(pluginDir, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: "worker-exit-fixture",
-          configSchema: { type: "object", properties: {} },
-        }),
-      );
+      await writeFixtureJson(path.join(pluginDir, "openclaw.plugin.json"), {
+        id: "worker-exit-fixture",
+        configSchema: { type: "object", properties: {} },
+      });
       await fs.writeFile(
         path.join(pluginDir, "index.cjs"),
         [
@@ -585,21 +576,18 @@ it.each([
         ].join("\n"),
       );
     }
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({
-        nodeHost: { skills: { enabled: false } },
-        ...(scenario.plugin
-          ? {
-              plugins: {
-                allow: ["worker-exit-fixture"],
-                load: { paths: [path.join(pluginDir, "index.cjs")] },
-                slots: { memory: "none" },
-              },
-            }
-          : {}),
-      }),
-    );
+    await writeFixtureJson(configPath, {
+      nodeHost: { skills: { enabled: false } },
+      ...(scenario.plugin
+        ? {
+            plugins: {
+              allow: ["worker-exit-fixture"],
+              load: { paths: [path.join(pluginDir, "index.cjs")] },
+              slots: { memory: "none" },
+            },
+          }
+        : {}),
+    });
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       HOME: root,

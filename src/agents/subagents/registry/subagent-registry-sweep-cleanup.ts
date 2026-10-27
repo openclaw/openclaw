@@ -166,7 +166,8 @@ export function mutateCleanup(
       if (!isCleanupCurrent(current, entry) || !ready(current)) {
         return { value: undefined };
       }
-      const draft = structuredClone(current);
+      // Cleanup changes only top-level bookkeeping and the frozen execution record.
+      const draft = { ...current, execution: { ...current.execution } };
       const next = update(draft) === null ? null : draft;
       return { value: next, postimages: new Map([[entry.runId, next]]) };
     },

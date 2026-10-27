@@ -23,7 +23,7 @@ export function createInboundDecisionParams(overrides: Overrides = {}): InboundD
     groupAllowFrom: [],
     groupPolicy: "open",
     dmPolicy: "open",
-    storeAllowFrom: [],
+    readStoreAllowFrom: async () => [],
     historyLimit: 0,
     groupHistories: new Map(),
     ...rest,

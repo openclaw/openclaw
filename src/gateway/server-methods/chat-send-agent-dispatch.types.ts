@@ -31,9 +31,6 @@ export type StartChatDispatchParams = {
   externalAuthorityAdmission: ChatSendExternalAuthorityAdmission | undefined;
   injection: {
     beginCapturedMessageInjection: () => Promise<ReplyMessageInjectionAttempt | undefined>;
-    messageInjectionAttempt: ReplyMessageInjectionAttempt | undefined;
-    messageInjectionDisposition?: "collaborative-steering-disabled";
-    preAckReplyContextPromise: Promise<ChatSendReplyContextFields> | undefined;
     replyContextFieldsPromise: Promise<ChatSendReplyContextFields> | undefined;
   };
   request: NormalizedChatSendRequest;

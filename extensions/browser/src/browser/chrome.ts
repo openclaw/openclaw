@@ -882,7 +882,7 @@ async function launchOpenClawChromeLocked(
   signal?.throwIfAborted();
 
   try {
-    prepareOpenClawProfile(userDataDir, {
+    await prepareOpenClawProfile(userDataDir, {
       name: profile.name,
       color: profile.color,
       downloadDir: DEFAULT_DOWNLOAD_DIR,
@@ -907,20 +907,28 @@ async function launchOpenClawChromeLocked(
       const spawned = await spawnOnce(onStderr);
       proc = spawned.proc;
       releaseSpawnAbort = spawned.releaseAbort;
+      const hasExited = () => spawned.proc.exitCode != null || spawned.proc.signalCode != null;
       const readyDeadline = Date.now() + resolved.localLaunchTimeoutMs;
       let launchHttpReachable = false;
       // Full CDP WebSocket readiness is handled by the caller's
       // waitForCdpReadyAfterLaunch() budget; launch only owns process discovery.
       while (Date.now() < readyDeadline) {
         signal?.throwIfAborted();
-        if (
-          await isChromeReachable(
-            profile.cdpUrl,
-            MANAGED_CDP_READY_HTTP_TIMEOUT_MS,
-            undefined,
-            signal,
-          )
-        ) {
+        if (hasExited()) {
+          break;
+        }
+        const reachable = await isChromeReachable(
+          profile.cdpUrl,
+          MANAGED_CDP_READY_HTTP_TIMEOUT_MS,
+          undefined,
+          signal,
+        );
+        // Discovery may finish after the exact child exits. A response from
+        // that endpoint must not turn a dead launch into a running handle.
+        if (hasExited()) {
+          break;
+        }
+        if (reachable) {
           launchHttpReachable = true;
           break;
         }
@@ -931,19 +939,40 @@ async function launchOpenClawChromeLocked(
         signal?.throwIfAborted();
         let finalDiagnostic: ChromeCdpDiagnostic | null = null;
         let diagnosticErrorText: string | null = null;
-        try {
-          finalDiagnostic = await diagnoseChromeCdp(
-            profile.cdpUrl,
-            MANAGED_CDP_READY_HTTP_TIMEOUT_MS,
-            CHROME_WS_READY_TIMEOUT_MS,
-            undefined,
-            signal,
-          );
-        } catch (err) {
-          diagnosticErrorText = `CDP diagnostic failed: ${safeChromeCdpErrorMessage(err)}.`;
+        if (!hasExited()) {
+          try {
+            finalDiagnostic = await diagnoseChromeCdp(
+              profile.cdpUrl,
+              MANAGED_CDP_READY_HTTP_TIMEOUT_MS,
+              CHROME_WS_READY_TIMEOUT_MS,
+              undefined,
+              signal,
+            );
+          } catch (err) {
+            diagnosticErrorText = `CDP diagnostic failed: ${safeChromeCdpErrorMessage(err)}.`;
+          }
         }
         signal?.throwIfAborted();
-        if (
+        if (hasExited()) {
+          // Exit can precede the last stderr delivery. Drain for at most one
+          // existing poll interval; inherited pipes must not hold failure open.
+          if (proc.stderr && !proc.stderr.destroyed && !proc.stderr.readableEnded) {
+            const drain = new AbortController();
+            const timer = setTimeout(() => drain.abort(), CHROME_LAUNCH_READY_POLL_MS);
+            try {
+              await once(proc.stderr, "close", {
+                signal: signal ? AbortSignal.any([signal, drain.signal]) : drain.signal,
+              });
+            } catch {
+              signal?.throwIfAborted();
+            } finally {
+              clearTimeout(timer);
+            }
+          }
+          signal?.throwIfAborted();
+          finalDiagnostic = null;
+          diagnosticErrorText = `Chrome process exited before CDP became ready (code ${spawned.proc.exitCode}, signal ${spawned.proc.signalCode}).`;
+        } else if (
           finalDiagnostic &&
           (finalDiagnostic.ok || !CHROME_HTTP_DISCOVERY_FAILURE_CODES.has(finalDiagnostic.code))
         ) {

@@ -15,8 +15,11 @@ import type { SessionsPageRequestScope } from "./request-scope.ts";
 
 registerSessionOrganizationEnglish();
 
-type SessionPageArchiveHost = {
-  captureScope: () => SessionsPageRequestScope | null;
+/** Page lifetime adapts to the same archive owner used by sidebar and chat. */
+export function createSessionsArchive(host: {
+  captureScope: (
+    options?: Pick<SessionsPageRequestScope, "allowDeferred">,
+  ) => SessionsPageRequestScope | null;
   clearError: () => void;
   isCurrent: (scope: SessionsPageRequestScope) => boolean;
   publishError: (scope: SessionsPageRequestScope, error: unknown) => SessionsPageMutationResult;
@@ -29,15 +32,12 @@ type SessionPageArchiveHost = {
     expectedSessionId: string | undefined,
     options: { onConfirmed?: (result: SessionPatchResult) => void; sessionScope?: boolean },
   ) => Promise<SessionsPageMutationResult>;
-};
-
-/** Page lifetime adapts to the same archive owner used by sidebar and chat. */
-export function createSessionsArchive(host: SessionPageArchiveHost) {
+}) {
   async function archive(
     row: GatewaySessionRow,
     hasDescendants = false,
   ): Promise<SessionsPageMutationResult | void> {
-    const scope = host.captureScope();
+    const scope = host.captureScope({ allowDeferred: true });
     if (!scope) {
       return;
     }
@@ -71,7 +71,7 @@ export function createSessionsArchive(host: SessionPageArchiveHost) {
       if (!choice) {
         return;
       }
-      if (choice.kind === "tree") {
+      if (choice.kind === "tree" || scope.gateway.snapshot.phase !== "connected") {
         return await operations.archiveConfirmedSessionsWithUndo(
           {
             sessionData: {
@@ -100,7 +100,7 @@ export function createSessionsArchive(host: SessionPageArchiveHost) {
             },
             sidebarSessionStatusFilter: () => "all",
           },
-          choice.rows,
+          choice.kind === "tree" ? choice.rows : [session],
           mutationScope,
         );
       }
@@ -111,6 +111,7 @@ export function createSessionsArchive(host: SessionPageArchiveHost) {
       if (!connection) {
         return;
       }
+      const undoPins = operations.captureSessionArchivePins(mutationScope, [key]);
       // Confirmation and Undo outlive the page, but keep the admitted connection and incarnation.
       const onConfirmed = (result: SessionPatchResult) => {
         if (
@@ -119,6 +120,11 @@ export function createSessionsArchive(host: SessionPageArchiveHost) {
         ) {
           return;
         }
+        scope.context.navigation.update({
+          sidebarEntries: scope.context.navigation.snapshot.sidebarEntries.filter(
+            (entry) => entry !== "session:" + key,
+          ),
+        });
         showToast({
           message: t("sessionsView.sessionArchived"),
           actionLabel: t("common.undo"),
@@ -126,12 +132,25 @@ export function createSessionsArchive(host: SessionPageArchiveHost) {
             if (!archiveSessions.isConnectionScopeCurrent(connection)) {
               return;
             }
-            void archiveSessions
-              .patch(
-                key,
-                { archived: false, ...(pinned === true ? { pinned: true } : {}) },
-                { agentId: archiveAgentId, expectedSessionId: sessionId },
-              )
+            void undoPins
+              .restore(async () => {
+                const receipt = Promise.withResolvers<readonly string[]>();
+                const restored = await archiveSessions.patch(
+                  key,
+                  { archived: false, ...(pinned === true ? { pinned: true } : {}) },
+                  {
+                    agentId: archiveAgentId,
+                    expectedSessionId: sessionId,
+                    onConfirmed: (confirmed) =>
+                      receipt.resolve(confirmed.entry.sessionId === sessionId ? [key] : []),
+                    onDeferredSettled: () => receipt.resolve([]),
+                  },
+                );
+                if (restored && "queued" in restored) {
+                  return receipt.promise;
+                }
+                return restored?.entry.sessionId === sessionId ? [key] : [];
+              })
               .catch((error: unknown) => {
                 if (archiveSessions.isConnectionScopeCurrent(connection)) {
                   showToast({ message: formatUiError(error) });

@@ -6,7 +6,6 @@ import {
   isPending,
   lazy,
   Loading,
-  onCleanup,
   onSettled,
   Show,
 } from "solid-js";
@@ -19,6 +18,10 @@ import {
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
 import { ImageLightbox } from "../../components/image-lightbox.tsx";
+import {
+  resolveLobsterPetMode,
+  resolveLobsterRunOutcome,
+} from "../../components/lobster-pet-contract.ts";
 import { SessionBackgroundLayoutScope } from "../../components/session-background-layout-context.tsx";
 import { SessionBackgroundView } from "../../components/session-background-view.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -34,7 +37,7 @@ import "../../styles/chat/composer-surface.css";
 import "../../styles/new-session.css";
 import "../../styles/new-session-attachment-panel.css";
 import { defineSolidBridge } from "../../lib/solid-bridge.ts";
-import { focusChatComposerFromPrintableKeydown } from "../chat/chat-pane-shared.ts";
+import { focusChatComposerFromKeydown } from "../chat/chat-pane-shared.ts";
 import { chatStartupStatusLabel } from "../chat/chat-run-startup.ts";
 import { ChatPermissionPicker } from "../chat/components/chat-permission-picker.tsx";
 import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
@@ -301,13 +304,7 @@ function DraftBlock(props: {
 function PageContent(_props: { data: NewSessionRouteData | undefined }, host: PageHost) {
   const context = useOptionalApplication();
   // Native bridge roots do not inherit the router's error boundary.
-  const Content = () => {
-    const content = renderPageContent(host);
-    onSettled(() => {
-      renderedPages.add(host);
-    });
-    return content;
-  };
+  const Content = () => renderPageContent(host);
   const RenderError = (props: { error: unknown; reset: () => void }) => {
     onSettled(() => {
       let active = true;
@@ -338,6 +335,37 @@ function renderPageContent(host: PageHost) {
   owner.context = useOptionalApplication();
   const pageState = projectOwner(owner, (value) => value);
   const page = pageState.read;
+  const initialConnectionReady = () => page().isConnected;
+  const context = owner.context;
+  const sessionFacts = context
+    ? projectOwner(
+        context.sessions,
+        (sessions) => ({
+          defaults: Object.entries(sessions.state.result?.defaults ?? {}),
+          groupStatus: sessions.groupsStatus(),
+          petMode: resolveLobsterPetMode(
+            !context.gateway.snapshot.offlineStable,
+            sessions.state.result?.sessions,
+          ),
+          runOutcome: resolveLobsterRunOutcome(sessions.state.result?.sessions),
+        }),
+        (previous, next) =>
+          previous.groupStatus === next.groupStatus &&
+          previous.petMode === next.petMode &&
+          previous.runOutcome === next.runOutcome &&
+          previous.defaults.length === next.defaults.length &&
+          previous.defaults.every(
+            ([key, value], index) =>
+              key === next.defaults[index]?.[0] && value === next.defaults[index]?.[1],
+          ),
+      )
+    : undefined;
+  // Recents own their row subscription; only draft-wide session facts reconcile the page.
+  onSettled(() => sessionFacts?.subscribe(owner.changed));
+  onSettled(() => {
+    owner.connect();
+    return () => owner.disconnect();
+  });
   const revision = createMemo(() => ({ value: pageState.revision() }));
   const submissionError = createMemo(() => page().submission.error);
   const saving = createSubmissionAction(
@@ -376,18 +404,26 @@ function renderPageContent(host: PageHost) {
       />
     </NewSessionComposerTextareaContext>
   );
-  // Bind gateway facts before the first child read; teardown must also cover pre-settle disposal.
-  owner.connect();
-  onCleanup(() => owner.disconnect());
   onSettled(() => {
     const document = host.ownerDocument;
+    // Model configuration does not need the deferred submission views.
+    const preloadOnIntent = (event: Event) => {
+      if (event.target instanceof Element && event.target.closest(".chat-composer-model-control")) {
+        return;
+      }
+      preloadStops.forEach((stop) => stop());
+      preloadSubmissionViews();
+    };
+    const preloadStops = (["pointerdown", "keydown"] as const).map((type) =>
+      listen(host, type, preloadOnIntent, true),
+    );
     const stops = [
       installChatComposerPickerDismissal(document),
       listen(
         document,
         "keydown",
         (event) =>
-          focusChatComposerFromPrintableKeydown(
+          focusChatComposerFromKeydown(
             host,
             event,
             owner.submission.composerTextarea.getTextarea(),
@@ -395,11 +431,7 @@ function renderPageContent(host: PageHost) {
         true,
       ),
       listen(document.defaultView!, "beforeunload", owner.flushDraft),
-      // Submit mounts the deferred preview and composer; fetch them on first
-      // intent so the page never flashes their loading fallbacks.
-      ...(["pointerdown", "keydown"] as const).map((type) =>
-        listen(host, type, preloadSubmissionViews, { capture: true, once: true }),
-      ),
+      ...preloadStops,
     ];
     return () => stops.forEach((stop) => stop());
   });
@@ -450,151 +482,166 @@ function renderPageContent(host: PageHost) {
     const attachment = panel();
     return attachment ? { ...attachment.content } : null;
   };
+  // The draft binds Gateway facts before its first child reads defaults.
   return (
-    <>
-      <div
-        class={[
-          "new-session-page",
-          {
-            chat: Boolean(page().submission.pendingMessage),
-            "new-session-page--incognito": page().submission.visibility === "incognito",
-          },
-        ]}
-      >
-        <SessionBackgroundView context={page().context} surface="new-session" />
-        <Show when={!catalog.isTarget(page().data)}>
-          <NewSessionIncognitoControl
-            submission={visibilityControl}
-            draftAvailable={page().submission.capabilities.canStartAsDraft(page().context)}
-          />
-        </Show>
-        <NewSessionBody
-          error={submissionError()}
-          pendingMessage={page().submission.pendingMessage}
-          userId={userId()}
-          submitting={saving() || page().submission.submitting}
-          statusLabel={
-            page().context?.gateway.snapshot.phase === "connected"
-              ? undefined
-              : t("connection.reconnecting")
-          }
-          completion={completion()}
-          showDraft={Boolean(completed())}
-          renderDraft={() => (
-            <Show
-              when={Boolean(completed())}
-              fallback={
-                <DraftWelcome
-                  sessions={page().context?.sessions}
-                  options={page().welcomeOptions()}
-                  assistantNameControl={
-                    !catalog.isTarget(page().data) && page().place.agents().length > 1 ? (
-                      <DraftAgentSelect page={page} />
-                    ) : undefined
-                  }
-                  composer={<Draft />}
+    <Show when={initialConnectionReady()}>
+      {(_ready) => {
+        onSettled(() => {
+          renderedPages.add(host);
+        });
+        return (
+          <>
+            <div
+              class={[
+                "new-session-page",
+                {
+                  chat: Boolean(page().submission.pendingMessage),
+                  "new-session-page--incognito": page().submission.visibility === "incognito",
+                },
+              ]}
+            >
+              <SessionBackgroundView context={page().context} surface="new-session" />
+              <Show when={!catalog.isTarget(page().data)}>
+                <NewSessionIncognitoControl
+                  submission={visibilityControl}
+                  draftAvailable={page().submission.capabilities.canStartAsDraft(page().context)}
                 />
-              }
-            >
-              <Draft />
-            </Show>
-          )}
-          onOpenImage={owner.setImageLightbox}
-        />
-        <Show when={creationComposer()}>
-          {(composer) => (
-            <Errored
-              fallback={(error, reset) => <LazyViewError error={error()} onRetry={reset} inline />}
-            >
-              <Loading fallback={<LoadingState />}>
-                <CreationComposer composer={composer()} onOpenImage={owner.setImageLightbox} />
-              </Loading>
-            </Errored>
-          )}
-        </Show>
-        <ConnectMachineDialog
-          {...page().connectMachine.view(page().place.isAdmin(), () => {
-            owner.connectMachine.close();
-            owner.context?.navigate("devices");
-          })}
-        />
-        <Show when={lightbox()}>
-          {(item) => (
-            <ImageLightbox
-              mediaKind={item().kind ?? "image"}
-              gallery={item().gallery}
-              connectVideo={item().connectVideo}
-              loadDisplayImage={item().loadDisplayImage}
-              readOriginalBlob={item().readOriginalBlob}
-              src={item().src}
-              originalSrc={item().originalSrc ?? ""}
-              imageTitle={item().title}
-              imageWidth={item().width}
-              imageHeight={item().height}
-              onImage-lightbox-close={() => owner.setImageLightbox(null)}
-            />
-          )}
-        </Show>
-      </div>
-      <Show when={panel()}>
-        {(_attachment) => {
-          const content = children(() => (
-            <AttachmentDetailPanel
-              content={panelContent()}
-              onChat-detail-panel-close={owner.closeAttachmentPanel}
-            />
-          ));
-          const loading = () => <div role="status">{t("common.loading")}</div>;
-          return (
-            <aside class="new-session-attachment-panel">
-              <Errored
-                fallback={(error, reset) => {
-                  let active = true;
-                  const [retrying, setRetrying] = createSignal(false);
-                  const stale = isStaleChunkImportError(error());
-                  const canRetry = () =>
-                    active && owner.isConnected && owner.attachmentPanel !== null;
-                  onSettled(() => () => {
-                    active = false;
-                    if (stale) {
-                      cancelStaleChunkRecovery();
-                    }
-                  });
-                  const retry = async () => {
-                    if (!canRetry()) {
-                      return;
-                    }
-                    setRetrying(true);
-                    if (
-                      stale &&
-                      (await retryStaleChunkReloadWhenReachable({ canReload: canRetry }))
-                    ) {
-                      return;
-                    }
-                    if (canRetry()) {
-                      setRetrying(false);
-                      reset();
-                    }
-                  };
-                  return (
-                    <Show when={!retrying() && !isPending(content)} fallback={loading()}>
-                      <LazyViewError
-                        error={error()}
-                        stale={stale}
-                        onRetry={() => void retry()}
-                        onClose={owner.closeAttachmentPanel}
+              </Show>
+              <NewSessionBody
+                error={submissionError()}
+                pendingMessage={page().submission.pendingMessage}
+                userId={userId()}
+                submitting={saving() || page().submission.submitting}
+                statusLabel={
+                  page().context?.gateway.snapshot.phase === "connected"
+                    ? undefined
+                    : t("connection.reconnecting")
+                }
+                completion={completion()}
+                showDraft={Boolean(completed())}
+                renderDraft={() => (
+                  <Show
+                    when={Boolean(completed())}
+                    fallback={
+                      <DraftWelcome
+                        sessions={page().context?.sessions}
+                        options={page().welcomeOptions()}
+                        assistantNameControl={
+                          !catalog.isTarget(page().data) && page().place.agents().length > 1 ? (
+                            <DraftAgentSelect page={page} />
+                          ) : undefined
+                        }
+                        composer={<Draft />}
                       />
-                    </Show>
-                  );
-                }}
-              >
-                <Loading fallback={loading()}>{content()}</Loading>
-              </Errored>
-            </aside>
-          );
-        }}
-      </Show>
-    </>
+                    }
+                  >
+                    <Draft />
+                  </Show>
+                )}
+                onOpenImage={owner.setImageLightbox}
+              />
+              <Show when={creationComposer()}>
+                {(composer) => (
+                  <Errored
+                    fallback={(error, reset) => (
+                      <LazyViewError error={error()} onRetry={reset} inline />
+                    )}
+                  >
+                    <Loading fallback={<LoadingState />}>
+                      <CreationComposer
+                        composer={composer()}
+                        onOpenImage={owner.setImageLightbox}
+                      />
+                    </Loading>
+                  </Errored>
+                )}
+              </Show>
+              <ConnectMachineDialog
+                {...page().connectMachine.view(page().place.isAdmin(), () => {
+                  owner.connectMachine.close();
+                  owner.context?.navigate("devices");
+                })}
+              />
+              <Show when={lightbox()}>
+                {(item) => (
+                  <ImageLightbox
+                    mediaKind={item().kind ?? "image"}
+                    gallery={item().gallery}
+                    connectVideo={item().connectVideo}
+                    loadDisplayImage={item().loadDisplayImage}
+                    readOriginalBlob={item().readOriginalBlob}
+                    src={item().src}
+                    originalSrc={item().originalSrc ?? ""}
+                    imageTitle={item().title}
+                    imageWidth={item().width}
+                    imageHeight={item().height}
+                    onImage-lightbox-close={() => owner.setImageLightbox(null)}
+                  />
+                )}
+              </Show>
+            </div>
+            <Show when={panel()}>
+              {(_attachment) => {
+                const content = children(() => (
+                  <AttachmentDetailPanel
+                    content={panelContent()}
+                    onChat-detail-panel-close={owner.closeAttachmentPanel}
+                  />
+                ));
+                const loading = () => <div role="status">{t("common.loading")}</div>;
+                return (
+                  <aside class="new-session-attachment-panel">
+                    <Errored
+                      fallback={(error, reset) => {
+                        let active = true;
+                        const [retrying, setRetrying] = createSignal(false);
+                        const stale = isStaleChunkImportError(error());
+                        const canRetry = () =>
+                          active && owner.isConnected && owner.attachmentPanel !== null;
+                        onSettled(() => () => {
+                          active = false;
+                          if (stale) {
+                            cancelStaleChunkRecovery();
+                          }
+                        });
+                        const retry = async () => {
+                          if (!canRetry()) {
+                            return;
+                          }
+                          setRetrying(true);
+                          if (
+                            stale &&
+                            (await retryStaleChunkReloadWhenReachable({ canReload: canRetry }))
+                          ) {
+                            return;
+                          }
+                          if (canRetry()) {
+                            setRetrying(false);
+                            reset();
+                          }
+                        };
+                        return (
+                          <Show when={!retrying() && !isPending(content)} fallback={loading()}>
+                            <LazyViewError
+                              error={error()}
+                              stale={stale}
+                              onRetry={() => void retry()}
+                              onClose={owner.closeAttachmentPanel}
+                            />
+                          </Show>
+                        );
+                      }}
+                    >
+                      <Loading fallback={loading()}>{content()}</Loading>
+                    </Errored>
+                  </aside>
+                );
+              }}
+            </Show>
+          </>
+        );
+      }}
+    </Show>
   );
 }
 

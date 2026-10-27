@@ -13,7 +13,12 @@ import { formatUiExternalText } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ModelProviderCard, ModelProviderRemovalTarget } from "./data.ts";
 import { apiKeySource, profileIdentity, ProviderProfiles } from "./profiles-view.tsx";
-import { isProviderUsable, renderMutationMessage, renderProviderStatus } from "./view-status.tsx";
+import {
+  isProviderUsable,
+  needsAuthAttention,
+  renderMutationMessage,
+  renderProviderStatus,
+} from "./view-status.tsx";
 import type { ModelProvidersViewProps } from "./view-types.ts";
 
 type ProviderRowProps = ModelProvidersViewProps & { card: ModelProviderCard };
@@ -221,6 +226,18 @@ function ProviderActions(props: ModelProvidersViewProps & { card: ModelProviderC
       ? t("modelProviders.apiKey.authModeBlocked", { mode: props.card.configAuthMode ?? "" })
       : (props.mutationBlockedReason ?? "");
   const removal = () => removalPlan(props.card);
+  const connectLabel = () =>
+    t(
+      isProviderUsable(props.card) || props.card.profiles.length > 0
+        ? "modelProviders.profiles.addAccount"
+        : "modelProviders.login.action",
+    );
+  const probeLabel = () =>
+    t(
+      props.busy[`probe:${props.card.id}`]
+        ? "modelProviders.probe.testing"
+        : "modelProviders.probe.test",
+    );
   return (
     <div class="model-providers__card-actions provider-row__footer">
       <Show when={removal().removeTargets.length > 0}>
@@ -228,6 +245,10 @@ function ProviderActions(props: ModelProvidersViewProps & { card: ModelProviderC
           class="btn btn--sm btn--ghost danger provider-row__remove"
           disabled={configMutationDisabled(props) || Boolean(props.busy[`logout:${props.card.id}`])}
           title={props.mutationBlockedReason ?? ""}
+          aria-label={t("modelProviders.actionNamed", {
+            action: t("modelProviders.remove.action"),
+            name: providerName(props.card),
+          })}
           onClick={() =>
             props.onRequestLogout({
               cardId: props.card.id,
@@ -243,14 +264,14 @@ function ProviderActions(props: ModelProvidersViewProps & { card: ModelProviderC
         <button
           class="btn btn--sm"
           data-models-connect-provider={props.card.id}
+          aria-label={t("modelProviders.actionNamed", {
+            action: connectLabel(),
+            name: providerName(props.card),
+          })}
           disabled={configMutationDisabled(props) || props.loginBusy}
           onClick={() => props.onConnect(props.card)}
         >
-          {t(
-            isProviderUsable(props.card) || props.card.profiles.length > 0
-              ? "modelProviders.profiles.addAccount"
-              : "modelProviders.login.action",
-          )}
+          {connectLabel()}
         </button>
       </Show>
       <Show when={isProviderUsable(props.card)}>
@@ -266,6 +287,10 @@ function ProviderActions(props: ModelProvidersViewProps & { card: ModelProviderC
               ? t("modelProviders.probe.unavailable")
               : (props.mutationBlockedReason ?? "")
           }
+          aria-label={t("modelProviders.actionNamed", {
+            action: probeLabel(),
+            name: providerName(props.card),
+          })}
           onClick={() =>
             props.onProbe(
               props.card.id,
@@ -275,11 +300,7 @@ function ProviderActions(props: ModelProvidersViewProps & { card: ModelProviderC
             )
           }
         >
-          {t(
-            props.busy[`probe:${props.card.id}`]
-              ? "modelProviders.probe.testing"
-              : "modelProviders.probe.test",
-          )}
+          {probeLabel()}
         </button>
       </Show>
       <Show when={props.card.apiKeySupported !== false}>
@@ -287,6 +308,10 @@ function ProviderActions(props: ModelProvidersViewProps & { card: ModelProviderC
           class="btn btn--sm"
           disabled={keyDisabled()}
           title={keyTitle()}
+          aria-label={t("modelProviders.actionNamed", {
+            action: t("modelProviders.apiKey.set"),
+            name: providerName(props.card),
+          })}
           onClick={() => props.onOpenKeyEditor(props.card.id)}
         >
           {t("modelProviders.apiKey.set")}
@@ -306,8 +331,7 @@ function providerName(card: ModelProviderCard): string {
 function needsAttention(card: ModelProviderCard): boolean {
   return (
     card.catalogStatus === "auth-rejected" ||
-    card.auth?.kind === "expired" ||
-    card.auth?.kind === "missing" ||
+    (needsAuthAttention(card) && card.auth?.kind !== "expiring") ||
     Boolean(card.usage?.error)
   );
 }

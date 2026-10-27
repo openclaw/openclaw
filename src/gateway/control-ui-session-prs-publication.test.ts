@@ -205,15 +205,15 @@ it("reconciles a fourth merged PR without expanding or poisoning displayed PRs",
     workspace_tree: tree,
   };
   expect(
-    await isGitHubPublicationSuperseded(snapshot, candidates.pullRequests, {
+    await isGitHubPublicationSuperseded(snapshot, async () => ({
+      pullRequests: candidates.pullRequests,
       assertCurrent: current,
-    }),
+    })),
   ).toBe(true);
   expect(
     await isGitHubPublicationSuperseded(
       { ...snapshot, workspace_tree: "c".repeat(40) },
-      candidates.pullRequests,
-      { assertCurrent: current },
+      async () => ({ pullRequests: candidates.pullRequests, assertCurrent: current }),
     ),
   ).toBe(false);
   expect((await owner.read(target, current)).pullRequests).toEqual(displayed.pullRequests);

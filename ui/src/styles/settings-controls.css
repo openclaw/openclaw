@@ -291,6 +291,14 @@ select.settings-select:focus-visible {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
+@media (forced-colors: active) {
+  /* Forced colors suppress the shadow that marks keyboard focus above. */
+  .settings-secret__toggle:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+}
+
 .settings-secret__toggle svg {
   width: 16px;
   height: 16px;

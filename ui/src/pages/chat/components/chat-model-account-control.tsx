@@ -2,12 +2,13 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show, useContext } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { ChatModelSearchContext, handleModelOptionMouseEnter } from "./chat-model-picker-search.ts";
+import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
+import { handleModelOptionMouseEnter } from "./chat-model-picker-search-view.ts";
+import { ChatModelSearchContext } from "./chat-model-picker-search.ts";
 import type { ModelPickerRowRenderer } from "./chat-model-picker-window.tsx";
-import type { ChatModelAccountSectionViewProps } from "./chat-model-types.ts";
 
 export function ChatModelAccountSectionView(
-  props: ChatModelAccountSectionViewProps & { renderRow?: ModelPickerRowRenderer },
+  props: ReturnType<ChatModelAccountSection["viewProps"]> & { renderRow?: ModelPickerRowRenderer },
 ) {
   const search = useContext(ChatModelSearchContext);
   const row = (key: string, render: () => JSX.Element) =>
@@ -68,7 +69,7 @@ export function ChatModelAccountSectionView(
                     data-chat-model-key={`account:${option().value}`}
                     data-chat-model-rank={search?.row(`account:${option().value}`)?.rank}
                     data-chat-model-highlighted={
-                      search?.highlighted() === `account:${option().value}` ? "" : undefined
+                      search?.isHighlighted(`account:${option().value}`) ? "" : undefined
                     }
                     style={{ "--chat-model-rank": search?.row(`account:${option().value}`)?.rank }}
                     data-chat-model-index={props.startIndex + index()}

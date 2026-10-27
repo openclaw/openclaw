@@ -15,6 +15,7 @@ import {
   terminalPolicyPass,
   validateReleaseChildDispatchBinding,
   validateReleaseCoveragePolicyBinding,
+  validateReleaseManifestAdvisoryJobs,
 } from "../../scripts/full-release-validation-policy.mjs";
 import {
   affectedActiveRunIds,
@@ -792,6 +793,25 @@ describe("full release execution plan", () => {
     });
   });
 
+  it("routes focused Windows node validation only to the candidate child", () => {
+    const selected = plan({
+      rerunGroup: "windows-node",
+      childPhaseVersion: 3,
+      candidateRequired: true,
+    });
+    expect(selected.children.filter((entry) => entry.selected).map((entry) => entry.key)).toEqual([
+      "releaseChecksCandidate",
+    ]);
+    expect(selected.gates.at(-1)).toMatchObject({
+      name: "Acquire full release candidate",
+      required: true,
+    });
+    expect(plan({ rerunGroup: "windows-node" }).gates.at(-1)).toMatchObject({ required: true });
+    expect(
+      plan({ rerunGroup: "windows-node", releasePackageSpec: "openclaw@2026.9.9" }).gates.at(-1),
+    ).toMatchObject({ required: false });
+  });
+
   it("requires live-e2e candidate preparation only without a suite filter", () => {
     expect(plan({ rerunGroup: "live-e2e" }).gates.at(-1)).toMatchObject({ required: true });
     expect(plan({ liveSuiteFilter: "discord", rerunGroup: "live-e2e" }).gates.at(-1)).toMatchObject(
@@ -1162,6 +1182,110 @@ describe("release decision policy", () => {
       expect(manifest.advisoryJobs).toEqual(result.advisoryJobs);
     },
   );
+
+  it.each([
+    ["prerelease", "failure"],
+    ["main", "failure"],
+    ["prerelease", "skipped"],
+    ["main", "skipped"],
+  ] as const)("retains Windows-node %s %s as advisory evidence", (lane, conclusion) => {
+    const snapshot = child("releaseChecksCandidate", {
+      conclusion: conclusion === "skipped" ? "success" : "failure",
+      status: "completed",
+      jobs: [
+        {
+          name:
+            conclusion === "skipped"
+              ? `Run Windows-node ${lane} E2E`
+              : `Run Windows-node ${lane} E2E / Setup, connect, and invoke candidate gateway`,
+          status: "completed",
+          conclusion,
+        },
+        {
+          name: "Run Windows-node stable E2E / Setup, connect, and invoke candidate gateway",
+          status: "completed",
+          conclusion: "success",
+        },
+        { name: "Verify release checks", status: "completed", conclusion: "success" },
+      ],
+    });
+    const decision = classifyReleaseSnapshot({ children: [snapshot] });
+    expect(terminalPolicyPass(snapshot)).toBe(true);
+    expect(decision).toMatchObject({
+      state: "passed",
+      blockers: [],
+      advisoryJobs: [
+        { class: "windows-node-preview", child: "releaseChecksCandidate", conclusion },
+      ],
+    });
+    const artifact = buildReleaseStateArtifact({
+      children: [snapshot],
+      decision,
+      executionPlan: { parentRunAttempt: 1, sha256: "a".repeat(64) },
+      expected: { parentRunAttempt: 1, parentRunId: "77", targetSha: TARGET_SHA },
+      mode: "decision",
+      releaseProfile: "stable",
+      rerunGroup: "all",
+    });
+    expect(validateReleaseStateArtifact(artifact).advisoryJobs).toEqual(decision.advisoryJobs);
+    expect(formatReleaseStateOutcome(artifact)).toContain("Advisory [windows-node-preview]");
+    const manifest = buildReleaseValidationManifest({
+      plan: executionPlan(),
+      drain: artifact,
+      context: { releaseProfile: "stable", rerunGroup: "all", validationInputs: {} },
+    });
+    expect(validateReleaseManifestAdvisoryJobs(manifest)).toEqual(decision.advisoryJobs);
+    expect(() => validateReleaseManifestAdvisoryJobs({ ...manifest, advisoryJobs: [] })).toThrow(
+      "advisory jobs differ",
+    );
+  });
+
+  it.each([
+    "stable-failed",
+    "stable-skipped",
+    "verifier-failed",
+    "other-job",
+    "wrong-child",
+    "cancelled",
+  ])("keeps Windows-node advisory admission narrow for %s", (scenario) => {
+    const snapshot = child(scenario === "wrong-child" ? "normalCi" : "releaseChecksCandidate", {
+      conclusion: scenario === "cancelled" ? "cancelled" : "failure",
+      status: "completed",
+      jobs: [
+        {
+          name: "Run Windows-node main E2E / Setup, connect, and invoke candidate gateway",
+          status: "completed",
+          conclusion: "failure",
+        },
+        {
+          name: "Run Windows-node stable E2E / Setup, connect, and invoke candidate gateway",
+          status: "completed",
+          conclusion:
+            scenario === "stable-failed"
+              ? "failure"
+              : scenario === "stable-skipped"
+                ? "skipped"
+                : "success",
+        },
+        {
+          name: "Verify release checks",
+          status: "completed",
+          conclusion: scenario === "verifier-failed" ? "failure" : "success",
+        },
+        ...(scenario === "other-job"
+          ? [
+              {
+                name: "Prepare release package artifact",
+                status: "completed",
+                conclusion: "failure",
+              },
+            ]
+          : []),
+      ],
+    });
+    expect(terminalPolicyPass(snapshot)).toBe(false);
+    expect(classifyReleaseSnapshot({ children: [snapshot] }).state).toBe("blocked_complete");
+  });
 
   it("accepts a human child rerun with retained earlier jobs in a reused plan", async () => {
     const original = child("normalCi");

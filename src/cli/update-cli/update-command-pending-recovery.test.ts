@@ -2,13 +2,14 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import * as config from "../../config/config.js";
 import * as launchd from "../../daemon/launchd.js";
 import * as scheduledTasks from "../../daemon/schtasks-control.js";
 import * as gatewayService from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
+import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import { resolvePackageActivationAnchor } from "../../infra/package-update-activation-journal.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
@@ -29,6 +30,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import * as stateOwnership from "../../state/openclaw-state-ownership-preflight.js";
+import { expectNoCalls } from "../../test-utils/mock-call-assertions.js";
 import { resolveProfileStateDir } from "../profile-utils.js";
 import { registerSignalExitGate, waitForCliSignalExit } from "../signal-exit-barrier.js";
 import * as updateShared from "./shared.js";
@@ -64,11 +66,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
-function expectNoCalls(...mocks: Mock[]) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
-}
+
 const pendingRecovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
 const candidateFailure = (runId: string, root?: string, reason = "candidate-failed") =>
   resultFixture(root, { status: "error", runId, reason, durationMs: 1 });
@@ -79,8 +77,8 @@ function expectPendingReport(fields: Record<string, unknown>) {
 }
 
 function materialSnapshot(root: string) {
-  return fs
-    .readdirSync(root, { recursive: true })
+  return listDirectoryTreeStrictSync(root)
+    .map((walkEntry) => walkEntry.relativePath)
     .map(String)
     .toSorted()
     .map((name) => {

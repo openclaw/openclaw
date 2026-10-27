@@ -16,6 +16,8 @@ import type {
 import { iterateUnindexedActiveTranscriptNavigation } from "./session-accessor.sqlite-history-navigation.js";
 import {
   getActiveTranscriptKysely,
+  selectActiveTranscriptEventRows,
+  selectActiveTranscriptIdentityRows,
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
 import {
@@ -38,7 +40,7 @@ import type { SessionTranscriptContextSelection } from "./session-history-read.t
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
-  transcriptEventJsonSql,
+  readTranscriptPayload,
   transcriptEventResetNavigationSql,
   transcriptPredicateSql,
 } from "./transcript-payload.js";
@@ -73,16 +75,9 @@ function readBoundedRetentionRanges(
   );
   if (missing.length > 0) {
     const lastSelectedSeq = rows.reduce((maximum, row) => Math.max(maximum, row.seq), -Infinity);
-    const db = getActiveTranscriptKysely(projection.database);
     const anchors = executeSqliteQuerySync(
       projection.database.db,
-      db
-        .selectFrom("transcript_event_identities as identity")
-        .innerJoin("session_transcript_active_events as active", (join) =>
-          join
-            .onRef("active.session_id", "=", "identity.session_id")
-            .onRef("active.event_seq", "=", "identity.seq"),
-        )
+      selectActiveTranscriptIdentityRows(projection.database)
         .select(["identity.event_id", "identity.seq"])
         .where("identity.session_id", "=", projection.resolved.sessionId)
         .where("identity.event_id", "in", missing)
@@ -370,13 +365,7 @@ export function readSessionTranscriptBoundedActiveContextCore(
           .slice(0, limits ? limits.maxEvents + 1 : undefined)
       : iterateSqliteQuerySync(
           projection.database.db,
-          db
-            .selectFrom("session_transcript_active_events as active")
-            .innerJoin("transcript_events as event", (join) =>
-              join
-                .onRef("event.session_id", "=", "active.session_id")
-                .onRef("event.seq", "=", "active.event_seq"),
-            )
+          selectActiveTranscriptEventRows(projection.database)
             .select([
               "active.event_seq",
               "active.active_position",
@@ -411,20 +400,14 @@ export function readSessionTranscriptBoundedActiveContextCore(
     const selection = selectBoundedContextRows(metadata, headerBytes, limits);
     const { selectedRows } = selection;
     let { serializedBytes, truncated } = selection;
-    const selectedSequences = selectedRows.map((row) => row.event_seq);
+    const contextSequences = selectedRows.map((row) => row.event_seq);
     let boundary = covered
       ? undefined
       : executeSqliteQueryTakeFirstSync(
           projection.database.db,
           db
             .selectFrom(
-              db
-                .selectFrom("transcript_event_identities as identity")
-                .innerJoin("session_transcript_active_events as active", (join) =>
-                  join
-                    .onRef("active.session_id", "=", "identity.session_id")
-                    .onRef("active.event_seq", "=", "identity.seq"),
-                )
+              selectActiveTranscriptIdentityRows(projection.database)
                 .select((eb) => [
                   "active.active_position",
                   "identity.seq",
@@ -472,9 +455,9 @@ export function readSessionTranscriptBoundedActiveContextCore(
         }
       }
     }
-    const contextSequences = selectedSequences.toSorted((left, right) => left - right);
+    contextSequences.sort((left, right) => left - right);
     let injectedBoundarySeq: number | undefined;
-    if (boundary && !selectedSequences.includes(boundary.seq)) {
+    if (boundary && !contextSequences.includes(boundary.seq)) {
       if (!limits || serializedBytes + boundary.serialized_bytes <= limits.maxBytes) {
         injectedBoundarySeq = boundary.seq;
         contextSequences.unshift(boundary.seq);
@@ -490,10 +473,10 @@ export function readSessionTranscriptBoundedActiveContextCore(
       for (const row of iterateSqliteQuerySync(
         projection.database.db,
         transcript
-          .select(["seq", transcriptEventJsonSql(projection.database.db).as("event_json")])
+          .select(["seq", "event_json", "event_zstd", "event_utf8_bytes"])
           .where("seq", "in", transcriptPositionSet(projection, payloadSequences)),
       )) {
-        payloads.set(row.seq, JSON.parse(row.event_json));
+        payloads.set(row.seq, JSON.parse(readTranscriptPayload(row)));
       }
     }
     // Retain logical ancestry across the byte cutoff without loading parent payloads.

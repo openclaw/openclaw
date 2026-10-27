@@ -4,6 +4,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { resetProxyValidationMocks } from "./proxy-cli.runtime.test-support.js";
 
 const { getRuntimeConfigMock, runProxyValidationMock, serverStopSpy, spawnMock } = vi.hoisted(
   () => ({
@@ -78,31 +79,7 @@ describe("proxy cli runtime", () => {
     delete process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID;
     delete process.env.FORCE_COLOR;
     process.env.NO_COLOR = "1";
-    getRuntimeConfigMock.mockReset();
-    getRuntimeConfigMock.mockReturnValue({
-      proxy: {
-        enabled: true,
-        proxyUrl: "http://config-proxy.example:3128",
-      },
-    });
-    runProxyValidationMock.mockReset();
-    runProxyValidationMock.mockResolvedValue({
-      ok: true,
-      config: {
-        enabled: true,
-        proxyUrl: "http://config-proxy.example:3128",
-        source: "config",
-        errors: [],
-      },
-      checks: [
-        {
-          kind: "allowed",
-          url: "https://example.com/",
-          ok: true,
-          status: 200,
-        },
-      ],
-    });
+    resetProxyValidationMocks(getRuntimeConfigMock, runProxyValidationMock);
     process.exitCode = undefined;
     stdoutWrite.mockClear();
     vi.spyOn(process.stdout, "write").mockImplementation(stdoutWrite);

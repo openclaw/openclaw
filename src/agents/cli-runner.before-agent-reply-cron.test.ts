@@ -15,11 +15,7 @@ import {
 } from "../infra/diagnostic-events.js";
 import { captureGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { withBeforeAgentReplyObserver } from "../plugins/before-agent-reply.js";
-import {
-  readClaimingHookAdmission,
-  type ClaimingHookAdmission,
-} from "../plugins/hook-claim-admission.js";
-import type { PluginHookAgentContext } from "../plugins/hook-types.js";
+import { readClaimingHookAdmission } from "../plugins/hook-claim-admission.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../sessions/user-turn-transcript.test-support.js";
@@ -36,13 +32,6 @@ import { CliAuthProfilePreparationError } from "./cli-runner/auth-profile-prepar
 import { cliBackendLog } from "./cli-runner/log.js";
 import { FailoverError } from "./failover-error.js";
 
-type BeforeAgentReplyResult =
-  | undefined
-  | {
-      handled?: boolean;
-      reply?: { text?: string };
-    };
-
 const {
   hasHooksMock,
   replyMock,
@@ -51,19 +40,13 @@ const {
   prepareMock,
   closeSessionMock,
   closeLoopbackMock,
-  retireKeyMock,
   retireMock,
   authStoreMock,
   authFailureMock,
   authSuccessMock,
 } = vi.hoisted(() => ({
   hasHooksMock: vi.fn<(hookName: string) => boolean>(() => false),
-  replyMock: vi.fn<
-    (
-      event: unknown,
-      ctx: PluginHookAgentContext & ClaimingHookAdmission,
-    ) => Promise<BeforeAgentReplyResult>
-  >(async () => undefined),
+  replyMock: vi.fn<HookRunner["runBeforeAgentReply"]>(async () => undefined),
   beforeRunMock: vi.fn<HookRunner["runBeforeAgentRun"]>(async () => undefined),
   executeMock: vi.fn<(_context: unknown, _cliSessionIdToUse?: string) => Promise<CliOutput>>(
     async () => ({ text: "" }),
@@ -71,7 +54,6 @@ const {
   prepareMock: vi.fn(),
   closeSessionMock: vi.fn(),
   closeLoopbackMock: vi.fn(),
-  retireKeyMock: vi.fn(),
   retireMock: vi.fn(),
   authStoreMock: vi.fn(),
   authFailureMock: vi.fn(),
@@ -105,8 +87,8 @@ vi.mock("../gateway/mcp-http.js", () => ({
   closeMcpLoopbackServer: closeLoopbackMock,
 }));
 
-vi.mock("./agent-bundle-mcp-tools.js", () => ({
-  retireSessionMcpRuntimeForSessionKey: retireKeyMock,
+vi.mock("./agent-bundle-mcp-tools.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-bundle-mcp-tools.js")>()),
   retireSessionMcpRuntime: retireMock,
 }));
 
@@ -200,7 +182,6 @@ beforeEach(() => {
   prepareMock.mockImplementation(async (params) => await makeStubContext(params));
   closeSessionMock.mockReset();
   closeLoopbackMock.mockReset();
-  retireKeyMock.mockReset().mockResolvedValue(true);
   retireMock.mockReset().mockResolvedValue(true);
   authStoreMock.mockReset();
   authFailureMock.mockReset().mockResolvedValue(undefined);
@@ -696,10 +677,9 @@ describe("runCliAgent before_agent_reply seam", () => {
     expect(replyMock.mock.calls[0]?.[1]).toMatchObject({
       sessionKey: "agent:main:cron:scheduled",
     });
-    expect(result.meta.agentMeta?.sessionId).toBe("");
-    expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
     expect(result.payloads).toEqual([]);
     expect(result.meta).toMatchObject({
+      agentMeta: { sessionId: "", clearCliSessionBinding: true },
       finalAssistantRawText: "",
       finalAssistantVisibleText: "",
       terminalReply: { disposition: "silent" },
@@ -784,7 +764,6 @@ describe("runCliAgent before_agent_reply seam", () => {
       workspaceDir: runParams.workspaceDir,
       cfg: unopenedMcpConfig,
     };
-    retireKeyMock.mockImplementation(mcpTools.retireSessionMcpRuntimeForSessionKey);
     retireMock.mockImplementation(mcpTools.retireSessionMcpRuntime);
     executeMock.mockResolvedValue({ text: "real reply" });
 
@@ -810,7 +789,6 @@ describe("runCliAgent before_agent_reply seam", () => {
         successorRuntime,
       );
       expect(mcpTools.peekSessionMcpRuntime({ sessionKey })).toBe(successorRuntime);
-      expect(retireKeyMock).not.toHaveBeenCalled();
       expect(closeLoopbackMock).not.toHaveBeenCalled();
     } finally {
       await mcpTools.retireSessionMcpRuntime({ sessionId: originalSessionId, reason: "test-end" });

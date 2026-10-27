@@ -1,7 +1,7 @@
 import { BROWSER_IMAGE_MIME_TYPES } from "../../../../../src/shared/browser-image-mime-types.js";
 import { formatInlineCodeSpan } from "../../../../../src/shared/markdown-code.js";
 import { downloadArtifact, isHttpArtifactDownloadUrl } from "../../../api/artifact-download.ts";
-import { GatewayRequestError } from "../../../api/gateway.ts";
+import { GatewayRequestError } from "../../../api/gateway-connect-errors.ts";
 import {
   downloadSessionFile,
   type SessionFileDownload,
@@ -14,7 +14,18 @@ import { formatUiError } from "../../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
 import { isTextAttachment } from "../../../lib/media-file-extension.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
+import { TEXT_ATTACHMENT_PREVIEW_MAX_BYTES } from "./chat-attachment-text-reader.ts";
+import { isManagedOutgoingMediaSource } from "./chat-message-attachment-availability.ts";
+import {
+  admitManagedAttachmentGrant,
+  prepareManagedAttachmentGrant,
+  readAttachmentSource,
+  resolveAttachmentSidebarSource,
+} from "./chat-message-attachment-source.ts";
+import { loadManagedImageBlob } from "./chat-message-image-loading.ts";
+import { releaseChatMediaResourceOwner, type AttachmentItem } from "./chat-message-media.ts";
 import {
   readWorkspaceFileText,
   workspaceBrowserFilePath,
@@ -117,15 +128,34 @@ function createSessionWorkspaceFileContent(
     };
   }
   if (file.previewKind === "unsupported") {
+    const source: FilePreviewSource = {
+      path: filePath,
+      absolutePath: workspaceBrowserFilePath(result.root, filePath),
+      root: result.root,
+      download,
+    };
+    if (file.mimeType === "application/pdf") {
+      return {
+        kind: "attachment",
+        attachmentKind: "document",
+        title: name,
+        mimeType: file.mimeType,
+        sizeBytes: file.size,
+        sourceIdentity: JSON.stringify([
+          gatewayUrl,
+          result.sessionKey,
+          messageFile,
+          actionPath,
+          result.root,
+          result.source,
+        ]),
+        file: source,
+      };
+    }
     return {
       ...unsupportedFileSidebarContent(file, actionPath, download),
       fileLinkSessionKey: result.sessionKey,
-      file: {
-        path: filePath,
-        absolutePath: workspaceBrowserFilePath(result.root, filePath),
-        root: result.root,
-        download,
-      },
+      file: source,
     };
   }
   const text = readWorkspaceFileText(file);
@@ -265,13 +295,14 @@ export async function loadSessionWorkspaceArtifactContent(
   state: SessionWorkspaceHost,
   workspace: SessionWorkspaceState,
   artifactId: string,
+  previewSignal: AbortSignal,
 ) {
   const query = {
     sessionKey: workspace.sessionKey,
     artifactId,
     ...(workspace.agentId ? { agentId: workspace.agentId } : {}),
   };
-  const readDownload = async (signal: AbortSignal): Promise<Blob | null> => {
+  const read = async (signal: AbortSignal, readBinary = false) => {
     const currentWorkspace = getSessionWorkspace(state);
     if (
       currentWorkspace.sessionKey !== query.sessionKey ||
@@ -283,16 +314,92 @@ export async function loadSessionWorkspaceArtifactContent(
     // transfer must never follow a reconnect to a replacement Gateway.
     const client = state.client;
     const connectionEpoch = state.connectionEpoch;
-    const result = await downloadArtifact(state, query, signal, { readBinary: true });
-    if (
-      signal.aborted ||
-      !state.connected ||
-      state.client !== client ||
-      state.connectionEpoch !== connectionEpoch ||
-      !isCurrentSessionWorkspace(state, currentWorkspace)
-    ) {
-      return null;
+    const current = () =>
+      !signal.aborted &&
+      state.connected &&
+      state.client === client &&
+      state.connectionEpoch === connectionEpoch &&
+      isCurrentSessionWorkspace(state, currentWorkspace);
+    const preparedGrant = prepareManagedAttachmentGrant(
+      { sessionKey: query.sessionKey, artifactId: query.artifactId, connectionEpoch },
+      signal,
+    );
+    try {
+      const result = await downloadArtifact(state, query, signal, { readBinary });
+      if (!current() || !result) {
+        return null;
+      }
+      const url = result.url;
+      const mimeType = result.artifact.mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+      if (
+        !result.blob &&
+        url &&
+        isManagedOutgoingMediaSource(url) &&
+        BROWSER_IMAGE_MIME_TYPES.has(mimeType)
+      ) {
+        // Reuse the image owner's scoped bytes and cancellation, not an expiring URL in a tab.
+        const onMediaChange = () => {};
+        const release = () => releaseChatMediaResourceOwner(onMediaChange);
+        const stopAbort = listen(signal, "abort", release, { once: true });
+        try {
+          const blob = await loadManagedImageBlob(
+            url,
+            {
+              sessionKey: query.sessionKey,
+              agentId: workspace.agentId,
+              connectionEpoch,
+              resourceBasePath: state.resourceBasePath,
+              onMediaChange,
+              resolveArtifactDownload: async () => ({ url, expiresAt: result.expiresAt }),
+            },
+            result.artifact.id,
+          );
+          if (blob.type.split(";", 1)[0]?.trim().toLowerCase() !== mimeType) {
+            throw new Error("Artifact image returned an unexpected content type");
+          }
+          return current() ? { ...result, blob } : null;
+        } finally {
+          stopAbort();
+          release();
+        }
+      }
+      if (
+        !result.blob &&
+        url &&
+        isManagedOutgoingMediaSource(url) &&
+        (readBinary ||
+          ((isTextAttachment(mimeType, result.artifact.title) || mimeType === "image/svg+xml") &&
+            result.artifact.sizeBytes !== undefined &&
+            result.artifact.sizeBytes <= TEXT_ATTACHMENT_PREVIEW_MAX_BYTES))
+      ) {
+        // Consume the freshly authorized grant; retained media readers renew through their owner.
+        const blob = await readAttachmentSource(
+          artifactAttachment(result, url, false),
+          { resourceBasePath: state.resourceBasePath },
+          signal,
+          readBinary ? Infinity : TEXT_ATTACHMENT_PREVIEW_MAX_BYTES,
+        );
+        return current() && blob ? { ...result, blob } : null;
+      }
+      if (
+        !readBinary &&
+        url &&
+        isManagedOutgoingMediaSource(url) &&
+        !mimeType.startsWith("image/")
+      ) {
+        admitManagedAttachmentGrant(
+          preparedGrant,
+          artifactAttachment(result, url, true),
+          result.expiresAt,
+        );
+      }
+      return result;
+    } finally {
+      preparedGrant.release();
     }
+  };
+  const readDownload = async (signal: AbortSignal): Promise<Blob | null> => {
+    const result = await read(signal, true);
     if (result?.blob) {
       return result.blob;
     }
@@ -303,7 +410,7 @@ export async function loadSessionWorkspaceArtifactContent(
       type: result.artifact.mimeType ?? "application/octet-stream",
     });
   };
-  const result = await downloadArtifact(state, query);
+  const result = await read(previewSignal);
   return result?.artifact
     ? {
         artifact: result.artifact,
@@ -436,6 +543,7 @@ async function loadArtifactSidebarContent(
   const { data, encoding, url, blob } = result;
   const { title } = result.artifact;
   const mimeType = result.artifact.mimeType ?? "";
+  const svg = mimeType.split(";", 1)[0]?.trim().toLowerCase() === "image/svg+xml";
   const file: FilePreviewSource = {
     path: "",
     artifactId: result.artifact.id,
@@ -447,17 +555,17 @@ async function loadArtifactSidebarContent(
   let imageSource: string | undefined;
   let text: string | undefined;
   if (blob) {
-    if (mimeType.startsWith("image/")) {
+    if (svg || isTextAttachment(mimeType, title)) {
+      text = await blob.text();
+    } else if (mimeType.startsWith("image/")) {
       // Workspace previews outlive the ticket, so retain the image in the existing data URL form.
       imageSource = await readBlobAsDataUrl(blob, "Artifact image could not be decoded");
-    } else if (isTextAttachment(mimeType, title)) {
-      text = await blob.text();
     }
   } else if (encoding === "base64" && data !== undefined) {
-    if (mimeType.startsWith("image/")) {
-      imageSource = `data:${mimeType};base64,${data}`;
-    } else if (isTextAttachment(mimeType, title)) {
+    if (svg || isTextAttachment(mimeType, title)) {
       text = new TextDecoder().decode(base64ToBytes(data));
+    } else if (mimeType.startsWith("image/")) {
+      imageSource = `data:${mimeType};base64,${data}`;
     }
   }
   if (imageSource) {
@@ -479,13 +587,32 @@ async function loadArtifactSidebarContent(
       name: title,
       content: text,
       rawText: text,
-      mimeType,
+      mimeType: svg ? "image/svg+xml" : mimeType,
       language,
       download: file.download,
     };
   }
 
-  if (blob || encoding === "base64" || (url && isHttpArtifactDownloadUrl(url, resourceBasePath))) {
+  if (url && isManagedOutgoingMediaSource(url) && !mimeType.startsWith("image/")) {
+    const attachment = artifactAttachment(result, url, true);
+    return {
+      kind: "attachment",
+      attachmentKind: attachment.kind,
+      title,
+      mimeType,
+      sizeBytes: result.artifact.sizeBytes,
+      sourceIdentity: url,
+      resolveSource: (onMediaChange, runtime) =>
+        resolveAttachmentSidebarSource(attachment, { ...runtime, onMediaChange }),
+      file,
+    };
+  }
+
+  if (
+    blob ||
+    encoding === "base64" ||
+    (url && (isHttpArtifactDownloadUrl(url, resourceBasePath) || isManagedOutgoingMediaSource(url)))
+  ) {
     return {
       kind: "attachment",
       attachmentKind: "document",
@@ -499,4 +626,24 @@ async function loadArtifactSidebarContent(
     ? `# ${title}\n\n[Open artifact](${url})`
     : `# ${title}\n\nArtifact download is not previewable in the sidebar.`;
   return { kind: "markdown", content, rawText: content };
+}
+
+function artifactAttachment(
+  result: ArtifactDownloadResult,
+  url: string,
+  renewable: boolean,
+): AttachmentItem["attachment"] {
+  const mimeType = result.artifact.mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  return {
+    kind: mimeType.startsWith("video/")
+      ? "video"
+      : mimeType.startsWith("audio/")
+        ? "audio"
+        : "document",
+    label: result.artifact.title,
+    mimeType,
+    sizeBytes: result.artifact.sizeBytes,
+    url,
+    ...(renewable ? { artifactId: result.artifact.id } : {}),
+  };
 }

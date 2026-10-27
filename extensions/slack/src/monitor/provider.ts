@@ -145,39 +145,6 @@ function adoptSlackIdentity(params: {
   return true;
 }
 
-function formatSlackSocketReconnectMessage(params: {
-  event: string;
-  attempt: number;
-  delayMs: number;
-  error?: unknown;
-}) {
-  const suffix = params.error ? ` (${formatSlackError(params.error)})` : "";
-  return `slack socket disconnected (${params.event}); reconnecting in ${Math.round(params.delayMs / 1000)}s (attempt ${params.attempt}/∞)${suffix}`;
-}
-
-function formatSlackSocketStartRetryMessage(params: {
-  attempt: number;
-  delayMs: number;
-  error: unknown;
-  sdkContext?: string;
-}) {
-  const reason = formatSlackError(
-    params.error,
-    "Slack Socket Mode start failed without error detail",
-  );
-  const sdkContext = params.sdkContext?.trim() ? `; last SDK log: ${params.sdkContext.trim()}` : "";
-  return `slack socket mode failed to start; retry ${params.attempt}/∞ in ${Math.round(params.delayMs / 1000)}s reason="${reason}${sdkContext}"`;
-}
-
-function parseApiAppIdFromAppToken(raw?: string) {
-  const token = raw?.trim();
-  if (!token) {
-    return undefined;
-  }
-  const match = /^xapp-\d-([a-z0-9]+)-/i.exec(token);
-  return match?.[1]?.toUpperCase();
-}
-
 function resolveSlackRelayConfig(params: { relay: unknown; accountId: string }): {
   url: string;
   authToken: string;
@@ -368,7 +335,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
   let botUserId = "";
   let botId = "";
   const expectedApiAppIdFromAppToken =
-    slackMode === "socket" ? parseApiAppIdFromAppToken(appToken) : undefined;
+    slackMode === "socket"
+      ? /^xapp-\d-([a-z0-9]+)-/i.exec(appToken?.trim() ?? "")?.[1]?.toUpperCase()
+      : undefined;
   let authTestError: string | undefined;
   let authIdentityWarning: string | undefined;
   let authTestIdentity: SlackAuthTestIdentity | undefined;
@@ -717,16 +686,14 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
 
           reconnectAttempts += 1;
           delayMs = computeBackoff(SLACK_SOCKET_RECONNECT_POLICY, reconnectAttempts);
-          runtime.log?.(
-            warn(
-              formatSlackSocketReconnectMessage({
-                event: disconnect.event,
-                attempt: reconnectAttempts,
-                delayMs,
-                error: disconnect.error,
-              }),
-            ),
-          );
+          if (runtime.log) {
+            const suffix = disconnect.error ? ` (${formatSlackError(disconnect.error)})` : "";
+            runtime.log(
+              warn(
+                `slack socket disconnected (${disconnect.event}); reconnecting in ${Math.round(delayMs / 1000)}s (attempt ${reconnectAttempts}/∞)${suffix}`,
+              ),
+            );
+          }
           await gracefulStopSlackApp(app, socketClient);
         } catch (err) {
           trackSlackAuthFailure(
@@ -739,14 +706,19 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
           publishSlackDisconnectedStatus(opts.setStatus, err);
           reconnectAttempts += 1;
           delayMs = computeBackoff(SLACK_SOCKET_RECONNECT_POLICY, reconnectAttempts);
-          runtime.error?.(
-            formatSlackSocketStartRetryMessage({
-              attempt: reconnectAttempts,
-              delayMs,
-              error: err,
-              sdkContext: socketModeLogger.getLastMessage(),
-            }),
-          );
+          if (runtime.error) {
+            const lastSdkMessage = socketModeLogger.getLastMessage();
+            const reason = formatSlackError(
+              err,
+              "Slack Socket Mode start failed without error detail",
+            );
+            const sdkContext = lastSdkMessage?.trim()
+              ? `; last SDK log: ${lastSdkMessage.trim()}`
+              : "";
+            runtime.error(
+              `slack socket mode failed to start; retry ${reconnectAttempts}/∞ in ${Math.round(delayMs / 1000)}s reason="${reason}${sdkContext}"`,
+            );
+          }
         }
         try {
           await sleepWithAbort(delayMs, opts.abortSignal);

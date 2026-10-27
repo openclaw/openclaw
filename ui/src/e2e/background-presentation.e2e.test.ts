@@ -4,6 +4,7 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { configResponse } from "./appearance-prefs.test-support.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Background presentation and live preview" });
@@ -50,23 +51,15 @@ suite.define(() => {
               "users.background.get",
             ],
             historyMessages: [
-              {
-                role: "user",
-                content: [{ type: "text", text: "Keep the writing surface solid." }],
-              },
-              {
-                role: "assistant",
-                content: [
-                  {
-                    type: "text",
-                    text: Array.from(
-                      { length: 18 },
-                      (_, index) =>
-                        `A clear response on the chosen backdrop. Paragraph ${index + 1} keeps the transcript long enough to exercise scrolling.`,
-                    ).join("\n\n"),
-                  },
-                ],
-              },
+              chatMessage("user", "Keep the writing surface solid."),
+              chatMessage(
+                "assistant",
+                Array.from(
+                  { length: 18 },
+                  (_, index) =>
+                    `A clear response on the chosen backdrop. Paragraph ${index + 1} keeps the transcript long enough to exercise scrolling.`,
+                ).join("\n\n"),
+              ),
             ],
             methodResponses: {
               "config.get": configResponse({ themeMode: mode }, "presentation"),
@@ -127,6 +120,12 @@ suite.define(() => {
                 bodyWidth: document.body.scrollWidth,
               };
             });
+          };
+          const readWritingSurface = async () => {
+            await page.locator(".chat-group.assistant").waitFor();
+            await page.locator(".chat-thread").hover({ position: { x: 16, y: 16 } });
+            await page.mouse.wheel(0, -1_000_000);
+            await page.getByText("Keep the writing surface solid.", { exact: true }).waitFor();
           };
           await page.goto(suite.server.baseUrl + "new");
           await expect.poll(async () => (await newPageGeometry()).fade).toBeGreaterThan(0);
@@ -204,7 +203,7 @@ suite.define(() => {
             await page
               .locator(".sidebar-region__background openclaw-session-background img")
               .waitFor({ state: "visible" });
-            await page.getByText("Keep the writing surface solid.", { exact: true }).waitFor();
+            await readWritingSurface();
             const surfaces = await page.evaluate(() => {
               const bg = document
                 .querySelector(".sidebar-region__background")!
@@ -311,7 +310,7 @@ suite.define(() => {
           preference = { ...preference, showInSessions: false };
           await sync();
           await page.goto(suite.server.baseUrl + "chat");
-          await page.getByText("Keep the writing surface solid.", { exact: true }).waitFor();
+          await readWritingSurface();
           expect(await page.locator(".sidebar-region__background img").count()).toBe(0);
           expect(
             await page

@@ -32,16 +32,8 @@ function primeOpenAiAuthProfile(mode: "api-key" | "token" = "api-key"): void {
 type LocalAudioSelection = Awaited<ReturnType<typeof inspectLocalAudioSelection>>;
 
 const closeEmbeddingProviderMock = vi.hoisted(() => vi.fn(async () => {}));
-const mocks = vi.hoisted(() => ({
-  runtime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn((code: number) => {
-      throw new Error(`exit ${code}`);
-    }),
-    writeJson: vi.fn(),
-    writeStdout: vi.fn(),
-  },
+const mocks = await vi.hoisted(async () => ({
+  runtime: (await import("./test-runtime-mock.js")).createInertRuntime(vi),
   loadConfig: vi.fn(() => ({})),
   getRuntimeConfigSourceSnapshot: vi.fn(() => null),
   setRuntimeConfigSnapshot: vi.fn(),
@@ -135,10 +127,9 @@ const mocks = vi.hoisted(() => ({
     voiceCompatible: false,
     attempts: [],
   })),
-  setTtsProvider: vi.fn(),
+  updateTtsPrefsAsync: vi.fn(),
   getTtsProviderAsync: vi.fn(() => "openai"),
   listSpeechProviders: vi.fn(() => []),
-  setTtsPersona: vi.fn(),
   resolveTtsConfig: vi.fn(() => ({ providerConfigs: {} })),
   resolveExplicitTtsOverridesAsync: vi.fn(
     ({
@@ -258,16 +249,14 @@ vi.mock("../secrets/provider-env-vars.js", () => ({
 }));
 
 // mock-isolation: Capability commands use fixture config and snapshot publication without host state.
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfigSourceSnapshot: mocks.getRuntimeConfigSourceSnapshot,
-  getRuntimeConfig: mocks.loadConfig,
-  loadConfig: mocks.loadConfig,
-  captureRuntimeConfigAsyncReader:
-    (...args: Parameters<typeof mocks.loadConfig>) =>
-    async () =>
-      mocks.loadConfig(...args),
-  setRuntimeConfigSnapshot: mocks.setRuntimeConfigSnapshot,
-}));
+vi.mock("../config/config.js", async () => {
+  const { createTestConfigReadMocks } = await import("../commands/test-runtime-config-helpers.js");
+  return {
+    getRuntimeConfigSourceSnapshot: mocks.getRuntimeConfigSourceSnapshot,
+    ...createTestConfigReadMocks(mocks, "loadConfig"),
+    setRuntimeConfigSnapshot: mocks.setRuntimeConfigSnapshot,
+  };
+});
 
 vi.mock("./command-config-resolution.js", () => ({
   resolveCommandConfigWithSecrets: mocks.resolveCommandConfigWithSecrets,
@@ -408,19 +397,19 @@ vi.mock("../tts/tts.js", () => ({
   listSpeechVoices: vi.fn(async () => []),
   resolveTtsConfig: mocks.resolveTtsConfig,
   resolveTtsPrefsPathAsync: vi.fn(async () => "/tmp/tts.json"),
-  setTtsEnabled: vi.fn(),
-  setTtsPersona: mocks.setTtsPersona,
-  setTtsProvider: mocks.setTtsProvider,
   resolveExplicitTtsOverridesAsync: mocks.resolveExplicitTtsOverridesAsync,
   textToSpeech: mocks.textToSpeech,
 }));
 
-vi.mock("../tts/provider-registry.js", () => ({
+vi.mock("../tts/tts-settings-write-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../tts/tts-settings-write-worker.js")>()),
+  updateTtsPrefsAsync: mocks.updateTtsPrefsAsync,
+}));
+
+vi.mock("../tts/provider-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../tts/provider-registry.js")>()),
   canonicalizeSpeechProviderId: vi.fn((provider: string) => provider),
   listSpeechProviders: mocks.listSpeechProviders,
-  normalizeSpeechProviderId: vi.fn(
-    (provider: string | undefined) => provider?.trim().toLowerCase() || undefined,
-  ),
 }));
 
 // mock-isolation: Command routing uses fixture providers without the auth and plugin runtime graph.
@@ -1066,7 +1055,7 @@ describe("capability cli", () => {
       message: "error: option '--persona <id>' cannot be used with option '--off'",
     });
     expect(mocks.callGateway).not.toHaveBeenCalled();
-    expect(mocks.setTtsPersona).not.toHaveBeenCalled();
+    expect(mocks.updateTtsPrefsAsync).not.toHaveBeenCalled();
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
 
@@ -1766,7 +1755,7 @@ describe("capability cli", () => {
           disableFallback: true,
         });
       }
-      expect(mocks.setTtsProvider).not.toHaveBeenCalled();
+      expect(mocks.updateTtsPrefsAsync).not.toHaveBeenCalled();
       expect(mocks.setRuntimeConfigSnapshot).toHaveBeenLastCalledWith(expected, undefined);
     },
   );

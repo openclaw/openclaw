@@ -1,41 +1,48 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show, useContext } from "solid-js";
+import { createMemo, For, lazy, Loading, Show, useContext } from "solid-js";
 import type {
   SessionPlacementDiskSpace,
   SessionPlacementWorkerRuntimeInstall,
 } from "../../../../packages/gateway-protocol/src/schema/session-placement.ts";
 import { readRunFailureNotice } from "../../../../src/shared/run-failure-notice.js";
+import type { GuestWelcomeHandle } from "../../app/guest-welcome-handle.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { formatWebUiIconErrorText } from "../../components/error-presentation.ts";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-session-runtime.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { clampText } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import {
-  ChatProviderReviewNotice,
-  type ChatProviderReviewOwner,
-} from "./chat-provider-review-controller.tsx";
-import type { SubagentRoster, SubagentRowContext } from "./chat-spawned-subagent.ts";
+import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
 import { ChatGPTUsageLimit } from "./chatgpt-usage-limit.tsx";
-import { ChatChildAttention } from "./components/chat-child-attention.tsx";
 import { ChatConversationMobile } from "./components/chat-conversation-presentation.ts";
+import { renderGuestWelcomeStatus } from "./components/chat-guest-welcome-status.tsx";
+import { ChatSendStatus } from "./components/chat-message-send-status-view.tsx";
 import { WorkspaceConflictNotice } from "./components/chat-workspace-conflict.tsx";
 import type { ChatRunError } from "./run-lifecycle.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
 import "../../styles/chat/conversation-notices.css";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 
+const ChatProviderReviewNotice = lazy(() => import("./chat-provider-review-controller.tsx"), {
+  export: "ChatProviderReviewNotice",
+});
+
 registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatComposerEnglish);
 
 registerNewSessionRuntimeEnglish();
 
 export type ChatPlacementStartupNoticeProps = {
   placementStartup?: ApplicationPlacementStartupStatus | null;
   onRetrySessionPlacementStartup?: () => void;
+  onDiscardSessionPlacementStartup?: () => void;
+  /** App-wide guest welcome setup, shown beside the composer of the route's chat. */
+  guestWelcome?: GuestWelcomeHandle;
 };
 
 type ChatViewNoticesProps = {
@@ -45,22 +52,19 @@ type ChatViewNoticesProps = {
   onDismissError?: () => void;
 };
 
-type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps &
-  SubagentRowContext &
-  Pick<SubagentRoster, "subagentSessionsRead"> & {
-    sessionKey?: string;
-    presented?: boolean;
-    onSessionSelect?: (key: string) => void;
-    connected?: boolean;
-    messages: readonly unknown[];
-    providerPolicyNotice?: ProviderPolicyNotice | null;
-    // Resolve after the first pane frame prepares the Solid owner's permission facts.
-    readProviderReview?: () => ChatProviderReviewOwner;
-    runError?: ChatRunError | null;
-    onRefresh?: () => void;
-    onDismissWorkspaceConflict?: () => void;
-    workspaceConflict?: WorkspaceResultConflict | null;
-  };
+type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps & {
+  sessionKey?: string;
+  presented?: boolean;
+  connected?: boolean;
+  messages: readonly unknown[];
+  providerPolicyNotice?: ProviderPolicyNotice | null;
+  // Resolve after the first pane frame prepares the Solid owner's permission facts.
+  readProviderReview?: () => ChatProviderReviewOwner | undefined;
+  runError?: ChatRunError | null;
+  onRefresh?: () => void;
+  onDismissWorkspaceConflict?: () => void;
+  workspaceConflict?: WorkspaceResultConflict | null;
+};
 
 function renderStatusNotice(
   className: string,
@@ -303,17 +307,12 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
   );
   return (
     <>
-      {/* Seeded rows can name children the gateway no longer links; wait for its child read. */}
-      <Show when={props.subagentParentKey && props.subagentSessionsRead}>
-        <ChatChildAttention
-          sessionKey={props.subagentParentKey ?? ""}
-          sessions={props.subagentSessions ?? []}
-          onOpenSubagent={props.onOpenSubagent}
-          onOpenSession={props.onSessionSelect}
-        />
-      </Show>
       <Show when={props.readProviderReview?.()}>
-        {(owner) => <ChatProviderReviewNotice owner={owner()} />}
+        {(owner) => (
+          <Loading>
+            <ChatProviderReviewNotice owner={owner()} />
+          </Loading>
+        )}
       </Show>
       {renderProviderPolicyNotice(providerPolicyNotice())}
       <Show when={usageLimit()}>
@@ -349,15 +348,22 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
           </>
         )}
       </Show>
-      <WorkspaceConflictNotice
-        conflict={props.workspaceConflict ?? undefined}
-        onDismiss={props.onDismissWorkspaceConflict}
-      />
-      <ChatPlacementStartupError
+      <Show when={props.workspaceConflict}>
+        <WorkspaceConflictNotice
+          conflict={props.workspaceConflict ?? undefined}
+          onDismiss={props.onDismissWorkspaceConflict}
+        />
+      </Show>
+      <ChatPlacementStartupNotice
         status={props.placementStartup}
         messages={props.messages}
+        connected={props.connected}
         onRetry={props.onRetrySessionPlacementStartup}
+        onDiscard={props.onDiscardSessionPlacementStartup}
       />
+      <Show when={props.guestWelcome} keyed>
+        {(owner) => renderGuestWelcomeStatus(owner)}
+      </Show>
     </>
   );
 }
@@ -381,63 +387,88 @@ function renderProviderPolicyNotice(notice: ProviderPolicyNotice | null | undefi
   );
 }
 
-function ChatPlacementStartupError(props: {
+function ChatPlacementStartupNotice(props: {
   status: ApplicationPlacementStartupStatus | null | undefined;
   messages: readonly unknown[];
+  connected?: boolean;
   onRetry?: () => void;
+  onDiscard?: () => void;
 }) {
-  const checking = () => props.status?.action === "check-delivery";
   const statusError = () => props.status?.error ?? t("newSession.createFailed");
-  const error = () =>
-    checking()
-      ? [t("chat.queue.checkDeliveryHelp"), props.status?.error].filter(Boolean).join("\n\n")
-      : t("newSession.placementStartFailed", { error: statusError() });
+  const error = () => t("newSession.placementStartFailed", { error: statusError() });
   const displayStatusError = () => formatWebUiIconErrorText(statusError());
-  const displayError = () =>
-    checking()
-      ? [t("chat.queue.checkDeliveryHelp"), props.status?.error ? displayStatusError() : undefined]
-          .filter(Boolean)
-          .join("\n\n")
-      : t("newSession.placementStartFailed", { error: displayStatusError() });
+  const displayError = () => t("newSession.placementStartFailed", { error: displayStatusError() });
   // History can own the bubble before startup observes its receipt. Keep the
-  // banner action reachable when transcript deduplication hides the row.
+  // notice actions reachable when transcript deduplication hides the row.
   const hasInlineTurn = () => {
     const initialTurn = props.status?.initialTurn;
     return initialTurn && !findChatSubmissionMessage(props.messages, initialTurn.sendRunId, true);
   };
   return (
-    <Show when={props.status?.phase === "failed"}>
-      <ChatErrorNotice
-        error={error()}
-        action={
-          <Show
-            when={props.status?.discardAndReload}
-            fallback={
-              <Show when={props.status?.retryable && props.onRetry && !hasInlineTurn()}>
-                <button class="btn btn--sm" type="button" onClick={() => props.onRetry?.()}>
-                  {t(checking() ? "chat.queue.checkDelivery" : "common.retry")}
-                </button>
-              </Show>
-            }
-          >
-            <button
-              class="btn btn--sm danger chat-error__discard"
-              type="button"
-              onClick={() => props.status?.discardAndReload?.()}
+    <>
+      <Show
+        when={props.status?.phase !== "failed" && !hasInlineTurn() && props.status?.initialTurn}
+      >
+        {(turn) => (
+          <div class="chat-composer-neighbor-card chat-composer-neighbor-card--info" role="status">
+            <span class="chat-composer-neighbor-card__icon" aria-hidden="true">
+              <Icon name="info" />
+            </span>
+            <div class="chat-composer-neighbor-card__copy">
+              <ChatSendStatus
+                status={{
+                  id: turn().id,
+                  state: turn().sendState === "waiting-reconnect" ? "waiting-reconnect" : "sending",
+                  error: turn().sendError,
+                }}
+                actions={{
+                  connected: props.connected,
+                  queuedMessageAction: { id: turn().id, onDiscard: props.onDiscard },
+                }}
+              />
+            </div>
+          </div>
+        )}
+      </Show>
+      <Show when={props.status?.phase === "failed"}>
+        <ChatErrorNotice
+          error={error()}
+          action={
+            <Show
+              when={props.status?.discardAndReload}
+              fallback={
+                <span class="row">
+                  <Show when={props.status?.retryable && props.onRetry && !hasInlineTurn()}>
+                    <button class="btn btn--sm" type="button" onClick={() => props.onRetry?.()}>
+                      {t("common.retry")}
+                    </button>
+                  </Show>
+                  <Show when={props.onDiscard && !hasInlineTurn()}>
+                    <button
+                      class="btn btn--sm"
+                      type="button"
+                      title={t("chat.queue.discardPendingMessage")}
+                      onClick={() => props.onDiscard?.()}
+                    >
+                      {t("chat.queue.discard")}
+                    </button>
+                  </Show>
+                </span>
+              }
             >
-              {t("newSession.discardUnsavedAndReload")}
-            </button>
-          </Show>
-        }
-        displayError={displayError()}
-        summary={
-          checking()
-            ? t("chat.queue.checkDeliveryHelp")
-            : props.status?.discardAndReload
-              ? displayError()
-              : t("chat.errorStartSummary")
-        }
-      />
-    </Show>
+              <button
+                class="btn btn--sm danger chat-error__discard"
+                type="button"
+                onClick={() => props.status?.discardAndReload?.()}
+              >
+                {t("newSession.discardUnsavedAndReload")}
+              </button>
+            </Show>
+          }
+          displayError={displayError()}
+          summary={props.status?.discardAndReload ? displayError() : t("chat.errorStartSummary")}
+        />
+      </Show>
+    </>
   );
 }

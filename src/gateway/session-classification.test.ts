@@ -29,9 +29,7 @@ describe("sessionClassificationForRow", () => {
           key: "agent:main:dashboard:board-agent",
           isMain: false,
           entry: entry({
-            createdVia: "operator",
             createdSurface,
-            createdActor: { type: "human", source: "profile", id: "ada" },
           }),
         }),
       ).toMatchObject({

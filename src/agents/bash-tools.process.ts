@@ -184,6 +184,9 @@ function finishedSessionDetails(sessionId: string, finished: ProcessSession) {
 }
 
 function finishedSessionText(finished: ProcessSession): string {
+  if (finished.exitReason === "memory-limit") {
+    return "Process killed for exceeding its host memory bound. Reduce concurrency or input size, or split the work.";
+  }
   if (isConfirmedRequestedStop(finished)) {
     return `Process stopped by request (${renderExecExitLabel(finished)}).`;
   }
@@ -500,19 +503,18 @@ export function createProcessTool(
               window.effectiveLimit,
             );
             const runtime = scopedSession ? describeRunningSession(scopedSession) : undefined;
+            const ended = record.exited && record.endedAt !== undefined;
             const text =
               retentionCapNote(record) +
               (slice || (scopedSession ? "(no output yet)" : "(no output recorded)")) +
               defaultTailNote(totalLines, window.usingDefaultTail) +
-              (isConfirmedRequestedStop(record)
-                ? `\n\nProcess stopped by request (${renderExecExitLabel(record)}).`
-                : "");
+              (ended ? `\n\n${finishedSessionText(record)}` : "");
             const output = runtime
               ? text +
                 buildInputWaitHint(runtime.waitingForInput) +
                 (runtime.followUp ? `\n\n${runtime.followUp}` : "")
               : appendExecTimeoutRetryGuidance(text, record.exitReason);
-            return textResult(output, {
+            const result = textResult(output, {
               ...(runtime
                 ? {
                     status: record.exited ? "completed" : "running",
@@ -528,6 +530,12 @@ export function createProcessTool(
               totalChars,
               truncated: record.truncated,
             });
+            // Reading an ended process delivers its result, so retire its completion like poll.
+            return ended
+              ? attachInternalToolResultAcknowledgement(result, () =>
+                  acknowledgeNotifyOnExit(record),
+                )
+              : result;
           });
         }
 

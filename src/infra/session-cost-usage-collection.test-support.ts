@@ -1,11 +1,13 @@
 import path from "node:path";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
-import { listSessionTranscriptArchivesReadOnly } from "../config/sessions/session-accessor.sqlite-history.js";
 import {
   readTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync,
 } from "../config/sessions/session-accessor.sqlite-read.js";
-import { listSessionTranscriptInstances } from "../config/sessions/session-history.js";
+import {
+  listSessionTranscriptArchivesReadOnly,
+  listSessionTranscriptInstances,
+} from "../config/sessions/session-history-read.js";
 import {
   listDurableSqliteTargetPathsForSessionStorePath,
   resolveSqliteTargetFromSessionStorePath,

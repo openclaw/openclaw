@@ -7,9 +7,13 @@ import {
   withDelegatedUpdateCommandExecutor,
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
+import {
+  readUpdateDoctorInput,
+  readUpdatePostCoreInput,
+  type DecodedUpdateDoctorInput,
+  type DecodedUpdatePostCoreInput,
+} from "../cli/update-cli/update-command-migrated-input.js";
 import type {
-  UpdateDoctorInput,
-  UpdatePostCoreInput,
   MigratedUpdateFinalizationInput,
   MigratedUpdateFinalizationResult,
 } from "../cli/update-cli/update-command-migrated-types.js";
@@ -32,10 +36,12 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contra
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
+import { closePostgresPool, preparePostgresPoolForUpdate } from "./postgres-sync/pool.js";
 import { resolveEnvironmentValue } from "./process-env.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { stopSupervisedPredecessorGateway } from "./update-candidate-predecessor-stop.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
+import { createDoctorServiceInspectionBudget } from "./update-doctor-deadline.js";
 import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   recordUpdateDoctorConfigWriteRefusal,
@@ -91,18 +97,19 @@ async function finalizeMigratedUpdate(): Promise<void> {
   // bypasses that bootstrap, so install the same kill-on-close owner before input.
   // POSIX callers own the detached process group and join its kernel extinction.
   await withCliProcessScope(retainCliProcessJobUntilExit);
+  await preparePostgresPoolForUpdate(
+    process.argv[2] === "--doctor" ? "openclaw doctor --fix" : "openclaw update repair",
+  );
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   const text = Buffer.concat(chunks).toString("utf8");
   if (process.argv[2] === "--post-core") {
-    // SAFETY: The parent binds this receiver before releasing its private input.
-    return await runDelegatedPostCore(JSON.parse(text) as UpdatePostCoreInput);
+    return await runDelegatedPostCore(readUpdatePostCoreInput(JSON.parse(text)));
   }
   if (process.argv[2] === "--doctor") {
-    // SAFETY: The typed parent sends this private input only after binding this child.
-    return await runDelegatedDoctor(JSON.parse(text) as UpdateDoctorInput);
+    return await runDelegatedDoctor(readUpdateDoctorInput(JSON.parse(text)));
   }
   // SAFETY: Only the typed parent continuation serializes this private input.
   const input = JSON.parse(text) as MigratedUpdateFinalizationInput;
@@ -223,7 +230,7 @@ async function finalizeMigratedUpdate(): Promise<void> {
   await fs.writeFile(input.resultPath, JSON.stringify(response), { mode: 0o600 });
 }
 
-async function runDelegatedPostCore(input: UpdatePostCoreInput): Promise<void> {
+async function runDelegatedPostCore(input: DecodedUpdatePostCoreInput): Promise<void> {
   const resultPath = process.env[POST_CORE_UPDATE_RESULT_PATH_ENV]?.trim();
   const executingRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
   if (
@@ -278,7 +285,8 @@ async function runDelegatedPostCore(input: UpdatePostCoreInput): Promise<void> {
   }
 }
 
-async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
+async function runDelegatedDoctor(input: DecodedUpdateDoctorInput): Promise<void> {
+  const remaining = createDoctorServiceInspectionBudget(input.serviceInspectionDeadlineAtMs);
   const resultPath = process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]?.trim();
   if (!resultPath || !input.executor) {
     throw new Error("Update Doctor requires its delegated executor and result path.");
@@ -326,12 +334,15 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
       }
       const { runDoctorHealthFlow } = await import("../flows/doctor-health.js");
       assertCurrent();
+      remaining();
       await stopSupervisedPredecessorGateway(input, {
         root: input.root,
         assertCurrent,
+        serviceInspectionBudget: remaining,
         warn: (message) => process.stderr.write(`${message}\n`),
       });
       assertCurrent();
+      const doctorBudget = remaining();
       await runDoctorHealthFlow(
         {
           ...defaultRuntime,
@@ -361,6 +372,8 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
           ...(input.databasePluginOwners
             ? { databasePluginOwners: input.databasePluginOwners }
             : {}),
+          serviceInspectionDeadlineAtMs:
+            doctorBudget === undefined ? undefined : Date.now() + doctorBudget,
           ...(input.postCoreSchemaRepair === true
             ? { postCoreSchemaRepair: { runId: input.runId, assertCurrent } }
             : {}),
@@ -537,6 +550,7 @@ async function finalizeInput(
 
 void (async () => {
   const errors: unknown[] = [];
+  let databaseOwnersClosed = true;
   for (const finalize of [
     finalizeMigratedUpdate,
     finalizeActiveDebugProxyCaptures,
@@ -545,6 +559,20 @@ void (async () => {
   ]) {
     try {
       await finalize();
+    } catch (error) {
+      errors.push(error);
+      if (
+        finalize === closeOpenClawStateDatabaseAsync ||
+        finalize === closeDefaultRetainedNativeWorkerSource
+      ) {
+        databaseOwnersClosed = false;
+      }
+    }
+  }
+  // A rejected drain can retain live SQL work that still needs these services.
+  if (databaseOwnersClosed) {
+    try {
+      await closePostgresPool();
     } catch (error) {
       errors.push(error);
     }

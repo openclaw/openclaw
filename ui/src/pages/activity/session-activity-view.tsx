@@ -16,6 +16,7 @@ import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { IpLocation } from "../../components/ip-location.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsStatus, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
+import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import "../../components/solid/viewer-facepile.tsx";
 import { formatRelativeTimestamp, formatTimeAgo } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
@@ -30,8 +31,11 @@ import {
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { projectAgents, projectAgentIdentity } from "../../lib/reactive/domain-capabilities.ts";
-import { getLocale, t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, getLocale, t } from "../../lib/reactive/i18n.ts";
+import {
+  sharedAgentIdentityProjection,
+  sharedAgentsProjection,
+} from "../../lib/reactive/shared-application-projections.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
   isSessionKeyAddressable,
@@ -58,6 +62,8 @@ import {
   sessionActivityOwner,
   type SessionActivityFilters,
 } from "./session-activity.ts";
+
+registerEnglishCatalog(registerActivityEnglish);
 
 export type SessionActivityViewProps = {
   expandedAutomationDays: ReadonlySet<string>;
@@ -131,15 +137,14 @@ function SessionLinkView(props: {
       : null,
   );
   const SessionLink = dynamic(() => (target() ? "a" : "div"));
-  const agents = projectAgents(context.agents);
-  const agentIdentity = projectAgentIdentity({
-    identities: context.agentIdentity,
-    get agentId() {
-      return props.row.agentId;
-    },
-  });
+  const agents = sharedAgentsProjection(context.agents);
+  const agentIdentity = sharedAgentIdentityProjection(context.agentIdentity);
   const owner = createMemo(() =>
-    sessionActivityOwner(props.row, agents.read().agentsList, agentIdentity.read()),
+    sessionActivityOwner(
+      props.row,
+      agents.read().agentsList,
+      agentIdentity.read().get(props.row.agentId),
+    ),
   );
   const ownerName = () => {
     getLocale();

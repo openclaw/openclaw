@@ -15,6 +15,8 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
 import * as agentScope from "./agent-scope.js";
+import type { RunEmbeddedAgentParamsWithSessionFile } from "./embedded-agent-runner/run/internal-params.js";
+import { resolvePreparedRuntimeWorkspaces } from "./embedded-agent-runner/run/prepared-runtime-context.js";
 import { createContextEngineLogicalTurnLease } from "./harness/context-engine-logical-turn.js";
 import {
   resolveAgentRuntimePluginLoadPlan,
@@ -22,11 +24,15 @@ import {
 } from "./harness/runtime-plugin-load-plan.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
-import { getPreparedModelRuntimePluginGeneration } from "./prepared-model-runtime-generation-scope.js";
+import {
+  getPreparedModelRuntimeBorrowedSnapshot,
+  getPreparedModelRuntimePluginGeneration,
+} from "./prepared-model-runtime-generation-scope.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   loadPublishedGatewayReplyDispatchRuntime,
   refreshPreparedModelRuntimeSnapshots,
+  type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
 
 const reply = vi.hoisted(() => ({ context: vi.fn(), execute: vi.fn() }));
@@ -160,6 +166,69 @@ describe("prepared reply fallback ownership", () => {
       expect.stringContaining('Context engine "unavailable-context" degraded to "legacy"'),
     );
     expect(config.plugins?.slots?.contextEngine).toBe("unavailable-context");
+  });
+
+  it("shares selected model preparation across fresh reply execution workspaces", async () => {
+    const config: OpenClawConfig = {
+      agents: { entries: { default: {} }, defaults: { model: "initial/model" } },
+      plugins: { slots: { memory: "none" } },
+    };
+    mocks.configuredAgentIds = ["default"];
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() =>
+      createEmptyPluginRegistry(),
+    );
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+      allowGatewaySubagentBinding: true,
+    });
+    const dispatch = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
+    const snapshots = new Set<PreparedModelRuntimeSnapshot>();
+    reply.execute.mockImplementation(async (context: { workspaceDir: string }) => {
+      const pluginGeneration = getPreparedModelRuntimePluginGeneration()!;
+      const prepared = getPreparedModelRuntimeBorrowedSnapshot(pluginGeneration)!;
+      snapshots.add(prepared);
+      const workspaces = resolvePreparedRuntimeWorkspaces({
+        config,
+        agentId: dispatch.agentId,
+        agentDir: dispatch.agentDir,
+        workspaceDir: context.workspaceDir,
+        pluginGeneration,
+      } as RunEmbeddedAgentParamsWithSessionFile);
+      await using nested = await acquireAgentRunPreparedModelRuntime(
+        {
+          config,
+          agentId: dispatch.agentId,
+          agentDir: dispatch.agentDir,
+          workspaceDir: workspaces.runtimeWorkspaceResolution.workspaceDir,
+          allowGatewaySubagentBinding: true,
+          runtimePluginSelections: [
+            { provider: "selected", modelId: "model", runtime: "openclaw" },
+          ],
+        },
+        { pluginGeneration },
+      );
+      expect(nested.snapshot).toBe(prepared);
+      return { text: context.workspaceDir };
+    });
+    const execute = bindPreparedReplyDispatchRuntime(dispatch, () =>
+      runPreparedReply({
+        provider: "selected",
+        model: "model",
+        ctx: {},
+        sessionCtx: {},
+        cfg: config,
+        agentId: dispatch.agentId,
+      } as RunPreparedReplyParams),
+    );
+    let buildsAfterFirst: number | undefined;
+    for (const workspaceDir of ["/synthetic/fresh-a", "/synthetic/fresh-b", "/synthetic/fresh-a"]) {
+      reply.context.mockResolvedValue({ kind: "run", workspaceDir, thinkingRuntime: "openclaw" });
+      await expect(execute()).resolves.toEqual({ text: workspaceDir });
+      buildsAfterFirst ??= mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.length;
+      expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(buildsAfterFirst);
+    }
+    expect(snapshots.size).toBe(1);
   });
 
   it.each([

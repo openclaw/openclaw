@@ -3,7 +3,7 @@ export type SqliteSessionWriteOperation =
   | "doctor-telegram-general-topic"
   | "session-entry-target.patch"
   | "session-entry.patch"
-  | "session-migration.legacy-main-copy"
+  | "session-repair.copy"
   | "session-migration.legacy-main-in-place"
   | "session-migration.legacy-main-quarantine"
   | "session.agent-purge.commit"

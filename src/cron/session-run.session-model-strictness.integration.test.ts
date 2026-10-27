@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installPrivateUpdateHandoffStore } from "../../test/helpers/private-update-handoff-store.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-manager-api.js";
 import { bindSessionMcpRuntimeTestScheduler } from "../agents/agent-bundle-mcp-manager.test-support.js";
+import { providerResponse } from "../agents/embedded-agent-runner.wire.test-support.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
@@ -13,9 +15,9 @@ import { refreshSessionPatchQueuedSelection } from "../gateway/server-methods/se
 import "../llm/ai-transport-host.js";
 import { resetSessionControllerStateForTest } from "../sessions/session-lifecycle-admission.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { makeCronJob } from "./delivery.test-helpers.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
 import { runCronSessionTurn } from "./session-run.js";
-import { loadCronJobsStore, saveCronJobsStore } from "./store.js";
 import type { CronStoredJob } from "./types.js";
 
 const admission = vi.hoisted(() => ({
@@ -76,31 +78,14 @@ const providerUrls = {
 const namedSessionKey = "agent:main:scheduled-pin";
 
 function completedResponse(model: string): Response {
-  const item = {
-    id: "msg_synthetic",
-    type: "message",
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text: "answered", annotations: [] }],
-  };
-  const response = { id: "resp_synthetic", model, status: "in_progress", output: [] };
-  const events = [
-    { type: "response.created", response },
-    { type: "response.output_item.added", output_index: 0, item: { ...item, content: [] } },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        ...response,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
-    },
-  ];
-  return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
-    headers: { "content-type": "text/event-stream" },
-  });
+  return providerResponse({
+    api: "openai-responses",
+    model,
+    id: "resp_synthetic",
+    messageId: "msg_synthetic",
+    text: "answered",
+    calls: [],
+  }).response;
 }
 
 function stubProvider(baseUrl: string, model: string) {
@@ -108,17 +93,7 @@ function stubProvider(baseUrl: string, model: string) {
     api: "openai-responses" as const,
     baseUrl,
     agentRuntime: { id: "openclaw" },
-    models: [
-      {
-        id: model,
-        name: model,
-        reasoning: false,
-        input: ["text" as const],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 1024,
-      },
-    ],
+    models: [modelDefinition(model, { reasoning: false, contextWindow: 128_000, maxTokens: 1024 })],
   };
 }
 
@@ -135,17 +110,22 @@ afterEach(async () => {
 });
 
 describe("stored session model selections in scheduled session turns", () => {
+  const userSelection = { modelOverrideSource: "user" } as const;
+  const pinned = { provider: "pinned", model: "model-x" };
+  const primary = { provider: "primary", model: "model-a" };
+  function expectPinnedFailure(result: Awaited<ReturnType<typeof runCronSessionTurn>> | undefined) {
+    expect(result?.status).toBe("error");
+    expect(result?.error).toContain("Couldn't sign in to the AI service");
+  }
   async function runWithFailingPinnedModel(params: {
-    storedSelection: Pick<SessionEntry, "modelOverrideSource">;
+    storedSelection?: Pick<SessionEntry, "modelOverrideSource">;
     target?: "main" | "session";
     payload?: { model?: string; fallbacks?: string[] };
+    payloadKind?: "systemEvent";
     storedPin?: { provider: string; model: string } | null;
     defaultPrimary?: string;
     modelAllow?: string[];
-    /**
-     * Queue the scheduled turn behind an active turn, then commit a sessions.patch model change
-     * while the drained turn waits in admission.
-     */
+    // Commit a sessions.patch model change while a queued turn waits in admission.
     retargetWhileAdmitting?: { pin: { provider: string; model: string } | null };
   }) {
     return await withOpenClawTestState({ label: "cron-session-turn-model" }, async (state) => {
@@ -226,20 +206,20 @@ describe("stored session model selections in scheduled session turns", () => {
         params.target === "main"
           ? resolveAgentMainSessionKey({ cfg, agentId: "main" })
           : namedSessionKey;
-      const stored: CronStoredJob = {
+      const stored: CronStoredJob = makeCronJob({
         id: "session-turn-model",
         name: "Session turn model",
         agentId: "main",
-        enabled: true,
         createdAtMs: 1,
         updatedAtMs: 1,
-        schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: params.target === "main" ? "main" : `session:${sessionKey}`,
         wakeMode: "now",
         delivery: { mode: "none" },
-        payload: { kind: "agentTurn", message: "Reply.", ...params.payload },
-        state: {},
-      };
+        payload:
+          params.payloadKind === "systemEvent"
+            ? { kind: "systemEvent", text: "Reply." }
+            : { kind: "agentTurn", message: "Reply.", ...params.payload },
+      });
       const conversation = {
         sessionId: "pinned-conversation",
         updatedAt: Date.now(),
@@ -253,16 +233,10 @@ describe("stored session model selections in scheduled session turns", () => {
               ...conversation,
               providerOverride: params.storedPin?.provider ?? "pinned",
               modelOverride: params.storedPin?.model ?? "model-x",
-              ...params.storedSelection,
+              ...(params.storedSelection ?? userSelection),
             },
       );
-      const storePath = state.statePath("cron", "jobs.json");
       const activeJob: CronStoredJob = { ...stored, id: "active-turn", name: "Active turn" };
-      await saveCronJobsStore(storePath, {
-        version: 1,
-        jobs: activeTurn ? [stored, activeJob] : [stored],
-      });
-      const [job, loadedActiveJob] = (await loadCronJobsStore(storePath)).jobs;
       const runTurn = (scheduled: CronStoredJob) =>
         runCronSessionTurn({
           occurrence: TEST_SCHEDULED_OCCURRENCE,
@@ -276,7 +250,7 @@ describe("stored session model selections in scheduled session turns", () => {
           assertCurrent() {},
         });
       if (!activeTurn) {
-        return { result: await runTurn(job!), requests };
+        return { result: await runTurn(stored), requests };
       }
       let retargeted = false;
       admission.whileQueuedAdmissionWaits = async (admittedSessionKey) => {
@@ -311,11 +285,11 @@ describe("stored session model selections in scheduled session turns", () => {
       const settledEarly = (turn: string) => (outcome: unknown) => {
         throw new Error(`${turn} turn settled early: ${JSON.stringify(outcome)}`);
       };
-      const activeResult = runTurn(loadedActiveJob!);
+      const activeResult = runTurn(activeJob);
       let pending: ReturnType<typeof runTurn> | undefined;
       try {
         await Promise.race([activeTurn.started.promise, activeResult.then(settledEarly("active"))]);
-        pending = runTurn(job!);
+        pending = runTurn(stored);
         await Promise.race([queued.promise, pending.then(settledEarly("scheduled"))]);
       } finally {
         activeTurn.release.resolve();
@@ -330,27 +304,22 @@ describe("stored session model selections in scheduled session turns", () => {
   }
 
   it.each([
-    {
-      name: "user",
-      target: "session" as const,
-      storedSelection: { modelOverrideSource: "user" as const },
-    },
-    { name: "legacy", target: "session" as const, storedSelection: {} },
-    {
-      name: "user",
-      target: "main" as const,
-      storedSelection: { modelOverrideSource: "user" as const },
-    },
-    { name: "legacy", target: "main" as const, storedSelection: {} },
-  ])(
-    "reports a failed $name selection in a $target turn instead of answering from a configured fallback",
-    async ({ storedSelection, target }) => {
-      const { result, requests } = await runWithFailingPinnedModel({ storedSelection, target });
-
+    ["user", "session", undefined, userSelection],
+    ["legacy", "session", undefined, {}],
+    ["user", "main", undefined, userSelection],
+    ["legacy", "main", undefined, {}],
+    ["user", "main", "systemEvent", userSelection],
+    ["legacy", "main", "systemEvent", {}],
+  ] as const)(
+    "reports a failed %s selection in a %s/%s turn without fallback",
+    async (_name, target, payloadKind, storedSelection) => {
+      const { result, requests } = await runWithFailingPinnedModel({
+        storedSelection,
+        target,
+        payloadKind,
+      });
       expect(requests).toEqual(["pinned/model-x"]);
-      expect(result.status).toBe("error");
-      // Session turns report the pinned model's 401 through the ordinary reply failure text.
-      expect(result.error).toContain("Couldn't sign in to the AI service");
+      expectPinnedFailure(result);
     },
   );
 
@@ -358,35 +327,33 @@ describe("stored session model selections in scheduled session turns", () => {
     {
       name: "an automatic session selection",
       storedSelection: { modelOverrideSource: "auto" as const },
-      expected: ["pinned/model-x", "fallback/model-b"],
     },
     {
-      // Distinct from the configured fallback, so the job's own list is what answers.
+      name: "an unpinned session in a main system-event turn",
+      storedPin: null,
+      defaultPrimary: "pinned/model-x",
+      target: "main" as const,
+      payloadKind: "systemEvent" as const,
+    },
+    {
       name: "a user selection with explicit job fallbacks",
-      storedSelection: { modelOverrideSource: "user" as const },
       payload: { fallbacks: ["jobfallback/model-c"] },
-      expected: ["pinned/model-x", "jobfallback/model-c"],
+      expectedFallback: "jobfallback/model-c",
     },
     {
       name: "a user selection when the job sets its own model",
-      storedSelection: { modelOverrideSource: "user" as const },
       payload: { model: "pinned/model-x" },
-      expected: ["pinned/model-x", "fallback/model-b"],
     },
     {
-      // Only the session-selection gate separates this from a strict run: the stored user pin
-      // is disallowed, so the configured default (the failing stub here) runs instead.
       name: "a disallowed user selection that falls through to the default",
-      storedSelection: { modelOverrideSource: "user" as const },
-      storedPin: { provider: "primary", model: "model-a" },
+      storedPin: primary,
       defaultPrimary: "pinned/model-x",
       modelAllow: ["pinned/*", "fallback/*"],
-      expected: ["pinned/model-x", "fallback/model-b"],
     },
-  ])("keeps falling back for $name", async ({ expected, ...selection }) => {
+  ])("keeps falling back for $name", async ({ expectedFallback, ...selection }) => {
     const { result, requests } = await runWithFailingPinnedModel(selection);
 
-    expect(requests).toEqual(expected);
+    expect(requests).toEqual(["pinned/model-x", expectedFallback ?? "fallback/model-b"]);
     expect(result.status, result.error).toBe("ok");
   });
 
@@ -394,8 +361,7 @@ describe("stored session model selections in scheduled session turns", () => {
     it("falls back once the user pin is cleared", async () => {
       // The answering pin is cleared, so the failing default runs with its configured fallback.
       const { result, requests } = await runWithFailingPinnedModel({
-        storedSelection: { modelOverrideSource: "user" },
-        storedPin: { provider: "primary", model: "model-a" },
+        storedPin: primary,
         defaultPrimary: "pinned/model-x",
         retargetWhileAdmitting: { pin: null },
       });
@@ -405,16 +371,22 @@ describe("stored session model selections in scheduled session turns", () => {
       expect(result.status, result.error).toBe("ok");
     });
 
-    it("stays strict once the user pins a model", async () => {
-      const { result, requests } = await runWithFailingPinnedModel({
-        storedSelection: {},
-        storedPin: null,
-        retargetWhileAdmitting: { pin: { provider: "pinned", model: "model-x" } },
-      });
-
-      expect(requests).toEqual(["primary/model-a", "pinned/model-x"]);
-      expect(result.status).toBe("error");
-      expect(result.error).toContain("Couldn't sign in to the AI service");
-    });
+    it.each([
+      { target: "session", payloadKind: undefined },
+      { target: "main", payloadKind: "systemEvent" },
+    ] as const)(
+      "keeps a queued $target/$payloadKind turn strict after pinning",
+      async ({ target, payloadKind }) => {
+        const { result, requests } = await runWithFailingPinnedModel({
+          storedSelection: {},
+          storedPin: null,
+          target,
+          payloadKind,
+          retargetWhileAdmitting: { pin: pinned },
+        });
+        expect(requests).toEqual(["primary/model-a", "pinned/model-x"]);
+        expectPinnedFailure(result);
+      },
+    );
   });
 });

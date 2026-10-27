@@ -10,6 +10,10 @@ import type {
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { subscribeChatOutboxAttentionChanges } from "../lib/chat/outbox-owner-registry.ts";
 import { subscribeStoredChatOutboxChanges } from "../lib/chat/outbox-store.ts";
+import {
+  hasCronInventoryEvents,
+  isCronInventoryInvalidation,
+} from "../lib/cron/inventory-connection.ts";
 import { loadCompactCronJobsPage } from "../lib/cron/jobs.ts";
 import { createInitialCronState, loadCronStatus } from "../lib/cron/state.ts";
 import { isGatewayAvailable } from "../lib/gateway-availability.ts";
@@ -101,7 +105,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
   private modelAuthRefresh: { generation: number; agentId: string; requested: boolean } | null =
     null;
   private readonly stopSubscriptions: Array<() => void>;
-  private outboxRuntime: typeof import("../pages/chat/chat-outbox-owner.ts") | null = null;
+  private outboxRuntime: typeof import("../lib/chat/outbox-attention.ts") | null = null;
   private disposed = false;
 
   constructor(
@@ -118,10 +122,16 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
       sources.gateway.subscribe(() => this.synchronizeGateway()),
       sources.gateway.subscribeEvents((event) => {
         if (event.event === "cron") {
-          if (!this.applyCronEvent(event.payload)) {
+          if (
+            !this.applyCronEvent(event.payload) &&
+            !hasCronInventoryEvents(sources.gateway.snapshot)
+          ) {
             this.load(false);
           }
-        } else if (event.event === "config.changed") {
+          if (document.visibilityState === "hidden") {
+            this.cronRefreshNeeded = true;
+          }
+        } else if (isCronInventoryInvalidation(event, sources.gateway.snapshot)) {
           this.load(false);
         } else if (modelAuthEventInvalidates(event)) {
           this.load(true, false);
@@ -137,7 +147,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
       listen(globalThis, "storage", this.syncDismissalsFromStorage),
     ];
     // Share the chat owner’s live overlays without putting its send graph in shell startup.
-    void import("../pages/chat/chat-outbox-owner.ts")
+    void import("../lib/chat/outbox-attention.ts")
       .then((runtime) => {
         if (!this.disposed) {
           this.outboxRuntime = runtime;
@@ -266,12 +276,12 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
                 item.agentId,
                 item.sessionKey,
                 item.id,
-                item.unconfirmed,
+                item.held,
                 item.command,
               ]),
             },
             requiresAction: true,
-            severity: item.unconfirmed ? ("warning" as const) : ("error" as const),
+            severity: item.held ? ("warning" as const) : ("error" as const),
           }),
         ) ?? [];
     const overlay = this.sources.overlays.snapshot;

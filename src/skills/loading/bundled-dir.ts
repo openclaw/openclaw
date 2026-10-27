@@ -18,15 +18,13 @@ function looksLikeSkillsDir(dir: string): boolean {
   }
 }
 
-export type BundledSkillsResolveOptions = {
-  argv1?: string;
-  moduleUrl?: string;
-  cwd?: string;
-  execPath?: string;
-};
-
 export function resolveBundledSkillsDir(
-  opts: BundledSkillsResolveOptions = {},
+  opts: {
+    argv1?: string;
+    moduleUrl?: string;
+    cwd?: string;
+    execPath?: string;
+  } = {},
 ): string | undefined {
   const override = process.env.OPENCLAW_BUNDLED_SKILLS_DIR?.trim();
   if (override) {

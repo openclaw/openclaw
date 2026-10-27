@@ -373,6 +373,8 @@ openclaw models accounts list --timeout 45000 --json
 
 ## Auth profiles
 
+`models auth list` escapes control characters in terminal output. Its `--json` output preserves the original field values.
+
 These commands manage **System / agent** credentials, not personal Gateway accounts. Before provider sign-in, `models auth login` shows the selected agent and that it is operating on the machine running OpenClaw.
 
 `models auth paste-api-key --provider <id>` can save a key while the local Gateway

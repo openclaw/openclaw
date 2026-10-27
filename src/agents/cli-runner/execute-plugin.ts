@@ -19,6 +19,7 @@ import type {
   CliBackendUserInputResult,
 } from "../../plugins/cli-backend.types.js";
 import type { RunExit, TerminationReason } from "../../process/supervisor/types.js";
+import { isExecCompletionInputProvenance } from "../../sessions/input-provenance.js";
 import { assertionSucceeds } from "../../shared/assertion.js";
 import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import {
@@ -556,6 +557,9 @@ export async function executePluginOwnedProcess(params: {
         env: params.env,
         prompt: params.prompt,
         ...(params.promptContext ? { promptContext: params.promptContext } : {}),
+        ...(isExecCompletionInputProvenance(params.context.params.inputProvenance)
+          ? { promptOrigin: "host" as const }
+          : {}),
         modelId: params.context.normalizedModel,
         systemPrompt: stripSystemPromptCacheBoundary(params.context.systemPrompt).trim(),
         ...(params.sessionId ? { sessionId: params.sessionId } : {}),
@@ -689,9 +693,7 @@ export async function executePluginOwnedProcess(params: {
     params.onOutstandingWorkChange?.(false);
     // Permission callbacks can be retained by the plugin or its subprocess.
     // Closing the turn fences those capabilities before any outer cleanup runs.
-    if (!controller.signal.aborted) {
-      controller.abort(new Error("CLI plugin runtime turn is no longer active."));
-    }
+    controller.abort(new Error("CLI plugin runtime turn is no longer active."));
     detachReplyBackend?.();
     await closePluginIterator(iterator);
   }

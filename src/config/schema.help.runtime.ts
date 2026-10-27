@@ -134,6 +134,18 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Enables Tool Search. When on, OpenClaw hides large tool catalogs behind structured search/describe/call tools during embedded runtime runs.",
   "tools.toolSearch.mode":
     'Choose the model-facing surface: "tools" (default) exposes structured search/describe/call tools; "directory" keeps a bounded tool directory visible, exposes a bounded set of likely or required schemas, and defers the rest behind search/describe/call.',
+  "tools.toolSearch.include":
+    "Presentation selectors for catalog-eligible, policy-approved tools. Omitted selects all eligible tools; [] selects none. Fields within a selector are ANDed; selectors are ORed. Unselected tools remain directly callable. Does not affect independent Code Mode or Codex-native search.",
+  "tools.toolSearch.include[].source":
+    'Tool origin: "openclaw" for core and non-MCP plugins, "mcp" for registered MCP tools, or "client" for client-supplied tools. Qualify names with a source to avoid matching lookalikes.',
+  "tools.toolSearch.include[].name":
+    "Registered tool name or * glob, using tool-policy normalization (including aliases). Name-only selectors match across sources. No regex support or tool-group expansion.",
+  "tools.toolSearch.exclude":
+    "Tools to keep directly visible instead of cataloging. Uses the same selectors as include; exclusion wins. Omitted or [] excludes nothing. Does not grant permissions or override direct-only and runtime-required tools.",
+  "tools.toolSearch.exclude[].source":
+    'Origin to exclude from cataloging: "openclaw", "mcp", or "client". ANDed with name when both are present.',
+  "tools.toolSearch.exclude[].name":
+    "Registered tool name or * glob to keep direct, using tool-policy normalization. Name-only selectors match across sources; use source qualification to avoid unintended matches.",
   "tools.toolSearch.searchDefaultLimit":
     "Default number of Tool Search results returned when the model omits a limit. Runtime clamps this to `maxSearchLimit`.",
   "tools.toolSearch.maxSearchLimit":
@@ -237,7 +249,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.embedSandbox":
     'Iframe sandbox policy for hosted Control UI embeds. "strict" disables scripts, "scripts" allows interactive embeds while keeping origin isolation (default), and "trusted" adds `allow-same-origin` for same-site documents that intentionally need stronger privileges.',
   "gateway.controlUi.allowExternalEmbedUrls":
-    "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas and /__openclaw__/a2ui documents do not need it.",
+    "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas documents do not need it.",
   "gateway.controlUi.automaticallyFetchFavicons":
     "Fetch link favicons and browser-tab social previews through the Gateway (default on). Browser-tab cards load public page metadata and declared images without browser cookies or site credentials. All requests use strict SSRF checks and bounded HTML/image processing. Set false to disable both automatic favicon and page-preview fetches; live browser screenshots are unaffected.",
   "gateway.controlUi.allowedOrigins":
@@ -540,7 +552,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "skills.load.watch":
     "Enable filesystem-triggered skill discovery with a safety rescan every 30 minutes for missed events. Disabling this leaves explicit OpenClaw skill changes, relevant configuration changes, and Gateway startup refreshing skills immediately. Existing sessions use changed snapshots on their next agent turn.",
   "skills.workshop.autonomous.mode":
-    'Controls background learning: "auto" lets agents save and update Workshop skills after substantial work, and archives learned skills unused for 30 days. Every change is recorded and undoable. "off" disables background learning. Default: "auto".',
+    'Controls background learning: "auto" lets agents save and update Workshop skills after substantial work, and archives learned skills unused for 30 days. Every change is recorded and undoable. "propose" saves what background reviews would change as drafts instead; review them with /learn drafts. "off" disables background learning. Default: "auto".',
   "skills.workshop.autonomous.channelNotices":
     'Post background review notices to channel conversations, except Slack, with an Undo button (default: false); the Control UI shows that message as plain text. When disabled, notices appear only as the Learned row in the Control UI chat. Saying "undo" works either way.',
   approvals:

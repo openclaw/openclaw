@@ -11,10 +11,11 @@ import {
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
-  beginSessionEffect,
+  runSessionMutation,
   getSessionMutationCount,
 } from "../../sessions/session-controller.lifecycle.js";
 import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { requestActiveCronJobCancellation } from "../active-jobs.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
@@ -289,27 +290,34 @@ it("blocks workspace-only images beside the session store", () =>
 
 it("does not prepare media when the source generation changes while waiting", () =>
   withCompletionFixture(async (fixture) => {
-    const admission = await beginSessionEffect({
+    const entered = createDeferredCore();
+    const finish = createDeferredCore();
+    const mutation = runSessionMutation({
       scope: fixture.scope.storePath,
       identities: [fixture.scope.sessionKey, fixture.scope.sessionId],
-      assertAllowed: () => {},
+      run: async () => {
+        entered.resolve();
+        await finish.promise;
+        await replaceSessionEntry(fixture.scope, {
+          sessionId: "replacement-session",
+          lifecycleRevision: "replacement-generation",
+          updatedAt: 3000,
+        });
+      },
     });
+    await entered.promise;
     const commit = fixture.commit();
     try {
       await vi.waitFor(() => expect(getSessionMutationCount()).toBe(1));
       expect(await fixture.records()).toEqual([]);
-      await replaceSessionEntry(fixture.scope, {
-        sessionId: "replacement-session",
-        lifecycleRevision: "replacement-generation",
-        updatedAt: 3000,
-      });
-      admission.release();
+      finish.resolve();
+      await mutation;
       await expect(commit).resolves.toMatchObject({ ok: false });
       expect(await fixture.records()).toEqual([]);
       expect(await fixture.messages()).toEqual([]);
       expect(fixture.updates()).toBe(0);
     } finally {
-      admission.release();
-      await commit;
+      finish.resolve();
+      await Promise.all([mutation, commit]);
     }
   }));

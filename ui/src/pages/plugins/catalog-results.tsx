@@ -60,6 +60,10 @@ export type PluginCatalogResultsProps = PluginDiscoveryState & {
   onRetry: () => void;
 };
 
+type CatalogResultsState = PluginCatalogResultsProps & {
+  installedByCatalogId: ReadonlyMap<string, PluginCatalogItem>;
+};
+
 const SECTION_SIZE = 8;
 // Estimate the current registry footprint without duplicating its taxonomy.
 // The actual labels, ordering, and count still come only from ClawHub.
@@ -219,13 +223,9 @@ export function formatCompactCount(value: number): string {
 
 function CatalogCard(props: {
   plugin: PluginDiscoveryEntry;
-  state: PluginCatalogResultsProps;
+  state: CatalogResultsState;
 }): JSX.Element {
-  const inventoryEntry = createMemo(() =>
-    props.state.inventory?.find(
-      (plugin) => plugin.installed && plugin.catalogId === props.plugin.id,
-    ),
-  );
+  const inventoryEntry = createMemo(() => props.state.installedByCatalogId.get(props.plugin.id));
   const installedState = () => {
     const state = inventoryEntry()?.state ?? props.plugin.local.state;
     return state === "not-installed" ? null : state;
@@ -268,24 +268,26 @@ function CatalogCard(props: {
             <div class="plugin-card-title-row">
               <h3>{props.plugin.catalog.name}</h3>
               {props.plugin.catalog.official ? renderPluginOfficialBadge() : undefined}
+              <div class="plugin-catalog-card__action">
+                {installed() ? (
+                  renderPluginStateStatus(installedState()!, "plugin-catalog-card__status")
+                ) : (
+                  <PluginInstallAction
+                    registerInstallAction={props.state.registerInstallAction}
+                    buttonClass={
+                      "btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"
+                    }
+                    pluginName={props.plugin.catalog.name}
+                    busy={busy()}
+                    disabled={!canInstall()}
+                    progress={progress()}
+                    onInstall={() => props.state.onInstall(props.plugin.id)}
+                  />
+                )}
+              </div>
             </div>
             {renderPluginAuthor(props.plugin.catalog.author)}
           </div>
-        </div>
-        <div class="plugin-catalog-card__action">
-          {installed() ? (
-            renderPluginStateStatus(installedState()!, "plugin-catalog-card__status")
-          ) : (
-            <PluginInstallAction
-              registerInstallAction={props.state.registerInstallAction}
-              buttonClass={"btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"}
-              pluginName={props.plugin.catalog.name}
-              busy={busy()}
-              disabled={!canInstall()}
-              progress={progress()}
-              onInstall={() => props.state.onInstall(props.plugin.id)}
-            />
-          )}
         </div>
       </div>
       <PluginCardSummary
@@ -356,7 +358,7 @@ function CatalogSection(params: {
   items: readonly PluginDiscoveryEntry[];
   loading?: boolean;
   onViewAll?: () => void;
-  state: PluginCatalogResultsProps;
+  state: CatalogResultsState;
 }): JSX.Element {
   return (
     <>
@@ -514,7 +516,7 @@ function renderCatalogEmptyState(): JSX.Element {
   );
 }
 
-function RawResults(props: PluginCatalogResultsProps): JSX.Element {
+function RawResults(props: CatalogResultsState): JSX.Element {
   const items = createMemo(() => props.result?.items ?? []);
   const official = createMemo(() => items().filter((plugin) => plugin.catalog.official));
   const community = createMemo(() => items().filter((plugin) => !plugin.catalog.official));
@@ -555,7 +557,7 @@ function RawResults(props: PluginCatalogResultsProps): JSX.Element {
   );
 }
 
-function GroupedCatalog(props: PluginCatalogResultsProps & { loading?: boolean }): JSX.Element {
+function GroupedCatalog(props: CatalogResultsState & { loading?: boolean }): JSX.Element {
   const items = createMemo(() => props.result?.items ?? []);
   const sourceCategories = createMemo(() => props.categories);
   const categories = createMemo(() =>
@@ -610,6 +612,18 @@ function GroupedCatalog(props: PluginCatalogResultsProps & { loading?: boolean }
 }
 
 export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JSX.Element {
+  const inventory = createMemo(() => props.inventory);
+  const installedByCatalogId = createMemo(() => {
+    const entries = new Map<string, PluginCatalogItem>();
+    // Inventory order decides which installed copy supplies a catalog entry's state.
+    for (const plugin of inventory() ?? []) {
+      const catalogId = plugin.catalogId;
+      if (plugin.installed && catalogId !== undefined && !entries.has(catalogId)) {
+        entries.set(catalogId, plugin);
+      }
+    }
+    return entries;
+  });
   const recordedError = createMemo(() => props.error);
   const { ready, receipt } = createCatalogRead(() => props.reads.browse, recordedError);
   const resultAvailable = createMemo(() => props.result !== null);
@@ -674,7 +688,11 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
           ]}
           fallback={
             grouped() ? (
-              <GroupedCatalog {...props} loading={true} />
+              <GroupedCatalog
+                {...props}
+                installedByCatalogId={installedByCatalogId()}
+                loading={true}
+              />
             ) : (
               <PluginCatalogSkeleton label={t("pluginsPage.loadingDiscovery")} />
             )
@@ -693,9 +711,9 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
             {readCatalog()}
           </Errored>
           {grouped() ? (
-            <GroupedCatalog {...props} />
+            <GroupedCatalog {...props} installedByCatalogId={installedByCatalogId()} />
           ) : props.hasCurrentResult || !recordedError() ? (
-            <RawResults {...props} />
+            <RawResults {...props} installedByCatalogId={installedByCatalogId()} />
           ) : undefined}
         </Loading>
       </div>

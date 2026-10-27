@@ -25,6 +25,7 @@ import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent
 import type { ReplyBackendQueueMessageResult } from "../../sessions/session-controller.contracts.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
 import { captureSessionControllerSourceSettlement } from "../../sessions/session-controller.mailbox.js";
+import { expectNoCalls as expectNotCalled } from "../../test-utils/mock-call-assertions.js";
 import { runReplyQuestionInput } from "./agent-runner-question-input.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import {
@@ -44,12 +45,6 @@ import { createQueueTestRun } from "./reply-tool-authority.test-support.js";
 const text = "candidate committed answer";
 type QueueOptions = Parameters<typeof steerActiveSessionWithOptionalDeliveryWait>[2];
 type SteerParams = Parameters<typeof runActiveReplySteer>[0];
-
-function expectNotCalled(...mocks: ReturnType<typeof vi.fn>[]) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
-}
 
 function startSteer(
   key: string,

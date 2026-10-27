@@ -13,11 +13,19 @@ type OptionalViewProp =
 export type CronProps = Omit<CronViewProps, OptionalViewProp | "gateway"> &
   Partial<Pick<CronViewProps, OptionalViewProp>> & {
     gateway: CronViewProps["gateway"] | null;
+    toggleSavingJobId?: string | null;
   };
 
 export type CronPanelMode = "overview" | "create" | "job";
 
 export type CronJobActionProps = Pick<
   CronProps,
-  "canManage" | "busy" | "connected" | "onRun" | "onToggle" | "onClone" | "onRemove"
+  | "canManage"
+  | "busy"
+  | "connected"
+  | "toggleSavingJobId"
+  | "onRun"
+  | "onToggle"
+  | "onClone"
+  | "onRemove"
 >;

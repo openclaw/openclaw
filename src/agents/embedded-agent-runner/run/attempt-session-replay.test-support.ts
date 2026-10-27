@@ -262,6 +262,7 @@ export async function withInterruptedTurn(
     const attempt = {
       config: {},
       contextTokenBudget: 8000,
+      timeoutMs: 120_000,
       model: testModel,
       modelId: testModel.id,
       provider: testModel.provider,
@@ -284,6 +285,13 @@ export async function withInterruptedTurn(
       throw new Error("Replay fixture requires a selected worker reader");
     }
     let active = true;
+    const runAbortController = new AbortController();
+    const assertCurrent = () => {
+      runAbortController.signal.throwIfAborted();
+      if (!active) {
+        throw new Error("original writer closed");
+      }
+    };
     const withOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) =>
       withOwnedSessionTranscriptWrites(
         {
@@ -294,9 +302,7 @@ export async function withInterruptedTurn(
           },
           sessionReader,
           assertCommitAllowed: () => {
-            if (!active) {
-              throw new Error("original writer closed");
-            }
+            assertCurrent();
           },
           withTranscriptWrite: (write) => lifecycle.withTranscriptWrite(write),
         },
@@ -313,13 +319,16 @@ export async function withInterruptedTurn(
           prepareEmbeddedAttemptSessionManager({
             ...extra,
             attempt,
+            assertCurrent: extra?.assertCurrent ?? assertCurrent,
             agentDir: state.agentDir("main"),
             effectiveCwd: state.workspaceDir,
             effectiveWorkspace: state.workspaceDir,
             onSessionManagerCreated: onCreated ?? (() => {}),
             replayAllowedToolNames: new Set(["read"]),
             resolveActiveContextEnginePluginId: () => undefined,
+            runAbortSignal: extra?.runAbortSignal ?? runAbortController.signal,
             sessionAgentId: target.agentId,
+            sessionTarget: target,
             withOwnedTranscriptWrite,
           }),
       });
@@ -335,7 +344,11 @@ export async function withInterruptedTurn(
 export async function withReplaySession(
   fixture: Parameters<Parameters<typeof withInterruptedTurn>[1]>[0],
   appendOnlyRuntimeContext: boolean,
-  run: (session: AgentSession, submit: () => Promise<void>) => Promise<void>,
+  run: (
+    session: AgentSession,
+    submit: () => Promise<void>,
+    manager: SessionManager,
+  ) => Promise<void>,
   options: {
     beforeStart?: () => Promise<unknown>;
     afterReplayPreparation?: () => Promise<unknown>;
@@ -404,7 +417,6 @@ export async function withReplaySession(
         images: options.images ?? [],
         modelPrompt: attempt.prompt,
         onFinalPromptText: () => {},
-        onSteeringAcknowledged: () => {},
         persistToolResultProjections: async () => {},
         runtimeOnly: false,
         systemPrompt: "",
@@ -420,7 +432,7 @@ export async function withReplaySession(
             session.prompt(text, { ...opts, expandPromptTemplates: false }),
           ),
       });
-    await run(session, submit);
+    await run(session, submit, prepared.sessionManager);
   } finally {
     session.dispose();
   }

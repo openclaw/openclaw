@@ -41,15 +41,10 @@ import { invalidateOpenClawAgentDatabaseValidationsForAgent } from "../state/ope
 import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
-import { withCurrentOpenClawStateReadScope } from "../state/openclaw-state-db-readonly.js";
+import { resolveOpenClawStateReadPath } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import type { OpenClawStateWorkerLeaseContext } from "../state/openclaw-state-lease-context.js";
-import {
-  withOpenClawStateLeaseWorkerAdmission,
-  withOpenClawStateLeasesWorkerAdmission,
-} from "../state/openclaw-state-lease-worker-owner.js";
+import { withOpenClawStateLeaseWorkerAdmission } from "../state/openclaw-state-lease-worker-owner.js";
 import { withOpenClawStateLeaseAsync } from "../state/openclaw-state-lease.js";
-import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease.types.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
@@ -174,30 +169,20 @@ function runAgentDeletionWithLease<T>(
           lifetime.assertCurrent();
         };
         const execute = async <Result>(
-          apply: (
-            scope: DomainScope,
-            identity: typeof lifetime.identity,
-            additionalIdentities: readonly OpenClawStateLeaseIdentity[],
-          ) => Promise<Result>,
+          apply: (scope: DomainScope, identity: typeof lifetime.identity) => Promise<Result>,
           publication?: {
             assertCurrent?: () => void;
             onCommitted?: (facts: unknown) => void;
             onAdmission?: (request: SqliteWorkerAdmissionRequest, stateIdentityKey: string) => void;
-            additionalLeases?: readonly OpenClawStateWorkerLeaseContext[];
           },
         ): Promise<Result> => {
           assertCurrentHost();
           const invoke = (
-            admission: Pick<typeof lifetime, "assertCurrent" | "createAdmission">,
-            identities: readonly OpenClawStateLeaseIdentity[],
+            admission: Pick<typeof lifetime, "assertCurrent" | "createAdmission" | "identity">,
           ) => {
-            const identity = identities[0];
-            if (!identity) {
-              throw new Error("Agent deletion requires a retained lease");
-            }
             return runOpenClawStateWorkerOperation(
               context,
-              (scope) => apply(scope, identity, identities.slice(1)),
+              (scope) => apply(scope, admission.identity),
               {
                 assertCurrent: admission.assertCurrent,
                 createAdmission: (retained) => {
@@ -250,19 +235,7 @@ function runAgentDeletionWithLease<T>(
               publication?.assertCurrent?.();
             },
           };
-          return publication?.additionalLeases?.length
-            ? withOpenClawStateLeasesWorkerAdmission(
-                [lease, ...publication.additionalLeases],
-                context,
-                (admission) => invoke(admission, admission.identities),
-                authority,
-              )
-            : withOpenClawStateLeaseWorkerAdmission(
-                lease,
-                statePath,
-                (admission) => invoke(admission, [admission.identity]),
-                authority,
-              );
+          return withOpenClawStateLeaseWorkerAdmission(lease, statePath, invoke, authority);
         };
         try {
           return await run(async (entry, beginOptions = {}) => {
@@ -373,8 +346,7 @@ function runAgentDeletionWithLease<T>(
                 ),
               runWithWorker: (operation, publication) =>
                 execute(
-                  (scope, identity, additionalIdentities) =>
-                    operation(scope, { lease: identity, predicate }, additionalIdentities),
+                  (scope, identity) => operation(scope, { lease: identity, predicate }),
                   publication,
                 ),
             };
@@ -540,14 +512,13 @@ export function isAgentDeletionBlocked(
   if (database) {
     return Boolean(readAgentDeletionJournalInDatabase({ db: database }, agentId, "runtime"));
   }
-  return withCurrentOpenClawStateReadScope(options, (statePath) => {
-    const opened = openClawStateDatabaseCache.getCachedOpenClawStateDatabase(statePath, {
-      readOnly: true,
-    });
-    // Native writers publish transaction-local facts before their committed receipt exists.
-    if (opened?.db.isTransaction) {
-      return getAgentDeletionJournalStatus(opened.db, agentId) !== "absent";
-    }
-    return getOrLoadAgentDeletionJournalStatus(statePath, agentId, () => undefined) !== "absent";
+  const statePath = resolveOpenClawStateReadPath(options);
+  const opened = openClawStateDatabaseCache.getCachedOpenClawStateDatabase(statePath, {
+    readOnly: true,
   });
+  // Native writers publish transaction-local facts before their committed receipt exists.
+  if (opened?.db.isTransaction) {
+    return getAgentDeletionJournalStatus(opened.db, agentId) !== "absent";
+  }
+  return getOrLoadAgentDeletionJournalStatus(statePath, agentId, () => undefined) !== "absent";
 }

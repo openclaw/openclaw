@@ -24,6 +24,7 @@ import {
   type ResponsesPromptObservation,
   type ResponsesServiceTierObservation,
 } from "./openai-responses-contracts.js";
+import type { SdkResponse } from "./openai-responses-sdk.test-support.js";
 import {
   message as responseMessage,
   outputItem,
@@ -40,7 +41,6 @@ type StreamMessage =
   | { type: "close"; code: number }
   | { type: "delay"; ms: number }
   | { type: "message"; message: Record<string, unknown> };
-type SdkResponse = { data: AsyncIterable<unknown>; response: Response };
 
 const transport = vi.hoisted(() => ({
   handshakeMessages: [] as StreamMessage[],
@@ -53,36 +53,12 @@ const transport = vi.hoisted(() => ({
   wsRequests: [] as Array<Record<string, unknown>>,
 }));
 
-vi.mock("openai", () => {
-  class MockOpenAI {
-    apiKey: string;
-    baseURL: string;
-    responses = {
-      create: (request: Record<string, unknown>) => {
-        transport.sdkRequests.push(request);
-        const outcome = transport.sdkOutcomes.shift() ?? new Error("Unexpected SSE request");
-        return {
-          withResponse: async () => {
-            if (outcome instanceof Error) {
-              throw outcome;
-            }
-            return outcome;
-          },
-        };
-      },
-    };
-
-    constructor(options: { apiKey?: string; baseURL?: string }) {
-      this.apiKey = options.apiKey ?? "";
-      this.baseURL = options.baseURL ?? "https://api.openai.com/v1";
-    }
-
-    withOptions(options: { apiKey?: string }) {
-      return new MockOpenAI({ apiKey: options.apiKey ?? this.apiKey, baseURL: this.baseURL });
-    }
-  }
-
-  return { default: MockOpenAI, AzureOpenAI: MockOpenAI };
+vi.mock("openai", async () => {
+  const { createResponsesSdkMock } = await import("./openai-responses-sdk.test-support.js");
+  return createResponsesSdkMock({
+    outcomes: transport.sdkOutcomes,
+    requests: transport.sdkRequests,
+  });
 });
 
 vi.mock("openai/resources/responses/ws.js", () => ({
@@ -139,6 +115,7 @@ import {
   createOpenAIResponsesTransportStreamFn as createStreamFn,
 } from "./openai-responses-client.js";
 import { createOpenAIResponsesWebSocketStream as createSocketStream } from "./openai-responses-websocket.js";
+import { collectEventTypes } from "./openai-stream-cases.test-support.js";
 
 const initialHost = getAiTransportHost();
 const model = makeProviderModel("openai-responses", "openai", "gpt-5.6-luna", {
@@ -545,11 +522,7 @@ describe("native OpenAI Responses WebSocket client integration", () => {
       transport: "auto",
       onResponse,
     });
-    const consume = (async () => {
-      for await (const event of responseStream) {
-        order.push(event.type);
-      }
-    })();
+    const consume = collectEventTypes(responseStream, order);
 
     await vi.waitFor(() => expect(onResponse).toHaveBeenCalledOnce());
     expect(order).toEqual(["hook:start"]);

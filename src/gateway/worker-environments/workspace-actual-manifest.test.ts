@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { observeSettlement } from "../../agents/promise-settlement.test-support.js";
 import {
   readActualWorkspaceManifestImpl,
   readWorkspaceFileContentsWithLimit,
@@ -31,15 +32,6 @@ async function inventoryFixture(count = 0) {
   const capture = (options: Omit<InventoryOptions, "root" | "baseCommit"> = {}) =>
     readActualWorkspaceManifestImpl({ root, baseCommit: null, ...options });
   return { root, files, capture };
-}
-
-function observeSettlement(promise: Promise<unknown>) {
-  let settled = false;
-  const markSettled = () => {
-    settled = true;
-  };
-  void promise.then(markSettled, markSettled);
-  return () => settled;
 }
 
 it.each(["before traversal", "during traversal", "root resolution", "safe-root setup"] as const)(
@@ -372,6 +364,7 @@ it("preserves bottom-up directory membership and canonical output across input o
       includePaths: new Set(paths),
       preserveDirectories: new Set(["preserved"]),
     });
+  const opened = vi.spyOn(fs, "opendir");
   const first = await capture(included);
   const reversed = await capture(included.toReversed());
   expect(first.manifest.directories).toEqual(["mixed", "mixed/child", "preserved"]);
@@ -381,9 +374,16 @@ it("preserves bottom-up directory membership and canonical output across input o
     "älg.txt",
   ]);
   expect(reversed).toEqual(first);
+  expect(opened.mock.calls.map(([directory]) => path.relative(root, String(directory)))).toEqual([
+    "cache/nested",
+    "cache",
+    "cache/nested",
+    "cache",
+  ]);
 });
 
 it("reserves aggregate inventory bytes even when every file hits the hash memo", async () => {
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
   const { root, capture } = await inventoryFixture();
   const memo = new Map<string, string>();
   const metrics = { contentHashCount: 0, memoHitCount: 0 };
@@ -403,6 +403,7 @@ it("reserves aggregate inventory bytes even when every file hits the hash memo",
 });
 
 it("opens only changed file content while retaining fresh edits and deletions", async () => {
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
   const { root, files, capture } = await inventoryFixture(3);
   const memo = new Map<string, string>();
   const read = () => withWorkspaceHashMemo(memo, () => capture());
@@ -425,6 +426,7 @@ it("opens only changed file content while retaining fresh edits and deletions", 
 });
 
 it("bounds active fallback scratch across inventories and skips reads on memo hits", async () => {
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
   vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
   const fixtures = await Promise.all(
     [0, 1].map(async (owner) => {
