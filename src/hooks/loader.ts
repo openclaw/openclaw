@@ -43,6 +43,99 @@ function buildImportUrl(handlerPath: string, source: HookSource): string {
 }
 
 const log = createSubsystemLogger("hooks:loader");
+
+export type LoadHookHandlerModuleParams = {
+  handlerPath: string;
+  baseDir: string;
+  source: HookSource;
+  exportName?: string;
+  /** When true, emit the trusted-local-code warning used by Gateway load. */
+  warnTrustedLocal?: boolean;
+};
+
+export type LoadedHookHandlerModule = {
+  handler: InternalHookHandler;
+  exportName: string;
+  resolvedPath: string;
+};
+
+/** Imports a hook handler module with the same boundary + export checks as Gateway load. */
+export async function loadHookHandlerModule(
+  params: LoadHookHandlerModuleParams,
+): Promise<LoadedHookHandlerModule> {
+  const hookBaseDir = safeRealpathSync(params.baseDir);
+  if (!hookBaseDir) {
+    throw new Error(`Hook base directory is no longer readable: ${params.baseDir}`);
+  }
+  const opened = await openRootFile({
+    absolutePath: params.handlerPath,
+    rootPath: hookBaseDir,
+    boundaryLabel: "hook directory",
+  });
+  if (!opened.ok) {
+    throw new Error(`Handler path fails boundary checks: ${params.handlerPath}`);
+  }
+  const safeHandlerPath = opened.path;
+  fs.closeSync(opened.fd);
+  if (
+    params.warnTrustedLocal &&
+    (params.source === "openclaw-workspace" || params.source === "openclaw-managed")
+  ) {
+    log.warn(
+      `Loading ${params.source.slice("openclaw-".length)} hook code into the gateway process. Hooks are trusted local code.`,
+    );
+  }
+
+  // Only mutable workspace/managed modules are cache-busted; imports may run trusted code.
+  // SAFETY: dynamic hook modules are validated for expected handler exports after import.
+  const mod = (await import(buildImportUrl(safeHandlerPath, params.source))) as Record<
+    string,
+    unknown
+  >;
+  const exportName = params.exportName?.trim() || "default";
+  const handler = resolveFunctionModuleExport<InternalHookHandler>({ mod, exportName });
+  if (!handler) {
+    throw new Error(`Handler '${exportName}' is not a function`);
+  }
+  return { handler, exportName, resolvedPath: safeHandlerPath };
+}
+
+export type HookHandlerSmokeLoadResult = {
+  loadOk: boolean;
+  exportName: string;
+  handlerPath: string;
+  error?: string;
+};
+
+/**
+ * Smoke-load a hook handler without registering it or mutating config.
+ * Mirrors the Gateway import path used by `prepareInternalHooks`.
+ */
+export async function smokeLoadHookHandler(
+  params: LoadHookHandlerModuleParams,
+): Promise<HookHandlerSmokeLoadResult> {
+  const exportName = params.exportName?.trim() || "default";
+  try {
+    // Diagnostics import disabled hooks; keep the trusted-local warning unless callers opt out.
+    const loaded = await loadHookHandlerModule({
+      ...params,
+      warnTrustedLocal: params.warnTrustedLocal ?? true,
+    });
+    return {
+      loadOk: true,
+      exportName: loaded.exportName,
+      handlerPath: loaded.resolvedPath,
+    };
+  } catch (error) {
+    return {
+      loadOk: false,
+      exportName,
+      handlerPath: params.handlerPath,
+      error: formatErrorMessage(error),
+    };
+  }
+}
+
 // Configured hooks belong to the Gateway, not to any one plugin registry generation.
 type HookGeneration = {
   registrations: Array<{ event: string; handler: InternalHookHandler }>;
@@ -104,36 +197,13 @@ export async function prepareInternalHooks(
       continue;
     }
     try {
-      const hookBaseDir = safeRealpathSync(entry.hook.baseDir);
-      if (!hookBaseDir) {
-        throw new Error(`Hook base directory is no longer readable: ${entry.hook.baseDir}`);
-      }
-      const opened = await openRootFile({
-        absolutePath: entry.hook.handlerPath,
-        rootPath: hookBaseDir,
-        boundaryLabel: "hook directory",
+      const { handler } = await loadHookHandlerModule({
+        handlerPath: entry.hook.handlerPath,
+        baseDir: entry.hook.baseDir,
+        source: entry.hook.source,
+        exportName: entry.metadata?.export,
+        warnTrustedLocal: true,
       });
-      if (!opened.ok) {
-        throw new Error(`Handler path fails boundary checks: ${entry.hook.handlerPath}`);
-      }
-      const safeHandlerPath = opened.path;
-      fs.closeSync(opened.fd);
-      if (entry.hook.source === "openclaw-workspace" || entry.hook.source === "openclaw-managed") {
-        log.warn(
-          `Loading ${entry.hook.source.slice("openclaw-".length)} hook code into the gateway process. Hooks are trusted local code.`,
-        );
-      }
-
-      // Only mutable workspace/managed modules are cache-busted; imports may run trusted code.
-      const mod = (await import(buildImportUrl(safeHandlerPath, entry.hook.source))) as Record<
-        string,
-        unknown
-      >;
-      const exportName = entry.metadata?.export ?? "default";
-      const handler = resolveFunctionModuleExport<InternalHookHandler>({ mod, exportName });
-      if (!handler) {
-        throw new Error(`Handler '${exportName}' is not a function`);
-      }
       const events = entry.metadata?.events ?? [];
       if (events.length === 0) {
         throw new Error("Hook has no events defined in metadata");

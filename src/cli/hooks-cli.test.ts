@@ -13,6 +13,7 @@ import type { HookStatusEntry, HookStatusReport } from "../hooks/hooks-status.js
 import { buildWorkspaceHookStatus } from "../hooks/hooks-status.js";
 import { defaultRuntime } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { pinConfigDir } from "../utils.js";
 import { makeHookStatusEntry } from "./cli-fixtures.test-support.js";
 import { registerHooksCli } from "./hooks-cli.js";
 import * as oneShotExit from "./one-shot-exit.js";
@@ -283,4 +284,176 @@ it("preserves env references while disable waits for the write lock", async () =
       });
     },
   );
+});
+
+describe("hooks test", () => {
+  it("reports loadOk for a valid workspace hook and does not write config", async () => {
+    await withOpenClawTestState(
+      {
+        label: "hook-test-ok",
+        env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+      },
+      async (state) => {
+        const hookDir = path.join(state.workspaceDir, "hooks", "fixture-ok");
+        await fs.mkdir(hookDir, { recursive: true });
+        await fs.writeFile(
+          path.join(hookDir, "HOOK.md"),
+          '---\nname: fixture-ok\ndescription: ok\nmetadata: {"openclaw":{"events":["command:new"]}}\n---\n',
+        );
+        await fs.writeFile(
+          path.join(hookDir, "handler.js"),
+          "export default async function () {}\n",
+        );
+        await state.writeConfig({
+          agents: {
+            ownership: "explicit",
+            entries: { fixture: { workspace: state.workspaceDir } },
+            defaults: { systemAgent: { agentId: "fixture" } },
+          },
+        });
+        const before = await fs.readFile(state.configPath, "utf8");
+        const beforeMtime = (await fs.stat(state.configPath)).mtimeMs;
+        const output: string[] = [];
+        const exitSpy = vi
+          .spyOn(oneShotExit, "requestExitAfterOneShotOutput")
+          .mockReturnValue(true);
+        const stdoutSpy = vi
+          .spyOn(defaultRuntime, "writeStdout")
+          .mockImplementation((value) => output.push(value));
+        const logSpy = vi
+          .spyOn(defaultRuntime, "log")
+          .mockImplementation((value) => output.push(String(value)));
+        try {
+          await hooksProgram().parseAsync(
+            [
+              "hooks",
+              "test",
+              "fixture-ok",
+              "--agent",
+              "fixture",
+              "--json",
+              "--event",
+              "command:new",
+            ],
+            { from: "user" },
+          );
+          const payload = JSON.parse(output.join("\n"));
+          expect(payload).toMatchObject({
+            name: "fixture-ok",
+            loadOk: true,
+            exportName: "default",
+            events: ["command:new"],
+            eventMatch: { event: "command:new", matched: true },
+          });
+          expect(exitSpy).toHaveBeenCalledWith(defaultRuntime, 0);
+          expect(await fs.readFile(state.configPath, "utf8")).toBe(before);
+          expect((await fs.stat(state.configPath)).mtimeMs).toBe(beforeMtime);
+        } finally {
+          exitSpy.mockRestore();
+          stdoutSpy.mockRestore();
+          logSpy.mockRestore();
+        }
+      },
+    );
+  });
+
+  it("exits non-zero when the handler export is not a function", async () => {
+    await withOpenClawTestState(
+      {
+        label: "hook-test-bad",
+        env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+      },
+      async (state) => {
+        const hookDir = path.join(state.workspaceDir, "hooks", "fixture-bad");
+        await fs.mkdir(hookDir, { recursive: true });
+        await fs.writeFile(
+          path.join(hookDir, "HOOK.md"),
+          '---\nname: fixture-bad\ndescription: bad\nmetadata: {"openclaw":{"events":["command:new"]}}\n---\n',
+        );
+        await fs.writeFile(path.join(hookDir, "handler.js"), "export const nope = 1;\n");
+        await state.writeConfig({
+          agents: {
+            ownership: "explicit",
+            entries: { fixture: { workspace: state.workspaceDir } },
+            defaults: { systemAgent: { agentId: "fixture" } },
+          },
+        });
+        const output: string[] = [];
+        const exitSpy = vi
+          .spyOn(oneShotExit, "requestExitAfterOneShotOutput")
+          .mockReturnValue(true);
+        const stdoutSpy = vi
+          .spyOn(defaultRuntime, "writeStdout")
+          .mockImplementation((value) => output.push(value));
+        const logSpy = vi
+          .spyOn(defaultRuntime, "log")
+          .mockImplementation((value) => output.push(String(value)));
+        try {
+          await hooksProgram().parseAsync(
+            ["hooks", "test", "fixture-bad", "--agent", "fixture", "--json"],
+            { from: "user" },
+          );
+          const payload = JSON.parse(output.join("\n"));
+          expect(payload.loadOk).toBe(false);
+          expect(payload.error).toMatch(/not a function/);
+          expect(exitSpy).toHaveBeenCalledWith(defaultRuntime, 1);
+        } finally {
+          exitSpy.mockRestore();
+          stdoutSpy.mockRestore();
+          logSpy.mockRestore();
+        }
+      },
+    );
+  });
+
+  it("fails when a managed session-memory without a handler shadows the bundled hook", async () => {
+    await withOpenClawTestState(
+      {
+        label: "hook-test-managed-shadow",
+        env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+      },
+      async (state) => {
+        pinConfigDir();
+        const managedDir = path.join(state.stateDir, "hooks", "session-memory");
+        await fs.mkdir(managedDir, { recursive: true });
+        await fs.writeFile(
+          path.join(managedDir, "HOOK.md"),
+          '---\nname: session-memory\ndescription: managed shadow\nmetadata: {"openclaw":{"events":["command:new"]}}\n---\n',
+        );
+        // Intentionally omit handler.js so Gateway prepare would reject this winner.
+        await state.writeConfig({
+          agents: {
+            ownership: "explicit",
+            entries: { fixture: { workspace: state.workspaceDir } },
+            defaults: { systemAgent: { agentId: "fixture" } },
+          },
+        });
+        const output: string[] = [];
+        const exitSpy = vi
+          .spyOn(oneShotExit, "requestExitAfterOneShotOutput")
+          .mockReturnValue(true);
+        const stdoutSpy = vi
+          .spyOn(defaultRuntime, "writeStdout")
+          .mockImplementation((value) => output.push(value));
+        const logSpy = vi
+          .spyOn(defaultRuntime, "log")
+          .mockImplementation((value) => output.push(String(value)));
+        try {
+          await hooksProgram().parseAsync(
+            ["hooks", "test", "session-memory", "--agent", "fixture", "--json"],
+            { from: "user" },
+          );
+          const payload = JSON.parse(output.join("\n"));
+          expect(payload.loadOk).toBe(false);
+          expect(payload.source).toBe("openclaw-managed");
+          expect(String(payload.error ?? "")).toMatch(/no readable handler/i);
+          expect(exitSpy).toHaveBeenCalledWith(defaultRuntime, 1);
+        } finally {
+          exitSpy.mockRestore();
+          stdoutSpy.mockRestore();
+          logSpy.mockRestore();
+        }
+      },
+    );
+  });
 });

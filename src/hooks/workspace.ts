@@ -112,6 +112,12 @@ export function prepareWorkspaceHookEntries(
   opts?: HookDiscoveryOptions & {
     previousSources?: HookSourceFact[];
     requireValidHook?: (entry: HookPolicyEntry) => boolean;
+    /**
+     * Keep candidates without a readable handler in precedence resolution.
+     * Invalid winners stay in `sources` and are omitted from `entries` instead of
+     * being dropped before collision resolution (best-effort status discovery).
+     */
+    preserveMissingHandlers?: boolean;
   },
 ): { entries: HookEntry[]; sources: HookSourceFact[] } {
   const candidates = resolveHookDiscoveryRoots(workspaceDir, opts).flatMap((root) => {
@@ -148,7 +154,9 @@ export function prepareWorkspaceHookEntries(
     return entries;
   });
   const resolved = resolveHookEntries(
-    opts?.requireValidHook ? candidates : candidates.filter(({ entry }) => entry?.hook.handlerPath),
+    opts?.requireValidHook || opts?.preserveMissingHandlers
+      ? candidates
+      : candidates.filter(({ entry }) => entry?.hook.handlerPath),
     {
       onCollisionIgnored: ({ name, kept, ignored }) => {
         log.warn(
@@ -174,6 +182,9 @@ export function prepareWorkspaceHookEntries(
             `Hook "${candidate.hook.name}" has no readable handler in ${entry.hook.baseDir}`,
           );
         }
+      }
+      if (opts?.preserveMissingHandlers && entry && !entry.hook.handlerPath) {
+        return [];
       }
       return entry ? [entry] : [];
     })
