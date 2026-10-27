@@ -1,6 +1,6 @@
-/* @vitest-environment jsdom */
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { requestResult, transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
 import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 import {
@@ -9,7 +9,9 @@ import {
   openSessionSnapshotDatabase,
   readStoredChatSnapshotRecord,
 } from "./session-snapshot-database.ts";
+import * as snapshotDatabase from "./session-snapshot-database.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
+/* @vitest-environment jsdom */
 
 const sessionKey = 'scope:["wss://cache.example","account-a"]\u0000agent:main:escaped-"\\🦞';
 function snapshot(): ChatSessionSnapshot {
@@ -394,17 +396,89 @@ describe("snapshot write serialization and scheduling", () => {
     expect(await store.read(sessionKey)).toEqual(value);
   });
 
-  it("uses idle time before the timeout and cancels stale work on reschedule", async () => {
-    const idle = idleScheduler();
+  it.each([false, true])(
+    "does not postpone writes during continuous updates (idle=%s)",
+    async (idle) => {
+      if (idle) {
+        idleScheduler();
+      } else {
+        vi.stubGlobal("requestIdleCallback", undefined);
+      }
+      let latest = snapshot();
+      store.write(sessionKey, latest);
+      const deadline = idle ? 1500 : 500;
+      for (let elapsed = 100; elapsed < deadline; elapsed += 100) {
+        vi.advanceTimersByTime(100);
+        latest = { ...snapshot(), messages: [`revision-${elapsed}`] };
+        store.write(sessionKey, latest);
+      }
+      vi.advanceTimersByTime(100);
+      await store.whenIdle();
+      expect(await store.read(sessionKey)).toEqual(latest);
+    },
+  );
+
+  it("coalesces repeated flushes behind one active database write", async () => {
+    const database = await openSessionSnapshotDatabase();
+    const held = createDeferred<IDBDatabase | null>();
+    const opening = vi
+      .spyOn(snapshotDatabase, "openSessionSnapshotDatabase")
+      .mockReturnValueOnce(held.promise);
     store.write(sessionKey, snapshot());
-    vi.advanceTimersByTime(500);
-    const latest = { ...snapshot(), messages: ["latest"] };
+    const first = store.flush();
+    await vi.waitFor(() => expect(opening).toHaveBeenCalledOnce());
+    const values = Array.from({ length: 60 }, (_, index) => ({
+      ...snapshot(),
+      messages: [`revision-${index}`],
+    }));
+    const stringify = vi.spyOn(JSON, "stringify");
+    const flushes = values.map((value) => {
+      store.write(sessionKey, value);
+      return store.flush();
+    });
+    try {
+      expect(
+        stringify.mock.calls.filter(([value]) => values.includes(value as (typeof values)[number])),
+      ).toHaveLength(0);
+    } finally {
+      stringify.mockRestore();
+      held.resolve(database);
+      await Promise.all([first, ...flushes]);
+    }
+    expect(await store.read(sessionKey)).toEqual(values.at(-1));
+  });
+
+  it("keeps whenIdle pending until a successor write settles", async () => {
+    const firstDatabase = await openSessionSnapshotDatabase();
+    const nextDatabase = await openSessionSnapshotDatabase();
+    const firstOpening = createDeferred<IDBDatabase | null>();
+    const nextOpening = createDeferred<IDBDatabase | null>();
+    const opening = vi
+      .spyOn(snapshotDatabase, "openSessionSnapshotDatabase")
+      .mockReturnValueOnce(firstOpening.promise)
+      .mockReturnValueOnce(nextOpening.promise);
+    store.write(sessionKey, snapshot());
+    const first = store.flush();
+    await vi.waitFor(() => expect(opening).toHaveBeenCalledOnce());
+    let idleSettled = false;
+    const idle = store.whenIdle().then(() => {
+      idleSettled = true;
+    });
+    const latest = { ...snapshot(), messages: ["successor"] };
     store.write(sessionKey, latest);
-    expect(idle.cancel).toHaveBeenCalledOnce();
-    vi.advanceTimersByTime(500);
-    idle.request.mock.calls[1]?.[0]({ didTimeout: false, timeRemaining: () => 50 });
-    await store.whenIdle();
-    expect(await store.read(sessionKey)).toEqual(latest);
+    const next = store.flush();
+    try {
+      firstOpening.resolve(firstDatabase);
+      await vi.waitFor(() => expect(opening).toHaveBeenCalledTimes(2));
+      expect(idleSettled).toBe(false);
+      nextOpening.resolve(nextDatabase);
+      await idle;
+      expect(await store.read(sessionKey)).toEqual(latest);
+    } finally {
+      firstOpening.resolve(firstDatabase);
+      nextOpening.resolve(nextDatabase);
+      await Promise.all([first, next, idle]);
+    }
   });
 
   it("uses the debounce timer when idle callbacks are unavailable", async () => {

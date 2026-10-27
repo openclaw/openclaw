@@ -1,5 +1,3 @@
-/* @vitest-environment jsdom */
-
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -35,6 +33,7 @@ import {
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
+/* @vitest-environment jsdom */
 
 const snapshotHost = {
   settings: { gatewayUrl: "wss://cache.example" },
@@ -500,9 +499,48 @@ describe("persistent chat session snapshots", () => {
   });
 
   it("defers snapshot sanitization until flush", async () => {
+    writer.connect();
+    connected.add(writer);
     await seed();
     await seed(snapshot(1n));
     expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
+  });
+
+  it.each([
+    { count: 60, message: "small" },
+    { count: 3, message: "x".repeat(9 * 1024 * 1024) },
+  ])("bounds pending ownership before flushing $count snapshots", async ({ count, message }) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      vi.setSystemTime(1);
+      const memory: ChatMessageCache = new Map();
+      const store = makeStore(memory, true);
+      await persist(store, sessionKey, snapshot("durable"));
+      vi.setSystemTime(2);
+      const { evicted, collectionControl } = await (async () => {
+        cacheSnapshot(memory, sessionKey, snapshot(message));
+        return {
+          evicted: new WeakRef(memory.get(sessionKey)!.snapshot),
+          collectionControl: new WeakRef({ unowned: true }),
+        };
+      })();
+      for (let index = 0; index < count; index += 1) {
+        cacheSnapshot(memory, key(`agent:main:pending-${index}`), snapshot(message, `${index}`));
+      }
+      expect(memory.has(sessionKey)).toBe(false);
+      // Dropping an unsaved update must preserve the older disk snapshot and its receipt.
+      expect.soft(store.readSavedAt(sessionKey)).toBe(1);
+      expect.soft(await readSnapshot()).toEqual(snapshot("durable"));
+      await collectGarbageForTest();
+      expect(collectionControl.deref()).toBeUndefined();
+      expect(evicted.deref()).toBeUndefined();
+      await store.flush();
+      expect(await readSnapshot(key(`agent:main:pending-${count - 1}`))).toEqual(
+        snapshot(message, `${count - 1}`),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("suppresses unchanged writes only for the latest hydration", async () => {
