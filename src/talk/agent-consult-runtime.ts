@@ -191,11 +191,11 @@ async function rollOverStaleConsultSession(params: {
   entry: SessionEntry | undefined;
   logger: Pick<RuntimeLogger, "warn">;
   abortSignal?: AbortSignal;
-}): Promise<void> {
+}): Promise<boolean> {
   const { agentId, sessionKey, storePath, entry } = params;
   const reason = await resolveDueVoiceSessionReset(params);
   if (!reason || !entry) {
-    return;
+    return false;
   }
   const [
     { resetSessionEntryLifecycle },
@@ -251,6 +251,7 @@ async function rollOverStaleConsultSession(params: {
     onError: (error) =>
       params.logger.warn(`[talk] failed to clear session reset runtime state: ${String(error)}`),
   });
+  return true;
 }
 
 export async function consultRealtimeVoiceAgent(params: {
@@ -265,6 +266,11 @@ export async function consultRealtimeVoiceAgent(params: {
   runIdPrefix: string;
   args: unknown;
   transcript: RealtimeVoiceAgentConsultTranscriptEntry[];
+  /**
+   * Called when this consult resets a stale session. Callers whose transcript quotes session history
+   * taken before the reset return its replacement (and drop that snapshot for later consults).
+   */
+  onSessionReset?: () => RealtimeVoiceAgentConsultTranscriptEntry[];
   surface: string;
   userLabel: string;
   assistantLabel?: string;
@@ -400,7 +406,7 @@ export async function consultRealtimeVoiceAgent(params: {
   };
   assertRealtimeVoiceAgentConsultModelSelectionUnlocked(modelLockParams);
   // Reset before admission: rollover cleanup interrupts work bound to the old incarnation.
-  await rollOverStaleConsultSession({
+  const sessionReset = await rollOverStaleConsultSession({
     cfg: params.cfg,
     agentId,
     sessionKey: params.sessionKey,
@@ -410,6 +416,11 @@ export async function consultRealtimeVoiceAgent(params: {
     logger: params.logger,
     abortSignal: params.abortSignal,
   });
+  // History quoted before the reset must not come back through the prompt's transcript.
+  const consultPromptParams =
+    sessionReset && params.onSessionReset
+      ? { ...params, transcript: params.onSessionReset() }
+      : params;
   params.abortSignal?.throwIfAborted();
   const lifecycleAbortController = new AbortController();
   const lifecycleInterruption = new Error(
@@ -624,7 +635,7 @@ export async function consultRealtimeVoiceAgent(params: {
         workspaceDir,
         cwd,
         config: params.cfg,
-        prompt: buildRealtimeVoiceAgentConsultPrompt(params),
+        prompt: buildRealtimeVoiceAgentConsultPrompt(consultPromptParams),
         provider: params.provider,
         model: params.model,
         thinkLevel: params.thinkLevel ?? "high",

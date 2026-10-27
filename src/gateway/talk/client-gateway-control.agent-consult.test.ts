@@ -224,6 +224,24 @@ describe("Talk client agent consult admission", () => {
     },
   );
 
+  it("drops the call's quoted history for the triggering and following consults after a reset", async () => {
+    const history = [{ role: "user" as const, text: "Quoted call history: PELICAN-DAY1" }];
+    const transcripts: unknown[] = [];
+    mockConsult(async (params) => {
+      transcripts.push(params.transcript, params.onSessionReset?.());
+    });
+    mockConsult(async (params) => {
+      transcripts.push(params.transcript);
+    });
+    const runner = createConsultRunner({ initialItems: history });
+
+    await expect(runner.runPrompt({ prompt: "first task" })).resolves.toEqual({ text: "done" });
+    await expect(runner.runPrompt({ prompt: "second task" })).resolves.toEqual({ text: "done" });
+
+    // The first consult reset the session: its prompt and every later consult quote none of it.
+    expect(transcripts).toEqual([history, [], []]);
+  });
+
   it.each(["runOwnedArgs", "runPrompt"] as const)(
     "steers and claims the registered owner through %s",
     async (entrypoint) =>

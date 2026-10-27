@@ -149,6 +149,36 @@ describe("voice consult concrete store ownership", () => {
       expect(revision()).toBe(rolledRevision);
     });
 
+    it.each([
+      { name: "a reset", startedAt: noon - 2 * 24 * 60 * MINUTE_MS, reset: true },
+      { name: "no reset", startedAt: noon - MINUTE_MS, reset: false },
+    ])(
+      "replaces history quoted before $name in the consult prompt",
+      async ({ startedAt, reset }) => {
+        const { runEmbeddedAgent, consult, target } = await seedVoiceSession(
+          { reset: { mode: "daily", atHour: 4 } },
+          startedAt,
+        );
+        const prompts: string[] = [];
+        runEmbeddedAgent.mockImplementation(async (params) => {
+          prompts.push(params.prompt);
+          return checkedResult();
+        });
+        const onSessionReset = vi.fn(() => []);
+
+        await expect(
+          consult({
+            ...target,
+            transcript: [{ role: "user", text: "Quoted call history: PELICAN-DAY1" }],
+            onSessionReset,
+          }),
+        ).resolves.toEqual({ text: "Checked" });
+
+        expect(onSessionReset).toHaveBeenCalledTimes(reset ? 1 : 0);
+        expect(prompts[0]?.includes("PELICAN-DAY1")).toBe(!reset);
+      },
+    );
+
     it("keeps a blocked stale session unchanged for admission to reject", async () => {
       const { revision, run, runEmbeddedAgent } = await seedVoiceSession(
         { reset: { mode: "daily", atHour: 4 } },
