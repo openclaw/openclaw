@@ -4,6 +4,7 @@ import path from "node:path";
 import { root } from "@openclaw/fs-safe/root";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import type { Skill } from "../../skills/loading/skill-contract.js";
 import { ensureWritableSkillDirectories } from "../../skills/loading/skill-directory-modes.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import { cliBackendLog } from "./log.js";
@@ -49,11 +50,19 @@ async function linkOrCopySkillDir(params: { sourceDir: string; targetDir: string
   }
 }
 
+export type ClaudeCliSkillsPlugin = {
+  args: string[];
+  cleanup: () => Promise<void>;
+  pluginDir?: string;
+  /** Claude's native Skill command name (`openclaw-skills:<dir>`) to the linked skill. */
+  skillCommands?: ReadonlyMap<string, Skill>;
+};
+
 /** Prepares Claude CLI `--plugin-dir` args for the current session skill snapshot. */
 export async function prepareClaudeCliSkillsPlugin(params: {
   backendId: string;
   skillsSnapshot?: SkillSnapshot;
-}): Promise<{ args: string[]; cleanup: () => Promise<void>; pluginDir?: string }> {
+}): Promise<ClaudeCliSkillsPlugin> {
   if (normalizeLowercaseStringOrEmpty(params.backendId) !== CLAUDE_CLI_BACKEND_ID) {
     return { args: [], cleanup: async () => {} };
   }
@@ -76,6 +85,7 @@ export async function prepareClaudeCliSkillsPlugin(params: {
     }
     return [
       {
+        skill,
         name,
         sourceDir: path.dirname(skillFilePath),
         targetDirName: sanitizeSkillDirName(name, usedTargetNames),
@@ -112,14 +122,14 @@ export async function prepareClaudeCliSkillsPlugin(params: {
       },
     );
 
-    let linkedSkillCount = 0;
+    const skillCommands = new Map<string, Skill>();
     for (const skill of skills) {
       try {
         await linkOrCopySkillDir({
           sourceDir: skill.sourceDir,
           targetDir: path.join(skillsDir, skill.targetDirName),
         });
-        linkedSkillCount += 1;
+        skillCommands.set(`${OPENCLAW_CLAUDE_PLUGIN_NAME}:${skill.targetDirName}`, skill.skill);
       } catch (error) {
         cliBackendLog.warn(
           `claude skill plugin skipped ${skill.name}: ${error instanceof Error ? error.message : String(error)}`,
@@ -127,7 +137,7 @@ export async function prepareClaudeCliSkillsPlugin(params: {
       }
     }
 
-    if (linkedSkillCount === 0) {
+    if (skillCommands.size === 0) {
       await cleanup();
       return { args: [], cleanup: async () => {} };
     }
@@ -135,6 +145,7 @@ export async function prepareClaudeCliSkillsPlugin(params: {
     return {
       args: ["--plugin-dir", pluginDir],
       pluginDir,
+      skillCommands,
       cleanup,
     };
   } catch (error) {

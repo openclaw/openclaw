@@ -30,6 +30,7 @@ const { values } = parseArgs({
     warmup: { type: "string", default: "48" },
     "updates-per-list": { type: "string", default: "33" },
     mode: { type: "string", default: "timing" },
+    "running-candidates": { type: "boolean", default: false },
     reconciliation: { type: "boolean", default: false },
     "metadata-churn": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
@@ -175,6 +176,17 @@ if (values["sort-workload"]) {
   }
 }
 
+if (values["running-candidates"]) {
+  cases.splice(0, cases.length, {
+    source: "agent-roster",
+    rowMode: "sidebar",
+    archived: "all",
+    limit: 50,
+    includeOwnerSessionCounts: true,
+    excludeSubagents: true,
+  });
+}
+
 if (values.mode === "verify") {
   let seed = 224;
   const choose = <T>(items: readonly T[]): T => {
@@ -283,17 +295,27 @@ try {
         : row.key.startsWith("agent:main:dashboard:")),
   );
   assert(parent && children.length > 0, "Team fixture must contain child and dashboard rows");
+  const requesterParents = values["running-candidates"]
+    ? rows.filter(
+        (row) =>
+          row.key.startsWith("agent:main:dashboard:") &&
+          row.entry &&
+          row.entry.archivedAt === undefined,
+      )
+    : [parent];
+  assert(requesterParents.length > 0, "Running candidates require unarchived parent rows");
   for (const [index, child] of children.entries()) {
     assert(child.entry);
+    const requesterParent = requesterParents[index % requesterParents.length]!;
     active.push({
       runId: `prepared-list-live-${index}`,
       childSessionKey: child.key,
       childAgentId: "main",
       childSessionIdentity: { sessionId: child.entry.sessionId },
-      requesterSessionKey: parent.key,
+      requesterSessionKey: requesterParent.key,
       requesterAgentId: "main",
-      requesterDisplayKey: parent.key,
-      controllerSessionKey: parent.key,
+      requesterDisplayKey: requesterParent.key,
+      controllerSessionKey: requesterParent.key,
       task: "Synthetic list preparation churn",
       cleanup: "keep",
       generation: 1,
@@ -461,6 +483,21 @@ try {
       before = process.threadCpuUsage();
       const result = await read(sequence++);
       used = process.threadCpuUsage(before);
+      if (
+        values.mode === "verify" &&
+        values["running-candidates"] &&
+        (sequence - 1) % cases.length === 0
+      ) {
+        assert(result.ownerSessionCounts);
+        assert.equal(
+          result.ownerSessionCounts.reduce((total, owner) => total + owner.running, 0),
+          new Set(
+            active
+              .filter((subagentRun) => subagentRun.execution?.status === "running")
+              .map((subagentRun) => subagentRun.requesterSessionKey),
+          ).size,
+        );
+      }
       assert.equal(result.count, result.sessions.length);
       assert(typeof result.totalCount === "number");
       assert(result.totalCount >= result.count);
@@ -523,8 +560,16 @@ try {
     );
   const firstPartitions = partitionTotals(beforeSelections);
   const lastPartitions = partitionTotals(afterSelections);
+  const candidateSelections = (snapshot: typeof beforeSelections) =>
+    snapshot.selections.reduce(
+      (total, metric) => total + (metric.kind === "running-candidate" ? metric.calls : 0),
+      0,
+    );
+  const runningCandidateSelections =
+    candidateSelections(afterSelections) - candidateSelections(beforeSelections);
   const result = {
     mode: values.mode,
+    runningCandidateWorkload: values["running-candidates"],
     cpuProfile: values["cpu-profile"],
     reconciliation: values.reconciliation,
     metadataChurn: values["metadata-churn"],
@@ -541,6 +586,8 @@ try {
     iterations,
     warmup,
     updatesPerList,
+    runningCandidateSelections,
+    runningCandidateSelectionsPerList: runningCandidateSelections / iterations,
     returnedRows,
     elapsedMs,
     threadCpuMs: (used.user + used.system) / 1000,

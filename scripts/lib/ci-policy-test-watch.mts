@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
-import { matchesGlob } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { matchesGlob, resolve } from "node:path";
 import { isPlainRepoRelativePath } from "../../test/vitest/vitest.include-patterns.ts";
 import { resolveUiTypeScriptPath } from "../../test/vitest/vitest.ui-paths.mjs";
 import { isTestFileTarget } from "./changed-path-facts.mjs";
@@ -11,6 +11,7 @@ import { UI_E2E_OWNER_WATCHES } from "./ci-ui-e2e-owner-inventory.mts";
 
 type PolicyTestWatch = {
   includeDotPaths?: boolean;
+  missingOnly?: boolean;
   ownerGlobs?: readonly string[];
   sourceOnly?: boolean;
   testFile: string;
@@ -22,6 +23,20 @@ type PolicyTestWatch = {
 // this inventory covers the remaining tests that changed targeting cannot
 // discover from imports alone.
 const policyTestWatches: readonly PolicyTestWatch[] = [
+  {
+    // YAML code/docs references are not import edges. A removed path can be
+    // either side of a rename; one catalog scan checks every remaining reference.
+    testFile: "extensions/qa-lab/src/scenario-catalog.test.ts",
+    watchGlobs: ["**"],
+    includeDotPaths: true,
+    missingOnly: true,
+  },
+  {
+    // The Node-driven browser inventory names test files without importing them.
+    testFile: "test/vitest-ui-package-config.test.ts",
+    watchGlobs: ["ui/**/*.test.{ts,tsx}"],
+    missingOnly: true,
+  },
   ...NODE_WORKER_E2E_TEST_FILES.map((testFile): PolicyTestWatch => ({
     testFile,
     watchGlobs: NODE_WORKER_E2E_OWNER_GLOBS,
@@ -2117,20 +2132,22 @@ function matchesPolicyPattern(
 /** Resolve watched tests, optionally restricting to complete owners of the changed input. */
 export function resolvePolicyTestTargets(
   changedPaths: readonly string[],
-  options: { completeOwnersOnly?: boolean } = {},
+  options: { completeOwnersOnly?: boolean; cwd?: string } = {},
 ): string[] {
   const paths = changedPaths.map((changedPath) => ({
     changedPath,
     literal: isPlainRepoRelativePath(changedPath),
   }));
   return policyTestWatches
-    .filter(({ watchGlobs, ownerGlobs, sourceOnly, includeDotPaths }) =>
+    .filter(({ watchGlobs, ownerGlobs, sourceOnly, includeDotPaths, missingOnly }) =>
       paths.some(
         ({ changedPath, literal }) =>
           (!sourceOnly || !isTestFileTarget(changedPath)) &&
           watchGlobs.some((watchGlob) =>
             matchesPolicyPattern(changedPath, watchGlob, literal, includeDotPaths),
           ) &&
+          (!missingOnly ||
+            (literal && !existsSync(resolve(options.cwd ?? process.cwd(), changedPath)))) &&
           (!options.completeOwnersOnly ||
             ownerGlobs?.some((ownerGlob) =>
               matchesPolicyPattern(changedPath, ownerGlob, literal, includeDotPaths),

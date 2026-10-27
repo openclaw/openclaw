@@ -41,6 +41,15 @@ expected absence. Import-cycle and Kysely guardrail checks remain blocking in th
 | Other runtime topology/architecture | Deferred                              | Existing check               | Existing check                |
 | Android screenshots                 | Deferred                              | Already excluded             | Existing capture proof        |
 
+Deleted paths retain bounded inventory coverage in the Node plan. The policy
+watch selects `extensions/qa-lab/src/scenario-catalog.test.ts` when a changed
+path is absent, because YAML code and documentation references are not imports.
+For removed `ui/**/*.test.{ts,tsx}` paths, it also selects
+`test/vitest-ui-package-config.test.ts`, which validates the literal Node-driven
+browser inventory against discovered files. Changed-scope detection includes
+both sides of renames. Existing unrelated files do not activate these watches;
+the selected tests use the existing Node packing, runners, and row caps.
+
 Import-cycle checks are blocking correctness guards. Four cycles reached main after
 the architecture deferral ([#165174](https://github.com/openclaw/openclaw/pull/165174),
 [#165274](https://github.com/openclaw/openclaw/pull/165274),
