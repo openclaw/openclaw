@@ -145,6 +145,7 @@ const repositoryScriptEntries = [
   "scripts/perf/session-reaction-quota-measure.ts!",
   // Maintained guides, source headers, and paired drivers invoke these roots by path.
   "scripts/perf/audit-batch-write-measure.ts!",
+  "scripts/perf/prompt-suffix-turn-context-measure.ts!",
   "scripts/perf/audit-context-write-measure.ts!",
   "scripts/perf/node-worker-journal-measure.ts!",
   "scripts/perf/orphan-recovery-observer.mjs!",

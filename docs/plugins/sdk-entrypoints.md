@@ -306,6 +306,13 @@ hint; the reader returns `undefined` when no advice is available.
 
 ## ACP harness turns
 
+Harnesses can use `splitExtraSystemPrompt` from
+`openclaw/plugin-sdk/agent-harness-runtime` to separate the producer-annotated
+`extraSystemPromptTurnContext` range from persistent instructions. It moves only
+an exact, paragraph-aligned match; an absent or stale annotation leaves the prompt
+intact. Carry the returned `turn` text as trusted current-turn instructions and
+retain `persistent` in the session's system prompt.
+
 Pass optional `currentInboundContext` to `resolveAgentHarnessBeforePromptBuildResult` from
 `openclaw/plugin-sdk/agent-harness-runtime`. It combines the prompt with its inbound context
 and channel-provided joiner before prompt hooks run. Frame ordinary chat

@@ -6,6 +6,7 @@ import {
   resolveProviderSystemPromptContribution,
   transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
+import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { getReplyOperationSessionReader } from "../../../sessions/session-controller.session-reader.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { prepareTtsPreferences } from "../../../tts/tts-preferences.js";
@@ -20,7 +21,10 @@ import {
 } from "../../bootstrap-budget.js";
 import { buildCodeModeCatalogPrompt } from "../../code-mode.js";
 import { resolveOpenClawReferencePaths } from "../../docs-path.js";
-import type { RuntimeContextFragment } from "../../internal-runtime-context.js";
+import {
+  splitExtraSystemPrompt,
+  type RuntimeContextFragment,
+} from "../../internal-runtime-context.js";
 import { prepareAgentMemoryPrompt } from "../../memory-prompt-prepare.js";
 import { buildModelToolsUnavailablePrompt } from "../../model-tool-support.js";
 import { prepareProjectMemoryBootstrap } from "../../project-memory-bootstrap.js";
@@ -337,8 +341,21 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     attempt.preparedTtsPreferences ??
     (effectivePromptMode === "full" ? await prepareTtsPreferences() : undefined);
   phases?.mark("attempt.system-prompt.render");
+  // Child launch policy belongs to that run; ordinary follow-ups do not restore it.
+  const extraPrompt = isSubagentSessionKey(attempt.sessionKey)
+    ? { persistent: undefined, turn: attempt.extraSystemPrompt }
+    : splitExtraSystemPrompt(attempt);
+  const turnInstructions: RuntimeContextFragment[] =
+    !params.isRawModelRun && extraPrompt.turn
+      ? [
+          {
+            kind: "runtime-instruction",
+            text: `Current turn instructions (apply only to this turn):\n\n${extraPrompt.turn}`,
+          },
+        ]
+      : [];
   const extraSystemPrompt = joinPresentTextSegments([
-    attempt.extraSystemPrompt,
+    extraPrompt.persistent,
     buildModelToolsUnavailablePrompt(params.modelToolsEnabled),
   ]);
 
@@ -453,18 +470,18 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     runtimeInfo: runtimePrompt.runtimeInfo,
     systemPromptReport,
     systemPromptText: attemptSystemPrompt.systemPrompt,
-    // A watch snapshot belongs beside its turn, not ahead of all prior history.
+    // Current run facts belong beside their turn, not ahead of all prior history.
     get runtimeContextFragments(): RuntimeContextFragment[] {
-      return currentWatchedSessions
-        ? [
-            {
-              kind: "conversation-data",
-              text: currentWatchedSessions.sessions.length
-                ? buildWatchedSessionsPromptLines(currentWatchedSessions).join("\n").trim()
-                : "## Watched Sessions\nnone",
-            },
-          ]
-        : [];
+      const fragments = [...turnInstructions];
+      if (currentWatchedSessions) {
+        fragments.push({
+          kind: "conversation-data",
+          text: currentWatchedSessions.sessions.length
+            ? buildWatchedSessionsPromptLines(currentWatchedSessions).join("\n").trim()
+            : "## Watched Sessions\nnone",
+        });
+      }
+      return fragments;
     },
     prepareToolPrompt: (
       effectiveTools: PromptTools = params.effectiveTools,

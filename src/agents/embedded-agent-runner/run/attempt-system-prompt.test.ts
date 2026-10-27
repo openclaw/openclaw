@@ -6,6 +6,10 @@ import {
 } from "@openclaw/ai/internal/shared";
 import { Type } from "typebox";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  captureAnthropicRequest,
+  registerParityHostLifecycle,
+} from "../../../../packages/ai/src/provider-transport-parity.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import {
@@ -24,10 +28,13 @@ import { createProcessSessionFixture } from "../../bash-process-registry.test-he
 import * as referencePaths from "../../docs-path.js";
 import * as runtimePrompt from "../../runtime-prompt.js";
 import type { AgentTool } from "../../runtime/index.js";
+import { convertToLlm } from "../../sessions/messages.js";
+import { buildSubagentSpawnEnvelope } from "../../subagents/spawn/subagent-system-prompt.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import type { ToolSearchCatalogRef } from "../../tool-search-types.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import { createEmptyPromptBootstrap } from "./attempt-system-prompt.test-support.js";
+import { buildSystemUpdateMessage } from "./runtime-context-prompt.js";
 import { buildTurnDeliveryContextFragments } from "./turn-delivery-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -184,6 +191,72 @@ async function preparePermissionPrompt({
 }
 
 describe("buildAttemptSystemPrompt", () => {
+  registerParityHostLifecycle();
+
+  it.each(["conversation", "subagent"] as const)(
+    "preserves the provider prefix across runs with different %s instructions",
+    async (kind) => {
+      const requests: Record<string, unknown>[] = [];
+      const messages: Parameters<typeof convertToLlm>[0] = [];
+      for (const turn of ["operator", "completion"]) {
+        const context =
+          kind === "conversation"
+            ? `Current conversation: ${turn}. Use this turn's delivery target.`
+            : turn === "operator"
+              ? `${
+                  buildSubagentSpawnEnvelope({
+                    completionMode: "collector",
+                    spawnMode: "session",
+                    task: "Inspect synthetic inputs.",
+                    childSessionKey: "agent:main:subagent:prefix-fixture",
+                  }).systemPrompt
+                }\n\nProfile instruction.\n\nAttachment: inputs/fixture.txt`
+              : undefined;
+        const { prepared } = await preparePermissionPrompt({
+          attemptOverrides:
+            kind === "conversation"
+              ? {
+                  extraSystemPrompt: `Persistent policy.\n\n${context}\n\nLater configured guidance.`,
+                  extraSystemPromptTurnContext: {
+                    start: "Persistent policy.\n\n".length,
+                    text: context!,
+                  },
+                }
+              : {
+                  sessionKey: "agent:main:subagent:prefix-fixture",
+                  promptMode: "minimal",
+                  extraSystemPrompt: context,
+                },
+        });
+        messages.push({ role: "user", content: `Handle ${turn}`, timestamp: 1 });
+        for (const fragment of prepared.runtimeContextFragments ?? []) {
+          messages.push(buildSystemUpdateMessage(fragment.text, "runtime-context", true));
+        }
+        const { payload } = await captureAnthropicRequest("transport", {
+          model: { id: "claude-opus-4-6" },
+          cacheRetention: "none",
+          context: { systemPrompt: prepared.systemPromptText, messages: convertToLlm(messages) },
+        });
+        requests.push(payload);
+        if (kind === "conversation") {
+          expect(JSON.stringify(payload.system)).toContain("Persistent policy.");
+          expect(JSON.stringify(payload.system)).toContain("Later configured guidance.");
+        }
+        if (context) {
+          expect(JSON.stringify(payload.system)).not.toContain(
+            JSON.stringify(context).slice(1, -1),
+          );
+          expect(JSON.stringify(payload.messages)).toContain(JSON.stringify(context).slice(1, -1));
+        }
+      }
+      expect(JSON.stringify(requests[1]!.system)).toBe(JSON.stringify(requests[0]!.system));
+      const firstMessages = requests[0]!.messages as unknown[];
+      expect(
+        JSON.stringify((requests[1]!.messages as unknown[]).slice(0, firstMessages.length)),
+      ).toBe(JSON.stringify(firstMessages));
+    },
+  );
+
   it("keeps watched membership and titles out of the system prefix across turns and refresh", async () => {
     await withOpenClawTestState({ label: "watched-turn-context" }, async () => {
       setRuntimeConfigSnapshot({});

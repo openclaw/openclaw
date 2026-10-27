@@ -90,6 +90,14 @@ turn instead of rebuilding the system suffix. Routes that retain runtime context
 replay earlier snapshots unchanged. The watch registry and existing read-access
 gates still determine what the model may see; a watch never grants send access.
 
+Embedded turns also carry producer-marked conversation and delivery instructions
+beside the current turn. Subagent launch instructions, including completion policy,
+spawn-profile instructions, and attachment guidance, apply to that run and travel with it;
+ordinary child follow-ups do not rewrite the system prefix when they omit them.
+Configured instructions outside the marked conversation section remain in the
+system prompt. Skill, tool, memory, and configuration refreshes retain their
+existing update behavior.
+
 ## Keep replayed tool results stable
 
 OpenClaw applies the same tool-result text cap before the first model request

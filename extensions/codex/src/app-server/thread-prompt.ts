@@ -1,5 +1,6 @@
 import {
   buildCredentialSafetyPrompt,
+  splitExtraSystemPrompt,
   buildDelegationGuidanceSection,
   buildUiPresentationPrompt,
   buildSkillWorkshopPromptSection,
@@ -40,32 +41,6 @@ export type CodexThreadPromptContext = Pick<
   | "runtimePlan"
 >;
 
-/** Move only the exact section annotated by its producer; later policy additions survive. */
-export function splitCodexExtraSystemPrompt(
-  params: Pick<CodexThreadPromptContext, "extraSystemPrompt" | "extraSystemPromptTurnContext">,
-) {
-  const prompt = params.extraSystemPrompt;
-  const context = params.extraSystemPromptTurnContext;
-  if (!prompt || !context?.text || !Number.isInteger(context.start) || context.start < 0) {
-    return { persistent: prompt, turn: undefined };
-  }
-  const end = context.start + context.text.length;
-  if (
-    prompt.slice(context.start, end) !== context.text ||
-    (context.start > 0 && prompt.slice(context.start - 2, context.start) !== "\n\n") ||
-    (end < prompt.length && prompt.slice(end, end + 2) !== "\n\n")
-  ) {
-    return { persistent: prompt, turn: undefined };
-  }
-  return {
-    persistent:
-      context.start === 0
-        ? prompt.slice(end === prompt.length ? end : end + 2)
-        : prompt.slice(0, context.start - 2) + prompt.slice(end),
-    turn: context.text,
-  };
-}
-
 /** Complete current snapshot for the existing parent-local inference relay. */
 export function buildCodexConversationTurnInstructions(
   params: Pick<CodexThreadPromptContext, "extraSystemPrompt" | "extraSystemPromptTurnContext">,
@@ -76,8 +51,7 @@ export function buildCodexConversationTurnInstructions(
   );
   return [
     "Current OpenClaw conversation instructions (replace earlier conversation context, not persistent policy):",
-    splitCodexExtraSystemPrompt(params).turn ??
-      "No additional conversation instructions for this turn.",
+    splitExtraSystemPrompt(params).turn ?? "No additional conversation instructions for this turn.",
     `Current OpenClaw tool bindings for this turn (accepted declarations alone do not grant execution): ${availableNames.length ? availableNames.toSorted().join(", ") : "none"}.`,
   ].join("\n\n");
 }
@@ -222,7 +196,7 @@ export function buildDeveloperInstructions(
     nativeCommandGuidance,
     params.gitCoauthorPrompt,
     options.omitConversationTurnContext
-      ? splitCodexExtraSystemPrompt(params).persistent
+      ? splitExtraSystemPrompt(params).persistent
       : params.extraSystemPrompt,
   ];
   return sections.filter((section) => section?.trim()).join("\n\n");
