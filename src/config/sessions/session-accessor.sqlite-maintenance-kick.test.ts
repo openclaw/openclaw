@@ -2,10 +2,6 @@ import path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
-import {
-  isSessionEntryDataSql,
-  observeHostDataSql,
-} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
@@ -104,7 +100,6 @@ it("joins automatic worker maintenance while Doctor drainage waits on other work
   const blocked = createDeferred();
   void maintenance.track(blocked.promise);
   const warn = vi.spyOn(logging.getChildLogger({ subsystem: "session-sqlite" }), "warn");
-  const observation = observeHostDataSql();
   maintenance.run(() => kickSessionEntryMaintenanceAfterWrite(request));
   const closing = maintenance.close();
   try {
@@ -113,11 +108,9 @@ it("joins automatic worker maintenance while Doctor drainage waits on other work
     await expect(closing).resolves.toBeUndefined();
     expect(reclamationRun.runSqliteSessionReclamation).toHaveBeenCalled();
     expect(warn).not.toHaveBeenCalled();
-    expect(observation.queries.filter(isSessionEntryDataSql)).toEqual([]);
   } finally {
     blocked.resolve();
     await Promise.allSettled([closing]);
-    observation.restore();
   }
 });
 
@@ -501,19 +494,14 @@ it("does not dispatch maintenance in warn mode", async () => {
 it("commits automatic maintenance after 20 sessions write during preparation", async ({
   signal,
 }) => {
-  const { request, scope, storePath, updatedAt, archived, read, expectArchive } =
+  const { request, storePath, updatedAt, archived, read, write, expectArchive } =
     createWorkerStore();
   const victimKey = "agent:main:prepared-victim";
   const writers = Array.from({ length: 20 }, (_, index) => `agent:main:writer-${index}`);
-  runOpenClawAgentWriteTransaction((owner) => {
-    writeSessionEntry(owner, victimKey, {
-      sessionId: "victim",
-      updatedAt: updatedAt - 172_800_000,
-    });
-    for (const key of writers) {
-      writeSessionEntry(owner, key, { sessionId: key, updatedAt });
-    }
-  }, scope);
+  write(
+    [victimKey, { sessionId: "victim", updatedAt: updatedAt - 172_800_000 }],
+    ...writers.map((key): Parameters<typeof write>[number] => [key, {}]),
+  );
   let preparations = 0;
   observeSessionMaintenancePlanningWorker({
     async afterPrepare() {

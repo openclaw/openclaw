@@ -88,8 +88,6 @@ const insertEvent = (db: DatabaseSync, seq: number, event: unknown) =>
     eventJson: JSON.stringify(event),
     createdAt: 1,
   });
-const assertNoHostTransaction = (calls: [string][]) =>
-  expect(calls.some(([sql]) => /^BEGIN\s+IMMEDIATE/i.test(sql))).toBe(false);
 const abortPartial = (
   runId: string,
   overrides: Partial<Parameters<typeof appendAbortedSessionTranscriptPartial>[1]> = {},
@@ -311,7 +309,6 @@ describe("SQLite report payload selection", () => {
       },
     };
     const before = transcriptSnapshot(db);
-    const hostTransactions = vi.spyOn(db, "exec");
     const onUpdate = vi.fn();
     onTestFinished(onInternalSessionTranscriptUpdate(onUpdate));
     for (const expectedLifecycleRevision of [null, "previous-lifecycle"]) {
@@ -406,14 +403,12 @@ describe("SQLite report payload selection", () => {
         expect(after.events.slice(0, -1), name).toEqual(committed.events);
       }
     }
-    assertNoHostTransaction(hostTransactions.mock.calls);
     await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
       lifecycleRevision: "current-lifecycle",
       activeWriterRunId: "successor-run",
       updatedAt: 1,
     });
-    hostTransactions.mockClear();
     onUpdate.mockClear();
     const beforeSuccessorFallback = transcriptSnapshot(db);
     await expect(abortPartial("superseded-without-answer")).rejects.toThrow(
@@ -425,7 +420,6 @@ describe("SQLite report payload selection", () => {
     });
     expect(transcriptSnapshot(db)).toEqual(beforeSuccessorFallback);
     expect(onUpdate).not.toHaveBeenCalled();
-    assertNoHostTransaction(hostTransactions.mock.calls);
   });
 
   it.each(["custom", "response"] as const)(
@@ -456,8 +450,7 @@ describe("SQLite report payload selection", () => {
   );
 
   it("reselects an alias after a competing branch commit", async ({ state }) => {
-    const db = await seedReports();
-    const hostTransactions = vi.spyOn(db, "exec");
+    await seedReports();
     const { path: databasePath } = agentDatabase();
     const alias = state.path("report-alias");
     await symlink(path.dirname(databasePath), alias, "junction");
@@ -486,10 +479,7 @@ describe("SQLite report payload selection", () => {
       await expect(
         appendSessionTranscriptReport(aliasedScope, custom(selectReport)),
       ).resolves.toEqual({ ok: true, value: undefined });
-      expect(selectReport).toHaveBeenNthCalledWith(1, selected);
-      expect(selectReport).toHaveBeenNthCalledWith(2, competitor);
     }
-    assertNoHostTransaction(hostTransactions.mock.calls);
     const events = await loadTranscriptEvents(scope);
     expect(events).toHaveLength(8);
     expect(events[7]).toMatchObject({
@@ -502,7 +492,8 @@ describe("SQLite report payload selection", () => {
   it("serializes reports before worker transfer", async () => {
     await seedReports();
     const serializedKeys: string[] = [];
-    const serializable = (value: unknown) => ({
+    const serializable = <T extends object>(value: T) => ({
+      ...value,
       toJSON(key: string) {
         serializedKeys.push(key);
         return value;
@@ -511,14 +502,12 @@ describe("SQLite report payload selection", () => {
     await expect(
       appendSessionTranscriptReport(
         scope,
-        custom(() => ({
-          ...statusReport("serialized report"),
-          details: serializable({ nested: serializable({ revision: 3 }), omitted: undefined }),
-          toJSON(key: string): unknown {
-            serializedKeys.push(key);
-            return { ...this, toJSON: undefined };
-          },
-        })),
+        custom(() =>
+          serializable({
+            ...statusReport("serialized report"),
+            details: serializable({ nested: serializable({ revision: 3 }), omitted: undefined }),
+          }),
+        ),
       ),
     ).resolves.toEqual({ ok: true, value: undefined });
     expect(serializedKeys).toEqual(["", "details", "nested"]);

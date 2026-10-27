@@ -70,6 +70,16 @@ const activityCommand = (updatedAt: number) => ({
   reducers: [{ kind: "activity" as const, updatedAt }],
 });
 
+function turnCommand(actor: SessionActor, commandId: string, options: SessionTurnPlan["options"]) {
+  return {
+    commandId,
+    phaseId: "turn",
+    lifecycle: {},
+    expectedState: buildRestartRecoveryExpectedState({ sessionId: "session-1", updatedAt: 1 }),
+    turn: { agentId: "main", sessionKey: actor.target.sessionKey, options },
+  };
+}
+
 describe("memory session actor", () => {
   it.each([
     { change: "unchanged", accepted: true },
@@ -81,19 +91,12 @@ describe("memory session actor", () => {
     async ({ change, accepted }) => {
       const { actor } = await fixture();
       const request = (commandId: string, eventId: string, message: unknown) => ({
-        commandId,
+        ...turnCommand(actor, commandId, {
+          expectedSessionId: "session-1",
+          sessionFile: "/synthetic/transcript",
+          messages: [{ eventId, message, now: 2 }],
+        }),
         phaseId: "recovery",
-        lifecycle: {},
-        expectedState: buildRestartRecoveryExpectedState({ sessionId: "session-1", updatedAt: 1 }),
-        turn: {
-          agentId: "main",
-          sessionKey,
-          options: {
-            expectedSessionId: "session-1",
-            sessionFile: "/synthetic/transcript",
-            messages: [{ eventId, message, now: 2 }],
-          },
-        },
       });
       const source = await actor.adoptRun(
         {
@@ -265,23 +268,13 @@ async function initialize(
   options: Partial<SessionTurnPlan["options"]> = {},
 ) {
   const result = await actor.acceptInput(
-    {
-      commandId,
-      phaseId: "turn",
-      expectedState: buildRestartRecoveryExpectedState({ sessionId: "session-1", updatedAt: 1 }),
-      lifecycle: {},
-      turn: {
-        agentId: "main",
-        sessionKey: actor.target.sessionKey,
-        options: {
-          expectedSessionId: "session-1",
-          sessionFile: sessionKey,
-          initialSessionEntry: { sessionId: "session-1", updatedAt: 1, incognito: true },
-          messages: [{ message: { role: "user", content: "Hello" }, eventId: "user-1", now: 1 }],
-          ...options,
-        },
-      },
-    },
+    turnCommand(actor, commandId, {
+      expectedSessionId: "session-1",
+      sessionFile: sessionKey,
+      initialSessionEntry: { sessionId: "session-1", updatedAt: 1, incognito: true },
+      messages: [{ message: { role: "user", content: "Hello" }, eventId: "user-1", now: 1 }],
+      ...options,
+    }),
     authority,
   );
   expect(result.kind).toBe("committed");
