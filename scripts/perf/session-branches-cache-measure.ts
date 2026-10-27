@@ -8,12 +8,13 @@
  * Run alternating base/candidate timing passes, then separate --allocations passes.
  * Each cohort reads 32 sessions after a real unrelated session write; --steady omits
  * writes as a warm-cache control. CPU/allocation includes the identical write workload;
- * per-call latency excludes writes. Counts observe real worker task dispatches.
+ * per-call latency excludes writes. Counts observe completed worker round trips.
  * Acceptance: identical response checksums, fewer branch-worker requests, lower main
  * thread CPU/allocation under churn, no material warm-cache regression. No Git is used.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { channel } from "node:diagnostics_channel";
 import { readFileSync } from "node:fs";
 import { Session, type HeapProfiler } from "node:inspector/promises";
 import { registerHooks } from "node:module";
@@ -67,14 +68,26 @@ if (values["base-file"]) {
   });
 }
 let branchRequests = 0;
-// oxlint-disable-next-line typescript/unbound-method -- Forwarded with its original receiver and restored below.
-const postMessage = Worker.prototype.postMessage;
-Worker.prototype.postMessage = function (message: unknown, transfers) {
-  if (isRecord(message) && isRecord(message.input) && message.input.kind === "branch-summaries") {
+const workers = new Set<Worker>();
+const workerChannel = channel("worker_threads");
+const observeReply = (message: unknown) => {
+  if (
+    isRecord(message) &&
+    message.status === "ok" &&
+    isRecord(message.value) &&
+    message.value.ok === true &&
+    isRecord(message.value.value) &&
+    message.value.value.kind === "branch-summaries"
+  ) {
     branchRequests++;
   }
-  return postMessage.call(this, message, transfers);
 };
+const observeWorker = (message: unknown) => {
+  assert(isRecord(message) && message.worker instanceof Worker);
+  workers.add(message.worker);
+  message.worker.on("message", observeReply);
+};
+workerChannel.subscribe(observeWorker);
 const { listSessionBranches, upsertSessionEntryCore } =
   await import("../../src/config/sessions/session-accessor.js");
 const agentDb = await import("../../src/state/openclaw-agent-db.js");
@@ -97,7 +110,7 @@ try {
     assert.equal(result.status, "ok");
     expected.push(JSON.stringify(result));
   }
-  assert(branchRequests > 0, "Worker dispatch instrumentation did not observe warmup");
+  assert(branchRequests > 0, "Worker reply instrumentation did not observe warmup");
   branchRequests = 0;
   globalThis.gc?.();
   if (values.allocations) {
@@ -163,7 +176,10 @@ try {
   );
 } finally {
   inspector.disconnect();
-  Worker.prototype.postMessage = postMessage;
+  workerChannel.unsubscribe(observeWorker);
+  for (const worker of workers) {
+    worker.off("message", observeReply);
+  }
   await agentDb.closeOpenClawAgentDatabasesAsync();
   await stateDb.closeOpenClawStateDatabaseAsync();
 }
