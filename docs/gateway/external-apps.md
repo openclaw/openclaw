@@ -228,7 +228,10 @@ openclaw gateway call gateway.suspend.prepare \
   --json
 ```
 
-Wait for the lease to become `ready` before performing the checked restart.
+Wait for the lease to become `ready` before performing the checked restart. With
+`drain: true`, readiness waits for persistence custody to clear, rather than for
+agent work to finish. Preparation is reversible and does not mark or abort sessions;
+the committed stop/restart performs that step.
 Terminal commands and scrollback are not recovered after restart; see
 [Restart recovery](/gateway/restart-recovery#what-is-not-resumed).
 
@@ -246,9 +249,9 @@ armed authority. Resume, replacement, another accepted lifecycle action, or
 host retirement invalidates it. Pending final-chat persistence refuses arming
 and is checked again when `SIGTERM` consumes the arm. If that check refuses,
 the Gateway logs the refusal and retains ordinary graceful-stop behavior.
-An accepted handoff uses the existing restart recovery and abort cleanup,
-then exits for the external controller. An ordinary stop without an arm keeps
-waiting for active work. Controllers must defer on unsupported methods or
+An accepted handoff uses the standard graceful-shutdown marker and abort path,
+then exits for the external controller. Ordinary committed stop/restart also
+marks running root sessions and aborts active work promptly. Controllers must defer on unsupported methods or
 refused handoffs; a draining lease alone never authorizes interruption.
 
 Once shutdown commits, including an installation-replaced restart during a

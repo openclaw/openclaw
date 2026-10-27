@@ -77,8 +77,8 @@ Guests with `operator.sessions.write` can launch hidden native children for thei
 own sandboxed work and receive private parent completions. The child keeps the
 initiating person's authority and model restrictions. See [Operator scopes](/gateway/operator-scopes#scope-levels).
 
-Native sub-agent continuations after a Gateway restart, descendant completion,
-or a `sessions_send` follow-up preserve the recorded run timeout, including `0`
+Native sub-agent continuations after descendant completion or a `sessions_send`
+follow-up preserve the recorded run timeout, including `0`
 for no timeout, while the recorded session identity still matches. A replaced
 session or a registration without a captured identity uses the ordinary agent
 timeout instead. Steering an active turn keeps that turn's existing budget.
