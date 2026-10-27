@@ -29,8 +29,6 @@ function describeFirst(source: AnyAgentTool, siblings: string[] = []) {
 }
 
 it.each([
-  ["yield", createSessionsYieldTool, "sessions_send", "use sessions_send"],
-  ["collector yield", createSessionsYieldTool, "agents_wait", "require agents_wait"],
   ["agent list", () => tool("agents_list"), "sessions_spawn", "sessions_spawn"],
   ["collector", () => tool("agents_wait"), "sessions_spawn", "sessions_spawn"],
 ] as const)(
@@ -40,6 +38,22 @@ it.each([
     expect(describeFirst(create(), [sibling]).description).toContain(guidance);
   },
 );
+
+it("keeps the yield definition unchanged when sibling tools appear or disappear", () => {
+  const yieldTool = createSessionsYieldTool();
+  const definition = ({ name, description, parameters }: AnyAgentTool) =>
+    JSON.stringify({ name, description, parameters });
+  const expected = definition(yieldTool);
+  for (const siblings of [
+    [],
+    ["sessions_send"],
+    ["agents_wait"],
+    ["sessions_send", "agents_wait"],
+    [],
+  ]) {
+    expect(definition(describeFirst(yieldTool, siblings))).toBe(expected);
+  }
+});
 
 it.each([false, true])(
   "names only executable conversation routes (thread targets: %s)",

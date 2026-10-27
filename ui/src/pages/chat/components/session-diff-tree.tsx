@@ -3,13 +3,13 @@ import type { SessionDiffFile } from "../../../../../packages/gateway-protocol/s
 import { Icon } from "../../../components/solid/icon.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
 import { FileDisclosure } from "./file-disclosure.tsx";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 type ReviewNode = { key: string; name: string; path: string } & (
   | { kind: "file"; file: SessionDiffFile; children: [] }

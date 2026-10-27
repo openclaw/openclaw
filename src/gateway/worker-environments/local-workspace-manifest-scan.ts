@@ -34,6 +34,8 @@ import {
 } from "./local-workspace-manifest-tree.js";
 import type {
   LocalWorkspaceManifestMutation,
+  LocalWorkspaceManifestScan,
+  LocalWorkspaceManifestValue,
   LocalWorkspaceMutation,
   LocalWorkspacePreparedUpdate,
 } from "./local-workspace-store.types.js";
@@ -69,36 +71,10 @@ export type LocalWorkspaceManifestAction =
       patch: Extract<LocalWorkspaceMutation, { kind: "update" }>["patch"];
     });
 
-export type LocalWorkspaceManifestScan = {
-  version: 1;
-  kind: "scan";
-  previousRoot: string | null;
-  resultingRoot: string;
-  treeRoot?: string;
-  previousTreeRoot?: string | null;
-  fingerprints?: { target: "canonical" | "projection"; blob: string };
-  preparations?: Uint8Array[];
-  records: LocalWorkspaceManifestRecord[];
-  observation?: LocalWorkspacePreparedUpdate;
-  removed: string[];
-  replace?: true;
-  baseManifestRaw: string;
-  baseManifestRef: string;
-  currentManifestRaw: string;
-  currentManifestRef: string;
-  buildCacheInputs: string[];
-};
-
 export type LocalWorkspaceManifestCheckpoint = Omit<
   LocalWorkspaceManifestScan,
   "observation" | "preparations"
 >;
-
-export type LocalWorkspaceManifestValue =
-  | LocalWorkspaceManifestScan
-  | { kind: "rescan" }
-  | { kind: "materialize"; rawManifest: string; manifestRef: string }
-  | { kind: "replace"; update: LocalWorkspacePreparedUpdate };
 
 export type LocalWorkspaceManifestInput = {
   id: string;

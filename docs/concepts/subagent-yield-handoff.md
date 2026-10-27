@@ -67,6 +67,13 @@ paused: a declared message wait, a leaf that an earlier version left paused, and
 orchestrator waiting on descendants are not bounded by this settlement. A kill
 claim on a paused run is never settled over; cancellation stays with the kill path.
 
+Session rows show a continuable paused run as `subagentRunState: "paused"`
+while its recorded `status` stays unchanged, so the parent's lists can tell it
+from a finished child. `isSubagentRunPausedForContinuation` owns that test for
+both the session row and the `/subagents` waiting label. See
+[sessions.list rows](/gateway/protocol/rpc-bootstrap-and-events) for the client
+contract.
+
 Private child results wait for their spawning turn to settle before individual
 announcement admission. Normal settlement resumes each finished private child,
 even while siblings are still running. Explicit yield assigns the frozen batch

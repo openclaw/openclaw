@@ -45,8 +45,10 @@ contains no tool executors.
 Code mode coverage should prove:
 
 - disabled config without an enabling override leaves existing tool exposure unchanged
-- omitted `enabled`, including object config that sets other fields, stays
-  disabled unless an agent or model override enables it
+- omitted `tools.codeMode` activates automatically for preferred catalog models
+  on eligible runs without overrides, and remains direct for capable or unflagged models
+- an authored global options object without `enabled` stays disabled unless an
+  agent or model override enables it
 - per-model `true`, `false`, and unset values preserve activation precedence,
   fallback-model selection, and limits from the enclosing options
 - enabled config exposes `exec`, `wait`, and only required direct-only tools to

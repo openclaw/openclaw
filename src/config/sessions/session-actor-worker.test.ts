@@ -454,6 +454,7 @@ it("adopts a run only under the exact lifecycle and current transaction and comm
 
 it.each([
   { phase: "acceptInput", initial: true, cold: false },
+  { phase: "acceptInput", initial: false, cold: false },
   { phase: "adoptRun", initial: false, cold: false },
   { phase: "acceptInput", initial: false, cold: true },
 ] as const)(
@@ -492,6 +493,7 @@ it.each([
         expected: before?.version,
         commandId: "accept-transcript",
         phaseId: "input",
+        entryReference: before?.writeToken,
         expectedState,
         lifecycle,
         turn,
@@ -501,8 +503,9 @@ it.each([
           ? { type: "session.actor.acceptInput", input }
           : { type: "session.actor.adoptRun", input: { ...input, sessionId } };
       await f.prepare(command);
-      expectCommitted(f.mutate(command));
-      expect(f.read(target)).toMatchObject({
+      const committed = expectCommitted(f.mutate(command));
+      expect(committed.receipt.postimage).toEqual(f.read(target));
+      expect(committed.receipt.postimage).toMatchObject({
         entry: { sessionId, ...lifecycle },
         pendingInputs: [],
       });

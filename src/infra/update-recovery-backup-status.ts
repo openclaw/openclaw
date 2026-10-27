@@ -3,6 +3,7 @@ import {
   hasUpdateRecoveryForwardResolution,
   readUpdateRecoveryBackups,
 } from "./update-recovery-backup-reader.js";
+import { isNeverActivatedFailedUpdate } from "./update-run-activation.js";
 import { getUpdateRunAsync } from "./update-run-reader.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 
@@ -48,6 +49,8 @@ export async function inspectUpdateRecoveryBackups() {
       }
       let terminalOutcome: "committed" | "restored" | undefined;
       let ambiguity: string | undefined;
+      // A failure that never activated left the captured state live; nothing needs recovery.
+      let unchanged = false;
       try {
         const run = await getUpdateRunAsync(manifest.runId);
         if (
@@ -83,25 +86,33 @@ export async function inspectUpdateRecoveryBackups() {
         if (!terminalOutcome && !ambiguity && run?.status !== "failed") {
           ambiguity = run ? `update run is ${run.status}` : "no matching update run exists";
         }
+        unchanged =
+          !terminalOutcome && !ambiguity && run !== undefined && isNeverActivatedFailedUpdate(run);
       } catch (error) {
         ambiguity = `update outcome is unreadable: ${formatErrorMessage(error)}`;
       }
-      if (!terminalOutcome && !ambiguity && snapshots.length - forwardResolved.size > 1) {
+      if (
+        !unchanged &&
+        !terminalOutcome &&
+        !ambiguity &&
+        snapshots.length - forwardResolved.size > 1
+      ) {
         ambiguity =
           "other recovery sets exist; restoring this set could discard newer database writes";
       }
-      const status: "stale" | "ambiguous" | "unresolved" = terminalOutcome
-        ? "stale"
-        : ambiguity
-          ? "ambiguous"
-          : "unresolved";
+      const status: "stale" | "ambiguous" | "unresolved" =
+        terminalOutcome || unchanged ? "stale" : ambiguity ? "ambiguous" : "unresolved";
       const nextAction =
         status === "unresolved"
           ? `Preserve current state and inspect ${ref.manifestPath} before manual recovery. See https://docs.openclaw.ai/cli/update/repair-and-recovery#original-state-captures`
-          : "openclaw update status --json";
+          : unchanged
+            ? "openclaw update cleanup"
+            : "openclaw update status --json";
       const reason = terminalOutcome
         ? `stale: its update already ${terminalOutcome === "committed" ? "succeeded" : "restored state"}`
-        : (ambiguity ?? "unresolved after a failed update");
+        : unchanged
+          ? "stale: its update failed before changing the installation or state"
+          : (ambiguity ?? "unresolved after a failed update");
       return {
         ref,
         runId: manifest.runId,
@@ -109,7 +120,7 @@ export async function inspectUpdateRecoveryBackups() {
         status,
         terminalOutcome,
         nextAction,
-        message: `Update recovery set ${ref.manifestPath}: ${reason}. ${status === "unresolved" ? `Retained original state requires manual inspection. ${nextAction}` : `Automatic restoration is refused; inspect with \`${nextAction}\`.`}${status === "ambiguous" ? " Resolve the recorded outcome before attempting recovery." : ""}`,
+        message: `Update recovery set ${ref.manifestPath}: ${reason}. ${status === "unresolved" ? `Retained original state requires manual inspection. ${nextAction}` : unchanged ? `Nothing needs recovery; retire it with \`${nextAction}\`.` : `Automatic restoration is refused; inspect with \`${nextAction}\`.`}${status === "ambiguous" ? " Resolve the recorded outcome before attempting recovery." : ""}`,
       };
     }),
   );
