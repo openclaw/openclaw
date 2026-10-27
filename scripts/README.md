@@ -150,6 +150,33 @@ Mobile transcript-top uses a native scrollport jump because Playwright's mobile
 WebKit driver has no wheel input; it is not a wheel-latency measurement. Tracing
 omits DOM snapshots so snapshot traversal does not dominate attribution.
 
+Use `--steps memory --viewport desktop --pairs 1` for the opt-in cross-engine
+retention census, or select individual `memory-route-usage`,
+`memory-long-session`, `memory-workboard-updates`, and
+`memory-mcp-relay-updates` steps. Route scenes make 20 same-document visits;
+the long-session scene switches among ten 2,000-message sessions and streams
+three replies; plugin scenes retire five mounts after 50 verified updates each.
+`memory-workboard-idle-control` and `memory-workboard-mounts-control` prime the
+same 50-update warmup, then capture four rounds without updates (idle or repeated
+mount/retirement). Compare these with the update workload to distinguish
+Inspector/allocator footprint from surviving application data.
+Each checkpoint drains intentional retirement timers, clears synthetic request
+history, requests two GCs and saves a heap snapshot. Each observation gets its
+own browser process. Reports include process-tree RSS, WebKit resource categories,
+heap class counts, detached DOM and active resource counters.
+
+Memory captures are excluded from the latency table. Compare warm and later
+checkpoints within each engine before attributing growth: Inspector/JIT warmup,
+retained Chat panes and bounded caches are not leaks. WebKit snapshot self sizes
+omit some backing stores, and its DOM counts cover JavaScript wrappers;
+Chromium supplies native DOM counters and snapshot detachedness. RSS can retain
+allocator capacity after GC and excludes platform services reparented outside
+the owned browser process tree. Native Workboard/MCP fixtures build from the
+current checkout; bundle comparisons alone do not compare plugin revisions.
+The collector clears WebKit Inspector's retained snapshot history after every
+capture, so WebKit heap object IDs are checkpoint-local. Raw snapshots remain
+available for class/edge inspection; use Chromium for stable cross-snapshot IDs.
+
 Build with `pnpm ui:build`, then collect the production renderer's desktop and
 mobile interactions against the synthetic Gateway:
 
