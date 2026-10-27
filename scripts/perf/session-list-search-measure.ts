@@ -1,3 +1,4 @@
+/// <reference lib="es2024.object" />
 /**
  * Real resident session-selection/search owner workload; no Gateway transport claim.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-list-search-measure.ts \
@@ -442,7 +443,7 @@ try {
       Object.entries(Object.groupBy(results, (sample) => `${sample.arm}:${sample.search}`)).map(
         ([key, samples]) => {
           assert(samples);
-          const mean = (pick: (sample: (typeof samples)[number]) => number) =>
+          const mean = (pick: (sample: NonNullable<typeof samples>[number]) => number) =>
             samples.reduce((sum, sample) => sum + pick(sample), 0) / samples.length;
           return [
             key,
