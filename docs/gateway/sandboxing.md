@@ -122,3 +122,13 @@ with the opt-in enabled. See [GitHub identity](/gateway/config-tools/github-iden
 - [Security](/gateway/security)
 - [`openclaw sandbox`](/cli/sandbox) — manage sandbox runtimes and inspect the effective sandbox policy
 - [Cloud Workers](/gateway/cloud-workers) — dispatching session work to throwaway cloud machines; its managed workspace is not an OS sandbox
+
+### Inaccessible generated-skills mountpoint
+
+If sandbox preparation reports `Cannot prepare sandbox skills mountpoint`, check
+ownership and ACLs on the named host path and its parent directories. Older
+Docker or Podman containers may have left `.openclaw/sandbox-skills` owned by
+root. The gateway user needs directory search (execute) access through every
+parent and write access where the scaffold is created. Have the workspace owner
+or administrator correct those permissions, then retry. OpenClaw does not change
+ownership or bypass the filesystem boundary to recover from this error.

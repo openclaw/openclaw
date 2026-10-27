@@ -1063,29 +1063,6 @@ img.chat-avatar {
   padding-inline-start: var(--chat-avatar-gutter);
 }
 
-.chat-duplicate-count {
-  display: inline-flex;
-  align-items: center;
-  align-self: baseline;
-  min-height: 22px;
-  margin-top: 0;
-  padding: 2px 7px;
-  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--panel) 72%, transparent);
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1;
-  vertical-align: 0.08em;
-  white-space: nowrap;
-}
-
-.chat-group.user .chat-duplicate-count {
-  background: color-mix(in srgb, var(--primary) 12%, transparent);
-  color: color-mix(in srgb, var(--text) 80%, var(--primary) 20%);
-}
-
 .chat-group.chat-group--reply {
   --chat-avatar-column: 36px;
   --chat-avatar-gap: 10px;

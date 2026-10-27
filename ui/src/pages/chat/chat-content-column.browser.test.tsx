@@ -1,6 +1,6 @@
 import { createSignal, For } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import { syncControlUiSystemChrome } from "../../app/control-ui-presentation.ts";
 import type { MessageGroup as MessageGroupData } from "../../lib/chat/chat-types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -347,6 +347,8 @@ it.each(["light", "dark"])(
       const [first, second] = [ink, fill].map(luminance);
       return (Math.max(first!, second!) + 0.05) / (Math.min(first!, second!) + 0.05);
     };
+    // Script focus matches :focus-visible only after keyboard input; parallel files' clicks reset that.
+    await userEvent.keyboard("{Tab}");
     for (const bubble of root.querySelectorAll<HTMLElement>(".chat-bubble")) {
       const fill = getComputedStyle(bubble).backgroundColor;
       expect(

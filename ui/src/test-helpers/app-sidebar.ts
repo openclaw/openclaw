@@ -322,6 +322,8 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     beginArchive: archiveState.beginPending,
     assignOwner,
     patchMany,
+    acknowledgeHiddenRuns: (...args: Parameters<SessionCapability["acknowledgeHiddenRuns"]>) =>
+      scopedSessions!.acknowledgeHiddenRuns(...args),
     deletionState: () => undefined,
     delete: deleteSession,
     deleteMany,

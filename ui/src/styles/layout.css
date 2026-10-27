@@ -2051,7 +2051,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 .sidebar-recent-session:not(
     .sidebar-recent-session--child,
     .sidebar-recent-session--single-line
-  ):is(:hover, :focus-within)
+  ):where(:hover, :focus-within)
   .sidebar-recent-session__title-row {
   padding-right: var(--session-row-actions-reserve);
 }
