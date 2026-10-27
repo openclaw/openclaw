@@ -64,6 +64,8 @@ function authorizedInput(
     message: message(runId, content),
     assertCurrent,
     assertAdmittedCurrent: assertCurrent,
+    assertFreshInputCurrent: authorization.assertCurrent,
+    prepareMessageAfterIdempotencyCheck: (prepared: PersistedUserTurnMessage) => prepared,
     authority: authorization.admittedInputAuthority,
   };
 }
@@ -157,11 +159,7 @@ describe("accepted input worker custody", () => {
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog({ env })).release };
         client.connect.scopes = ["operator.admin"];
         const authorization = await authorize(scope, client, cfg);
-        const input = {
-          ...authorizedInput(authorization, "incognito-memory", "Continue in memory"),
-          assertFreshInputCurrent: authorization.assertCurrent,
-          prepareMessageAfterIdempotencyCheck: (prepared: PersistedUserTurnMessage) => prepared,
-        };
+        const input = authorizedInput(authorization, "incognito-memory", "Continue in memory");
         try {
           receipt = await stageInput(scope, input);
           const admitted = receipt;
@@ -250,9 +248,7 @@ it("refreshes every collected source after a non-revoking profile change", async
       const collected = bindInputs(receipts, message("collected", "Collected sources"));
       assert(collected?.runAsync, "Expected collected input authority");
       let executed = 0;
-      await collected.runAsync(() => {
-        executed++;
-      });
+      await collected.runAsync(() => executed++);
       expect(executed).toBe(1);
       setUserProfileRole(second.id, "view");
       await removeSessionMember(scope, second.id);
@@ -307,22 +303,14 @@ it.each(["turn", "locked"] as const)(
       let admitted: SessionPendingInputReceipt | undefined;
       let unsettled: SessionPendingInputReceipt | undefined;
       try {
-        const authority = authorization.admittedInputAuthority!;
-        const authorityReads = vi.spyOn(authority, "withCurrent");
+        using authorityReads = vi.spyOn(authorization.admittedInputAuthority!, "withCurrent");
         setUserProfileRole(profileId, "suggest");
-        admitted = await stageInput(scope, {
-          ...authorizedInput(
-            authorization,
-            "prepared-custody",
-            "Continue with captured custody",
-            assertCurrent,
-          ),
-          assertFreshInputCurrent: authorization.assertCurrent,
-          prepareMessageAfterIdempotencyCheck: (input) => input,
-        });
+        admitted = await stageInput(
+          scope,
+          authorizedInput(authorization, "prepared-custody", "Continue", assertCurrent),
+        );
         expect(admitted?.state).toBe("queued");
         expect(authorityReads).toHaveBeenCalledTimes(1);
-        authorityReads.mockRestore();
         setUserProfileRole(profileId, "view");
         unsettled = await stageInput(scope, {
           runId: "pending-settlement",
