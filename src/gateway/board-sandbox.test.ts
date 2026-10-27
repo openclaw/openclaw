@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   buildSandboxHostDocument as buildHost,
   decodeSandboxHostCsp,
@@ -25,6 +25,23 @@ const hostPolicy = (csp?: Parameters<typeof buildHost>[0]) =>
   buildHost(csp).headers["Content-Security-Policy"];
 const directives = (policy: string | undefined) =>
   policy?.split(";").map((entry) => entry.trim().split(/\s+/u));
+
+it("reuses the fixed sandbox policy without reparsing origins and observes grant changes", () => {
+  const widget = document("pending");
+  const fixed = buildBoardWidgetSandboxPath(widget);
+  const parse = vi.spyOn(URL, "parse");
+  try {
+    expect(buildBoardWidgetSandboxPath(widget)).toBe(fixed);
+    expect(buildBoardWidgetSandboxPath({ grantState: "none" })).toBe(fixed);
+    expect(parse).not.toHaveBeenCalled();
+    widget.grantState = "granted";
+    expect(sandbox(widget).csp?.connectDomains).toEqual(widget.declared.netOrigins);
+    widget.grantState = "pending";
+    expect(buildBoardWidgetSandboxPath(widget)).toBe(fixed);
+  } finally {
+    parse.mockRestore();
+  }
+});
 
 it("permits HTTPS and generated media without granting other network access", () => {
   const { policies } = sandbox(document("pending"));
