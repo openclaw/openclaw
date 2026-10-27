@@ -505,15 +505,16 @@ it.skipIf(process.platform === "win32")(
           }
           expect(child.kill("SIGTERM")).toBe(true);
           const exit = await race(closed);
+          const shutdownMs = Date.now() - started;
           const markerAndAbortMs = [
             ...instance.logs().matchAll(/restart trace: restart.close.session-abort ([\d.]+)ms/g),
           ].at(-1)?.[1];
           process.stdout.write(
-            `[restart-resume-proof] ${mode} markerAndAbortMs=${markerAndAbortMs ?? "unavailable"} shutdownMs=${Date.now() - started}\n`,
+            `[restart-resume-proof] ${mode} markerAndAbortMs=${markerAndAbortMs ?? "unavailable"} shutdownMs=${shutdownMs}\n`,
           );
           expect.soft(exit, instance.logs()).toEqual([0, null]);
           expect
-            .soft(Date.now() - started, "busy shutdown must finish within ten seconds")
+            .soft(shutdownMs, `busy shutdown must finish within ten seconds\n${instance.logs()}`)
             .toBeLessThan(10_000);
           await client.stopAndWait();
           client = undefined;

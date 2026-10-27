@@ -10,6 +10,7 @@ import {
 } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { listAgentIds, tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
+import { captureGatewayToolCallerAssertion } from "../../agents/tools/gateway-caller-context.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
@@ -245,10 +246,21 @@ export async function authorizeGatewayRequestPreDispatch(params: {
       retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
       details: { ...gatewayStartupUnavailableDetails(), method: params.method },
     });
-  const startupError = () =>
-    params.context.unavailableGatewayMethods?.has(params.method) &&
-    // Only the queue owner's exact retained input may enter before external admission opens.
-    !(
+  const startupError = () => {
+    if (!params.context.unavailableGatewayMethods?.has(params.method)) {
+      return null;
+    }
+    // Admitted runs can use their tools while startup retains external input admission.
+    try {
+      const assertCallerCurrent = captureGatewayToolCallerAssertion(params.method);
+      if (assertCallerCurrent) {
+        assertCallerCurrent();
+        return null;
+      }
+    } catch {
+      return errorShape(ErrorCodes.FORBIDDEN, "agent tool caller authority is no longer active");
+    }
+    return !(
       params.method === "chat.send" &&
       readQueuedChatInputAdmission(
         readSessionSharingStringParam(params.requestParams, "idempotencyKey") ?? "",
@@ -256,6 +268,7 @@ export async function authorizeGatewayRequestPreDispatch(params: {
     )
       ? unavailableDuringStartup()
       : null;
+  };
   let assertChatRoutingCurrent: (() => void) | undefined;
   while (true) {
     signal?.throwIfAborted();
