@@ -124,15 +124,15 @@ suite.define(() => {
           });
           await page.addInitScript(() => {
             const inspect = () => {
-              const header = document.querySelector(".chat-pane__header");
-              if (!header?.getBoundingClientRect().height) {
+              const initialHeader = document.querySelector(".chat-pane__header");
+              if (!initialHeader?.getBoundingClientRect().height) {
                 requestAnimationFrame(inspect);
                 return;
               }
               Reflect.set(
                 window,
                 "firstHeaderViewerCount",
-                header
+                initialHeader
                   .querySelector(".chat-pane__presence .viewer-facepile")
                   ?.getAttribute("data-viewer-count") ?? null,
               );
