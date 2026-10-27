@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type {
@@ -57,15 +56,10 @@ const sessionEntry = (overrides: Partial<SessionEntry> = {}): SessionEntry => ({
   updatedAt: 1,
   ...overrides,
 });
-function pendingLogin(
-  code: string,
-  profile = "openai:codex",
-  title = "OpenAI Codex device code",
-  details: { expiresInMinutes?: number; message?: string } = {},
-) {
+function pendingLogin(code: string, profile = "openai:codex") {
   const finish = createDeferred<void>();
   const loginFlow = vi.fn<TelegramLoginFlow>(async (params) => {
-    await params.prompter.deviceCode?.({ title, code, ...details });
+    await params.prompter.deviceCode?.({ title: "OpenAI Codex device code", code });
     await finish.promise;
     return createLoginResult(profile);
   });
@@ -86,7 +80,7 @@ const registerSessionLogin = (loginFlow: TelegramLoginFlow) =>
 const sessionMocks = vi.hoisted(() => ({
   getSessionEntry: vi.fn<typeof getSessionEntryAsync>(),
   resolveStorePath: vi.fn(),
-  prepareSessionEntryPatch: vi.fn(),
+  prepareSessionEntryPatch: vi.fn<typeof prepareSessionEntryPatch>(),
   recordDeliveredCommandExchange: vi.fn(async () => ({
     ok: true,
     target: { sessionId: "login-session" },
@@ -137,7 +131,7 @@ function resetLoginCommandMocks() {
     if (!current) {
       return null;
     }
-    const patch = await params.prepare({ ...current });
+    const patch = await params.prepare({ ...current }, { existingEntry: current });
     if (params.authority?.kind === "host") {
       params.authority.assertCurrent();
     }
@@ -373,8 +367,7 @@ describe("registerTelegramNativeCommands /login", () => {
 
   it("rejects credential persistence after the command owner is removed", async () => {
     const deferred = createDeferred<void>();
-    const commands = { native: true, ownerAllowFrom: ["200"] };
-    const cfg: OpenClawConfig = { commands, agents: { entries: { main: {} } } };
+    const cfg = createOwnerLoginConfig();
     let currentConfig = cfg;
     const persist = vi.fn();
     const loginFlow = vi.fn<TelegramLoginFlow>(async (opts) => {
@@ -490,11 +483,7 @@ describe("registerTelegramNativeCommands /login", () => {
   });
 
   it("delivers pending login results through the account sender instead of the retired bot", async () => {
-    const { finish: finishLogin, loginFlow } = pendingLogin(
-      "RESTART-CODE",
-      "openai:codex",
-      "Codex login",
-    );
+    const { finish: finishLogin, loginFlow } = pendingLogin("RESTART-CODE");
     const { accountId, handler, sendMessage, sendMessageTelegram } =
       await registerOwnedLogin(loginFlow);
 
@@ -553,18 +542,13 @@ describe("registerTelegramNativeCommands /login", () => {
     };
     finish.resolve();
     if (laterProfile) {
-      await vi.waitFor(() => expectSent(sendMessage, kept));
-      expect(sendMessage).not.toHaveBeenCalledWith(100, completed, expect.any(Object));
+      await vi.waitFor(() => expectKept(sendMessage));
     } else {
       await vi.waitFor(() =>
         expect(sessionMocks.prepareSessionEntryPatch).toHaveBeenCalledTimes(1),
       );
-      const update = (
-        sessionMocks.prepareSessionEntryPatch.mock.calls[0]?.[0] as {
-          prepare?: (entry: SessionEntry) => Partial<SessionEntry> | null;
-        }
-      )?.prepare;
-      expect(update?.(created)).toEqual({
+      const update = sessionMocks.prepareSessionEntryPatch.mock.calls[0]?.[0].prepare;
+      expect(update?.(created, { existingEntry: created })).toEqual({
         authProfileOverride: "openai:new-owner@example.com",
         authProfileOverrideSource: "user",
         authProfileOverrideCompactionCount: undefined,
@@ -596,7 +580,7 @@ describe("registerTelegramNativeCommands /login", () => {
           authProfileOverride: "openai:concurrent-owner@example.com",
           updatedAt: 2,
         };
-        const patch = await params.prepare({ ...current });
+        const patch = await params.prepare({ ...current }, { existingEntry: current });
         if (params.authority?.kind === "host") {
           params.authority.assertCurrent();
         }
