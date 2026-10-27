@@ -709,6 +709,7 @@ const repositoryScriptEntries = [
   "scripts/perf/session-transcript-code-measure.mjs!",
   "scripts/perf/stall-recorder-cost-preload.mjs!",
   "scripts/perf/trajectory-preparation-retention.ts!",
+  "scripts/perf/usage-cache-write-measure.ts!",
   "scripts/perf/transcript-session-list-measure.ts!",
   "scripts/perf/transport-pull-allocation-measure.mjs!",
   // Source headers and maintained benchmark contributions invoke these workloads by exact path.
