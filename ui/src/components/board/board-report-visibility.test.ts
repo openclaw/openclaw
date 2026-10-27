@@ -62,11 +62,13 @@ it("defers fixed reports until nearby, then retains their body and current conte
     "grid-row: 1 / span 4",
   );
   expect(cell.querySelector("openclaw-report-widget")).toBeNull();
+  expect(cell.querySelector(".board-widget__menu-trigger")).toBeNull();
   const target = cell.querySelector(".board-widget")!;
   const observer = observers.find(({ targets }) => targets.has(target));
   expect(observer).toBeDefined();
   observer!.deliver(target);
   await waitForSolid(() => expect(cell.textContent).toContain("Initial report"));
+  expect(cell.querySelector(".board-widget__menu-trigger")).not.toBeNull();
   const report = cell.querySelector("openclaw-report-widget");
   expect(observer!.targets.has(target)).toBe(false);
 
