@@ -190,13 +190,11 @@ describe("composer run status", () => {
       expect(container.querySelector(".chat-working-indicator .chat-reading-indicator")).toBeNull();
       expect(container.querySelector(".chat-subagent-activity")).toBeNull();
       expect(container.querySelector("openclaw-working-phrase")).toBeNull();
-      expect(container.textContent).not.toContain("Backend implementation");
-      const count = container.querySelector<HTMLButtonElement>(
-        ".chat-working-indicator__subagents",
-      );
-      expect(count?.textContent).toBe("1 subagent running");
-      count?.click();
-      expect(onOpenSubagents).toHaveBeenCalledExactlyOnceWith();
+      // A handoff's wait names the session it waits on in place of a running count.
+      const wait = () =>
+        container.querySelector(".chat-subagent-wait")?.textContent?.replace(/\s+/gu, " ").trim();
+      expect(wait()).toBe("Waiting on Backend implementation · 1m 5s");
+      expect(container.querySelector(".chat-working-indicator__subagents")).toBeNull();
       const timer = container.querySelector(".chat-working-indicator openclaw-elapsed-time");
       expect(timer?.textContent).toBe("1m 5s");
 
@@ -204,9 +202,12 @@ describe("composer run status", () => {
         child,
         { ...child, key: "agent:main:subagent:frontend", label: "Frontend implementation" },
       ]);
-      expect(container.querySelector(".chat-working-indicator__subagents")?.textContent).toBe(
-        "2 subagents running",
-      );
+      expect(
+        container
+          .querySelector(".chat-subagent-wait button[aria-expanded]")
+          ?.textContent?.replace(/\s+/gu, " ")
+          .trim(),
+      ).toBe("Waiting on 2 sessions · 1m 5s");
       expect(
         container.querySelectorAll(".chat-working-indicator openclaw-elapsed-time"),
       ).toHaveLength(1);
@@ -214,7 +215,7 @@ describe("composer run status", () => {
 
       await draw([{ ...child, hasActiveRun: false }]);
       expect(container.querySelector(".chat-subagent-activity")).toBeNull();
-      expect(container.querySelector(".chat-working-indicator__subagents")).toBeNull();
+      expect(container.querySelector(".chat-subagent-wait")).toBeNull();
     },
   );
 

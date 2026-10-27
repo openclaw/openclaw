@@ -146,10 +146,10 @@ export interface SessionListHost {
   showMoreChildren(sessionKey: string): void;
   toggleSection(sectionId: string): void;
   expandedAgentId(): string;
-  /** Unadmitted New session handoff; presentation only, never a saved selection. */
-  pendingSessionCreate():
+  /** Foreground create display; never roster membership or saved selection. */
+  sessionCreateDisplay():
     | Readonly<{
-        creation: Readonly<{ sessionKey: string }>;
+        creation: Readonly<{ sessionKey: string; admitted: boolean }>;
         displayName?: string;
         category?: string;
       }>
