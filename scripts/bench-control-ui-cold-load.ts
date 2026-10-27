@@ -258,6 +258,8 @@ function summarizeSidebarWindows(
 
 const { values } = parseArgs({
   options: {
+    "new-session-first-token": { type: "boolean", default: false },
+    "new-session-token-ms": { type: "string", default: "1500" },
     "cpu-profile": { type: "boolean", default: false },
     "selector-stats": { type: "boolean", default: false },
     "cpu-profile-compare": { type: "string" },
@@ -3146,8 +3148,18 @@ try {
         await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.${route}.png`) });
       }
     }
+    const newSessionFirstToken = values["new-session-first-token"]
+      ? await (
+          await import("./lib/control-ui-new-session-first-token.ts")
+        ).measureNewSession(page, artifactDir, run + 1, {
+          initialHistory: fixture.scenario.methodResponses?.["chat.startup"],
+          viewerId: fixture.sidebarListInput.viewerProfileId,
+          tokenDelayMs: Number(values["new-session-token-ms"]),
+        })
+      : undefined;
     await cdp.detach();
     const result = {
+      newSessionFirstToken,
       layoutCell,
       run: run + 1,
       hostLoadAverage,
