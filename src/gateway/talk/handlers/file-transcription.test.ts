@@ -291,8 +291,7 @@ describe("configured file transcription through Talk RPCs", () => {
     await withFileProvider(
       async (requests) => {
         const { call, open, append, start, events, context } = fileRpc(cfg, talkHandlers);
-        const catalog = await call("talk.catalog");
-        expectRespondOk(catalog, {
+        expectRespondOk(await call("talk.catalog"), {
           transcription: {
             ready: true,
             activeProvider: "local-stt",
@@ -414,10 +413,8 @@ describe("configured file transcription through Talk RPCs", () => {
     await withFileProvider(async (requests) => {
       const { open, append, context } = fileRpc(withModels(models));
       const sessionId = await open();
-      const accepted = await append(sessionId, Buffer.alloc((maxBytes - 44) / 2, 0xff));
-      expectRespondOk(accepted);
-      const rejected = await append(sessionId, Buffer.alloc(1, 0xff));
-      expectRespondError(rejected, {
+      expectRespondOk(await append(sessionId, Buffer.alloc((maxBytes - 44) / 2, 0xff)));
+      expectRespondError(await append(sessionId, Buffer.alloc(1, 0xff)), {
         message: expect.stringContaining(`${maxBytes} byte limit`),
       });
       expect(requests).toHaveLength(0);
@@ -439,12 +436,12 @@ describe("configured file transcription through Talk RPCs", () => {
           agents: { defaults: { voiceModel: { primary: "streaming-stt/saved-model" } } },
         };
         const { call } = fileRpc(config, talkHandlers);
-        const catalog = await call("talk.catalog");
-        expect(expectRespondOk(catalog)).toMatchObject({
+        expect(expectRespondOk(await call("talk.catalog"))).toMatchObject({
           transcription: { ready: true, activeProvider: "streaming-stt" },
         });
-        const respond = await call("talk.session.create", { mode: "transcription" });
-        expectRespondOk(respond, { provider: "streaming-stt" });
+        expectRespondOk(await call("talk.session.create", { mode: "transcription" }), {
+          provider: "streaming-stt",
+        });
         expect(createSession).toHaveBeenCalledWith(
           expect.objectContaining({ providerConfig: { model: "saved-model" } }),
         );
@@ -506,8 +503,7 @@ describe("configured file transcription through Talk RPCs", () => {
         audioModel(),
       ]);
       const { open, append, call } = fileRpc(config, talkHandlers);
-      const catalog = await call("talk.catalog");
-      expect(expectRespondOk(catalog)).toMatchObject({
+      expect(expectRespondOk(await call("talk.catalog"))).toMatchObject({
         transcription: {
           ready: true,
           activeProvider: "local-stt",
@@ -519,8 +515,7 @@ describe("configured file transcription through Talk RPCs", () => {
       });
       const sessionId = await open({}, { sessionId: expect.any(String) });
       await append(sessionId);
-      const closed = await call("talk.session.close", { sessionId });
-      expectRespondOk(closed);
+      expectRespondOk(await call("talk.session.close", { sessionId }));
       expect(requests).toHaveLength(1);
       expect(requests[0]?.model).toBe("whisper");
     });
@@ -567,9 +562,7 @@ describe("configured file transcription through Talk RPCs", () => {
       const { open, append, call, context } = fileRpc();
       const sessionId = await open();
       await append(sessionId);
-      const closing = call("talk.session.close", {
-        sessionId,
-      });
+      const closing = call("talk.session.close", { sessionId });
       cleanupTalkConnection("conn-1", context.logGateway);
       await closing;
       expect(requests).toHaveLength(0);
@@ -582,8 +575,7 @@ describe("configured file transcription through Talk RPCs", () => {
         const { open, append, call, events } = fileRpc();
         const sessionId = await open();
         await append(sessionId);
-        const closed = await call("talk.session.close", { sessionId });
-        expectRespondError(closed, {
+        expectRespondError(await call("talk.session.close", { sessionId }), {
           message: expect.stringContaining("Local speech endpoint rejected audio"),
         });
         expect(events.at(-2)).toMatchObject({
