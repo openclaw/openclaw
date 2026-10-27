@@ -90,7 +90,7 @@ suite.define(() => {
         );
         await gateway.waitForRequest("connect");
         await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
-        expect(await page.locator(".sidebar-recent-session").count()).toBeGreaterThan(10);
+        await page.locator(".sidebar-recent-session").nth(10).waitFor();
       }
     });
   });
