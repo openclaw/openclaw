@@ -101,6 +101,12 @@ suite.define(() => {
         await subagents
           .getByRole("button", { name: "Review the release Done", exact: true })
           .waitFor();
+        if (
+          (await automations.locator(":scope > summary").getAttribute("aria-expanded")) !== "false"
+        ) {
+          await automations.locator(":scope > summary").click();
+        }
+        await automations.locator(':scope > summary[aria-expanded="false"]').waitFor();
         await automations.locator(":scope > summary").click();
         await automations.getByText("Scheduled release check", { exact: true }).waitFor();
         expect(await automations.locator(".chat-summary__automation-attention").count()).toBe(1);

@@ -391,10 +391,13 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
       ? props.cached
       : undefined;
   const pending = () => (cached() ? inventory.loading() : isPending(inventory.read));
+  // Closing the row DOM must not erase the bounded offline preview.
   const jobs = createMemo<DetailsAutomation[]>(() =>
     inventory.loaded()
-      ? (props.desktop && !props.desktop.expanded ? [] : inventory.jobs().slice(0, shown())).map(
-          (job) => ({
+      ? inventory
+          .jobs()
+          .slice(0, props.desktop && !props.desktop.expanded ? 10 : shown())
+          .map((job) => ({
             id: job.id,
             name: job.name,
             disabled: !job.enabled || undefined,
@@ -407,8 +410,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
             state: jobState(job),
             result: automationResultData(job),
             timezone: job.schedule?.kind === "cron" ? job.schedule.tz : undefined,
-          }),
-        )
+          }))
       : (cached()?.rows ?? []),
   );
   const hasCachedRows = () => inventory.jobs().length > shown();
@@ -419,10 +421,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
       ? {
           write: props.onDetailsSnapshot,
           automations: {
-            rows:
-              inventory.jobs().length > 0 && props.desktop && !props.desktop.expanded
-                ? (props.cached?.rows ?? [])
-                : jobs().slice(0, 10),
+            rows: jobs().slice(0, 10),
             total: inventory.total() ?? inventory.jobs().length,
             more: inventory.jobs().length > 10 || inventory.hasMore(),
           },
@@ -551,7 +550,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
     );
   const content = () => (
     <div class="chat-summary__automations" aria-busy={pending() ? "true" : "false"}>
-      <For each={jobs()} keyed={(job) => job.id}>
+      <For each={props.desktop && !props.desktop.expanded ? [] : jobs()} keyed={(job) => job.id}>
         {(job) => {
           let row: HTMLAnchorElement | undefined;
           const search = () => `?${new URLSearchParams({ job: job().id })}`;

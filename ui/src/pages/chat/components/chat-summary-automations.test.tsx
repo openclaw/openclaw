@@ -159,6 +159,27 @@ function component(
 
 afterEach(() => document.body.replaceChildren());
 
+it("keeps a bounded live preview when desktop rows close before cached props catch up", async () => {
+  const remember =
+    vi.fn<NonNullable<Parameters<typeof ChatSummaryAutomations>[0]["onDetailsSnapshot"]>>();
+  const desktop = { expanded: true, onExpandedChange: vi.fn() };
+  const current = component(sequence(page([job()]), page()));
+  current.update({ desktop, onDetailsSnapshot: remember });
+  await current.ready();
+  expect(current.find(".chat-summary__automation")).not.toBeNull();
+  current.update({ desktop: { ...desktop, expanded: false } });
+  await waitForSolid(() =>
+    expect(remember.mock.lastCall?.[0].automations?.rows).toEqual([
+      expect.objectContaining({ id: "summary-job", name: "Check the task" }),
+    ]),
+  );
+  expect(current.find(".chat-summary__automation")).toBeNull();
+  current.cron();
+  await waitForSolid(() =>
+    expect(remember.mock.lastCall?.[0].automations).toMatchObject({ rows: [], total: 0 }),
+  );
+});
+
 it.each([false, true])("coalesces hidden refreshes: %s", async (hiddenEvents) => {
   const pending = createDeferred<Page>();
   const current = component(sequence(pending.promise).mockResolvedValue(page([job()])));
