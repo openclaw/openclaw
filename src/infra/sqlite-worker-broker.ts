@@ -449,7 +449,7 @@ export class SqliteWorkerBroker {
       isAvailable: () => !owned.slot.failed && !owned.cleanupState && !owned.retirementRequested,
       // The broker owns retirement when the opener does not provide one: an idle client
       // must release its retained state instead of pinning it for the process lifetime.
-      retireIdle: options.retireIdle ?? (() => brokerClient?.retire()),
+      retireIdle: options.retireIdle ?? (() => brokerClient?.retire?.()),
       dispatch: (payload, signal, scope, assertCurrent, createAdmission, requestClass) =>
         this.enqueue(
           owned.slot,
@@ -783,6 +783,7 @@ export class SqliteWorkerBroker {
   }
 
   close(): Promise<void> {
+    this.sqliteWorkerIdleSweepTimer.clear();
     this.draining ??= this.lifecycle
       .closeHost({
         inputAdmission: this.inputAdmission,
