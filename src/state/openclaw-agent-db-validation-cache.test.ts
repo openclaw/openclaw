@@ -403,6 +403,31 @@ describe("canonical proof on physical database validation", () => {
   );
 
   describe("native integrity proof handoff", () => {
+    it.for(["empty", "canonical", "verified"] as const)(
+      "keeps concurrent publications current after $0 admission succeeds",
+      (cache, { empty: { database, options } }) => {
+        if (cache === "canonical") {
+          writeTransaction(recordCanonical, options);
+        }
+        const received = independentWorkerReceipt(database);
+        if (cache !== "verified") {
+          clearValidation(database.path);
+          if (cache === "canonical") {
+            expect(hasCanonical(database)).toBe(true);
+          }
+        }
+        const first = capturePublication(database);
+        const second = capturePublication(database);
+
+        first(received.identity, structuredClone(received));
+        // A later opener must not replace the owner captured by the queued peer.
+        const third = capturePublication(database);
+        expect(() => second(received.identity, structuredClone(received))).not.toThrow();
+        expect(() => third(received.identity, structuredClone(received))).not.toThrow();
+        expect(getTransfer(database)?.schema).toBeDefined();
+      },
+    );
+
     it("distinguishes raced publication from malformed receipts even after revocation", ({
       empty: { database },
     }) => {
