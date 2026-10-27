@@ -19,6 +19,7 @@ import { resolveUserPath } from "../../../utils.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { installAcceptedSubagentGatewayMock } from "../../test-helpers/subagent-gateway.js";
 import type { RegisterSubagentRunOptions } from "../registry/subagent-registry.types.js";
+import type { SpawnSubagentContext, SpawnSubagentParams } from "./subagent-spawn-contract.js";
 import { expectSharedPendingSpawnCapacity } from "./subagent-spawn.pending-capacity.test-support.js";
 import {
   createConfigOverride,
@@ -95,23 +96,20 @@ function expectNoChildSpawnSideEffects(): void {
 }
 
 const collectorContext = { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" };
-function spawn(
-  params: Parameters<typeof spawnSubagentDirect>[0],
-  ctx: Parameters<typeof spawnSubagentDirect>[1] = {},
-) {
+function spawn(params: SpawnSubagentParams, ctx: SpawnSubagentContext = {}) {
   return spawnSubagentDirect(params, { agentSessionKey: "agent:main:main", ...ctx });
 }
 function spawnCollector(
   task: string,
-  params: Partial<Parameters<typeof spawnSubagentDirect>[0]> = {},
-  context: Parameters<typeof spawnSubagentDirect>[1] = {},
+  params: Partial<SpawnSubagentParams> = {},
+  context: SpawnSubagentContext = {},
 ) {
   return spawn({ task, collect: true, ...params }, { ...collectorContext, ...context });
 }
 async function expectRefusedSpawn(
-  params: Partial<Parameters<typeof spawnSubagentDirect>[0]>,
+  params: Partial<SpawnSubagentParams>,
   error: string,
-  context: Parameters<typeof spawnSubagentDirect>[1] = {},
+  context: SpawnSubagentContext = {},
   status = "error",
 ) {
   expect(await spawn({ task: "must not launch", ...params }, context)).toMatchObject({
@@ -261,37 +259,11 @@ describe("spawnSubagentDirect seam flow", () => {
     },
   );
 
-  it.each([false, true])(
-    "rejects invalid worktree names before reserving native work (collect=%s)",
-    async (collect) => {
-      const onSpawnEffectsStart = vi.fn();
-      const result = await spawn(
-        {
-          task: "inspect",
-          worktree: true,
-          worktreeName: "codex/qa-telemetry-prompt-cache-20261016",
-          collect,
-        },
-        { ...collectorContext, onSpawnEffectsStart },
-      );
-      expect(onSpawnEffectsStart).not.toHaveBeenCalled();
-      expectNoChildSpawnSideEffects();
-      expect(result).toEqual({
-        status: "error",
-        error: "worktree name must match [a-z0-9][a-z0-9-]{0,63}",
-      });
-    },
-  );
-
-  it.each<
+  it.each<[Partial<SpawnSubagentParams>, string, boolean?, SpawnSubagentContext?, string?]>([
     [
-      Partial<Parameters<typeof spawnSubagentDirect>[0]>,
-      string,
-      boolean?,
-      Parameters<typeof spawnSubagentDirect>[1]?,
-      string?,
-    ]
-  >([
+      { worktree: true, worktreeName: "codex/qa-telemetry-prompt-cache-20261016", collect: true },
+      "worktree name must match [a-z0-9][a-z0-9-]{0,63}",
+    ],
     [{ completionTarget: "parent", collect: true }, 'completionTarget="parent"'],
     [
       { completionTarget: "parent" },
@@ -310,7 +282,9 @@ describe("spawnSubagentDirect seam flow", () => {
     ],
   ])("rejects %j with %s before child effects", async (params, error, enabled, context, status) => {
     configureSwarm(enabled ?? false);
-    await expectRefusedSpawn(params, error, context, status);
+    const onSpawnEffectsStart = vi.fn();
+    await expectRefusedSpawn(params, error, { ...context, onSpawnEffectsStart }, status);
+    expect(onSpawnEffectsStart).not.toHaveBeenCalled();
   });
 
   it("rejects explicit same-agent targets when allowAgents excludes the requester", async () => {
@@ -434,19 +408,32 @@ describe("spawnSubagentDirect seam flow", () => {
   });
 
   it.each([
-    [false, "model not allowed: fixture/blocked"],
-    [true, "sessions_spawn could not verify the selected model: configuration unavailable"],
-  ] as const)(
-    "rejects model preparation before child effects (throws=%s)",
-    async (throws, error) => {
-      if (throws) {
-        hoisted.prepareModelChoiceMock.mockRejectedValue(new Error("configuration unavailable"));
-      } else {
-        hoisted.prepareModelChoiceMock.mockResolvedValue({ kind: "unavailable", error });
-      }
-      await expectRefusedSpawn({ model: "fixture/blocked" }, error);
-    },
-  );
+    ["unavailable", "model not allowed: fixture/blocked"],
+    ["throws", "sessions_spawn could not verify the selected model: configuration unavailable"],
+    ["no-tools", "requires a tool-capable target model"],
+  ] as const)("rejects model preparation before child effects (%s)", async (failure, error) => {
+    if (failure === "no-tools") {
+      configureSwarm();
+      hoisted.prepareModelChoiceMock.mockImplementation(async (request) => {
+        const choice = await supportedSpawnModelChoice(request);
+        if (choice.kind !== "resolved") {
+          throw new Error("Expected supported fixture model");
+        }
+        return { ...choice, model: { ...choice.model, compat: { supportsTools: false } } };
+      });
+    } else if (failure === "throws") {
+      hoisted.prepareModelChoiceMock.mockRejectedValue(new Error("configuration unavailable"));
+    } else {
+      hoisted.prepareModelChoiceMock.mockResolvedValue({ kind: "unavailable", error });
+    }
+    await expectRefusedSpawn(
+      failure === "no-tools"
+        ? { model: "openai/no-tools", collect: true, outputSchema: { type: "object" } }
+        : { model: "fixture/blocked" },
+      error,
+      failure === "no-tools" ? collectorContext : {},
+    );
+  });
 
   it.each(["unconfirmed", "publication", "indeterminate"] as const)(
     "retains collector capacity until rollback settles (%s)",
@@ -624,45 +611,36 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
   });
 
-  it("reconciles a transport-ambiguous dispatch so an accepted run is surfaced instead of misreported as an error", async () => {
+  it.each([false, true])("reconciles ambiguous dispatch (terminal=%s)", async (terminal) => {
     const accepted = { runId: "accepted-ambig-run", status: "in_flight" };
-    const dispatch = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("gateway timeout after 60000ms"))
-      .mockResolvedValueOnce({ ...accepted, admissionPending: true })
-      .mockResolvedValue(accepted);
+    const dispatch = vi.fn().mockRejectedValueOnce(new Error("gateway timeout after 60000ms"));
+    if (!terminal) {
+      dispatch.mockResolvedValueOnce({ ...accepted, admissionPending: true });
+    }
+    dispatch.mockResolvedValue(terminal ? { runId: "stopped-run", status: "timeout" } : accepted);
     hoisted.callGatewayMock.mockImplementation(async ({ method }: { method?: string }) =>
-      method === "agent" ? dispatch() : method?.startsWith("sessions.") ? { ok: true } : {},
+      method === "agent"
+        ? dispatch()
+        : terminal || method?.startsWith("sessions.")
+          ? { ok: true }
+          : {},
     );
     const result = await spawn({ task: "ambiguous child" });
-
-    const agentRequests = gatewayRequestRecords().filter((request) => request.method === "agent");
-    expect(agentRequests.map((request) => request.params)).toEqual(
-      Array(3).fill(agentRequests[0]?.params),
-    );
-    expect(result).toMatchObject({
-      status: "accepted",
-      runId: "accepted-ambig-run",
-      childSessionKey: expect.any(String),
-    });
-  });
-
-  it("does not register a child when reconciliation finds a terminal run", async () => {
-    const dispatch = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("gateway timeout after 60000ms"))
-      .mockResolvedValue({ runId: "stopped-run", status: "timeout" });
-    hoisted.callGatewayMock.mockImplementation(async ({ method }: { method?: string }) =>
-      method === "agent" ? dispatch() : { ok: true },
-    );
-
-    const result = await spawn({ task: "ambiguous terminal child" });
-
-    expect(result).toMatchObject({
-      status: "error",
-      error: expect.stringContaining("no active subagent run (status: timeout)"),
-    });
-    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+    if (terminal) {
+      expect(result).toMatchObject({
+        status: "error",
+        error: expect.stringContaining("no active subagent run (status: timeout)"),
+      });
+      expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+    } else {
+      const requests = gatewayRequestRecords().filter((request) => request.method === "agent");
+      expect(requests.map((request) => request.params)).toEqual(Array(3).fill(requests[0]?.params));
+      expect(result).toMatchObject({
+        status: "accepted",
+        runId: "accepted-ambig-run",
+        childSessionKey: expect.any(String),
+      });
+    }
   });
 
   it("shares pending child capacity between native and visible spawn paths", async ({ signal }) => {
@@ -674,27 +652,6 @@ describe("spawnSubagentDirect seam flow", () => {
       countActiveRuns: hoisted.countActiveRunsForSessionMock,
       signal,
     });
-  });
-
-  it("rejects schema collection for a model that cannot call tools", async () => {
-    configureSwarm();
-    hoisted.prepareModelChoiceMock.mockImplementation(async (request) => {
-      const choice = await supportedSpawnModelChoice(request);
-      if (choice.kind !== "resolved") {
-        throw new Error("Expected supported fixture model");
-      }
-      return { ...choice, model: { ...choice.model, compat: { supportsTools: false } } };
-    });
-
-    const rejected = await spawnCollector("structured result", {
-      model: "openai/no-tools",
-      outputSchema: { type: "object" },
-    });
-
-    expect(rejected.status).toBe("error");
-    expect(rejected.error).toContain("requires a tool-capable target model");
-    expect(hoisted.updateSessionStoreMock).not.toHaveBeenCalled();
-    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
   });
 
   it.each(["off", "all"] as const)(

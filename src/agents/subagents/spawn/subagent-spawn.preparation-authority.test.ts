@@ -53,7 +53,7 @@ import {
 } from "../../tools/gateway-caller-context.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
+import { holdSpawnCapacity } from "./subagent-spawn.production-boundary.test-support.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
 const fixture = installSpawnAuthorityFixture();
@@ -567,16 +567,10 @@ describe("pending spawn preparation authority", () => {
       }
       expect(deleted).toEqual([childSessionKey]);
       expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toBeUndefined();
-      const survivor = vi.fn(async () => {});
-      enqueueSwarmRun({
-        groupId: JSON.stringify(["main", parentSessionKey, groupId]),
-        runId: "surviving-reservation",
-        maxConcurrent: 1,
-        activeRunIds: [],
-        start: survivor,
-        onStartFailure: () => true,
-      });
-      await vi.waitFor(() => expect(survivor).toHaveBeenCalledOnce());
+      await holdSpawnCapacity(
+        JSON.stringify(["main", parentSessionKey, groupId]),
+        "surviving-reservation",
+      );
     } finally {
       release.resolve();
       acceptedGate.resolve();
