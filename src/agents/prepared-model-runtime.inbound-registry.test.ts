@@ -233,7 +233,7 @@ describe("prepared reply dispatch runtime", () => {
     await publishGateway(config);
     const published = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
     const selection = { provider: "selected", modelId: "model", runtime: "openclaw" as const };
-    const input = runInput(published, [selection]);
+    const input = { ...runInput(published, [selection]), config };
     const lease = await acquireAgentRunPreparedModelRuntime(input, {
       catalogMode: "static",
       pluginGeneration: published.pluginGeneration,
@@ -283,6 +283,7 @@ describe("prepared reply dispatch runtime", () => {
       acquireAgentRunPreparedModelRuntime(
         {
           ...runInput(published, [{ provider: "custom", modelId: "model", runtime }]),
+          config,
           allowGatewaySubagentBinding: true,
           ...overrides,
         },
@@ -434,12 +435,12 @@ describe("prepared reply dispatch runtime", () => {
         },
       });
       const published = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
-      const selection = {
+      const pick = {
         provider: "bailian-token-plan",
         modelId: "qwen3.7-max",
         runtime: "openclaw" as const,
       };
-      const input = { ...runInput(published, [selection]), allowGatewaySubagentBinding: true };
+      const input = { ...runInput(published, [pick]), config, allowGatewaySubagentBinding: true };
       await using parent = scopePreparedModelRuntimeLease(
         await acquireAgentRunPreparedModelRuntime(input, {
           catalogMode: "static",
