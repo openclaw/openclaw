@@ -52,7 +52,7 @@ const nodeRowSource = `
   });
 `;
 
-export function runCiManifestFixture(options: {
+type CiManifestFixtureOptions = {
   bundledPlanner: boolean;
   sourceChannelPolicy?: boolean;
   nodeTestShards?: Record<string, unknown>[];
@@ -116,7 +116,9 @@ export function runCiManifestFixture(options: {
   uiRealGatewayShards?: boolean;
   remoteTagRefs?: Record<string, string>;
   scopeEnv?: Record<string, string>;
-}) {
+};
+
+export function runCiManifestFixture(options: CiManifestFixtureOptions, compilerTempDir?: string) {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-ci-manifest-"));
   try {
     const scriptsDir = path.join(root, "scripts", "lib");
@@ -617,6 +619,7 @@ export function runCiManifestFixture(options: {
       const correctionOutput = path.join(root, "correction.out");
       writeFileSync(correctionOutput, "");
       const correction = runWorkflowShellScript(correctionStep.run, {
+        tempDir: compilerTempDir,
         cwd: root,
         env: {
           PATH: `${fixtureBin}${path.delimiter}${process.env.PATH ?? ""}`,
@@ -652,6 +655,7 @@ export function runCiManifestFixture(options: {
       (step: { name?: string }) => step.name === "Build CI manifest",
     );
     const run = runWorkflowShellScript(manifestStep.run, {
+      tempDir: compilerTempDir,
       cwd: root,
       env: {
         ...process.env,
@@ -731,6 +735,7 @@ export function runCiManifestFixture(options: {
         ]),
       );
       checkPlanRun = runWorkflowShellScript(checkPlanStep.run, {
+        tempDir: compilerTempDir,
         cwd: root,
         env: { ...process.env, ...plannerEnv, GITHUB_OUTPUT: checkPlanOutputPath },
       });

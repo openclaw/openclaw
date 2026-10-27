@@ -77,6 +77,7 @@ import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import type { UserModelAccountSelection } from "./model-account-authority.js";
 import { isSessionUnreadAckOnlyPatch } from "./server-methods/session-unread-ack.js";
 import {
+  createSessionAccessProgramValidation,
   prepareSessionPatchModelSelection,
   resolveSessionPatchModelSelection,
 } from "./server-methods/sessions-patch-model-selection.js";
@@ -205,10 +206,9 @@ function* projectSessionPatchSteps(
   const sessionAgentId = normalizeAgentId(
     params.agentId ?? parsedAgent?.agentId ?? resolveDefaultAgentId(cfg),
   );
-  let resolvedDefault = resolveDefaultModelForAgent({ cfg, agentId: sessionAgentId });
-  const subagentModelHint = isSubagentSessionKey(storeKey)
-    ? resolveSubagentConfiguredModelSelection({ cfg, agentId: sessionAgentId })
-    : undefined;
+  let resolvedDefault: ModelRef | undefined;
+  const getResolvedDefault = () =>
+    (resolvedDefault ??= resolveDefaultModelForAgent({ cfg, agentId: sessionAgentId }));
   const resolveThinkingRuntime = (
     provider: string,
     model: string,
@@ -395,8 +395,9 @@ function* projectSessionPatchSteps(
     const normalized = normalizeThinkLevel(rawThinking);
     if (!normalized) {
       const hintProvider =
-        normalizeOptionalString(existing?.providerOverride) || resolvedDefault.provider;
-      const hintModel = normalizeOptionalString(existing?.modelOverride) || resolvedDefault.model;
+        normalizeOptionalString(existing?.providerOverride) || getResolvedDefault().provider;
+      const hintModel =
+        normalizeOptionalString(existing?.modelOverride) || getResolvedDefault().model;
       const profile = yield* loadThinkingProfileForPatch(hintProvider, hintModel, existing);
       return invalid(
         `invalid thinkingLevel (use ${profile.levels.map(({ label }) => label).join("|")})`,
@@ -504,6 +505,7 @@ function* projectSessionPatchSteps(
     applyModelRuntimeDirective(next, { kind: "clear" });
   }
   if (typeof patch.nativeRuntimeConsent === "string" && typeof patch.model !== "string") {
+    getResolvedDefault();
     yield* loadPreparedModelCatalogForPatch();
   }
   if ("model" in patch) {
@@ -523,12 +525,16 @@ function* projectSessionPatchSteps(
     const raw = patch.model;
     let selection: (ModelRef & { profile?: string; isDefault: boolean }) | undefined;
     if (raw === null) {
-      selection = { ...resolvedDefault, isDefault: true };
+      selection = { ...getResolvedDefault(), isDefault: true };
     } else if (raw !== undefined) {
       const trimmed = normalizeOptionalString(raw) ?? "";
       if (!trimmed) {
         return invalid("invalid model: empty");
       }
+      const selectionDefault = getResolvedDefault();
+      const subagentModelHint = isSubagentSessionKey(storeKey)
+        ? resolveSubagentConfiguredModelSelection({ cfg, agentId: sessionAgentId })
+        : undefined;
       const catalog = yield* loadPreparedModelCatalogForPatch();
       if (!catalog) {
         return {
@@ -545,8 +551,8 @@ function* projectSessionPatchSteps(
         catalog,
         raw: trimmed,
         defaultProvider:
-          (statusModelPatch && next.providerOverride?.trim()) || resolvedDefault.provider,
-        defaultModel: resolvedDefault.model,
+          (statusModelPatch && next.providerOverride?.trim()) || selectionDefault.provider,
+        defaultModel: selectionDefault.model,
         subagentModelHint,
         preparedModelSelection: params.preparedModelSelection,
       });
@@ -641,7 +647,8 @@ function* projectSessionPatchSteps(
         cfg,
         agentDir: resolveAgentDir(cfg, sessionAgentId),
         entry: next,
-        currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
+        currentProvider:
+          next.providerOverride ?? next.modelProvider ?? getResolvedDefault().provider,
         selection,
         explicitDefaultSelection: selection.isDefault,
         profileOverride: selection.profile,
@@ -658,8 +665,8 @@ function* projectSessionPatchSteps(
   }
 
   if (typeof rawThinking === "string") {
-    const effectiveProvider = next.providerOverride ?? resolvedDefault.provider;
-    const effectiveModel = next.modelOverride ?? resolvedDefault.model;
+    const effectiveProvider = next.providerOverride ?? getResolvedDefault().provider;
+    const effectiveModel = next.modelOverride ?? getResolvedDefault().model;
     const profile = yield* loadThinkingProfileForPatch(effectiveProvider, effectiveModel, next);
     if (!profile.levels.some(({ id }) => id === next.thinkingLevel)) {
       return invalid(
@@ -669,8 +676,7 @@ function* projectSessionPatchSteps(
   }
 
   const contextWindowPatch = yield* applySessionContextWindowPatch({
-    defaultModel: resolvedDefault.model,
-    defaultProvider: resolvedDefault.provider,
+    resolveDefaultModel: getResolvedDefault,
     loadModelCatalog: loadPreparedModelCatalogForPatch,
     runtimeId: resolveThinkingRuntime,
     routeVariants: () => loadedModelCatalog?.routeVariants,
@@ -723,5 +729,19 @@ function* projectSessionPatchSteps(
     delete next.liveModelSwitchPending;
   }
 
+  if (
+    params.operatorAuthority &&
+    (patch.cyberAccessProgram !== undefined || "model" in patch || "agentRuntime" in patch)
+  ) {
+    validateModelSelection = createSessionAccessProgramValidation({
+      operatorAuthority: params.operatorAuthority,
+      entry: next,
+      validateModelSelection,
+    });
+    const error = validateModelSelection();
+    if (error) {
+      return { ok: false, error };
+    }
+  }
   return { ok: true, entry: next, ...(validateModelSelection ? { validateModelSelection } : {}) };
 }

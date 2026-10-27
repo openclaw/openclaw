@@ -41,7 +41,11 @@ export type TestChatPane = Omit<BaseTestChatPane, "loadOlderMessages"> & {
   visuallyPresented: boolean;
 };
 
-export function createTestChatPane(params: Parameters<typeof createBaseTestChatPane>[0]) {
+export function createTestChatPane(
+  params: NonNullable<Parameters<typeof createBaseTestChatPane>[0]> & {
+    client: GatewayBrowserClient;
+  },
+) {
   const sessions =
     params.sessions ?? createTestSessionCapability(createGatewayHarness(params.client).gateway);
   if (!params.sessions) {

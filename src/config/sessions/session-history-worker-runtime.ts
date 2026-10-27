@@ -72,18 +72,25 @@ function receivePage(
       }
       if (page.kind === "rpc" && page.page.encodedResponse) {
         // Wire bytes are immutable; each reader still owns its mutable page metadata.
-        const { messages, ...response } = page.page.encodedResponse;
+        const response = page.page.encodedResponse;
         const { encodedMessagesDeflate, ...metadata } = page.page;
         const copy = structuredClone({
           ...page,
-          page: { ...metadata, encodedResponse: response },
+          page: {
+            ...metadata,
+            encodedResponse: { ...response, messages: undefined, activity: undefined },
+          },
         });
         return {
           ...copy,
           page: {
             ...copy.page,
             encodedMessagesDeflate,
-            encodedResponse: { ...copy.page.encodedResponse, messages },
+            encodedResponse: {
+              ...copy.page.encodedResponse,
+              messages: response.messages,
+              activity: response.activity,
+            },
           },
         };
       }

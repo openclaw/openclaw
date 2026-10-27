@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
@@ -16,7 +15,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { minimatch } from "minimatch";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import type { createChangedCiLintPlan } from "../../scripts/check-changed.mts";
 import {
@@ -45,7 +44,7 @@ import {
 import { assertStartupCorpusCommand } from "./ci-startup-corpus.test-support.js";
 import {
   CI_MANIFEST_FIXTURE_TARGETS,
-  runCiManifestFixture,
+  runCiManifestFixture as runManifestFixture,
 } from "./ci-workflow-manifest.test-support.js";
 import {
   AMBIGUOUS_MAIN_PUSH_DIAGNOSTIC,
@@ -53,16 +52,20 @@ import {
   CACHE_V5,
   SETUP_GO_V6,
   UPLOAD_ARTIFACT_V7,
+  evaluateWorkflow,
   evaluateWorkflowCondition,
   evaluateWorkflowExpression,
+  quoteShell,
   readAndroidToolchainAction,
   readBuildArtifactsTestboxWorkflow,
   readCiWorkflow,
   readTrackedText,
   readWorkflow,
   readWorkflowOutputs,
+  requiredWorkflowStep,
   runControlUiE2eWorkflow,
   runGit,
+  runWorkflowCommand,
   runWorkflowShellScript,
   testNodeExecPath,
   type WorkflowStep,
@@ -70,6 +73,12 @@ import {
 } from "./ci-workflow.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+// Reuse content-keyed compiler artifacts; each manifest still gets fresh files and processes.
+const compilerTempDir = useAutoCleanupTempDirTracker(afterAll).make(
+  "openclaw-ci-manifest-compiler-",
+);
+const runCiManifestFixture = (options: Parameters<typeof runManifestFixture>[0]) =>
+  runManifestFixture(options, compilerTempDir);
 
 function installCollectChecks(root: string) {
   mkdirSync(path.join(root, ".ci-harness/scripts"), { recursive: true });
@@ -272,8 +281,7 @@ function runCiGateFixture(jobResults: string, env: Record<string, string> = {}) 
   );
   // Homebrew Bash 5.3 can block writing this here-string before its reader starts.
   const bash = process.platform === "darwin" ? "/bin/bash" : "bash";
-  return spawnSync(bash, ["-c", gateStep.run], {
-    encoding: "utf8",
+  return runWorkflowCommand(bash, ["-c", gateStep.run], {
     env: {
       ...process.env,
       JOB_RESULTS: jobResults,
@@ -382,8 +390,7 @@ function runPreflightNodeInvocation(
   chmodSync(nodePath, 0o755);
   // Avoid Darwin Bash 5.3 heredoc deadlocks while preserving the PATH node spy.
   const bash = process.platform === "darwin" ? "/bin/bash" : "bash";
-  const result = spawnSync(bash, ["-c", script], {
-    encoding: "utf8",
+  const result = runWorkflowCommand(bash, ["-c", script], {
     env: {
       ...process.env,
       GITHUB_EVENT_NAME: options.eventName,
@@ -548,8 +555,7 @@ function runCandidateTrustClassification(options: {
     "candidate cache trust step",
   );
   const script = expectDefined(step.run, "candidate cache trust script");
-  const run = spawnSync("bash", ["-c", script], {
-    encoding: "utf8",
+  const run = runWorkflowCommand("bash", ["-c", script], {
     env: {
       ...process.env,
       CHECKOUT_REVISION: options.checkoutRevision,
@@ -671,7 +677,8 @@ function runDiffBaseFixture(options: {
         );
   const emittedBaseIsCommit =
     typeof outputs.sha === "string" &&
-    spawnSync("git", ["cat-file", "-e", `${outputs.sha}^{commit}`], { cwd: root }).status === 0;
+    runWorkflowCommand("git", ["cat-file", "-e", `${outputs.sha}^{commit}`], { cwd: root })
+      .status === 0;
   return {
     emittedBaseIsCommit,
     eventBaseSha,
@@ -686,7 +693,14 @@ function runDiffBaseFixture(options: {
 function runCheckShardFixture(options: {
   frozenTarget: boolean;
   scripts: string[];
-  task?: "guards" | "guards-architecture" | "npm-lock" | "prod-types" | "test-types";
+  task?:
+    | "guards"
+    | "guards-architecture"
+    | "npm-lock"
+    | "prod-types"
+    | "test-types"
+    | "dependencies";
+  releaseToolingEntry?: boolean;
   earlyGuards?: boolean;
   splitPrGuards?: boolean;
   madgeImportCycles?: boolean;
@@ -721,6 +735,7 @@ function runCheckShardFixture(options: {
   const callsPath = path.join(root, "pnpm-calls.txt");
   const typeCallsPath = path.join(root, "type-calls.txt");
   const typeCheck = options.task === "test-types" || options.task === "prod-types";
+  const additionalCheck = options.earlyGuards || options.task === "dependencies";
   mkdirSync(fakeBin);
   installCollectChecks(root);
   if (typeCheck) {
@@ -740,15 +755,24 @@ function runCheckShardFixture(options: {
         ? "// legacy runner\n"
         : `// --stripe${options.types?.rootStripeSupport ? " --root-stripe" : ""}\n`,
     );
-    writeFileSync(
-      path.join(root, "scripts/run-tsgo-core-test-shards.mjs"),
-      `import { appendFileSync } from "node:fs";
-const args = process.argv.slice(2);
-appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCLAW_LOCAL_CHECK ?? "<unset>", "node " + args.join(" ")].join("\\t") + "\\n");
-const stripe = args[args.indexOf("--stripe") + 1];
-if (stripe === process.env.FAIL_TYPE_STRIPE) process.exit(17);
-`,
-    );
+    // This leaf only records routing; package probes and boundary runners still use Node.
+    writeExecutable(path.join(fakeBin, "node"), [
+      "#!/bin/sh",
+      'if [ "${1-}" != scripts/run-tsgo-core-test-shards.mjs ]; then',
+      `  exec ${quoteShell(testNodeExecPath)} "$@"`,
+      "fi",
+      "shift",
+      'printf "%s\\t%s\\tnode %s\\n" "$TYPE_ROW" "${OPENCLAW_LOCAL_CHECK-<unset>}" "$*" >> "$TYPE_CALLS"',
+      'while [ "$#" -gt 0 ]; do',
+      '  if [ "$1" = --stripe ]; then',
+      "    shift",
+      '    [ "${1-}" != "${FAIL_TYPE_STRIPE-}" ] || exit 17',
+      "    break",
+      "  fi",
+      "  shift",
+      "done",
+      "exit 0",
+    ]);
   }
   if (options.types?.boundary) {
     // Routing proof records native leaves without executing repository checks.
@@ -787,10 +811,24 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
     ).scripts["tsgo:test"]!;
   }
   writeFileSync(path.join(root, "package.json"), `${JSON.stringify({ scripts })}\n`);
+  if (options.releaseToolingEntry) {
+    mkdirSync(path.join(root, "config"), { recursive: true });
+    mkdirSync(path.join(root, "scripts"), { recursive: true });
+    writeFileSync(
+      path.join(root, "config/knip.config.ts"),
+      "const repositoryScriptEntries = [\n] as const;\n",
+    );
+    writeFileSync(path.join(root, "scripts/generate-dependency-release-evidence.mts"), "");
+  }
   writeExecutable(path.join(fakeBin, "pnpm"), [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     'if [ "$*" = "run --silent" ]; then exit 1; fi',
+    'if [ "${EXPECT_RELEASE_TOOLING_ENTRY:-false}" = "true" ] &&',
+    "  ! grep -Fq '\"scripts/generate-dependency-release-evidence.mts!\"' config/knip.config.ts; then",
+    '  echo "release-only helper is missing from Knip entries" >&2',
+    "  exit 1",
+    "fi",
     'printf "%s\\n" "$*" >> "$PNPM_CALLS"',
     ...(typeCheck
       ? [
@@ -800,7 +838,7 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
     'if [ "$*" = "${FAIL_PACKAGE_SCRIPT:-}" ]; then exit 17; fi',
   ]);
   const workflow = readCiWorkflow();
-  const checkShardStep = options.earlyGuards
+  const checkShardStep = additionalCheck
     ? workflow.jobs["check-additional-shard"].steps.find(
         (step: WorkflowStep) => step.name === "Run independent checks",
       )
@@ -827,7 +865,7 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
       split_pr_guards: String(options.splitPrGuards ?? false),
       changed_core_test_paths_json: options.types?.changedPathsJson ?? "",
       narrow_check_paths_json:
-        options.types?.narrowPathsJson ?? (options.earlyGuards ? '["src/shared/runtime.ts"]' : ""),
+        options.types?.narrowPathsJson ?? (additionalCheck ? '["src/shared/runtime.ts"]' : ""),
       ...(options.types?.compose
         ? {
             core_type_matrix: expectDefined(
@@ -858,7 +896,7 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
     step: checkShardStep,
     matrix: {
       task: options.task ?? "guards",
-      ...(options.earlyGuards ? { group: options.task ?? "guards" } : {}),
+      ...(additionalCheck ? { group: options.task ?? "guards" } : {}),
       ...options.types?.matrix,
     },
   });
@@ -888,6 +926,7 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
         linuxWorkflow: true,
         env: {
           ...process.env,
+          EXPECT_RELEASE_TOOLING_ENTRY: options.releaseToolingEntry ? "true" : "false",
           FROZEN_TARGET: options.frozenTarget ? "true" : "false",
           FORMAT_CHECK: "false",
           HISTORICAL_TARGET: options.frozenTarget ? "true" : "false",
@@ -904,7 +943,7 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
             resolveValue(row.step.env?.RUN_PR_KYSELY_GUARDRAILS) ?? "",
           ),
           SPLIT_PR_GUARDS: String(resolveValue(row.step.env?.SPLIT_PR_GUARDS) ?? ""),
-          ...(typeCheck || options.earlyGuards
+          ...(typeCheck || additionalCheck
             ? {
                 OPENCLAW_LOCAL_CHECK: undefined,
                 TYPE_ROW: row.name,
@@ -950,75 +989,6 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
   };
 }
 
-function runDependencyCheckFixture(options: {
-  historicalTarget: boolean;
-  releaseToolingEntry?: boolean;
-  scripts: string[];
-}): {
-  calls: string[];
-  output: string;
-  status: number | null;
-} {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-ci-deadcode-"));
-  try {
-    const fakeBin = path.join(root, "bin");
-    const callsPath = path.join(root, "pnpm-calls.txt");
-    mkdirSync(fakeBin);
-    installCollectChecks(root);
-    writeFileSync(
-      path.join(root, "package.json"),
-      `${JSON.stringify({
-        scripts: Object.fromEntries(options.scripts.map((name) => [name, "true"])),
-      })}\n`,
-    );
-    if (options.releaseToolingEntry) {
-      mkdirSync(path.join(root, "config"), { recursive: true });
-      mkdirSync(path.join(root, "scripts"), { recursive: true });
-      writeFileSync(
-        path.join(root, "config/knip.config.ts"),
-        "const repositoryScriptEntries = [\n] as const;\n",
-      );
-      writeFileSync(path.join(root, "scripts/generate-dependency-release-evidence.mts"), "");
-    }
-    writeExecutable(path.join(fakeBin, "pnpm"), [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
-      'if [ "${EXPECT_RELEASE_TOOLING_ENTRY:-false}" = "true" ] &&',
-      "  ! grep -Fq '\"scripts/generate-dependency-release-evidence.mts!\"' config/knip.config.ts; then",
-      '  echo "release-only helper is missing from Knip entries" >&2',
-      "  exit 1",
-      "fi",
-      'printf "%s\\n" "$*" >> "$PNPM_CALLS"',
-    ]);
-    const checkShardRun = readCiWorkflow().jobs["check-additional-shard"].steps.find(
-      (step: WorkflowStep) => step.name === "Run independent checks",
-    ).run;
-    const run = spawnSync("bash", ["-c", checkShardRun], {
-      cwd: root,
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        EXPECT_RELEASE_TOOLING_ENTRY: options.releaseToolingEntry ? "true" : "false",
-        FROZEN_TARGET: options.historicalTarget ? "true" : "false",
-        FORMAT_CHECK: "false",
-        HISTORICAL_TARGET: options.historicalTarget ? "true" : "false",
-        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
-        PNPM_CALLS: callsPath,
-        TASK: "dependencies",
-      },
-    });
-    return {
-      calls: existsSync(callsPath)
-        ? readFileSync(callsPath, "utf8").trim().split("\n").filter(Boolean)
-        : [],
-      output: `${run.stdout}${run.stderr}`,
-      status: run.status,
-    };
-  } finally {
-    rmSync(root, { force: true, recursive: true });
-  }
-}
-
 function runControlUiI18nSourceFixture(options: {
   compatibilityTarget: boolean;
   hasVerifyScript: boolean;
@@ -1043,9 +1013,8 @@ function runControlUiI18nSourceFixture(options: {
     const sourceStep = readCiWorkflow().jobs["control-ui-i18n"].steps.find(
       (step: WorkflowStep) => step.name === "Verify Control UI i18n source",
     );
-    const run = spawnSync("bash", ["-c", sourceStep.run], {
+    const run = runWorkflowCommand("bash", ["-c", sourceStep.run], {
       cwd: root,
-      encoding: "utf8",
       env: {
         ...process.env,
         COMPATIBILITY_TARGET: options.compatibilityTarget ? "true" : "false",
@@ -7788,33 +7757,26 @@ describe("ci workflow guards", () => {
     expect(concreteBase.emittedBaseIsCommit).toBe(true);
   });
 
-  it("uses stable deadcode checks for current and frozen checkouts", () => {
-    const modern = runDependencyCheckFixture({
-      historicalTarget: false,
+  it.each([false, true])("uses all three stable deadcode checks for frozen=%s", (frozenTarget) => {
+    const result = runCheckShardFixture({
+      task: "dependencies",
+      frozenTarget,
+      releaseToolingEntry: frozenTarget,
       scripts: ["deadcode:dependencies", "deadcode:unused-files", "deadcode:exports"],
     });
-    expect(modern.status, modern.output).toBe(0);
+    expect(result.status, result.output).toBe(0);
     // The scripts launch concurrently; completion order is nondeterministic.
-    expect(modern.calls.toSorted()).toEqual([
+    expect(result.calls.toSorted()).toEqual([
       "deadcode:dependencies",
       "deadcode:exports",
       "deadcode:unused-files",
     ]);
+  });
 
-    const frozenWithExports = runDependencyCheckFixture({
-      historicalTarget: true,
-      releaseToolingEntry: true,
-      scripts: ["deadcode:dependencies", "deadcode:unused-files", "deadcode:exports"],
-    });
-    expect(frozenWithExports.status, frozenWithExports.output).toBe(0);
-    expect(frozenWithExports.calls.toSorted()).toEqual([
-      "deadcode:dependencies",
-      "deadcode:exports",
-      "deadcode:unused-files",
-    ]);
-
-    const frozen = runDependencyCheckFixture({
-      historicalTarget: true,
+  it("preserves historical deadcode routes and rejects incomplete current targets", () => {
+    const frozen = runCheckShardFixture({
+      task: "dependencies",
+      frozenTarget: true,
       scripts: [
         "deadcode:ci",
         "deadcode:dependencies",
@@ -7825,8 +7787,9 @@ describe("ci workflow guards", () => {
     expect(frozen.status, frozen.output).toBe(0);
     expect(frozen.calls.toSorted()).toEqual(["deadcode:dependencies", "deadcode:unused-files"]);
 
-    const currentWithoutExports = runDependencyCheckFixture({
-      historicalTarget: false,
+    const currentWithoutExports = runCheckShardFixture({
+      task: "dependencies",
+      frozenTarget: false,
       scripts: ["deadcode:dependencies", "deadcode:unused-files"],
     });
     expect(currentWithoutExports.status).toBe(1);
@@ -7837,15 +7800,17 @@ describe("ci workflow guards", () => {
       "Current CI targets must provide the deadcode:exports package script.",
     );
 
-    const legacy = runDependencyCheckFixture({
-      historicalTarget: true,
+    const legacy = runCheckShardFixture({
+      task: "dependencies",
+      frozenTarget: true,
       scripts: ["deadcode:ci"],
     });
     expect(legacy.status, legacy.output).toBe(0);
     expect(legacy.calls).toEqual(["deadcode:ci"]);
 
-    const incompleteCurrent = runDependencyCheckFixture({
-      historicalTarget: false,
+    const incompleteCurrent = runCheckShardFixture({
+      task: "dependencies",
+      frozenTarget: false,
       scripts: ["deadcode:dependencies"],
     });
     expect(incompleteCurrent.status).toBe(1);
@@ -8752,9 +8717,8 @@ describe("ci workflow guards", () => {
         'require("node:fs").appendFileSync(process.env.PNPM_CALLS, JSON.stringify(process.argv.slice(2)) + "\\n");',
       ]);
       // Historical release checkouts retain these tasks; current PRs select the owner row above.
-      const run = spawnSync("bash", ["-c", runStep.run], {
+      const run = runWorkflowCommand("bash", ["-c", runStep.run], {
         cwd: root,
-        encoding: "utf8",
         env: {
           ...process.env,
           PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
@@ -11049,11 +11013,9 @@ describe("ci workflow guards", () => {
     expect(workflow.jobs["checks-ui-browser-extension"]).toBeUndefined();
     expect(workflow.jobs["ci-gate"].needs).toContain("checks-ui-e2e-real-gateway");
     const artifactSteps = workflow.jobs["build-artifacts"].steps as WorkflowStep[];
-    const browserScenario = expectDefined(
-      artifactSteps.find(
-        (step: WorkflowStep) => step.name === "Test browser extension bootstrap end-to-end",
-      ),
-      "public-build browser extension proof",
+    const browserScenario = requiredWorkflowStep(
+      artifactSteps,
+      "Test browser extension bootstrap end-to-end",
     );
     expect(browserScenario.run).toContain(
       "extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
@@ -11068,11 +11030,9 @@ describe("ci workflow guards", () => {
       OPENCLAW_E2E_WORKERS: "1",
       OPENCLAW_VITEST_WORKER_CACHE: "1",
     });
-    const productionScenario = expectDefined(
-      artifactSteps.find(
-        (step: WorkflowStep) => step.name === "Test production Control UI deployment fixtures",
-      ),
-      "public-build production deployment proof",
+    const productionScenario = requiredWorkflowStep(
+      artifactSteps,
+      "Test production Control UI deployment fixtures",
     );
     expect(productionScenario.env).toMatchObject({
       OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1",
@@ -11131,10 +11091,7 @@ describe("ci workflow guards", () => {
       matrix: "${{ fromJson(needs.preflight.outputs.ui_real_gateway_matrix) }}",
     });
 
-    const uiE2eSetup = expectDefined(
-      uiE2e.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
-      "Control UI E2E Node setup",
-    );
+    const uiE2eSetup = requiredWorkflowStep(uiE2e.steps, "Setup Node environment");
     expect(uiE2eSetup.uses).toBe("./.ci-harness/.github/actions/setup-node-env");
     const expectedSharedUiE2eSetup = {
       "cache-mode": "${{ needs.preflight.outputs.cache_mode }}",
@@ -11148,10 +11105,7 @@ describe("ci workflow guards", () => {
         "${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && 'true' || 'false' }}",
     } as const;
     expect(uiE2eSetup.with).toEqual(expectedUiE2eSetup);
-    const realGatewaySetup = expectDefined(
-      uiE2eRealGateway.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
-      "real-Gateway Control UI E2E Node setup",
-    );
+    const realGatewaySetup = requiredWorkflowStep(uiE2eRealGateway.steps, "Setup Node environment");
     expect(realGatewaySetup).toMatchObject({
       uses: uiE2eSetup.uses,
       with: expectedSharedUiE2eSetup,
@@ -11193,172 +11147,91 @@ describe("ci workflow guards", () => {
       ...routedRealGatewayJobs,
     ] as const;
     expect(new Set(routedUiE2eJobs.map((job) => job.name)).size).toBe(routedUiE2eJobs.length);
+    const sameRepo = { headRepository: "openclaw/openclaw" };
     const routingScenarios = [
-      {
-        name: "same-repo pull request first attempt",
-        context: {
-          eventName: "pull_request",
-          headRepository: "openclaw/openclaw",
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
-        },
-        expected: { blacksmith: true, dependencyCache: "true" },
-      },
-      {
-        name: "same-repo pull request with GitHub backend",
-        context: {
-          eventName: "pull_request",
-          headRepository: "openclaw/openclaw",
-          repository: "openclaw/openclaw",
-          runnerBackend: "github",
-          runAttempt: 1,
-        },
-        expected: { blacksmith: false, dependencyCache: "false" },
-      },
-      {
-        name: "same-repo pull request with hybrid backend",
-        context: {
-          eventName: "pull_request",
-          headRepository: "openclaw/openclaw",
-          repository: "openclaw/openclaw",
-          runnerBackend: "hybrid",
-          runAttempt: 1,
-        },
-        expected: { blacksmith: true, dependencyCache: "true" },
-      },
-      {
-        name: "same-repo pull request retry",
-        context: {
-          eventName: "pull_request",
-          headRepository: "openclaw/openclaw",
-          repository: "openclaw/openclaw",
-          runAttempt: 2,
-        },
-        expected: { blacksmith: false, dependencyCache: "false" },
-      },
-      {
-        name: "same-repo pull request with hybrid backend retry",
-        context: {
-          eventName: "pull_request",
-          headRepository: "openclaw/openclaw",
-          repository: "openclaw/openclaw",
-          runnerBackend: "hybrid",
-          runAttempt: 2,
-        },
-        expected: { blacksmith: false, dependencyCache: "false" },
-      },
-      {
-        name: "canonical hybrid push retry",
-        context: {
-          eventName: "push",
-          repository: "openclaw/openclaw",
-          runnerBackend: "hybrid",
-          runAttempt: 2,
-        },
-        expected: { blacksmith: false, dependencyCache: "false" },
-      },
-      {
-        // Runner capacity is author-independent; exact dependency restores
-        // still require a same-repository PR.
-        name: "fork pull request from returning contributor",
-        context: {
-          authorAssociation: "CONTRIBUTOR",
-          eventName: "pull_request",
-          headRepository: "contributor/openclaw",
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
-        },
-        expected: { blacksmith: true, dependencyCache: "false" },
-      },
-      {
-        name: "fork pull request from unknown author",
-        context: {
-          authorAssociation: "NONE",
-          eventName: "pull_request",
-          headRepository: "contributor/openclaw",
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
-        },
-        expected: { blacksmith: true, dependencyCache: "false" },
-      },
-      {
-        name: "workflow dispatch",
-        context: {
-          eventName: "workflow_dispatch",
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
-        },
-        expected: { blacksmith: false, dependencyCache: "false" },
-      },
-      {
-        name: "canonical push retry",
-        context: {
-          eventName: "push",
-          repository: "openclaw/openclaw",
-          runAttempt: 2,
-        },
-        expected: { blacksmith: true, dependencyCache: "true" },
-      },
+      ["same-repo pull request first attempt", sameRepo, true, "true"],
+      [
+        "same-repo pull request with GitHub backend",
+        { ...sameRepo, runnerBackend: "github" },
+        false,
+        "false",
+      ],
+      [
+        "same-repo pull request with hybrid backend",
+        { ...sameRepo, runnerBackend: "hybrid" },
+        true,
+        "true",
+      ],
+      ["same-repo pull request retry", { ...sameRepo, runAttempt: 2 }, false, "false"],
+      [
+        "same-repo pull request with hybrid backend retry",
+        { ...sameRepo, runnerBackend: "hybrid", runAttempt: 2 },
+        false,
+        "false",
+      ],
+      [
+        "canonical hybrid push retry",
+        { eventName: "push", runnerBackend: "hybrid", runAttempt: 2 },
+        false,
+        "false",
+      ],
+      // Runner capacity is author-independent; exact dependency restores still require a same-repository PR.
+      [
+        "fork pull request from returning contributor",
+        { authorAssociation: "CONTRIBUTOR", headRepository: "contributor/openclaw" },
+        true,
+        "false",
+      ],
+      [
+        "fork pull request from unknown author",
+        { authorAssociation: "NONE", headRepository: "contributor/openclaw" },
+        true,
+        "false",
+      ],
+      ["workflow dispatch", { eventName: "workflow_dispatch" }, false, "false"],
+      ["canonical push retry", { eventName: "push", runAttempt: 2 }, true, "true"],
     ] as const;
     for (const { blacksmithRunner, job, matrix, name: jobName, setup } of routedUiE2eJobs) {
-      for (const { context, expected, name: scenarioName } of routingScenarios) {
+      for (const [scenarioName, context, blacksmith, dependencyCache] of routingScenarios) {
         const assertionName = `${jobName}: ${scenarioName}`;
-        const expectedRunner = expected.blacksmith ? blacksmithRunner : "ubuntu-24.04";
         expect(
           String(job.name).replace(/\$\{\{[\s\S]*?\}\}/gu, (expression) =>
-            String(evaluateWorkflowExpression(expression, { ...context, matrix })),
+            String(evaluateWorkflow(expression, { ...context, matrix })),
           ),
           assertionName,
         ).toBe(jobName);
+        expect(evaluateWorkflow(job["runs-on"], { ...context, matrix }), assertionName).toBe(
+          blacksmith ? blacksmithRunner : "ubuntu-24.04",
+        );
         expect(
-          evaluateWorkflowExpression(job["runs-on"], { ...context, matrix }),
-          assertionName,
-        ).toBe(expectedRunner);
-        expect(
-          evaluateWorkflowExpression(setup.with?.["dependency-cache"], {
+          evaluateWorkflow(setup.with?.["dependency-cache"], {
             ...context,
             matrix,
-            runnerEnvironment: expected.blacksmith ? "self-hosted" : "github-hosted",
+            runnerEnvironment: blacksmith ? "self-hosted" : "github-hosted",
           }),
           assertionName,
-        ).toBe(expected.dependencyCache);
+        ).toBe(dependencyCache);
         expect(setup.with?.["cache-mode"], assertionName).toBe(
           "${{ needs.preflight.outputs.cache_mode }}",
         );
       }
     }
 
-    const chromiumInstall = expectDefined(
-      uiE2e.steps.find((step: WorkflowStep) => step.name === "Install Playwright Chromium"),
-      "Control UI E2E Chromium installation",
-    );
+    const chromiumInstall = requiredWorkflowStep(uiE2e.steps, "Install Playwright Chromium");
     expect(chromiumInstall.uses).toBe("./.ci-harness/.github/actions/setup-playwright-chromium");
-    const realGatewayChromiumInstall = expectDefined(
-      uiE2eRealGateway.steps.find(
-        (step: WorkflowStep) => step.name === "Install Playwright Chromium",
-      ),
-      "real-Gateway Control UI E2E Chromium installation",
+    const realGatewayChromiumInstall = requiredWorkflowStep(
+      uiE2eRealGateway.steps,
+      "Install Playwright Chromium",
     );
     expect(realGatewayChromiumInstall).toEqual(chromiumInstall);
-    const scenario = expectDefined(
-      uiE2e.steps.find((step: WorkflowStep) => step.name === "Test Control UI end-to-end"),
-      "Control UI E2E suite",
-    );
-    const selection = expectDefined(
-      uiE2e.steps.find((step: WorkflowStep) => step.name === "Decode Control UI E2E selection"),
-      "Control UI E2E selection",
-    );
+    const scenario = requiredWorkflowStep(uiE2e.steps, "Test Control UI end-to-end");
+    const selection = requiredWorkflowStep(uiE2e.steps, "Decode Control UI E2E selection");
     expect(selection.if).toBe("matrix.task == 'control-ui'");
     expect(selection.env).toEqual({
       OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64:
         "${{ needs.preflight.outputs.ui_e2e_test_groups_gzip_base64 }}",
     });
-    const discovery = expectDefined(
-      uiE2e.steps.find(
-        (step: WorkflowStep) => step.name === "Discover Control UI E2E requirements",
-      ),
-      "Control UI E2E discovery",
-    );
+    const discovery = requiredWorkflowStep(uiE2e.steps, "Discover Control UI E2E requirements");
     expect(discovery["timeout-minutes"]).toBe(20);
     expect(scenario.if).toBe("matrix.task == 'control-ui'");
     expect(scenario["timeout-minutes"]).toBe(20);
@@ -11371,11 +11244,9 @@ describe("ci workflow guards", () => {
       OPENCLAW_VITEST_MAX_WORKERS: "${{ matrix.vitest_max_workers || 2 }}",
     });
     expect(scenario.run).not.toContain("--project");
-    const timeoutDiagnostics = expectDefined(
-      uiE2e.steps.find(
-        (step: WorkflowStep) => step.name === "Upload Control UI E2E timeout diagnostics",
-      ),
-      "Control UI E2E timeout diagnostic upload",
+    const timeoutDiagnostics = requiredWorkflowStep(
+      uiE2e.steps,
+      "Upload Control UI E2E timeout diagnostics",
     );
     expect(timeoutDiagnostics).toEqual({
       name: "Upload Control UI E2E timeout diagnostics",
@@ -11388,11 +11259,9 @@ describe("ci workflow guards", () => {
         "retention-days": 7,
       },
     });
-    const browserExtension = expectDefined(
-      uiE2e.steps.find(
-        (step: WorkflowStep) => step.name === "Test browser extension bootstrap end-to-end",
-      ),
-      "browser extension bootstrap E2E suite",
+    const browserExtension = requiredWorkflowStep(
+      uiE2e.steps,
+      "Test browser extension bootstrap end-to-end",
     );
     expect(browserExtension.if).toBe("matrix.task == 'browser-extension'");
     expect(browserExtension.run).toBe("pnpm test:e2e:browser-extension");
@@ -11419,11 +11288,9 @@ describe("ci workflow guards", () => {
     );
     const proofUpload = uiE2eRealGateway.steps[proofUploadIndex];
     const realGatewayIndex = uiE2eRealGateway.steps.indexOf(realGatewayStep);
-    const realGatewayFailureDiagnostics = expectDefined(
-      uiE2eRealGateway.steps.find(
-        (step: WorkflowStep) => step.name === "Upload Control UI real-Gateway failure diagnostics",
-      ),
-      "real-Gateway Control UI failure diagnostic upload",
+    const realGatewayFailureDiagnostics = requiredWorkflowStep(
+      uiE2eRealGateway.steps,
+      "Upload Control UI real-Gateway failure diagnostics",
     );
     expect(realGatewayFailureDiagnostics).toEqual({
       name: "Upload Control UI real-Gateway failure diagnostics",
@@ -11442,11 +11309,9 @@ describe("ci workflow guards", () => {
     expect(uiE2eRealGateway.steps.indexOf(realGatewayFailureDiagnostics)).toBeGreaterThan(
       realGatewayIndex,
     );
-    const quotaDiagnostics = expectDefined(
-      uiE2eRealGateway.steps.find(
-        (step: WorkflowStep) => step.name === "Upload quota auth and transport diagnostics",
-      ),
-      "quota diagnostics retained on success and failure",
+    const quotaDiagnostics = requiredWorkflowStep(
+      uiE2eRealGateway.steps,
+      "Upload quota auth and transport diagnostics",
     );
     expect(quotaDiagnostics).toEqual({
       name: "Upload quota auth and transport diagnostics",
@@ -11462,12 +11327,9 @@ describe("ci workflow guards", () => {
     expect(uiE2eRealGateway.steps.indexOf(quotaDiagnostics)).toBeGreaterThan(realGatewayIndex);
     // Same-origin admission compares exact build IDs, including the build timestamp.
     // Include private QA so media bootstrap cannot rebuild runtime behind the UI.
-    const realGatewayBuild = expectDefined(
-      uiE2eRealGateway.steps.find(
-        (step: WorkflowStep) =>
-          step.name === "Build runtime and Control UI artifacts for real-Gateway tests",
-      ),
-      "paired runtime and Control UI build",
+    const realGatewayBuild = requiredWorkflowStep(
+      uiE2eRealGateway.steps,
+      "Build runtime and Control UI artifacts for real-Gateway tests",
     );
     expect(realGatewayBuild.run).toBe("pnpm build");
     expect(realGatewayBuild.if).toBe(
@@ -11481,11 +11343,9 @@ describe("ci workflow guards", () => {
     const realGatewayBuildIndex = uiE2eRealGateway.steps.indexOf(realGatewayBuild);
     expect(realGatewayBuildIndex).toBeGreaterThan(uiE2eRealGateway.steps.indexOf(realGatewaySetup));
     expect(realGatewayBuildIndex).toBeLessThan(realGatewayIndex);
-    const desktopProof = expectDefined(
-      uiE2eRealGateway.steps.find(
-        (step: WorkflowStep) => step.name === "Prove desktop resize over node and SSH",
-      ),
-      "real desktop fixture proof",
+    const desktopProof = requiredWorkflowStep(
+      uiE2eRealGateway.steps,
+      "Prove desktop resize over node and SSH",
     );
     expect(desktopProof).toEqual({
       name: "Prove desktop resize over node and SSH",
@@ -11520,11 +11380,9 @@ describe("ci workflow guards", () => {
         }
       }
     }
-    const desktopUpload = expectDefined(
-      uiE2eRealGateway.steps.find(
-        (step: WorkflowStep) => step.name === "Upload sanitized desktop resize proof",
-      ),
-      "sanitized desktop upload",
+    const desktopUpload = requiredWorkflowStep(
+      uiE2eRealGateway.steps,
+      "Upload sanitized desktop resize proof",
     );
     expect(desktopUpload).toEqual({
       name: "Upload sanitized desktop resize proof",
@@ -13275,6 +13133,52 @@ describe("ci workflow guards", () => {
     );
     expect(compatibilityJob.steps.at(-1)?.run).toContain("src/config/sessions/sessions.test.ts");
   });
+
+  it.skipIf(process.platform === "win32").each(["false", "true", "", "unexpected"])(
+    "runs the minimum-Node compatibility commands once with frozen target %j",
+    (frozenTarget) => {
+      const job = readCiWorkflow().jobs["checks-node-compat"];
+      const setup = job.steps.find((step: WorkflowStep) => step.name === "Setup Node environment");
+      expect(setup.with["node-version"]).toBe("24.22.1");
+      const step = job.steps.at(-1);
+      expect(step.env.CI_COMPAT_FROZEN_TARGET).toBe("${{ needs.preflight.outputs.frozen_target }}");
+      const root = tempDirs.make("openclaw-node-compat-commands-");
+      const bin = path.join(root, "bin");
+      const calls = path.join(root, "calls.log");
+      mkdirSync(bin);
+      for (const command of ["pnpm", "node"]) {
+        writeExecutable(path.join(bin, command), [
+          "#!/bin/sh",
+          `printf '%s:%s\\n' '${command}' "$*" >> "$COMMAND_LOG"`,
+          'if [ "$1" = build ] && [ "${FAIL_BUILD:-}" = 1 ]; then exit 42; fi',
+        ]);
+      }
+      const run = (failBuild = false) =>
+        runWorkflowCommand("/bin/bash", ["-e", "-o", "pipefail", "-c", step.run], {
+          cwd: root,
+          env: {
+            PATH: `${bin}:/usr/bin:/bin`,
+            COMMAND_LOG: calls,
+            CI_COMPAT_FROZEN_TARGET: frozenTarget,
+            FAIL_BUILD: failBuild ? "1" : "0",
+          },
+        });
+      const result = run();
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual([
+        "pnpm:build",
+        ...(frozenTarget === "false" ? [] : ["pnpm:ui:build"]),
+        "node:openclaw.mjs --help",
+        "node:openclaw.mjs status --json --timeout 1",
+        "pnpm:test:build:singleton",
+        "pnpm:test src/config/sessions/session-accessor.test.ts src/config/sessions/store-writer.test.ts src/config/sessions/sessions.test.ts",
+      ]);
+      rmSync(calls);
+      const failed = run(true);
+      expect(failed.status, failed.stderr).toBe(42);
+      expect(readFileSync(calls, "utf8")).toBe("pnpm:build\n");
+    },
+  );
 
   it.skipIf(process.platform === "win32").each([
     ["schedule", "ios-build", "cancelled", "true", 0],

@@ -49,6 +49,27 @@ const widgetSnapshot = (
 ): ChatSessionSnapshot => ({ messages, pagination: { hasMore: false }, sessionId, ...extras });
 
 describe("session message cache", () => {
+  it("persists changed session display facts once without repeating unchanged writes", () => {
+    const cache: ChatMessageCache = new Map();
+    const host = { assistantAgentId: "main" };
+    const target = { sessionKey: "agent:main:archived" };
+    const write = vi.fn();
+    observeChatCache(cache, { write, delete: vi.fn() });
+    const snapshot = widgetSnapshot(["saved conversation"]);
+    const sessionState = { archived: true, unarchiveAllowed: true, parentSession: null };
+    cacheChatSessionSnapshot(cache, host, target, { ...snapshot, sessionState });
+    cacheChatSessionSnapshot(cache, host, target, {
+      ...snapshot,
+      sessionState: { ...sessionState },
+    });
+    expect(write).toHaveBeenCalledTimes(1);
+    cacheChatSessionSnapshot(cache, host, target, {
+      ...snapshot,
+      sessionState: { ...sessionState, archived: false },
+    });
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(readChatSessionSnapshot(cache, host, target)?.sessionState?.archived).toBe(false);
+  });
   it("retains reaction facts only across the same session incarnation", () => {
     const { read, write } = createCacheContext();
     const summaries = [{ emoji: "👍", count: 1, identities: [{ id: "peer" }] }];

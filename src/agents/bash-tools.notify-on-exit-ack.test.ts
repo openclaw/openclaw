@@ -124,14 +124,16 @@ it("isolates identical completions across exact full-slug reuse", async () => {
   enqueueSystemEventEntry("unrelated", { sessionKey: QUEUE_KEY, contextKey: "marker" });
   const second = await startNotifyRun();
 
-  expect(contexts()).toEqual(["exec:amber-atlas", "marker", "exec:amber-atlas"]);
+  expect(second.id).toBe(first.id);
+  const context = `exec:${first.id}`;
+  expect(contexts()).toEqual([context, "marker", context]);
   const queued = peekSystemEventEntries(QUEUE_KEY);
   expect(queued[0]?.id).not.toBe(queued[2]?.id);
 
   await pollAndAcknowledge(second.id, queued);
-  expect(contexts()).toEqual(["exec:amber-atlas", "marker"]);
+  expect(contexts()).toEqual([context, "marker"]);
   acknowledgeInternalToolResult(await execute("poll", second.id));
-  expect(contexts()).toEqual(["exec:amber-atlas", "marker"]);
+  expect(contexts()).toEqual([context, "marker"]);
 });
 
 it("keeps an identical successor queued when an earlier consumer settles", async () => {

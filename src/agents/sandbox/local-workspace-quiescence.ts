@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import {
   bindDockerPersistentTarget,
@@ -33,27 +34,23 @@ export async function readLocalWorkspaceRuntimes(
     assertCurrent: custody.assertCurrent,
   };
   const [containers, browsers, streams] = await Promise.all([
-    readRegistry(database),
-    readBrowserRegistry(database),
+    readRegistry({ ...database, workspaceDir }),
+    readBrowserRegistry({ ...database, workspaceDir }),
     custody.list(),
   ]);
   return [
-    ...containers.entries
-      .filter((entry) => entry.workspaceDir === workspaceDir)
-      .map((entry) => ({
-        kind: "container" as const,
-        entry,
-        database,
-        assertCurrent: () => assertSandboxRegistryRetirementCurrent("container", entry, database),
-      })),
-    ...browsers.entries
-      .filter((entry) => entry.workspaceDir === workspaceDir)
-      .map((entry) => ({
-        kind: "browser" as const,
-        entry,
-        database,
-        assertCurrent: () => assertSandboxRegistryRetirementCurrent("browser", entry, database),
-      })),
+    ...containers.entries.map((entry) => ({
+      kind: "container" as const,
+      entry,
+      database,
+      assertCurrent: () => assertSandboxRegistryRetirementCurrent("container", entry, database),
+    })),
+    ...browsers.entries.map((entry) => ({
+      kind: "browser" as const,
+      entry,
+      database,
+      assertCurrent: () => assertSandboxRegistryRetirementCurrent("browser", entry, database),
+    })),
     ...streams.flatMap((record) => {
       const receipt = record.receipt;
       // Preparation and START share the projection lease. Without a published
@@ -192,6 +189,9 @@ export async function quiesceLocalWorkspace(params: {
   persist: (runtimes: LocalWorkspacePausedRuntime[]) => void | Promise<void>;
   assertCurrent: () => void;
 }) {
+  using phases = observeDiagnosticsTimelinePhases(
+    "attempt.setup.sandbox.workspace_selection.quiesce.registry",
+  );
   const selected = (await readLocalWorkspaceRuntimes(params.workspaceDir, { env: params.env })).map(
     (runtime) => ({
       runtime,
@@ -229,9 +229,12 @@ export async function quiesceLocalWorkspace(params: {
         });
       });
     };
+    phases.mark("attempt.setup.sandbox.workspace_selection.quiesce.engine_target");
     await validateSandboxContainerEngineTarget(engine, backendTarget);
     params.assertCurrent();
+    phases.mark("attempt.setup.sandbox.workspace_selection.quiesce.authority");
     await runtime.assertCurrent();
+    phases.mark("attempt.setup.sandbox.workspace_selection.quiesce.inspect");
     const inspect = await execContainer(
       engine,
       [
@@ -245,6 +248,7 @@ export async function quiesceLocalWorkspace(params: {
     params.assertCurrent();
     if (inspect.code !== 0) {
       if (/no such (?:container|object)|does not exist/iu.test(inspect.stderr)) {
+        phases.mark("attempt.setup.sandbox.workspace_selection.quiesce.authority");
         await runtime.assertCurrent();
         captureRetirement(null);
         continue;
@@ -261,6 +265,7 @@ export async function quiesceLocalWorkspace(params: {
     ) {
       throw new Error("Invalid local workspace runtime inspection");
     }
+    phases.mark("attempt.setup.sandbox.workspace_selection.quiesce.authority");
     await runtime.assertCurrent();
     captureRetirement(id);
     // Podman reports a paused container as Running=false; its exact retained
@@ -278,20 +283,27 @@ export async function quiesceLocalWorkspace(params: {
     }
     if (!retained) {
       paused.push({ name: containerName, id });
+      phases.mark("attempt.setup.sandbox.workspace_selection.quiesce.persist");
       await params.persist(paused);
     }
     if (isPaused !== "true") {
       // A retained receipt may outlive an unpause. Re-fence the live writer
       // before reconciliation rather than trusting stale pause metadata.
       params.assertCurrent();
+      phases.mark("attempt.setup.sandbox.workspace_selection.quiesce.authority");
       await runtime.assertCurrent();
+      phases.mark("attempt.setup.sandbox.workspace_selection.quiesce.pause");
       await execContainer(engine, ["pause", id], { signal: AbortSignal.timeout(30_000) });
     }
     releases.push(async () => {
+      using resumePhases = observeDiagnosticsTimelinePhases(
+        "attempt.setup.sandbox.workspace_selection.resume.engine_target",
+      );
       await validateSandboxContainerEngineTarget(engine, backendTarget);
       params.assertCurrent();
       // Archive may have removed this exact generation while settlement held it.
       // A missing or already-running runtime needs receipt cleanup, not unpause.
+      resumePhases.mark("attempt.setup.sandbox.workspace_selection.resume.inspect");
       const observed = await execContainer(engine, ["inspect", "-f", "{{.State.Paused}}", id], {
         allowFailure: true,
         signal: AbortSignal.timeout(30_000),
@@ -304,7 +316,9 @@ export async function quiesceLocalWorkspace(params: {
           );
         }
       } else if (observed.stdout.trim() === "true") {
+        resumePhases.mark("attempt.setup.sandbox.workspace_selection.resume.authority");
         await runtime.assertCurrent();
+        resumePhases.mark("attempt.setup.sandbox.workspace_selection.resume.unpause");
         const result = await execContainer(engine, ["unpause", id], {
           allowFailure: true,
           signal: AbortSignal.timeout(30_000),
@@ -320,6 +334,7 @@ export async function quiesceLocalWorkspace(params: {
       }
       params.assertCurrent();
       paused = paused.filter((held) => held.name !== containerName || held.id !== id);
+      resumePhases.mark("attempt.setup.sandbox.workspace_selection.resume.persist");
       await params.persist(paused);
     });
   }

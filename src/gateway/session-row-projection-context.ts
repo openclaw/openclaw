@@ -63,7 +63,7 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
     const previousIndexRevision = subagentIndex.revision;
     const subagentRuns = subagentIndex.read(now);
     const subagentChanged = previousIndexRevision !== subagentIndex.revision;
-    if (subagentChanged || registryRevision === undefined) {
+    if (registryRevision === undefined) {
       subagentRevision++;
     }
     // Keep maps local to this projection; independent builders still own fresh indexes.
@@ -101,7 +101,7 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
     dispose: subagentIndex.dispose,
     readPrepared(epoch: number): SessionListRowContext | undefined {
       return preparedEpoch === epoch &&
-        parentRevision === subagentRevision &&
+        parentRevision === subagentIndex.revision &&
         agentRunRevision === readAgentRunIndexVersion() &&
         registryRevision === getSubagentRegistryPublicationRevision() &&
         registrySnapshot === subagents.snapshotIdentity()
@@ -178,13 +178,27 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
         }
         rosterConfig = cfg;
       }
-      const broad = registryRevision === undefined;
+      const broad =
+        registryRevision === undefined || registrySnapshot !== subagents.snapshotIdentity();
       prepare(epoch);
-      if (parentRevision === subagentRevision) {
+      if (!broad && parentRevision === subagentIndex.revision) {
         return;
       }
+      const invalidatePresentation = (row: records.Row | undefined) => {
+        if (row) {
+          row.subagentRevision = undefined;
+        }
+      };
+      for (const key of subagentIndex.changedSwarmRequesters) {
+        for (const row of matching({ key })) {
+          invalidatePresentation(row);
+        }
+      }
       for (const key of broad
-        ? current.subagentRunsByChildSessionKey.keys()
+        ? new Set([
+            ...subagentIndex.changedChildren,
+            ...current.subagentRunsByChildSessionKey.keys(),
+          ])
         : subagentIndex.changedChildren) {
         for (const row of matching({ key })) {
           if (!row.storedEntry) {
@@ -198,11 +212,19 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
             referenced,
           );
           if (row.parents !== parents) {
+            // Only a changed relationship invalidates child lists. Run progress and
+            // unrelated publications must not rebuild every resident row's children.
+            for (const ref of row.parents) {
+              invalidatePresentation(referenced(ref));
+            }
+            for (const ref of parents) {
+              invalidatePresentation(referenced(ref));
+            }
             put({ ...row, parents });
           }
         }
       }
-      parentRevision = subagentRevision;
+      parentRevision = subagentIndex.revision;
     },
     preparePresentation(
       row: records.MaterializedRow,

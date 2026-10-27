@@ -266,7 +266,11 @@ export function encodeChatHistoryResponsePage(
     return page;
   }
   const response = prepareChatHistoryResponsePage(page, params);
-  const messages = new TextEncoder().encode(JSON.stringify(response.messages));
+  const encoder = new TextEncoder();
+  const messages = encoder.encode(JSON.stringify(response.messages));
+  const activity = response.activity
+    ? encoder.encode(JSON.stringify(response.activity))
+    : undefined;
   return {
     ...page,
     messages: [],
@@ -284,6 +288,7 @@ export function encodeChatHistoryResponsePage(
     encodedResponse: {
       ...response,
       messages,
+      activity,
     },
   };
 }

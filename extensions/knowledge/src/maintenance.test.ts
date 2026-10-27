@@ -5,6 +5,7 @@ import { contract } from "./contract.js";
 import { Maintenance } from "./maintenance.js";
 import { RegistryClient } from "./registry-client.js";
 import { createKnowledgeService } from "./service.js";
+import { parsePolicy } from "./stores-config.js";
 import { Stores } from "./stores.js";
 import {
   adopt,
@@ -107,21 +108,22 @@ it("stopping the service ends maintenance: a pass in flight neither re-arms nor 
   ).toStrictEqual([]);
 });
 
-it("stopping during a paused review enqueue settles maintenance before closing the registry", async () => {
+it("stopping while a pass is paused settles maintenance before closing the registry", async () => {
   // Passthrough spies record each call's receiver, result and global call order.
   const callSpy = vi.spyOn(RegistryClient.prototype, "call"),
     closeSpy = vi.spyOn(RegistryClient.prototype, "close"),
     storesStopSpy = vi.spyOn(Stores.prototype, "stop"),
-    maintenanceStopSpy = vi.spyOn(Maintenance.prototype, "stop");
+    maintenanceStopSpy = vi.spyOn(Maintenance.prototype, "stop"),
+    releaseSpy = vi.spyOn(Stores.prototype, "releaseIdle");
   afterTest(() => {
-    for (const spy of [callSpy, closeSpy, storesStopSpy, maintenanceStopSpy]) {
+    for (const spy of [callSpy, closeSpy, storesStopSpy, maintenanceStopSpy, releaseSpy]) {
       spy.mockRestore();
     }
   });
-  const f = await fixture({ reviewJobId: "review-job" }),
+  const f = await fixture(),
     scheduler = fakeScheduler(Date.parse("2026-10-22T10:20:00Z"));
   let entered!: () => void, release!: () => void;
-  const enqueued = new Promise<void>((resolve) => {
+  const reached = new Promise<void>((resolve) => {
       entered = resolve;
     }),
     paused = new Promise<void>((resolve) => {
@@ -129,33 +131,31 @@ it("stopping during a paused review enqueue settles maintenance before closing t
     });
   // A failed assertion must not leave the pass, and so its service stop, paused.
   afterTest(() => release());
-  const enqueueSettled = vi.fn();
-  const cron = {
-    enqueueRun: async () => {
-      entered();
-      await paused;
-      enqueueSettled();
-      return { ok: true, enqueued: true, runId: "run-1" };
-    },
-  };
-  const service = await f.boot(scheduler, { getCron: () => cron });
+  const pauseSettled = vi.fn();
+  const service = await f.boot(scheduler);
   await remember(service, toolContext(f.host.api, "main"), "I prefer short replies.");
+  // The pass pauses after relink, before it records its state.
+  releaseSpy.mockImplementationOnce(async () => {
+    entered();
+    await paused;
+    pauseSettled();
+  });
   const pass = scheduler.fire("knowledge-maintenance");
-  await enqueued;
+  await reached;
   const stopped = f.lifecycles[0].stop();
   expect(maintenanceStopSpy, "stop asks maintenance to settle").toHaveBeenCalledOnce();
   expect(
     storesStopSpy.mock.calls.map(([gate]) => gate),
     "the registry closes only after maintenance settles",
   ).toStrictEqual(maintenanceStopSpy.mock.results.map((result) => result.value));
-  expect(closeSpy, "nothing closes while the enqueue is paused").not.toHaveBeenCalled();
+  expect(closeSpy, "nothing closes while the pass is paused").not.toHaveBeenCalled();
   release();
   await stopped;
   await pass;
   expect(closeSpy).toHaveBeenCalledOnce();
   const [closedAt] = closeSpy.mock.invocationCallOrder,
     [closed] = closeSpy.mock.contexts;
-  expect(enqueueSettled.mock.invocationCallOrder[0]).toBeLessThan(closedAt!);
+  expect(pauseSettled.mock.invocationCallOrder[0]).toBeLessThan(closedAt!);
   callSpy.mock.contexts.forEach((registry, index) => {
     if (registry === closed) {
       expect(callSpy.mock.invocationCallOrder[index], "no registry call after close").toBeLessThan(
@@ -264,132 +264,29 @@ it("disabled maintenance, invalid schedules and write-disabled installs schedule
   }
 });
 
-it("a pass that leaves private claims unlinked queues the review automation once, and only then", async () => {
-  const f = await fixture({ reviewJobId: "review-job" }),
-    host = f.host,
-    scheduler = fakeScheduler(Date.parse("2026-10-22T10:20:00Z"));
-  const calls: any[] = [];
-  let answer: any = { ok: true, enqueued: true, runId: "run-1" },
-    cron: any = {
-      enqueueRun: async (id: any, mode: any) => {
-        calls.push([id, mode]);
-        return answer;
-      },
-    };
-  const service = await f.boot(scheduler, { getCron: () => cron });
-  const main = toolContext(host.api, "main");
-  const review = async () => {
-    await scheduler.fire("knowledge-maintenance");
-    return (await service.maintenance_status({}, operatorContext(host.api))).lastRun!.review;
-  };
-
-  const linkable = (await remember(service, main, "Atlas Labs moved its launch to March.")).items[0]
-    .id;
-  await remember(service, main, "I prefer short replies.");
-  await page(service, main, "Atlas Labs");
-  expect(await review(), "Relink links Atlas; the preference is left for review").toStrictEqual({
-    jobId: "review-job",
-    pending: 1,
-    outcome: "enqueued",
-    runId: "run-1",
-  });
-  expect(calls).toStrictEqual([["review-job", "if-enabled"]]);
-  expect((await service.record({ id: linkable }, main)).record).toBeTruthy();
-
-  answer = { ok: true, ran: false, reason: "disabled" };
-  expect((await review())!.outcome, "A disabled automation is reported, not forced").toBe(
-    "skipped",
-  );
-  cron = undefined;
-  expect((await review())!.outcome).toBe("unavailable");
-
-  // Once the review has linked everything, the pass does not queue it.
-  const left = (await service.relink({ dryRun: true }, main)).examples[0]!.id;
-  const record = (await service.record({ id: left }, main)).record!;
-  const prefs = await page(service, main, "Reply style", "concept");
-  await service.annotate(
-    {
-      requestId: randomUUID(),
-      id: left,
-      expectedRevision: record.revision,
-      expectedHash: record.hash,
-      reason: "Reviewed.",
-      annotations: {},
-      entities: [prefs.id],
-    },
-    main,
-  );
-  cron = { enqueueRun: async () => expect.unreachable("nothing to review") };
-  expect(await review()).toStrictEqual({ jobId: "review-job", pending: 0, outcome: "not_needed" });
-  const status = await service.maintenance_status({}, operatorContext(host.api));
-  expect(Check(contract.operations.maintenance_status.output, status)).toBeTruthy();
-  expect(status.reviewJobId).toBe("review-job");
-});
-
-it("without reviewJobId, the pass queues the review scribe's automation found by declaration key", async () => {
+it("a pass leaves claims it cannot link for the review scribe and never reaches the automation scheduler", async () => {
   const f = await fixture(),
     host = f.host,
     scheduler = fakeScheduler(Date.parse("2026-10-22T10:20:00Z"));
-  const calls: any[] = [];
-  let jobs: any[] = [{ id: "other", declarationKey: "knowledge:scribe:conversations" }];
-  const cron = {
-    list: async (opts: any) => {
-      expect(opts, "a paused scribe is found so the pass can report it").toStrictEqual({
-        includeDisabled: true,
-      });
-      return jobs;
-    },
-    enqueueRun: async (id: any, mode: any) => {
-      calls.push([id, mode]);
-      return id === "paused"
-        ? { ok: true, ran: false, reason: "disabled" }
-        : { ok: true, enqueued: true, runId: "run-1" };
-    },
-  };
-  const service = await f.boot(scheduler, { getCron: () => cron });
-  const review = async () => {
-    await scheduler.fire("knowledge-maintenance");
-    return (await service.maintenance_status({}, operatorContext(host.api))).lastRun!.review;
-  };
-  await remember(service, toolContext(host.api, "main"), "I prefer short replies.");
-
-  expect(await review(), "No scribe job: no review, as when nothing is configured").toBe(undefined);
-  expect(calls).toStrictEqual([]);
-
-  jobs = [
-    ...jobs,
-    { id: "paused", declarationKey: "knowledge:scribe:unlinked-review", enabled: false },
-    { id: "scribe", declarationKey: "knowledge:scribe:unlinked-review", enabled: true },
-  ];
-  expect(await review(), "The enabled scribe job is preferred").toStrictEqual({
-    jobId: "scribe",
-    pending: 1,
-    outcome: "enqueued",
-    runId: "run-1",
-  });
-  jobs = jobs.filter((job) => job.id !== "scribe");
-  expect((await review())!.outcome, "A paused scribe job is reported, not forced").toBe("skipped");
-  expect(calls).toStrictEqual([
-    ["scribe", "if-enabled"],
-    ["paused", "if-enabled"],
-  ]);
+  const getCron = vi.fn();
+  const service = await f.boot(scheduler, { getCron });
+  const main = toolContext(host.api, "main");
+  await remember(service, main, "Atlas Labs moved its launch to March.");
+  const left = (await remember(service, main, "I prefer short replies.")).items[0].id;
+  await page(service, main, "Atlas Labs");
+  await scheduler.fire("knowledge-maintenance");
   const status = await service.maintenance_status({}, operatorContext(host.api));
-  expect(status.reviewJobId, "Status reports only the configured job").toBe(null);
+  expect(Check(contract.operations.maintenance_status.output, status)).toBeTruthy();
+  expect(status.lastRun!.linked, "relink links Atlas").toBe(1);
+  expect(Object.keys(status.lastRun!), "a pass records no review").not.toContain("review");
+  expect(Object.keys(status), "status names no review automation").not.toContain("reviewJobId");
+  expect(getCron, "maintenance never looks up or queues an automation").not.toHaveBeenCalled();
+  const record = (await service.record({ id: left, includeMetadata: true }, main)).record!;
+  expect(record.metadata!.entities ?? [], "the preference stays unlinked").toStrictEqual([]);
 });
 
-it("a configured reviewJobId wins over the review scribe's automation", async () => {
-  const f = await fixture({ reviewJobId: "review-job" }),
-    scheduler = fakeScheduler(Date.parse("2026-10-22T10:20:00Z"));
-  const calls: any[] = [];
-  const cron = {
-    list: async () => expect.unreachable("the configured job needs no lookup"),
-    enqueueRun: async (id: any) => {
-      calls.push(id);
-      return { ok: true, enqueued: true, runId: "run-1" };
-    },
-  };
-  const service = await f.boot(scheduler, { getCron: () => cron });
-  await remember(service, toolContext(f.host.api, "main"), "I prefer short replies.");
-  await scheduler.fire("knowledge-maintenance");
-  expect(calls).toStrictEqual(["review-job"]);
+it("a maintenance reviewJobId is not a configuration key", () => {
+  expect(() => parsePolicy({ maintenance: { reviewJobId: "review-job" } })).toThrow(
+    /configuration is invalid/,
+  );
 });

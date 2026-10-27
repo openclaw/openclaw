@@ -184,10 +184,24 @@ This is evaluation-only evidence, not a CI or release gate. Results do not chang
 
 These opt-in workloads compare Code Mode with normal OpenClaw tool exposure.
 `--mode direct` explicitly disables Code Mode and retains normal Tool Search;
-`--mode code` enables it. Both arms use the same prompt, seeded inputs, allowed
-tools, model, and thinking setting. They reject `--mode auto`, pin the OpenClaw
-runtime, disable fast mode, and skip follow-up interviews. OpenAI models use
-OpenClaw here, rather than their native agent harness.
+`--mode code` enables it. To validate default activation instead, select
+`--mode direct --mode auto`. Gateway auto omits the entire `tools.codeMode`
+setting and rejects `--executor`, so it exercises the default executor and the
+selected model's catalog tier. Both arms use the same prompt, seeded inputs,
+allowed tools, model, and thinking setting. They pin the OpenClaw runtime,
+disable fast mode, and skip follow-up interviews. OpenAI models use OpenClaw
+here, rather than their native agent harness.
+
+Auto evidence records the resolved provider, model, catalog tier, and actual
+engagement. Missing identity or tier evidence fails validation; an explicitly
+unflagged or capable model correctly remains direct. To prove a preferred
+model's default activation, independently verify its expected catalog tier and
+pass `--expect-auto-tier preferred`. This assertion applies to every auto cell
+and requires the recorded tier to match, with engagement enabled for preferred
+models. `capable` and `unflagged` expectations require direct behavior. The
+expectation is recorded separately from the observed tier; omitting the flag
+keeps generic auto validation. The flag requires Gateway tasks and an auto arm. A passing
+auto row for an unflagged or capable model is not Code Mode activation proof.
 
 Performance selections require both treatment arms and cannot be mixed with
 code-only interview tasks. Built artifacts are rehashed after each wave; drift
@@ -220,9 +234,9 @@ the runner also captures each workload's named deliverables with hashes.
 
 The default schedule alternates the starting arm between pairs. `--schedule`
 accepts a JSON array of `{model, task, repetition, firstMode}` entries, where
-`firstMode` is `direct` or `code`. Entries must match the selected inventory and
-require both modes. Keep the schedule fixed for a comparison. `--concurrency`
-limits root cells, not descendants. Limits admit complete paired waves; token,
+`firstMode` is `direct` or the selected treatment (`code` or `auto`). Entries must
+match the selected inventory and require both modes. Keep the schedule fixed for
+a comparison. `--concurrency` limits root cells, not descendants. Limits admit complete paired waves; token,
 known-cost, and wall limits stop new waves while admitted work finishes. Missing
 usage or prices make observed totals lower bounds, so these are not hard
 spending caps. Unstarted cells remain visible in the schedule and summary.
@@ -234,6 +248,7 @@ totals. Missing usage or prices remain unavailable, never zero. Failed attempts
 remain in operational totals. Successful-pair deltas require both arms to pass
 and complete measurements; observed error counts include intentional checks and
 are not repair-turn counts. Task latency excludes startup and interviews.
+Auto comparisons retain the `auto` label rather than reporting forced Code Mode.
 
 Automated completion means artifact/effect checks passed. Final-response
 accuracy and execution integrity need separate adjudication against retained

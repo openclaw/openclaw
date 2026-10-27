@@ -15,12 +15,12 @@ import {
   type SqliteStagingToken,
 } from "../infra/sqlite-staging-token.js";
 import { removeTemporaryArtifacts } from "../infra/temp-artifact-cleanup.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
 import {
   pluginSourceCaptureMaintenance,
   resolvePluginSourceCaptureStorage,
-  runInPluginSourceCaptureContext,
 } from "./plugin-source-capture-context.js";
 import {
   createPluginNativeCaptureCustody,
@@ -433,7 +433,7 @@ function scheduleCaptureCleanup(key: string, instance: Instance): void {
   scope.signal.addEventListener("abort", () => scheduleCaptureCleanup(key, instance), {
     once: true,
   });
-  runInPluginSourceCaptureContext(() =>
+  runInDetachedAsyncContext(() =>
     scope.schedule({
       id: `plugin-source-captures:${key}`,
       delayMs: CAPTURE_GRACE_MS,

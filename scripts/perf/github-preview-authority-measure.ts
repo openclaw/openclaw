@@ -7,6 +7,8 @@
  * --personal-display: real synthetic managed-profile I/O with 120 synthetic env
  *   fields, cold account checks plus warm owner CPU; --allocations measures warm
  *   sampled allocation separately. Results include stable display-fact digests.
+ * --shared-options: the same display workload across 40 agents with a shared OAuth
+ *   profile and real synthetic OAuth-record worker reads; publication expiry is unused.
  * Cold p95 with five samples is context only. Mock delays honor the real preview
  * 2s deadline, so failures at 800ms/hop are reported rather than excluded.
  * Run base/candidate AB/BA. The optional owner is a frozen source file adjacent to
@@ -44,7 +46,12 @@ const identityApi: typeof import("../../src/agents/github-tool-identity.js") = a
   pathToFileURL(path.resolve(owner ?? "src/agents/github-tool-identity.ts")).href
 );
 const allocations = process.argv.includes("--allocations");
-if (process.argv.includes("--cold") || process.argv.includes("--personal-display")) {
+const sharedOptions = process.argv.includes("--shared-options");
+if (
+  process.argv.includes("--cold") ||
+  process.argv.includes("--personal-display") ||
+  sharedOptions
+) {
   const args = process.argv.slice(2);
   const value = (name: string, fallback: string) =>
     args.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3) ?? fallback;
@@ -61,6 +68,8 @@ if (process.argv.includes("--cold") || process.argv.includes("--personal-display
       p50Ms: sorted[Math.ceil(sorted.length * 0.5) - 1],
       p95Ms: sorted[Math.ceil(sorted.length * 0.95) - 1],
       p95ContextOnly: sorted.length < 200,
+      p99Ms: sorted[Math.ceil(sorted.length * 0.99) - 1],
+      p99ContextOnly: sorted.length < 1000,
     };
   };
 
@@ -240,6 +249,7 @@ if (process.argv.includes("--cold") || process.argv.includes("--personal-display
     const inspector = new Session();
     let fetches = 0;
     let latency = 0;
+    let closeState: (() => Promise<void>) | undefined;
     try {
       // Keep Node's native environment object: replacing it with a plain object
       // removes the enumeration/access cost that this workload measures.
@@ -273,9 +283,38 @@ if (process.argv.includes("--cold") || process.argv.includes("--personal-display
         );
       };
       const profileId = `ghp_${"1".repeat(32)}`;
+      const config: OpenClawConfig = {
+        tools: { github: { profileId, kind: "oauth" } },
+        agents: {
+          entries: Object.fromEntries(
+            Array.from({ length: 40 }, (_, index) => [`agent-${index}`, {}]),
+          ),
+        },
+      };
+      if (sharedOptions) {
+        const state = await import("../../src/state/openclaw-state-db.js");
+        const records = await import("../../src/agents/github-oauth-records.js");
+        state.openOpenClawStateDatabase();
+        closeState = state.closeOpenClawStateDatabaseAsync;
+        const now = Date.now();
+        await records.writeGitHubOAuthRecord({
+          version: 1,
+          profileId,
+          agentId: "agent-0",
+          scope: "system",
+          accountId: 123,
+          login: "synthetic-display",
+          refreshToken: "synthetic-shared-refresh",
+          scopes: ["repo"],
+          accessExpiresAtMs: now + 3_600_000,
+          refreshExpiresAtMs: now + 86_400_000,
+          createdAtMs: now,
+        });
+        setRuntimeConfigSnapshot(config);
+      }
       const directory = identityApi.resolveManagedGitHubProfileDir({
         agentId: "",
-        scope: "personal",
+        scope: sharedOptions ? "system" : "personal",
         profileId,
       });
       await fs.mkdir(directory, { recursive: true, mode: 0o700 });
@@ -285,13 +324,20 @@ if (process.argv.includes("--cold") || process.argv.includes("--personal-display
         { mode: 0o600 },
       );
       await fs.writeFile(path.join(directory, "config.yml"), "{}\n", { mode: 0o600 });
+      let reads = 0;
       const read = async () => {
-        const identity = await identityApi.preparePersonalGitHubPublicationIdentity({
-          profileId,
-          accountId: 123,
-          assertCurrent() {},
-          forDisplay: true,
-        });
+        const identity = sharedOptions
+          ? await identityApi.prepareGitHubPublicationOptionsIdentity({
+              config,
+              agentId: `agent-${reads++ % 40}`,
+              assertCurrent() {},
+            })
+          : await identityApi.preparePersonalGitHubPublicationIdentity({
+              profileId,
+              accountId: 123,
+              assertCurrent() {},
+              forDisplay: true,
+            });
         return { account: identity.account, stale: identity.stale ?? false };
       };
       if (!allocations) {
@@ -308,7 +354,7 @@ if (process.argv.includes("--cold") || process.argv.includes("--personal-display
           }
           console.log(
             JSON.stringify({
-              workload: "personal-display-cold",
+              workload: sharedOptions ? "shared-options-cold" : "personal-display-cold",
               mockLatencyMs,
               ...percentiles(timings),
               fetches,
@@ -322,6 +368,9 @@ if (process.argv.includes("--cold") || process.argv.includes("--personal-display
       for (let index = 0; index < 1_000; index++) {
         await read();
       }
+      // Start the timed warm pass with the same verification-cache age in both arms.
+      clearGitHubCredentialVerificationCache();
+      await read();
       fetches = 0;
       if (allocations) {
         inspector.connect();
@@ -335,8 +384,11 @@ if (process.argv.includes("--cold") || process.argv.includes("--personal-display
       const hostLoad = loadavg();
       const cpu = process.threadCpuUsage();
       const started = performance.now();
+      const timings: number[] = [];
       for (let index = 0; index < iterations; index++) {
+        const callStarted = performance.now();
         resultDigest.update(JSON.stringify(await read()));
+        timings.push(performance.now() - callStarted);
       }
       const elapsedMs = performance.now() - started;
       const used = process.threadCpuUsage(cpu);
@@ -348,13 +400,14 @@ if (process.argv.includes("--cold") || process.argv.includes("--personal-display
         : undefined;
       console.log(
         JSON.stringify({
-          workload: "personal-display-warm",
+          workload: sharedOptions ? "shared-options-warm" : "personal-display-warm",
           owner: owner ?? "src/agents/github-tool-identity.ts",
           cpuKind: "main-thread",
           iterations,
           allocations,
           hostLoad,
           elapsedMs,
+          ...percentiles(timings),
           fetches,
           cpuUsPerCall: (used.user + used.system) / iterations,
           sampledBytesPerCall: sampledBytes === undefined ? undefined : sampledBytes / iterations,
@@ -364,6 +417,7 @@ if (process.argv.includes("--cold") || process.argv.includes("--personal-display
       );
     } finally {
       inspector.disconnect();
+      await closeState?.();
       globalThis.fetch = originalFetch;
       for (const name of Object.keys(process.env)) {
         delete process.env[name];
@@ -378,7 +432,7 @@ if (process.argv.includes("--cold") || process.argv.includes("--personal-display
   if (process.argv.includes("--cold")) {
     await measurePreviews();
   }
-  if (process.argv.includes("--personal-display")) {
+  if (process.argv.includes("--personal-display") || sharedOptions) {
     await measurePersonalDisplay();
   }
 } else {
