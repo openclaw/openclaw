@@ -20,6 +20,7 @@ import { attachHistoryActivity } from "../chat-history-request.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "../history-merge.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
+import { projectChatTranscriptMetadata } from "../session-message-cache.ts";
 import { render, renderTranscriptSearch } from "../test-helpers/chat-transcript-native.tsx";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
@@ -580,6 +581,39 @@ describe("chat transcript rendering", () => {
         expect(requireElement(container, ".chat-notice").textContent).toContain(text);
       }
     }
+  });
+
+  it("commits a cached archive notice with its rows and replaces only differing live facts", () => {
+    const sessionKey = "agent:main:cached-archive";
+    const archived: GatewaySessionRow = {
+      key: sessionKey,
+      sessionId: "cached-archive-session",
+      kind: "direct",
+      archived: true,
+      archivedAt: 2_000,
+      archivedBy: { type: "human", id: "profile-ada", label: "Ada" },
+    };
+    const props = threadProps(
+      "cached-archive",
+      sessionKey,
+      [message("assistant", "Before archive", 1_000)],
+      { transcriptMetadata: projectChatTranscriptMetadata(archived), mediaReadAllowed: false },
+    );
+    const { container, rerender } = threadFixture(props);
+    rerender(true);
+    expect(requireElement(container, ".chat-notice").textContent).toContain("Archived by Ada");
+
+    props.transcriptMetadata = undefined;
+    props.selectedSession = {
+      ...archived,
+      archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
+    };
+    rerender();
+    expect(requireElement(container, ".chat-notice").textContent).toContain("Archived by Bob");
+    props.selectedSession = { ...archived, archived: false };
+    rerender();
+    expect(container.querySelector(".chat-notice")).toBeNull();
+    expect(container.querySelectorAll(".chat-bubble")).toHaveLength(1);
   });
 
   it.each([

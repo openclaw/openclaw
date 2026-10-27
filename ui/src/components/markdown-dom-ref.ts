@@ -1,6 +1,11 @@
 import { createEffect, createSignal, onCleanup } from "solid-js";
+import type { ChatRowDisplay } from "../lib/chat/row-display-facts.ts";
 import type { MarkdownContent } from "../lib/markdown-content.ts";
 import { MarkdownDomReconciler, type MarkdownDomMedia } from "../lib/markdown-dom-reconciler.ts";
+import {
+  MARKDOWN_LINK_DISPLAY_TARGET_SELECTOR,
+  registerMarkdownLinkDisplay,
+} from "./markdown-link-display.ts";
 import { registerSessionTitleTarget } from "./session-title-target-registration.ts";
 
 export type MarkdownContentValue =
@@ -23,6 +28,7 @@ export function createMarkdownRef(
     connected?: boolean;
     onUpdate?: () => void;
   },
+  display?: (() => ChatRowDisplay | undefined) | null,
 ): (element: ParentNode) => void {
   // Fragment consumers attach during construction; ordinary element refs run unowned.
   const [owner, setOwner] = createSignal<MarkdownDomReconciler | undefined>(undefined, {
@@ -104,7 +110,13 @@ export function createMarkdownRef(
     cancel();
     current?.dispose();
     // Create the boundary synchronously so a fragment caller can return its markers.
-    current = new MarkdownDomReconciler(element, registerSessionTitleTarget);
+    current = new MarkdownDomReconciler(
+      element,
+      display
+        ? (target, label) => registerMarkdownLinkDisplay(target, label, display())
+        : registerSessionTitleTarget,
+      display ? MARKDOWN_LINK_DISPLAY_TARGET_SELECTOR : undefined,
+    );
     setOwner(current);
   };
 }

@@ -4,14 +4,21 @@ import { removePairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import { projectChatMessageReactions } from "./chat-message-reactions-snapshot.ts";
 import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 import { readLiveTerminalRunId } from "./terminal-message-identity.ts";
+import {
+  boundChatThumbnails,
+  chatThumbnailWeight,
+  projectChatRowDisplay,
+} from "./session-message-display-facts.ts";
+import type { PreparedSnapshotRecord } from "./session-snapshot-record.ts";
 
-export const CHAT_SNAPSHOT_PROJECTION_VERSION = 9;
+
+export const CHAT_SNAPSHOT_PROJECTION_VERSION = 10;
 const CHAT_SNAPSHOT_MESSAGE_LIMIT = 80;
 
 export async function createSnapshotRecord(
   sessionKey: string,
   pending: { savedAt: number; snapshot: ChatSessionSnapshot },
-) {
+): Promise<PreparedSnapshotRecord | null> {
   let snapshot: ChatSessionSnapshot;
   let weight: number;
   try {
@@ -60,8 +67,16 @@ export async function createSnapshotRecord(
         ),
       };
     }
+    const rowDisplay = projectChatRowDisplay(projected);
+    if (rowDisplay !== projected.rowDisplay) {
+      projected = { ...projected, rowDisplay };
+    }
+    projected = boundChatThumbnails(projected);
     // Pairing credentials stay in the live projection, never the browser's disk cache.
     const serialized = JSON.stringify(projected, (_key, value: unknown) => {
+      if (value instanceof Blob) {
+        return undefined;
+      }
       if (value === projected.messages) {
         return projected.messages.map((message) => {
           const record = asOptionalRecord(message);
@@ -77,8 +92,18 @@ export async function createSnapshotRecord(
       return sanitized;
     });
     snapshot = JSON.parse(serialized);
+    // Structured clone stores bounded thumbnails alongside the JSON projection.
+    // No image decode or object URL creation runs on the snapshot-read path.
+    for (const [id, row] of Object.entries(projected.rowDisplay ?? {})) {
+      for (const [key, image] of Object.entries(row.images ?? {})) {
+        if (image.thumbnail && snapshot.rowDisplay?.[id]?.images?.[key]) {
+          snapshot.rowDisplay[id]!.images![key]!.thumbnail = image.thumbnail;
+        }
+      }
+    }
     // A receipt cannot certify history changed by the disk display or privacy projection.
     if (historyChanged) {
+
       delete snapshot.historyState;
     }
     weight = serialized.length;
@@ -91,12 +116,15 @@ export async function createSnapshotRecord(
     sessionId: pending.snapshot.sessionId,
     sessionKey,
   };
+  const thumbnails = chatThumbnailWeight(snapshot);
   return {
     record: { ...envelope, snapshot },
     metadata: {
       savedAt: pending.savedAt,
       sessionKey,
       weight: weight + JSON.stringify(envelope).length,
+      thumbnailCount: thumbnails.count,
+      thumbnailBytes: thumbnails.bytes,
     },
   };
 }

@@ -17,7 +17,7 @@ const bootstrap = new LazyHovercardBootstrap<SessionProgressHovercardProvider>({
   },
 });
 
-installSessionTitleRegistrar((target, label) => {
+installSessionTitleRegistrar((target, label, display) => {
   let active = true;
   let release: (() => void) | undefined;
   // The registrar promise lets producers finish mounting before this lookup.
@@ -28,7 +28,7 @@ installSessionTitleRegistrar((target, label) => {
       .then(async () => {
         await provider.updateComplete;
         if (active && target.isConnected && bootstrap.providerFor(target) === provider) {
-          release = provider.registerSessionTitleTarget(target, label);
+          release = provider.registerSessionTitleTarget(target, label, display);
         }
       })
       .catch(() => undefined);

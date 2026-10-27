@@ -22,6 +22,7 @@
 // --layout-matrix covers routes, themes, viewports and cold/warm reloads; --runs is per bundle/cell.
 // Repeat --layout-cell mobile:light:chat:cold to isolate cells with their matrix setup intact.
 // --sidebar-presentation adds badges/avatars; --sidebar-presentation-probe records visible waves.
+// --late-row-facts covers titled links, native/ticketed thumbnails, archive notice and avatars.
 // --critical-path captures usable-screen readiness and first Sessions/Settings/Cron/Agents visits.
 // Repeat --critical-path-route to narrow/order visits; HTTP throttling and RPC latency are separate.
 // --critical-path-intent-ms 150 includes hover/focus prefetch before route activation.
@@ -272,6 +273,7 @@ const { values } = parseArgs({
     allocations: { type: "boolean", default: false },
     "warm-reload": { type: "boolean", default: false },
     "row-facts": { type: "boolean", default: false },
+    "late-row-facts": { type: "boolean", default: false },
     "pane-chrome-probe": { type: "boolean", default: false },
     "archived-session": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
@@ -351,6 +353,22 @@ const { values } = parseArgs({
     output: { type: "string", default: ".artifacts/control-ui-cold-load" },
   },
 });
+if (values["late-row-facts"]) {
+  if (
+    !values["warm-reload"] ||
+    !values["gateway-http"] ||
+    values["cold-http-cache"] ||
+    values["hold-boot-assets"] ||
+    Number(values["history-validator-delay-ms"]) > 0 ||
+    values["duplicate-boot-reads"]
+  ) {
+    throw new Error(
+      "late-row-facts requires cache-enabled gateway-http + warm-reload without intercepted assets or duplicate-boot-reads",
+    );
+  }
+  values["row-facts"] = true;
+  values["transcript-avatars"] = true;
+}
 if (values["pane-chrome-probe"] && !values["warm-reload"]) {
   throw new Error("pane-chrome-probe requires warm-reload for the first transcript paint boundary");
 }
@@ -798,6 +816,7 @@ const fixture = createControlUiTeamScaleFixture({
   closedMenuMembers: values["closed-menu-members"],
   largeSnapshot: values["large-snapshot"],
   rowFacts: values["row-facts"],
+  lateRowFacts: values["late-row-facts"],
   offRosterSession: values["off-roster-route"],
   archivedSession: values["archived-session"],
   transcriptMessages,
@@ -1208,12 +1227,31 @@ try {
   ]);
   if (gatewayHttpServer) {
     // Native fixture HTTP keeps browser caching available for production assets.
-    gatewayHttpServer.setFixtureReader((pathname) => {
+    gatewayHttpServer.setFixtureReader((pathname, url) => {
       if (pathname === "/control-ui-config.json") {
         return {
           body: JSON.stringify(createControlUiMockBootstrapConfig(prepared.scenario)),
           contentType: "application/json",
         };
+      }
+      if (fixture.lateRowFacts && pathname === "/__openclaw__/assistant-media") {
+        if (url.searchParams.get("source") !== fixture.lateRowFacts.cacheableImageSource) {
+          return undefined;
+        }
+        if (url.searchParams.get("meta") === "1") {
+          return {
+            body: JSON.stringify(fixture.lateRowFacts.metadata),
+            contentType: "application/json",
+            headers: { "Cache-Control": "private, no-store" },
+          };
+        }
+        if (url.searchParams.get("mediaTicket") !== fixture.lateRowFacts.metadata.mediaTicket) {
+          return {
+            body: "Synthetic media ticket required",
+            contentType: "text/plain",
+            status: 403,
+          };
+        }
       }
       const asset = assets.get(pathname);
       return asset
@@ -1343,7 +1381,7 @@ try {
     : "";
   const warmProbes =
     values["warm-reload"] || firstLoad
-      ? `\n${paneChromeScript}\n(${warmReloadProbe.toString()})(${JSON.stringify({ rowFacts: values["row-facts"], avatars: values["transcript-avatars"] })}, ${values["pane-chrome-probe"] ? "__paneChrome.sample" : "undefined"});`
+      ? `\n${paneChromeScript}\n(${warmReloadProbe.toString()})(${JSON.stringify({ rowFacts: values["row-facts"], avatars: values["transcript-avatars"], lateRowFacts: values["late-row-facts"] })}, ${values["pane-chrome-probe"] ? "__paneChrome.sample" : "undefined"});`
       : "";
   const presentationProbes = fixture.sidebarPresentation
     ? `\n(${installTeamScaleSidebarPresentation.toString()})(${JSON.stringify(fixture.sidebarPresentation)});${values["sidebar-presentation-probe"] ? `\n(${sidebarPresentationProbe.toString()})();` : ""}`
@@ -1666,8 +1704,55 @@ try {
   const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
     sessionKey: fixture.selectedSessionKey,
     rowFacts: values["row-facts"],
+    lateRowFacts: values["late-row-facts"],
     offRosterSession: values["off-roster-route"],
     sidebarView: sidebarView === "online" ? "online" : "sessions",
+  };
+  const qualifyLateRowFacts = async () => {
+    if (!fixture.lateRowFacts) {
+      return;
+    }
+    await page.waitForFunction(({ sessionTitle, prUrl }) => {
+      const thread = document.querySelector(".chat-pane-cache__pane--active .chat-thread");
+      const links = [...(thread?.querySelectorAll<HTMLAnchorElement>("a") ?? [])];
+      const images = [
+        ...(thread?.querySelectorAll<HTMLImageElement>(".chat-image-frame img") ?? []),
+      ];
+      const assistantAvatars = [
+        ...(thread?.querySelectorAll<HTMLImageElement>(
+          ".chat-avatar.assistant img, .identity-avatar--agent img",
+        ) ?? []),
+      ];
+      return (
+        links.some(
+          (link) =>
+            link.classList.contains("markdown-session-link--titled") &&
+            link.textContent === sessionTitle,
+        ) &&
+        links.some((link) => link.href === prUrl && link.dataset.linkReaderTone === "positive") &&
+        images.length === 2 &&
+        images.every((image) => image.complete && image.naturalWidth > 0) &&
+        Boolean(thread?.querySelector(".chat-notice")) &&
+        assistantAvatars.some((image) => image.complete && image.naturalWidth > 0)
+      );
+    }, fixture.lateRowFacts);
+  };
+  const qualifyLateRowSnapshot = (saved: (typeof snapshotSaves)[number], bundleIndex: number) => {
+    if (!values["late-row-facts"] || !comparisonBundleDirs.length || bundleIndex === 0) {
+      return;
+    }
+    const facts = saved.displayFacts;
+    if (
+      !facts ||
+      facts.thumbnails !== 2 ||
+      facts.imageDimensions !== 2 ||
+      facts.links < 2 ||
+      facts.thumbnailBytes <= 0 ||
+      facts.cachedThumbnails > 32 ||
+      facts.cachedThumbnailBytes > 8 * 1024 * 1024
+    ) {
+      throw new Error(`Unqualified candidate late-row snapshot: ${JSON.stringify(facts)}`);
+    }
   };
   if (!firstLoad) {
     await page.goto(chatUrl);
@@ -1740,6 +1825,7 @@ try {
       await settle("chat");
     }
     await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor({ state: "attached" });
+    await qualifyLateRowFacts();
     const { storage: warmStorage, ...snapshotSave } = await page.evaluate(
       persistColdLoadWarmState,
       warmInput,
@@ -1765,10 +1851,12 @@ try {
           await page.locator(".shell--nav-drawer-open").waitFor();
         }
         await expandSidebar();
+        await qualifyLateRowFacts();
         const { storage: captured, ...saved } = await page.evaluate(
           persistColdLoadWarmState,
           warmInput,
         );
+        qualifyLateRowSnapshot(saved, index);
         storage = captured;
         primes.push(saved);
         if (pass === passes - 1) {
@@ -2060,6 +2148,11 @@ try {
       await page.reload({ waitUntil: "domcontentloaded" });
     }
     await settle(runRoute);
+    await qualifyLateRowFacts();
+    if (values["late-row-facts"]) {
+      // Keep the probe alive until the qualified final image state has been sampled.
+      await page.evaluate(() => new Promise(requestAnimationFrame));
+    }
     const coverage = values.coverage
       ? (await page.coverage.stopJSCoverage())
           .filter((entry) => controlUiScriptAssetUrl(entry.url, new URL("assets/", baseUrl)))
@@ -3408,6 +3501,7 @@ try {
         connectNotBeforeMs,
         dashboardWidget: values["dashboard-widget"],
         rowFacts: values["row-facts"],
+        lateRowFacts: values["late-row-facts"],
         face,
         shortRoute: values["short-route"],
         fullUuidRoute: values["full-uuid-route"],

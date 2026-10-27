@@ -13,6 +13,12 @@ export function createTeamScaleHistoryFixture(options: {
   sessionInfo: ControlUiSessionFixture;
   sender?: ControlUiMockPresenceUser;
   rowFacts?: boolean;
+  lateRowFacts?: {
+    sessionKey: string;
+    prUrl: string;
+    artifactId: string;
+    cacheableImageSource: string;
+  };
   models: ModelCatalogEntry[];
   inFlightRun?: ChatHistoryResult["inFlightRun"];
   attachments?: ReturnType<typeof createTeamScaleDuplicateReadFixture>["attachments"];
@@ -47,6 +53,22 @@ export function createTeamScaleHistoryFixture(options: {
     timestamp: options.now - (options.messageCount - index) * 60_000,
     content: [
       ...(options.attachments && index === options.messageCount - 1 ? options.attachments : []),
+      ...(options.lateRowFacts && index === options.messageCount - 1
+        ? [
+            {
+              type: "image",
+              artifactId: options.lateRowFacts.artifactId,
+              mimeType: "image/png",
+              fileName: "Synthetic ticketed thumbnail.png",
+            },
+            {
+              type: "image",
+              url: options.lateRowFacts.cacheableImageSource,
+              mimeType: "image/png",
+              fileName: "Synthetic cacheable thumbnail.png",
+            },
+          ]
+        : []),
       {
         type: "text",
         text: [
@@ -55,6 +77,9 @@ export function createTeamScaleHistoryFixture(options: {
           index % 2
             ? "The current implementation is ready for verification. Coverage includes the normal path, a recoverable failure, and the final user-visible result."
             : "Please check the current progress and keep the existing layout stable while the remaining results arrive.",
+          ...(options.lateRowFacts && index === options.messageCount - 1
+            ? [`Reference ${options.lateRowFacts.sessionKey} and ${options.lateRowFacts.prUrl}.`]
+            : []),
           ...(options.largeSnapshot
             ? ["Synthetic transcript detail and tool output. ".repeat(40)]
             : []),

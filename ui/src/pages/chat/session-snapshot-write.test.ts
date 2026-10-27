@@ -304,11 +304,14 @@ describe("snapshot write serialization and scheduling", () => {
         savedAt: envelope.savedAt,
         sessionKey,
         weight: expectedWeight,
+        thumbnailCount: 0,
+        thumbnailBytes: 0,
       });
     },
   );
 
   it.each([
+    { name: "retired projection", patch: { projectionVersion: 5 } },
     { name: "non-array messages", patch: { snapshot: { ...snapshot(), messages: {} } } },
     {
       name: "missing messages",
