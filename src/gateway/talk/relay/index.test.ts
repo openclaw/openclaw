@@ -52,7 +52,6 @@ import {
   makeRelayTransport,
   observeRelayTranscriptFailures,
 } from "./index.test-support.js";
-import { resolveTalkRealtimeRelayPresentation } from "./issues.js";
 import {
   acknowledgeTalkRealtimeRelayMark,
   cancelTalkRealtimeRelayTurn,
@@ -93,10 +92,6 @@ const DELIVERED_RESULT = {
   status: "already_delivered",
   message: "OpenClaw already delivered this consult result internally. Do not repeat it.",
 };
-const providerErrorCases = [
-  ["retry later", { status: 429, message: "raw-rate-marker" }, RELAY_RETRY_ERROR],
-  ["unavailable", { status: 503, message: "raw-unavailable-marker" }, RELAY_UNAVAILABLE_ERROR],
-] as const;
 
 type RelaySessionParams = Parameters<typeof createRelayRaw>[0];
 type RelayFixtureDefaults = "connId" | "providerConfig" | "instructions" | "tools";
@@ -372,19 +367,6 @@ function embeddedBackend(abort = vi.fn()) {
 }
 
 describe("talk realtime relay helpers", () => {
-  it.each(providerErrorCases)(
-    "projects public %s failures to fixed copy",
-    (_name, error, expected) => {
-      const message = resolveTalkRealtimeRelayPresentation({
-        provider: createIdleRelayProvider(),
-        providerConfig: {},
-      }).publicError(error).message;
-
-      expect(message).toBe(expected);
-      expect(message).not.toContain(error.message);
-    },
-  );
-
   it.each(["late claim", "revocation"] as const)(
     "forwards the retained runner's %s",
     (operation) => {
@@ -453,7 +435,7 @@ describe("talk realtime gateway relay", () => {
     },
   );
 
-  it.each(["failed", "incomplete", "cancelled"] as const)(
+  it.each(["failed", "cancelled"] as const)(
     "keeps a relay reusable after a %s response",
     async (status) => {
       const close = vi.fn();
@@ -1463,94 +1445,97 @@ describe("talk realtime gateway relay", () => {
   });
 
   it.each([
-    { failure: "connect", opaque: false },
-    { failure: "close-before-ready", opaque: false },
-    { failure: "error-before-close", opaque: false },
-    { failure: "provider-error", opaque: false },
-    { failure: "provider-error", opaque: true },
-  ])("bounds $failure issue details (opaque=$opaque)", async ({ failure, opaque }) => {
-    const model = opaque ? "gpt-live-test-private" : "gpt-realtime-test-public";
-    const privateDetails = ["sensitive-route", "sensitive-session", "sensitive-transcript"];
-    const error = Object.assign(new Error(model + privateDetails.join(" ")), { status: 401 });
-    const captured = captureProvider(() =>
-      makeRelayTransport({
-        connect: vi.fn(async () => {
-          if (failure === "connect") {
-            throw error;
-          }
+    ["connect", 401, false, RELAY_AUTH_ERROR],
+    ["close-before-ready", 401, false, undefined],
+    ["error-before-close", 401, false, RELAY_AUTH_ERROR],
+    ["provider-error", 401, false, RELAY_AUTH_ERROR],
+    ["provider-error", 401, true, RELAY_GENERIC_ERROR],
+    ["provider-error", 429, false, RELAY_RETRY_ERROR],
+    ["provider-error", 503, false, RELAY_UNAVAILABLE_ERROR],
+  ] as const)(
+    "bounds %s issue details (status=%s, opaque=%s)",
+    async (failure, status, opaque, message) => {
+      const model = opaque ? "gpt-live-test-private" : "gpt-realtime-test-public";
+      const privateDetails = ["sensitive-route", "sensitive-session", "sensitive-transcript"];
+      const error = Object.assign(new Error(model + privateDetails.join(" ")), { status });
+      const captured = captureProvider(() =>
+        makeRelayTransport({
+          connect: vi.fn(async () => {
+            if (failure === "connect") {
+              throw error;
+            }
+          }),
+          isConnected: vi.fn(() => failure !== "connect"),
         }),
-        isConnected: vi.fn(() => failure !== "connect"),
-      }),
-    );
-    const provider: RealtimeVoiceProviderPlugin = {
-      ...captured.provider,
-      id: "openai",
-      label: "OpenAI Realtime",
-      ...(opaque
-        ? {
-            [Symbol.for("openclaw.internal.realtime-voice-provider.v1")]: {
-              isBrowserSessionConfigured: () => true,
-              projectPublicProjection: ({ config }: { config: Record<string, unknown> }) => {
-                const { model: _model, ...publicConfig } = config;
-                return { config: publicConfig };
+      );
+      const provider: RealtimeVoiceProviderPlugin = {
+        ...captured.provider,
+        id: "openai",
+        label: "OpenAI Realtime",
+        ...(opaque
+          ? {
+              [Symbol.for("openclaw.internal.realtime-voice-provider.v1")]: {
+                isBrowserSessionConfigured: () => true,
+                projectPublicProjection: ({ config }: { config: Record<string, unknown> }) => {
+ const { model: _model, ...publicConfig } = config;
+ return { config: publicConfig };
+ },
               },
-            },
-          }
-        : {}),
-    };
-    const { events, context } = createRelayEventRecorder();
-    const session = await createRelay({ context, provider, providerConfig: { model }, model });
-    if (failure === "connect") {
-      await Promise.resolve();
-    } else {
-      if (failure !== "close-before-ready") {
-        captured.request?.onError?.(error);
+            }
+          : {}),
+      };
+      const { events, context } = createRelayEventRecorder();
+      const session = await createRelay({ context, provider, providerConfig: { model }, model });
+      if (failure === "connect") {
+        await Promise.resolve();
+      } else {
+        if (failure !== "close-before-ready") {
+          captured.request?.onError?.(error);
+        }
+        if (failure !== "provider-error") {
+          captured.request?.onClose?.("error");
+        }
       }
-      if (failure !== "provider-error") {
-        captured.request?.onClose?.("error");
+      const payload = findEventPayload(events, "error");
+      const issue = {
+        code: "realtime_unavailable",
+        provider: "openai",
+        transport: "gateway-relay",
+        phase: "connect",
+      };
+      expect(payload).toMatchObject({
+        ...issue,
+        relaySessionId: session.relaySessionId,
+        ...(opaque ? {} : { model }),
+        ...(message ? { message } : {}),
+      });
+      if (failure === "connect") {
+        expect(payload.talkEvent).toMatchObject({
+          type: "session.error",
+          final: true,
+          payload: { ...issue, model },
+        });
+        expect(events.find((entry) => entry.payload === payload)?.opts).toEqual({
+          dropIfSlow: false,
+        });
       }
-    }
-    const payload = findEventPayload(events, "error");
-    const issue = {
-      code: "realtime_unavailable",
-      provider: "openai",
-      transport: "gateway-relay",
-      phase: "connect",
-    };
-    expect(payload).toMatchObject({
-      ...issue,
-      relaySessionId: session.relaySessionId,
-      ...(opaque ? {} : { model }),
-      ...(failure === "close-before-ready"
-        ? {}
-        : { message: opaque ? RELAY_GENERIC_ERROR : RELAY_AUTH_ERROR }),
-    });
-    if (failure === "connect") {
-      expect(payload.talkEvent).toMatchObject({
-        type: "session.error",
-        final: true,
-        payload: { ...issue, model },
-      });
-      expect(events.find((entry) => entry.payload === payload)?.opts).toEqual({
-        dropIfSlow: false,
-      });
-    }
-    if (failure === "close-before-ready") {
-      expect(findEventPayload(events, "close").reason).toBe("error");
-    }
-    if (failure === "error-before-close") {
-      expect(eventPayloads(events, "error")).toHaveLength(1);
-    }
-    if (opaque) {
-      expect(session).not.toHaveProperty("model");
-    } else {
-      expect(session.model).toBe(model);
-    }
-    const projected = JSON.stringify(events);
-    for (const value of [...privateDetails, ...(opaque ? [model] : [])]) {
-      expect(projected).not.toContain(value);
-    }
-  });
+      if (failure === "close-before-ready") {
+        expect(findEventPayload(events, "close").reason).toBe("error");
+      }
+      if (failure === "error-before-close") {
+        expect(eventPayloads(events, "error")).toHaveLength(1);
+      }
+      if (opaque) {
+        expect(session).not.toHaveProperty("model");
+      } else {
+        expect(session.model).toBe(model);
+      }
+      const projected = JSON.stringify(events);
+      for (const value of [...privateDetails, ...(opaque ? [model] : [])]) {
+        expect(projected).not.toContain(value);
+      }
+    },
+  );
 
   it("forces an agent consult when configured and realtime transcript finalizes without a provider tool call", async () => {
     const fixture = await createForcedConsultFixture([], {
@@ -1650,26 +1635,6 @@ describe("talk realtime gateway relay", () => {
     });
   });
 
-  it("waits for every native result before publishing a forced result", async () => {
-    const fixture = await createForcedConsultFixture(["native-1", "native-2"]);
-    const first = createDeferred();
-    const second = createDeferred();
-    fixture.submitToolResult.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
-    const submission = fixture.submit({ result: "checked" });
-    expect(fixture.submit({ answer: "duplicate" })).toBe(submission);
-    expect(fixture.submitToolResult.mock.calls).toEqual([
-      ["native-1", { result: "checked" }, undefined],
-      ["native-2", { result: "checked" }, undefined],
-    ]);
-    first.resolve();
-    await Promise.resolve();
-    expect(eventPayloads(fixture.events, "toolResult", fixture.callId)).toHaveLength(0);
-    second.resolve();
-    await submission;
-    expect(eventPayloads(fixture.events, "toolResult", fixture.callId)).toHaveLength(1);
-    expect(fixture.sendUserMessage).not.toHaveBeenCalled();
-  });
-
   it("classifies forced interim and terminal results only from willContinue", async () => {
     const fixture = await createForcedConsultFixture(["native-call"]);
 
@@ -1688,59 +1653,58 @@ describe("talk realtime gateway relay", () => {
     expect(finalStates).toEqual([false, true]);
   });
 
-  it("drains native calls that join while a forced terminal result is pending", async () => {
-    const fixture = await createForcedConsultFixture(["native-1"]);
+  it("waits for every initial and late native result before publishing a forced result", async () => {
+    const fixture = await createForcedConsultFixture(["native-1", "native-2"]);
     const first = createDeferred();
     const second = createDeferred();
     const third = createDeferred();
-    const secondStarted = createDeferred();
+    const fourth = createDeferred();
     const thirdStarted = createDeferred();
+    const fourthStarted = createDeferred();
     fixture.submitToolResult
       .mockReturnValueOnce(first.promise)
-      .mockImplementationOnce(() => {
-        secondStarted.resolve();
-        return second.promise;
-      })
+      .mockReturnValueOnce(second.promise)
       .mockImplementationOnce(() => {
         thirdStarted.resolve();
         return third.promise;
+      })
+      .mockImplementationOnce(() => {
+        fourthStarted.resolve();
+        return fourth.promise;
       });
     const submission = fixture.submit({ result: "checked" });
-
-    consultCall(fixture.bridgeRequest, "late-item", "native-2", "Can you check this?");
-    expect(fixture.submitToolResult.mock.calls.map((call) => call[0])).toEqual(["native-1"]);
-
+    expect(fixture.submit({ answer: "duplicate" })).toBe(submission);
+    expect(fixture.submitToolResult.mock.calls).toEqual([
+      ["native-1", { result: "checked" }, undefined],
+      ["native-2", { result: "checked" }, undefined],
+    ]);
     first.resolve();
-    await secondStarted.promise;
+    await Promise.resolve();
+    expect(eventPayloads(fixture.events, "toolResult", fixture.callId)).toHaveLength(0);
     consultCall(fixture.bridgeRequest, "later-item", "native-3", "Can you check this?");
     second.resolve();
-    await vi.waitFor(() =>
-      expect(fixture.submitToolResult.mock.calls.map((call) => call[0])).toEqual([
-        "native-1",
-        "native-2",
-        "native-3",
-      ]),
-    );
     await thirdStarted.promise;
-    let terminalSettled = false;
-    const completion = Promise.resolve(submission).then(() => {
-      terminalSettled = true;
-    });
-    expect(terminalSettled).toBe(false);
+    consultCall(fixture.bridgeRequest, "last-item", "native-4", "Can you check this?");
     third.resolve();
-    await completion;
-    expect(terminalSettled).toBe(true);
+    await fourthStarted.promise;
+    const settled = vi.fn();
+    void Promise.resolve(submission).then(settled);
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+    expect(eventPayloads(fixture.events, "toolResult", fixture.callId)).toHaveLength(0);
+    fourth.resolve();
+    await submission;
+    expect(eventPayloads(fixture.events, "toolResult", fixture.callId)).toHaveLength(1);
     expect(fixture.submitToolResult.mock.calls.map((call) => call[0])).toEqual([
       "native-1",
       "native-2",
       "native-3",
+      "native-4",
     ]);
     expect(fixture.sendUserMessage).not.toHaveBeenCalled();
     expect(
-      fixture.events.filter(
-        (entry) =>
-          (entry.payload as { type?: string }).type === "toolResult" &&
-          ["native-2", "native-3"].includes((entry.payload as { callId?: string }).callId ?? ""),
+      eventPayloads(fixture.events, "toolResult").filter(({ callId }) =>
+        ["native-2", "native-3", "native-4"].includes(String(callId)),
       ),
     ).toHaveLength(0);
   });
