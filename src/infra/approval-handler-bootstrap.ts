@@ -50,10 +50,15 @@ export async function startChannelApprovalHandlerBootstrap(params: {
   accountId: string;
   channelRuntime?: ChannelRuntimeSurface;
   gatewayRuntime?: GatewayNativeApprovalRuntime;
+  abortSignal?: AbortSignal;
   logger?: ReturnType<typeof createSubsystemLogger>;
 }): Promise<() => Promise<void>> {
   const capability = resolveChannelApprovalCapability(params.plugin);
-  if (!(capability?.nativeRuntimeAsync ?? capability?.nativeRuntime) || !params.channelRuntime) {
+  if (
+    !(capability?.nativeRuntimeAsync ?? capability?.nativeRuntime) ||
+    !params.channelRuntime ||
+    params.abortSignal?.aborted
+  ) {
     return async () => {};
   }
 
@@ -166,10 +171,19 @@ export async function startChannelApprovalHandlerBootstrap(params: {
 
   spawn("failed to start native approval handler", startRegisteredHandler());
 
-  return async () => {
+  const cleanup = async () => {
     stopped = true;
+    params.abortSignal?.removeEventListener("abort", onAbort);
     unsubscribe();
     cancelRetry();
     await stopHandler();
   };
+  // A timed-out provider can outlive its account. Revoke its watcher on abort,
+  // before a replacement context can rearm the abandoned approval handler.
+  const onAbort = () => spawn("failed to stop aborted native approval handler", cleanup());
+  params.abortSignal?.addEventListener("abort", onAbort, { once: true });
+  if (params.abortSignal?.aborted) {
+    await cleanup();
+  }
+  return cleanup;
 }
