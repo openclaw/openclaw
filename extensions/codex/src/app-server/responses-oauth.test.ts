@@ -3,7 +3,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import {
   createCodexResponsesOAuth,
   resolveCodexResponsesOAuthProfileFingerprint,
-} from "./responses-oauth.js";
+} from "./responses-oauth-runtime.js";
 
 const owner = vi.hoisted(() => ({
   credential: undefined as AuthProfileCredential | undefined,

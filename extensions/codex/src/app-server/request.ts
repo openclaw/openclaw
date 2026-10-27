@@ -32,6 +32,9 @@ type CodexAppServerClientRequestParams = {
   sessionKey?: string;
   sessionId?: string;
   controlObservation?: CodexControlRequestObservation;
+  catalogPreview?: true;
+  catalogPreviewCache?: CodexCatalogPreviewCache;
+  catalogRows?: number;
 };
 
 function observeControlPhase(
@@ -96,6 +99,13 @@ export async function requestCodexAppServerClientJson<T = JsonValue | undefined>
     const options = {
       timeoutMs,
       signal: params.signal,
+      ...(params.catalogPreview
+        ? {
+            catalogPreview: true as const,
+            catalogPreviewCache: params.catalogPreviewCache,
+            catalogRows: params.catalogRows,
+          }
+        : {}),
       ...(attemptWaiterFinished ? { attemptWaiterFinished } : {}),
       ...(params.assertCurrent
         ? { assertCurrent: () => assertRequestOwnerCurrent(params.assertCurrent) }

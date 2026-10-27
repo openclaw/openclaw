@@ -72,9 +72,20 @@ const mocks = vi.hoisted(() => ({
   resolveDefaultAgentDir: vi.fn(() => "/tmp/openclaw-agent"),
   desktopGeneration: undefined as { epoch: number; fingerprint: string } | undefined,
   desktopGenerationCurrent: true,
+  responsesOAuthImport: undefined as Promise<void> | undefined,
+  responsesOAuthImportStarted: undefined as (() => void) | undefined,
+  createCodexResponsesOAuth: vi.fn(() => ({
+    resolve: vi.fn(async () => ({ token: "synthetic-access", assertCurrent: () => {} })),
+  })),
   waitForCodexDesktopGeneration: vi.fn(),
 }));
 mocks.waitForCodexDesktopGeneration.mockImplementation(async () => mocks.desktopGeneration);
+
+vi.mock("./responses-oauth-runtime.js", async () => {
+  mocks.responsesOAuthImportStarted?.();
+  await mocks.responsesOAuthImport;
+  return { createCodexResponsesOAuth: mocks.createCodexResponsesOAuth };
+});
 
 vi.mock("./auth-bridge.js", () => ({
   applyCodexAppServerAuthProfile: mocks.applyCodexAppServerAuthProfile,
@@ -332,6 +343,9 @@ describe("shared Codex app-server client", () => {
     mocks.embeddedAgentLog.debug.mockClear();
     mocks.embeddedAgentLog.warn.mockClear();
     mocks.resolveDefaultAgentDir.mockClear();
+    mocks.responsesOAuthImport = undefined;
+    mocks.responsesOAuthImportStarted = undefined;
+    mocks.createCodexResponsesOAuth.mockClear();
   });
 
   registerSharedClientWebSocketStartupTests({
@@ -1347,6 +1361,61 @@ describe("shared Codex app-server client", () => {
       expect(mocks.applyCodexAppServerAuthProfile).not.toHaveBeenCalled();
       expect(harness.process.stdin.destroyed).toBe(true);
     } finally {
+      harness.client.close();
+    }
+  });
+
+  it("does not attach host OAuth after its caller retires during the runtime import", async () => {
+    const harness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    const imported = createDeferred<void>();
+    const releaseImport = createDeferred<void>();
+    mocks.responsesOAuthImportStarted = () => imported.resolve();
+    mocks.responsesOAuthImport = releaseImport.promise;
+    const retired = new Error("host OAuth caller retired during import");
+    let current = true;
+    const clientPromise = createIsolatedCodexAppServerClient({
+      startOptions: createStartOptions({ commandSource: "resolved-managed" }),
+      timeoutMs: 1_000,
+      assertCurrent: () => {
+        if (!current) {
+          throw retired;
+        }
+      },
+      preparedAuth: {
+        kind: "profile",
+        profileId: "openai:sharing",
+        store: {
+          version: 1,
+          profiles: {
+            "openai:sharing": {
+              type: "oauth",
+              provider: "openai",
+              authFlow: "chatgpt-token-sharing",
+              access: "synthetic-access",
+              refresh: "synthetic-refresh",
+              expires: 1,
+            },
+          },
+        },
+        snapshot: {
+          inferenceAuth: "host-oauth",
+          loginParams: { type: "apiKey", apiKey: "synthetic-placeholder" },
+          secretFreeCacheKey: "synthetic-fingerprint",
+        },
+      },
+    });
+    const rejection = expect(clientPromise).rejects.toBe(retired);
+    try {
+      await sendInitializeResult(harness, "openclaw/0.149.0 (macOS; test)");
+      await imported.promise;
+      current = false;
+      releaseImport.resolve();
+      await rejection;
+      expect(mocks.createCodexResponsesOAuth).not.toHaveBeenCalled();
+      expect(harness.process.stdin.destroyed).toBe(true);
+    } finally {
+      releaseImport.resolve();
       harness.client.close();
     }
   });

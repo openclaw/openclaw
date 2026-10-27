@@ -11,13 +11,18 @@ export type CodexAppServerCloseResult =
   | { exited: false; cleanup: "uncertain" };
 
 type TransportClose = {
-  closing: Promise<"natural" | "contained" | "uncertain">;
+  closing: Promise<"natural" | "contained" | "contained-terminated" | "uncertain">;
   naturalExit: boolean;
   wasForced: () => boolean;
 };
 const CODEX_APP_SERVER_TRANSPORT_CLOSES = new WeakMap<object, TransportClose>();
 
-type TransportCloseOptions = { forceKillDelayMs?: number; drainStdio?: boolean };
+type TransportCloseOptions = {
+  forceKillDelayMs?: number;
+  drainStdio?: boolean;
+  /** An isolated read owner may terminate its verified, still-stopped root. */
+  terminateOwnedProcess?: true;
+};
 
 /** True only after bounded settlement proves an exit that cleanup did not cause. */
 export function hasCodexAppServerNaturalExit(child: CodexAppServerTransport): boolean {
@@ -85,6 +90,20 @@ function beginCodexAppServerTransportClose(
     const contained = await terminateCodexAppServerDescendants(child).catch(() => undefined);
     if (contained === "exited") {
       return "natural";
+    }
+    if (options.terminateOwnedProcess && contained) {
+      try {
+        // Descendants are observed dead and the direct root remains stopped.
+        // Kill through the retained handle before it can resume and fork again.
+        finishCodexAppServerTransportClose(child, options, forceKill);
+        if (child.kill("SIGKILL") === true) {
+          return "contained-terminated";
+        }
+      } catch {
+        // Failed root termination does not discharge this owner's custody.
+      }
+      contained.resume();
+      return "uncertain";
     }
     try {
       finishCodexAppServerTransportClose(child, options, forceKill, contained?.resume);
@@ -170,7 +189,9 @@ export async function closeCodexAppServerTransportAndWait(
     ? {
         exited: true,
         cleanup:
-          containment === "contained" && !closure.wasForced() && child.signalCode == null
+          !closure.wasForced() &&
+          ((containment === "contained" && child.signalCode == null) ||
+            (containment === "contained-terminated" && child.signalCode === "SIGKILL"))
             ? "closed"
             : "uncertain",
       }

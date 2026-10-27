@@ -8,17 +8,13 @@ import {
   AgentHarnessPreflightError,
   resolveDefaultAgentDir,
 } from "openclaw/plugin-sdk/agent-harness-registration";
-import {
-  ensureAuthProfileStore,
-  findPersistedAuthProfileCredential,
-  refreshOAuthCredentialForRuntime,
-  resolveApiKeyForProfile,
-  resolvePersistedAuthProfileOwnerAgentDir,
-  type AuthProfileCredential,
-  type AuthProfileStore,
-  type OAuthCredential,
+import type {
+  AuthProfileCredential,
+  AuthProfileStore,
+  OAuthCredential,
 } from "openclaw/plugin-sdk/agent-runtime";
 import {
+  ensureAuthProfileStore,
   hasUsableOAuthCredential,
   resolveOpenAICodexAuthIdentity,
 } from "openclaw/plugin-sdk/provider-auth";
@@ -76,10 +72,7 @@ import type {
   CodexGetAccountResponse,
   CodexLoginAccountParams,
 } from "./protocol.js";
-import {
-  isCodexResponsesOAuthCredential,
-  resolveCodexResponsesOAuthProfileFingerprint,
-} from "./responses-oauth.js";
+import { isCodexResponsesOAuthCredential } from "./responses-oauth.js";
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
 export type {
@@ -240,6 +233,8 @@ export async function resolveCodexAppServerPreparedAuthProfileSnapshot(
   }
   const { agentDir, store, profileId, credential } = profile;
   if (isCodexResponsesOAuthCredential(credential)) {
+    const { resolveCodexResponsesOAuthProfileFingerprint } =
+      await import("./responses-oauth-runtime.js");
     return {
       inferenceAuth: "host-oauth",
       // Native Codex also uses API-key auth for auxiliary services. Only this local
@@ -402,6 +397,7 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
 export async function resolveCodexAppServerAuthAccountCacheKey(
   params: CodexAppServerAuthProfileLookup,
 ): Promise<string | undefined> {
+  const { resolveApiKeyForProfile } = await import("openclaw/plugin-sdk/agent-runtime");
   const profile = resolveCodexAppServerAuthProfile(params);
   if (!profile) {
     return undefined;
@@ -955,6 +951,7 @@ async function resolveLoginParamsForCredential(
   // belongs at credential entry time so request handling does not preemptively
   // reject opaque provider credentials.
   if (credential.type === "api_key" || credential.type === "token") {
+    const { resolveApiKeyForProfile } = await import("openclaw/plugin-sdk/agent-runtime");
     const resolved = await resolveApiKeyForProfile({
       cfg: params.config,
       store: params.preferStoreCredential
@@ -1006,6 +1003,12 @@ async function resolveOAuthCredentialForCodexAppServer(
     config?: AuthProfileOrderConfig;
   },
 ): Promise<OAuthCredential> {
+  const {
+    resolvePersistedAuthProfileOwnerAgentDir,
+    findPersistedAuthProfileCredential,
+    refreshOAuthCredentialForRuntime,
+    resolveApiKeyForProfile,
+  } = await import("openclaw/plugin-sdk/agent-runtime");
   const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
     agentDir: params.agentDir,
     profileId,
@@ -1197,6 +1200,7 @@ async function resolveScopedOAuthCredential(params: {
   expectedAccountId?: string;
   config?: AuthProfileOrderConfig;
 }): Promise<OAuthCredential> {
+  const { refreshOAuthCredentialForRuntime } = await import("openclaw/plugin-sdk/agent-runtime");
   const existingRefresh = scopedOAuthRefreshQueues.get(params.store)?.get(params.profileId);
   if (existingRefresh) {
     const refreshed = await existingRefresh;

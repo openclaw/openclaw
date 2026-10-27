@@ -64,7 +64,7 @@ import {
 } from "./managed-binary.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
-import { createCodexResponsesOAuth, isCodexResponsesOAuth } from "./responses-oauth.js";
+import { isCodexResponsesOAuth, type CodexResponsesOAuth } from "./responses-oauth.js";
 import {
   notifyDesktopGenerationDrainChecks,
   retainSharedClientEntry,
@@ -290,6 +290,8 @@ export type CodexAppServerClientOptions = {
   agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   onStartedClient?: (client: CodexAppServerClient) => void;
+  /** Caller-owned startup also retains late registration until physical cleanup. */
+  onStartingClient?: (starting: Promise<CodexAppServerClient>) => void;
   abandonSignal?: AbortSignal;
   /** Caller authority for startup of an isolated, caller-owned client. */
   assertCurrent?: () => void;
@@ -836,6 +838,7 @@ export async function createIsolatedCodexAppServerClient(
       timeoutMs: resolveRemainingAcquireTimeout(timeoutMs, startedAt),
       abandonSignal,
       assertCurrent: options?.assertCurrent,
+      onStartingClient: options?.onStartingClient,
       onStartedClient: (client) => {
         trackIsolatedCodexAppServerClient(client);
         options?.onStartedClient?.(client);
@@ -1098,19 +1101,21 @@ async function startInitializedCodexAppServerClientOnce(
       }
       if (ownsInference) {
         const prepared = params.preparedAuth;
-        ownCodexInferenceClient(
-          client,
-          startOptions,
-          isCodexResponsesOAuth(prepared) && prepared?.kind === "profile"
-            ? createCodexResponsesOAuth({
-                profileId: prepared.profileId,
-                store: prepared.store,
-                fingerprint: prepared.snapshot.secretFreeCacheKey,
-                agentDir: params.agentDir,
-                config: params.config,
-              })
-            : undefined,
-        );
+        let responsesOAuth: CodexResponsesOAuth | undefined;
+        if (isCodexResponsesOAuth(prepared) && prepared?.kind === "profile") {
+          const { createCodexResponsesOAuth } = await waitForStartup(
+            () => import("./responses-oauth-runtime.js"),
+          );
+          assertStartupCurrent();
+          responsesOAuth = createCodexResponsesOAuth({
+            profileId: prepared.profileId,
+            store: prepared.store,
+            fingerprint: prepared.snapshot.secretFreeCacheKey,
+            agentDir: params.agentDir,
+            config: params.config,
+          });
+        }
+        ownCodexInferenceClient(client, startOptions, responsesOAuth);
       }
       recordCodexAppServerAuthHandoff(client, authHandoff);
       if (runtimeArtifactModule && runtimeArtifact) {
