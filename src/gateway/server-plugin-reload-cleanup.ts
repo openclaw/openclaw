@@ -18,6 +18,7 @@ import { withPluginHttpRouteRegistry } from "../plugins/http-registry.js";
 import { PluginInstanceDrainTimeoutError } from "../plugins/plugin-instance-error.js";
 import { getPluginInstance, type PluginInstanceHandle } from "../plugins/plugin-instance-scope.js";
 import { collectRegistryInvocationInstances } from "../plugins/plugin-invocation-scope.js";
+import { pluginHandsOverTurns } from "../plugins/plugin-turn-handover-eligibility.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import {
@@ -333,7 +334,7 @@ export function createPluginReloadCleanup({
             {
               pluginId: record.id,
               count: instance.retainedWorkCount + (includeCalls ? instance.ordinaryCallCount : 0),
-              turnHandover: record.turnHandover === true,
+              turnHandover: pluginHandsOverTurns([previousRegistry], record.id),
             },
           ]
         : [];

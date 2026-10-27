@@ -1,4 +1,4 @@
-/** Retained work on one plugin being replaced, and whether that plugin hands turns over. */
+/** Retained work on one plugin being replaced, and whether a reload hands its turns over. */
 export type PluginReloadDrainHold = {
   pluginId: string;
   count: number;
@@ -6,9 +6,9 @@ export type PluginReloadDrainHold = {
 };
 
 /**
- * Explains what a plugin reload's drain is waiting for. Work on plugins that declare
- * `reload.turnHandover` is waiting for turns to reach their next step; work on other
- * plugins is waiting for whole turns, so those plugins are named.
+ * Explains what a plugin reload's drain is waiting for. Work on plugins that hand turns
+ * over is waiting for turns to reach their next step; work on other plugins is waiting
+ * for whole turns, so those plugins are named.
  */
 export function formatPluginReloadDrainReason(params: {
   holds: readonly PluginReloadDrainHold[];
@@ -31,7 +31,7 @@ export function formatPluginReloadDrainReason(params: {
   }
   if (pinning.length) {
     parts.push(
-      `Running turns keep ${pinning.map((hold) => hold.pluginId).join(", ")} until they finish because ${pinning.length === 1 ? "it does" : "they do"} not declare reload.turnHandover.`,
+      `Running turns keep ${pinning.map((hold) => hold.pluginId).join(", ")} until they finish because ${pinning.length === 1 ? "it does" : "they do"} not hand turns over (reload.turnHandover is not declared, or a context engine is registered).`,
     );
   }
   parts.push(`New agent runs wait up to the ${drainBudgetSeconds}s drain budget.`);
