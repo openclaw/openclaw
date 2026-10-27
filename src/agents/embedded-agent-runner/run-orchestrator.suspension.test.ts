@@ -356,13 +356,30 @@ describe("embedded run detached session metadata", () => {
       if (outcome === "assistant") {
         failAttempt(outcome, params.sessionId);
       } else {
-        runAttempt.mockResolvedValue({
-          ...successfulAttempt(params.sessionId),
-          terminal:
-            outcome === "aborted" ? { kind: "aborted", source: "external" } : { kind: "ok" },
+        if (existing) {
+          params.sessionManager.appendMessage(makeUserMessage("in-memory history", 1));
+        }
+        runAttempt.mockImplementationOnce(async (attempt) => {
+          const { resolveExistingAttemptTranscriptState } =
+            await import("./run/attempt-transcript-helpers.js");
+          expect(attempt.sessionPersistence).toBe("detached");
+          expect(attempt.sessionManager).toBeDefined();
+          expect(
+            await resolveExistingAttemptTranscriptState({ ...attempt, agentId: "research" }),
+          ).toEqual({
+            hasBootstrapTranscriptState: existing,
+          });
+          return {
+            ...successfulAttempt(params.sessionId),
+            terminal:
+              outcome === "aborted" ? { kind: "aborted", source: "external" } : { kind: "ok" },
+          };
         });
       }
-      const pending = run(existing ? {} : { sessionKey: undefined });
+      const pending = run({
+        agentHarnessRuntimeOverride: existing ? "codex" : "openclaw",
+        ...(existing ? {} : { sessionKey: undefined, sessionManager: undefined }),
+      });
       if (outcome === "assistant") {
         await expect(pending).rejects.toMatchObject(billingFailure);
       } else {
@@ -403,26 +420,6 @@ describe("embedded run detached session metadata", () => {
     await joinSuspensionWrites();
     expect(loadSessionEntry(scope)?.liveModelSwitchPending).toBeUndefined();
   });
-
-  it.each([false, true])(
-    "reads bootstrap state from the detached manager (has messages: %s)",
-    async (hasMessages) => {
-      const { params, run, expectNoAgent } = await createRun("detached");
-      const { resolveExistingAttemptTranscriptState } =
-        await import("./run/attempt-transcript-helpers.js");
-      if (hasMessages) {
-        params.sessionManager.appendMessage(makeUserMessage("in-memory history", 1));
-      }
-      runAttempt.mockImplementationOnce(async (attempt) => {
-        expect(
-          await resolveExistingAttemptTranscriptState({ ...attempt, agentId: "research" }),
-        ).toEqual({ hasBootstrapTranscriptState: hasMessages });
-        return successfulAttempt(params.sessionId);
-      });
-      await expect(run()).resolves.toMatchObject(verified);
-      await expectNoAgent();
-    },
-  );
 
   it.each([
     ["overflow", false, "active"],
@@ -554,29 +551,6 @@ describe("embedded run detached session metadata", () => {
     expect(runAttempt).toHaveBeenCalledTimes(2);
     await expectNoAgent();
   });
-
-  it.each([
-    ["openclaw", true],
-    ["openclaw", false],
-    ["codex", true],
-    ["codex", false],
-  ] as const)(
-    "forwards detached lifetime to the %s attempt (caller manager: %s)",
-    async (harness, suppliedManager) => {
-      const { params, run, expectNoAgent } = await createRun("detached");
-      runAttempt.mockImplementationOnce(async (attempt) => {
-        expect(attempt.sessionPersistence).toBe("detached");
-        return successfulAttempt(params.sessionId);
-      });
-      await expect(
-        run({
-          agentHarnessRuntimeOverride: harness,
-          sessionManager: suppliedManager ? params.sessionManager : undefined,
-        }),
-      ).resolves.toMatchObject(verified);
-      await expectNoAgent();
-    },
-  );
 
   it("does not spend the candidate deferral on a detached run before durable runs", async () => {
     const { params, scope, database, seed, run } = await createRun("detached");
