@@ -352,7 +352,9 @@ export function filterSessionEntries(
           identityMatch = matchesSessionListSearch([params.identityNames?.get(agentId)], search);
           (identityMatches ??= new Map()).set(agentId, identityMatch);
         }
-        if (identityMatch) return true;
+        if (identityMatch) {
+          return true;
+        }
         const source = expectDefined(params.getModelFacts, "prepared search row model facts")(key);
         // Derived model aliases are not agent-key matches.
         if (!search.startsWith("agent:")) {
@@ -395,7 +397,9 @@ export function filterSessionEntries(
             modelMatch = matchesSessionListSearch(models, search);
             (modelMatches ??= new Map()).set(modelKey, modelMatch);
           }
-          if (modelMatch) return true;
+          if (modelMatch) {
+            return true;
+          }
         }
         const runtimeLabel = formatAgentRuntimeLabel(source.thinkingProjection.agentRuntime);
         let runtimeMatch = runtimeMatches?.get(runtimeLabel);
