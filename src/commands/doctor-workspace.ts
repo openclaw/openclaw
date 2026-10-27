@@ -2,13 +2,13 @@ import { isUtf8 } from "node:buffer";
 import fs from "node:fs";
 import path from "node:path";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { safeStatSync } from "@openclaw/fs-safe/path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { DEFAULT_AGENTS_FILENAME } from "../agents/workspace.js";
 import { safeRealpathSync } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { findGitRoot } from "../infra/git-root.js";
-import { writeTextAtomic } from "../infra/json-files.js";
 import { statIfExists as statPathIfExists } from "../infra/path-existence.js";
 import {
   CANONICAL_ROOT_MEMORY_FILENAME,
@@ -249,18 +249,25 @@ async function migrateLegacyRootMemoryFile(
     })}`;
     // The pre-merge canonical bytes exist nowhere else (only the legacy file was
     // archived), so copy them beside that archive before touching the live file,
-    // and publish through an atomic replace: a crash or ENOSPC mid-write must
-    // never tear the only durable memory file.
+    // and publish through an atomic replace: a failed publication must never
+    // tear the only durable memory file. The permission-error copy fallback
+    // stays disabled — its unlink-then-recreate path is exactly the tear this
+    // write must not perform — and the workspace's own mode is passed back so
+    // publication never widens it.
     canonicalBackupPath = path.join(
       path.dirname(archivedLegacyPath),
       `${CANONICAL_ROOT_MEMORY_FILENAME}.pre-merge`,
     );
     await fs.promises.copyFile(detection.canonicalPath, canonicalBackupPath);
-    const { mode } = await fs.promises.stat(detection.canonicalPath);
-    await writeTextAtomic(detection.canonicalPath, merged, {
-      durable: true,
-      mode: mode & 0o777,
+    await replaceFileAtomic({
+      filePath: detection.canonicalPath,
+      content: merged,
+      dirMode: (await fs.promises.stat(detection.workspaceDir)).mode & 0o7777,
+      preserveExistingMode: true,
       tempPrefix: CANONICAL_ROOT_MEMORY_FILENAME,
+      syncTempFile: true,
+      syncParentDir: true,
+      throwOnCleanupError: true,
     });
   }
   return {
