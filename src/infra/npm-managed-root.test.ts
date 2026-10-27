@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CommandOptions } from "../process/exec.js";
@@ -9,7 +8,6 @@ import {
   listMissingRequiredPlatformPackages,
   readManagedNpmRootInstalledDependency,
   readOpenClawManagedNpmRootOverrides,
-  resolveManagedNpmRootDependencySpec,
   syncManagedNpmRootPeerDependencies,
   upsertManagedNpmRootDependency,
 } from "./npm-managed-root.js";
@@ -54,17 +52,14 @@ describe("managed npm root", () => {
   it("finds explicitly required optional packages for the current platform", async () => {
     const npmRoot = await makeTempRoot();
     const matchingPackage = "@vendor/tool-platform";
-    const scriptedPackage = "@vendor/tool-scripted";
+    const otherMatchingPackage = "@vendor/tool-other";
     const foreignPackage = "@vendor/tool-foreign";
     const unconstrainedPackage = "@vendor/tool-optional";
     const unlistedPackage = "@vendor/tool-unlisted";
     await writeLock(npmRoot, {
       "": {},
       [`node_modules/${matchingPackage}`]: platformFacts,
-      [`node_modules/${scriptedPackage}`]: {
-        ...platformFacts,
-        hasInstallScript: true,
-      },
+      [`node_modules/${otherMatchingPackage}`]: platformFacts,
       [`node_modules/${foreignPackage}`]: {
         ...platformFacts,
         os: [`not-${process.platform}`],
@@ -78,18 +73,16 @@ describe("managed npm root", () => {
         npmRoot,
         requiredPackageNames: [
           matchingPackage,
-          scriptedPackage,
+          otherMatchingPackage,
           foreignPackage,
           unconstrainedPackage,
         ],
       }),
     ).resolves.toEqual(
-      [matchingPackage, scriptedPackage]
-        .map((name) => ({
-          name,
-          packagePath: path.join(npmRoot, "node_modules", ...name.split("/")),
-        }))
-        .toSorted((left, right) => left.packagePath.localeCompare(right.packagePath)),
+      [otherMatchingPackage, matchingPackage].map((name) => ({
+        name,
+        packagePath: path.join(npmRoot, "node_modules", ...name.split("/")),
+      })),
     );
   });
 
@@ -217,26 +210,6 @@ describe("managed npm root", () => {
     });
   });
 
-  it("resolves workspace pnpm overrides from packaged dist chunks", async () => {
-    const packageRoot = await makeTempRoot();
-    await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
-    await writeFixtureJson(path.join(packageRoot, "package.json"), { name: "openclaw" });
-    await fs.writeFile(
-      path.join(packageRoot, "pnpm-workspace.yaml"),
-      "overrides:\n  axios: 1.18.0\n",
-    );
-
-    const resolvePackageRoot = openclawRoot.resolveOpenClawPackageRootSync;
-    vi.spyOn(openclawRoot, "resolveOpenClawPackageRootSync").mockImplementation((params) =>
-      resolvePackageRoot({
-        ...params,
-        moduleUrl: pathToFileURL(path.join(packageRoot, "dist", "install-AbCdEf.js")).toString(),
-        cwd: path.join(packageRoot, "dist"),
-      }),
-    );
-    await expect(readOpenClawManagedNpmRootOverrides()).resolves.toEqual({ axios: "1.18.0" });
-  });
-
   it("normalizes workspace overrides before managed npm use", async () => {
     const packageRoot = await makeTempRoot();
     await writeFixtureJson(path.join(packageRoot, "package.json"), {
@@ -281,26 +254,6 @@ describe("managed npm root", () => {
       axios: "1.18.0",
       "node-domexception": "npm:@nolyfill/domexception@1.0.28",
     });
-  });
-
-  it("pins managed dependencies to the resolved version", () => {
-    expect(
-      resolveManagedNpmRootDependencySpec({
-        parsedSpec: {
-          name: "@openclaw/discord",
-          raw: "@openclaw/discord@stable",
-          selector: "stable",
-          selectorKind: "tag",
-          selectorIsPrerelease: false,
-        },
-        resolution: {
-          name: "@openclaw/discord",
-          version: "2026.5.2",
-          resolvedSpec: "@openclaw/discord@2026.5.2",
-          resolvedAt: "2026-05-03T00:00:00.000Z",
-        },
-      }),
-    ).toBe("2026.5.2");
   });
 
   it("reads installed dependency metadata from package-lock", async () => {

@@ -23,7 +23,6 @@ import {
 
 const resources = sqliteMaintenanceFixture();
 const { open: openDatabase, entries: createDatabase } = resources;
-const tempDirs = { make: resources.dir };
 
 function fileDatabase(schema: string) {
   const databasePath = resources.file();
@@ -194,14 +193,14 @@ describe("runSqliteImmediateTransactionSync", () => {
     const stage = (value: string) => {
       const previous = stagedValue;
       stageSqliteTransactionState(db, {
-        stage: () => {
+        stage() {
           stagedValue = value;
         },
-        rollback: () => {
+        rollback() {
           stagedValue = previous;
           stateEvents.push(`rollback:${value}`);
         },
-        commit: () => {
+        commit() {
           stateEvents.push(`commit:${value}`);
         },
       });
@@ -284,17 +283,17 @@ describe("runSqliteImmediateTransactionSync", () => {
       }
       const stage = (label: string, fails: boolean) => {
         stageSqliteTransactionState(db, {
-          stage: () => {
+          stage() {
             events.push(`stage:${label}`);
           },
-          rollback: (error) => {
+          rollback(error) {
             rollbackErrors.push(error);
             events.push(`rollback:${label}`);
             if (fails) {
               throw observerError;
             }
           },
-          commit: () => {
+          commit() {
             events.push(`commit:${label}`);
           },
         });
@@ -468,12 +467,11 @@ describe("runSqliteImmediateTransaction", () => {
   it.each([false, true])(
     "preserves a failed rollback during admission yield (deadline expired: %s)",
     async (expireDeadline) => {
-      const dir = tempDirs.make("openclaw-sqlite-admission-abort-");
-      const db = openDatabase(path.join(dir, "index.sqlite"));
-      const writer = openDatabase(path.join(dir, "index.sqlite"));
       const busyTimeoutMs = expireDeadline ? 100 : 1000;
-      db.exec(`CREATE TABLE entries(id INTEGER PRIMARY KEY, value BLOB);
+      const { db, databasePath } =
+        fileDatabase(`CREATE TABLE entries(id INTEGER PRIMARY KEY, value BLOB);
         PRAGMA max_page_count=2; PRAGMA busy_timeout=${busyTimeoutMs}`);
+      const writer = openDatabase(databasePath);
       writer.exec("BEGIN IMMEDIATE");
       let primaryError: unknown;
       let faultScheduled = false;
