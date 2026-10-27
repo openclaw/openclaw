@@ -31,7 +31,8 @@ const MAX_USER_MEDIA_PLACEHOLDER_ENTRIES = 8;
  * facts. Their payloads are not replayable through the text-oriented recovery
  * projection, so a legitimate historical attachment projects as a bounded,
  * deterministic marker; only messages without any well-formed media fact stay
- * a content rejection.
+ * a content rejection. Empty positional slots are not media, so an entry needs
+ * an actual reference — path, URL, content type, or a known kind — to count.
  */
 function userMediaPlaceholder(
   message: Extract<AgentMessage, { role: "user" }>,
@@ -46,6 +47,11 @@ function userMediaPlaceholder(
     }
     const contentType = normalizeOptionalString(entry.contentType);
     const kind = normalizeOptionalString(entry.kind);
+    const reference =
+      contentType ?? normalizeOptionalString(entry.path) ?? normalizeOptionalString(entry.url);
+    if (!reference && (!kind || kind === "unknown")) {
+      return [];
+    }
     return [contentType ?? kind ?? "unknown type"];
   });
   if (labels.length === 0) {

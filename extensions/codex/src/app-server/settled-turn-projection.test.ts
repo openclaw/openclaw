@@ -291,6 +291,43 @@ describe("projectSettledCodexMessages", () => {
         toolResult(),
       ]),
     ).toThrowError(new CodexHistoryRejection("invalid_content"));
+    expect(() =>
+      projectSettledCodexMessages([
+        message({ role: "user", content: "", __openclaw: { media: [{}] } }),
+        toolCall(),
+        toolResult(),
+      ]),
+    ).toThrowError(new CodexHistoryRejection("invalid_content"));
+    expect(() =>
+      projectSettledCodexMessages([
+        message({ role: "user", content: "", __openclaw: { media: [{ kind: "unknown" }] } }),
+        toolCall(),
+        toolResult(),
+      ]),
+    ).toThrowError(new CodexHistoryRejection("invalid_content"));
+  });
+
+  it("labels a reference-backed media fact without a type as unknown type", () => {
+    expect(
+      projectSettledCodexMessages([
+        message({
+          role: "user",
+          content: "",
+          __openclaw: { media: [{ path: "/attachments/photo.bin" }] },
+        }),
+        toolCall(),
+        toolResult(),
+      ])[0],
+    ).toEqual({
+      type: "message",
+      role: "user",
+      content: [
+        {
+          type: "input_text",
+          text: "[User media attachment unavailable in this context: unknown type]",
+        },
+      ],
+    });
   });
 
   it("bounds the media placeholder to the first entries", () => {
