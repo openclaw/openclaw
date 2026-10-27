@@ -483,6 +483,7 @@
     .chat-virtual-row:has(.chat-group.assistant .chat-bubble > .chat-text > .markdown-table) {
       /* WebKit lacks an adjustable paint clip. Let wide tables extend beyond
          the row; transcript virtualization still bounds mounted content. */
+      content-visibility: visible;
       contain: none;
     }
   }

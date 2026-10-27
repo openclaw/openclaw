@@ -430,6 +430,7 @@ suite.define(() => {
             if (!row) {
               throw new Error("Expected a mounted overscan row above the viewport");
             }
+            row.style.contentVisibility = "visible";
             row.style.contain = "none";
             const filler = document.createElement("div");
             filler.id = "follow-delayed-measurement";

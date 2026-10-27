@@ -644,13 +644,21 @@ openclaw-pending-session-create {
   position: relative;
   display: flow-root;
   width: 100%;
-  /* The virtualizer already bounds mounted rows. Automatic content skipping
-     makes WebKit repeatedly resolve row styles during window recycling. */
-  contain: content;
+  content-visibility: auto;
+}
+
+@media (min-width: 769px) {
+  .chat-virtual-row {
+    /* The virtualizer bounds mounted rows. Wide rows pay for WebKit's automatic
+       content skipping; compact rows retain it for steadier frame delivery. */
+    content-visibility: visible;
+    contain: content;
+  }
 }
 
 /* Small notice rows must enter at their real height, not the virtual estimate. */
 .chat-virtual-row:has(> .chat-notice) {
+  content-visibility: visible;
   contain: none;
 }
 
@@ -662,6 +670,7 @@ openclaw-pending-session-create {
 
 /* Message jumps need real mounted-row sizes before their target settles. */
 .chat-thread-inner[data-measuring-rows] .chat-virtual-row {
+  content-visibility: visible;
   contain: none;
 }
 

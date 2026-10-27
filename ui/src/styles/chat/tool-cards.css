@@ -897,6 +897,7 @@
   .chat-tool-card__preview[data-widget-actions-above],
   .chat-tool-card__widget-actions [aria-expanded="true"]
 ) {
+  content-visibility: visible;
   contain: none;
 }
 
@@ -949,6 +950,7 @@
   }
 
   .chat-virtual-row:has(.chat-tool-card__preview[data-has-widget-actions]) {
+    content-visibility: visible;
     contain: none;
   }
 }
