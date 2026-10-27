@@ -747,7 +747,11 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
       const before = (await gateway.getRequests("skills.status", params, { exactParams: true }))
         .length;
       await page.locator('[data-agent-option][value="data-agent-0299"]').click();
-      await gateway.waitForRequest("skills.status", { after: before, match: params, exactParams: true });
+      await gateway.waitForRequest("skills.status", {
+        after: before,
+        match: params,
+        exactParams: true,
+      });
       await page.waitForFunction(
         (query) =>
           document.querySelector<HTMLInputElement>('input[name="agent-skills-filter"]')?.value ===
@@ -758,6 +762,10 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
         skillQuery,
       );
       await countRows(page, ".agent-skill-row:not([hidden])", 1);
+      await page
+        .locator(".agent-skill-row:not([hidden]) .settings-row__title")
+        .getByText(skillQuery, { exact: true })
+        .waitFor();
       await frames(page);
       const skillStatusRequests =
         (await gateway.getRequests("skills.status", params, { exactParams: true })).length - before;
@@ -767,7 +775,7 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
       return {
         fixtureSkills: inventorySize,
         matchingSkills: 1,
-        selectedAgent: params.agentId,
+        selectedAgentMatches: true,
         skillStatusRequests,
       };
     },
