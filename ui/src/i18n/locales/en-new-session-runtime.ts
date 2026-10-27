@@ -26,6 +26,10 @@ const enNewSessionRuntime = {
     followUpsAdmissionFailed:
       "Your follow-up messages are held. Retry them after checking browser storage.",
     createFailed: "Couldn't create the session.",
+    preferenceSaveUnconfirmed:
+      "Saving your new-session choices could not be confirmed. Check them before starting a session.",
+    worktreeNameClearUnconfirmed:
+      "Session accepted, but clearing the saved worktree name could not be confirmed. Check Name before starting another worktree.",
   },
 } satisfies TranslationMap;
 

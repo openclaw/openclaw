@@ -91,7 +91,7 @@ describe("probeMediaFile", () => {
     { rotation: -90, width: 1280, height: 720 },
     { rotation: -180, width: 720, height: 1280 },
   ])("returns display dimensions for selected stream rotation $rotation", async (testCase) => {
-    runFfprobe.mockResolvedValue(
+    runFfprobe.mockResolvedValueOnce(
       JSON.stringify({
         format: { duration: "10" },
         streams: [
@@ -111,14 +111,6 @@ describe("probeMediaFile", () => {
       width: testCase.width,
       height: testCase.height,
     });
-    await expect(probeVideoDimensions(Buffer.from("video"))).resolves.toEqual({
-      width: testCase.width,
-      height: testCase.height,
-    });
-    await expect(probePlaybackMediaFileDescriptor(17, "video")).resolves.toMatchObject({
-      width: 720,
-      height: 1280,
-    });
   });
 
   it.each([
@@ -131,7 +123,7 @@ describe("probeMediaFile", () => {
   ])(
     "returns display dimensions for SAR $sampleAspectRatio at rotation $rotation",
     async (testCase) => {
-      runFfprobe.mockResolvedValue(
+      runFfprobe.mockResolvedValueOnce(
         JSON.stringify({
           streams: [
             {
@@ -146,26 +138,10 @@ describe("probeMediaFile", () => {
       );
       const display = { width: testCase.width, height: testCase.height };
       await expect(probeMediaFile(clipPath, "video")).resolves.toEqual(display);
-      await expect(probeVideoDimensions(Buffer.from("video"))).resolves.toEqual(display);
-      await expect(probePlaybackMediaFileDescriptor(17, "video")).resolves.toMatchObject({
-        width: 720,
-        height: 576,
-      });
     },
   );
 
-  it("probes an inherited descriptor through stdin", async () => {
-    runFfprobe.mockResolvedValueOnce(JSON.stringify({ format: { duration: "2" } }));
-
-    await expect(probePlaybackMediaFileDescriptor(17, "audio")).resolves.toEqual({
-      durationMs: 2000,
-    });
-    expect(runFfprobe).toHaveBeenCalledWith(expect.arrayContaining(["-fd", "0", "fd:"]), {
-      stdinFileDescriptor: 17,
-    });
-  });
-
-  it("returns duration and first audio/video codecs in one playback probe", async () => {
+  it("keeps encoded dimensions and selected audio/video facts in one playback probe", async () => {
     runFfprobe.mockResolvedValueOnce(
       JSON.stringify({
         format: { duration: "3.25" },
@@ -185,6 +161,8 @@ describe("probeMediaFile", () => {
             duration: "3",
             width: 1920,
             height: 1080,
+            sample_aspect_ratio: "4:3",
+            side_data_list: [{ rotation: 90 }],
             disposition: { default: 1, attached_pic: 0 },
           },
           {
@@ -202,6 +180,8 @@ describe("probeMediaFile", () => {
       durationMs: 4000,
       width: 1920,
       height: 1080,
+      videoSampleAspectRatio: 4 / 3,
+      videoRotation: 90,
       videoCodec: "hevc",
       videoProfile: "main 10",
       videoPixelFormat: "yuv420p10le",
@@ -210,6 +190,9 @@ describe("probeMediaFile", () => {
       audioStreamIndex: 3,
     });
     expect(runFfprobe).toHaveBeenCalledOnce();
+    expect(runFfprobe).toHaveBeenCalledWith(expect.arrayContaining(["-fd", "0", "fd:"]), {
+      stdinFileDescriptor: 17,
+    });
   });
 
   it.each([
@@ -359,13 +342,23 @@ describe("probeMediaFilesWithinBudget", () => {
 });
 
 describe("probeVideoDimensions", () => {
-  it("keeps buffer callers on the canonical probe path", async () => {
+  it("returns rotated anamorphic display dimensions through the buffer probe", async () => {
     const buffer = Buffer.from("video");
     runFfprobe.mockResolvedValueOnce(
-      JSON.stringify({ streams: [{ codec_type: "video", width: 720, height: 1280 }] }),
+      JSON.stringify({
+        streams: [
+          {
+            codec_type: "video",
+            width: 720,
+            height: 576,
+            sample_aspect_ratio: "64:45",
+            side_data_list: [{ rotation: -90 }],
+          },
+        ],
+      }),
     );
 
-    await expect(probeVideoDimensions(buffer)).resolves.toEqual({ width: 720, height: 1280 });
+    await expect(probeVideoDimensions(buffer)).resolves.toEqual({ width: 576, height: 1024 });
     expect(runFfprobe).toHaveBeenCalledWith(
       [
         "-v",

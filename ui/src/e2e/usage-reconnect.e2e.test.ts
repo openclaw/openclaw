@@ -148,7 +148,10 @@ async function proxyReconnect(
   await page.clock.resume();
   await expect.poll(() => gateway.getSocketCount(), { timeout: 10_000 }).toBe(expectedSocketCount);
   await waitForControlUiGatewayReady(page);
-  await page.locator(".sidebar-shell__footer .gateway-status").waitFor({ state: "detached" });
+  await page
+    .locator(".sidebar-shell__footer .gateway-status")
+    .getByText("Connected", { exact: true })
+    .waitFor();
 }
 
 async function usageBadges(page: Page): Promise<string[]> {

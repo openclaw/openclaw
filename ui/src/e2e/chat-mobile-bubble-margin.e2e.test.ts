@@ -37,8 +37,13 @@ function expectActivityEdges(margin: Margin, label: string) {
 }
 
 suite.define(() => {
-  // Retain four-case media isolation while sharing each app boot within the batch.
-  const casesPerPage = 4;
+  // Preserve each video case's fresh-page boundary; share the later non-video cases.
+  const caseBatches = [
+    marginCases.slice(0, 4),
+    marginCases.slice(4, 8),
+    marginCases.slice(8, 16),
+    marginCases.slice(16),
+  ];
   let context: BrowserContext;
   let page: Page;
   let pageBatch = -1;
@@ -80,7 +85,7 @@ suite.define(() => {
   it.each(marginCases)(
     "preserves $id gutters across viewports and themes, restoring desktop geometry",
     async (testCase) => {
-      const batch = Math.floor(marginCases.indexOf(testCase) / casesPerPage);
+      const batch = caseBatches.findIndex((cases) => cases.includes(testCase));
       await page.setViewportSize({ width: 1440, height: 1200 });
       await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" });
       if (batch !== pageBatch) {
@@ -89,7 +94,7 @@ suite.define(() => {
           page = await context.newPage();
         }
         pageBatch = batch;
-        const cases = marginCases.slice(batch * casesPerPage, (batch + 1) * casesPerPage);
+        const cases = caseBatches[batch]!;
         await installMockGateway(page, {
           ...marginScenario(testCase),
           sessions: cases.map((entry) => createControlUiSessionRow(sessionKey(entry), entry.id, 1)),

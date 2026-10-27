@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
@@ -191,6 +192,12 @@ async function runInstallationCase(params: {
   tokenRecovery?: "success" | "writer-unavailable" | "no-consent";
   revoked?: "unchanged" | "restored" | "unclassified";
   initiallyStopped?: boolean;
+  nativePolicy?:
+    | "disabled-before"
+    | "disabled-during"
+    | "disabled-before-activation"
+    | "disabled-before-install"
+    | "unavailable-before";
   releaseStateBeforeFinish?: boolean;
   pendingRuntimePinMigration?: boolean;
   inspectionFailure?: "lost-before-install";
@@ -233,10 +240,7 @@ async function runInstallationCase(params: {
     [mocks.activeRoot, "2026.9.17"],
   ] as const) {
     await fs.mkdir(path.join(root, "dist"), { recursive: true });
-    await fs.writeFile(
-      path.join(root, "package.json"),
-      JSON.stringify({ name: "openclaw", version }),
-    );
+    await writeFixtureJson(path.join(root, "package.json"), { name: "openclaw", version });
     await fs.writeFile(path.join(root, "dist/index.js"), "export {};\n");
   }
   await withEnvAsync(
@@ -309,6 +313,7 @@ async function runInstallationCase(params: {
         }));
       }
       let running = !initiallyStopped;
+      let enabled = params.nativePolicy !== "disabled-before";
       const pid = mocks.gatewayPid;
       mocks.resident.mockImplementation(() => (running ? { pid } : undefined));
       let nativeInspectionReads = 0;
@@ -322,6 +327,7 @@ async function runInstallationCase(params: {
       let originalConfig: string | undefined;
       const service = createMockGatewayService({
         isAbsent: async () => false,
+        isEnabled: params.nativePolicy === "unavailable-before" ? undefined : async () => enabled,
         isLoaded: async () => true,
         readCommand: async () => command,
         readRuntime: async (env, opts) => {
@@ -384,6 +390,10 @@ async function runInstallationCase(params: {
           running = true;
         },
         install: async (plan) => {
+          if (params.nativePolicy === "disabled-before-install") {
+            enabled = false;
+          }
+          await plan.beforeMutation?.();
           return await captureGatewayServiceRebind(
             async () => command,
             () => plan.assertCurrent?.(),
@@ -430,7 +440,14 @@ async function runInstallationCase(params: {
             },
           );
         },
-        restart: async () => {
+        restart: async (args) => {
+          if (params.nativePolicy === "disabled-before-activation") {
+            enabled = false;
+          }
+          await args.beforeMutation?.();
+          if (params.nativePolicy === "disabled-before") {
+            expect(args.preserveAutoStart).toBe(true);
+          }
           events.push("restart");
           running = true;
           return { outcome: "completed" };
@@ -574,6 +591,13 @@ async function runInstallationCase(params: {
         }
         return;
       }
+      if (params.nativePolicy === "unavailable-before") {
+        await expect(admission).rejects.toThrow(
+          "autostart policy could not be verified before stopping",
+        );
+        expectOriginal([], true);
+        return;
+      }
       const maintenance = await admission;
       if (params.inspectionScenario) {
         vi.spyOn(performance, "now").mockImplementation(() => inspectionClock);
@@ -605,6 +629,9 @@ async function runInstallationCase(params: {
         maintenance?.run(() => {
           expect(running).toBe(false);
           events.push("repair-state");
+          if (params.nativePolicy === "disabled-during") {
+            enabled = false;
+          }
         });
         if (params.releaseStateBeforeFinish) {
           await maintenance?.releaseState();
@@ -629,6 +656,18 @@ async function runInstallationCase(params: {
           );
         } catch (error) {
           finishError = error;
+        }
+        if (params.nativePolicy) {
+          if (params.nativePolicy === "disabled-before") {
+            expect(finishError).toBeUndefined();
+            expectOriginal(["stop", "repair-state", "restart"], true);
+          } else {
+            expect(String(finishError)).toContain("autostart policy changed");
+            expectOriginal(["stop", "repair-state"], false);
+            expect(mocks.health).not.toHaveBeenCalled();
+          }
+          expect(enabled).toBe(false);
+          return;
         }
         if (params.tokenRecovery) {
           expect(finishError).toBeUndefined();
@@ -839,4 +878,21 @@ it.each<InstallationCase>([
   { platform: "linux", bun: true },
 ])("repairs installation drift with doctor --fix (%j)", async (scenario) =>
   runInstallationCase({ ...scenario, mode: "direct" }),
+);
+
+it.each([
+  "disabled-before",
+  "disabled-during",
+  "disabled-before-activation",
+  "disabled-before-install",
+  "unavailable-before",
+] as const)(
+  "preserves native autostart policy during Doctor restoration (%s)",
+  async (nativePolicy) =>
+    runInstallationCase({
+      platform: "darwin",
+      mode: "maintenance",
+      definitionRepair: nativePolicy === "disabled-before-install" ? "repaired" : "not-needed",
+      nativePolicy,
+    }),
 );

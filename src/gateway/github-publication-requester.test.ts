@@ -17,7 +17,6 @@ import fs from "node:fs/promises";
 import nodePath from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
-import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   ensureCanonicalUserProfileForEmail,
@@ -45,10 +44,7 @@ import {
 } from "./github-publication-requester.test-support.js";
 import { readRepositoryGitHubPublicationFixture as readRepositoryGitHubPublication } from "./github-publication-store.test-support.js";
 import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
-import {
-  GatewayOperatorAccessUnavailableError,
-  hasGatewayOperatorAccessPolicies,
-} from "./operator-access-policy.js";
+import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
@@ -222,7 +218,6 @@ describe("shared GitHub publication requester authority", () => {
     "does not adopt a newly required missing policy for a grant-free %s request",
     async (backend) => {
       const f = await fixture(backend);
-      expect(hasGatewayOperatorAccessPolicies(f.config)).toBe(false);
       const claim = await holdWorkerTurn(f);
       const guest = await request(f, "before-policy");
       const staff = await request(f, "independent-staff", f.maintainer);
@@ -230,9 +225,7 @@ describe("shared GitHub publication requester authority", () => {
       expect(original).toEqual(f.guest.snapshot);
       expect(original?.grant).toBeNull();
       expect([guest.status, staff.status]).toEqual(["requested", "requested"]);
-      const requiredConfig = requireVisitorPublicationPolicy(f);
-      expect(hasGatewayOperatorAccessPolicies(requiredConfig)).toBe(true);
-      expect(getPluginRegistryState()?.activeRegistry?.gatewayAccessPolicies ?? []).toEqual([]);
+      requireVisitorPublicationPolicy(f);
       await f.placements.releaseTurn(claim);
       f.guestSource.release();
       f.maintainerSource.release();

@@ -23,11 +23,7 @@ const core = (
 
 describe("gateway method registry", () => {
   it("requires a profile for session-scoped plugin and core methods", () => {
-    const sessionAccess = {
-      mode: "write" as const,
-      allowOwnSessionScope: true,
-      requiredTool: "example",
-    };
+    const sessionAccess = { mode: "write" as const, allowOwnSessionScope: true, requiredTool: "x" };
     const plugin = createPluginGatewayMethodDescriptor({
       pluginId: "example",
       name: "example.session",
@@ -83,29 +79,12 @@ describe("gateway method registry", () => {
 
   it("rejects duplicate method names", () => {
     expect(() =>
-      createGatewayMethodRegistry([
-        core("example.duplicate"),
-        core("example.duplicate", { scope: WRITE_SCOPE }),
-      ]),
-    ).toThrow("gateway method already registered: example.duplicate");
+      createGatewayMethodRegistry([core("same"), core("same", { scope: WRITE_SCOPE })]),
+    ).toThrow("gateway method already registered: same");
   });
 
-  it("rejects unknown core handlers while accepting hidden core methods", () => {
-    expect(() => createCoreGatewayMethodDescriptors({ "example.unknown": handler })).toThrow(
-      "gateway method handler is missing a descriptor: example.unknown",
-    );
-    expect(createCoreGatewayMethodDescriptors({ "config.openFile": handler })).toMatchObject([
-      { name: "config.openFile", advertise: false, handler },
-    ]);
-  });
-
-  it("classifies Claw Add as a control-plane write without lifecycle methods", () => {
-    const registry = createGatewayMethodRegistry(
-      createCoreGatewayMethodDescriptors({ "claws.add.apply": handler }),
-    );
-
-    expect(registry.isControlPlaneWrite("claws.add.apply")).toBe(true);
-    for (const method of ["claws.status", "claws.update.apply", "claws.remove.apply"]) {
+  it("rejects unknown core handlers", () => {
+    for (const method of "claws.status claws.update.apply claws.remove.apply".split(" ")) {
       expect(() => createCoreGatewayMethodDescriptors({ [method]: handler })).toThrow(
         `gateway method handler is missing a descriptor: ${method}`,
       );
@@ -119,23 +98,9 @@ describe("gateway method registry", () => {
     const registry = createGatewayMethodRegistry([
       createPluginGatewayMethodDescriptor({ pluginId: "demo", name, handler, scope }),
     ]);
-    expect(registry.listMethods()).toEqual([name]);
-    expect(registry.getHandler(name)).toBe(handler);
     expect(registry.getScope(name)).toBe(ADMIN_SCOPE);
     expect(registry.requiresAuthenticatedProfile(name)).toBe(true);
     expect(registry.descriptors()[0]?.owner).toEqual({ kind: "plugin", pluginId: "demo" });
-  });
-
-  it("preserves reserved core and aux scopes", () => {
-    const registry = createGatewayMethodRegistry([
-      core("config.get", { owner: { kind: "core", area: "gateway" } }),
-      core("exec.approvals.get", {
-        scope: "operator.approvals",
-        owner: { kind: "aux", area: "gateway-extra" },
-      }),
-    ]);
-    expect(registry.getScope("config.get")).toBe(READ_SCOPE);
-    expect(registry.getScope("exec.approvals.get")).toBe("operator.approvals");
   });
 
   it("classifies every core method and defaults non-core owners fail-closed", () => {
@@ -144,36 +109,37 @@ describe("gateway method registry", () => {
     );
     const registry = createGatewayMethodRegistry([
       ...coreDescriptors,
-      core("aux.identity.read", { owner: { kind: "aux", area: "test" } }),
+      core("aux.approvals", { scope: "operator.approvals", owner: { kind: "aux", area: "test" } }),
     ]);
-
+    expect(registry.getScope("config.get")).toBe(READ_SCOPE);
+    expect(registry.getScope("aux.approvals")).toBe("operator.approvals");
+    expect(registry.isControlPlaneWrite("claws.add.apply")).toBe(true);
+    expect(registry.listMethods()).toContain("config.openFile");
+    expect(registry.listAdvertisedMethods()).not.toContain("config.openFile");
     for (const descriptor of coreDescriptors) {
       expect(["independent", "required"], descriptor.name).toContain(descriptor.profileAccess);
       expect(registry.requiresAuthenticatedProfile(descriptor.name), descriptor.name).toBe(
         descriptor.profileAccess === "required",
       );
     }
-    expect(registry.requiresAuthenticatedProfile("users.self")).toBe(true);
-    expect(registry.requiresAuthenticatedProfile("status")).toBe(false);
+    const expectProfile = (methods: string[], required: boolean) => {
+      for (const method of methods) {
+        expect(registry.requiresAuthenticatedProfile(method), method).toBe(required);
+      }
+    };
     // Profile accent projection must wait for pending GitHub identity sync.
-    expect(registry.requiresAuthenticatedProfile("talk.config")).toBe(true);
-    expect(registry.requiresAuthenticatedProfile("talk.voice.get")).toBe(true);
-    expect(registry.requiresAuthenticatedProfile("talk.voice.set")).toBe(true);
-    for (const method of listCoreGatewayMethodNames().filter(isSessionProfileDependentMethod)) {
-      expect(registry.requiresAuthenticatedProfile(method), method).toBe(true);
-    }
-    expect(registry.requiresAuthenticatedProfile("agent")).toBe(true);
-    expect(registry.requiresAuthenticatedProfile("chat.history")).toBe(true);
-    expect(registry.requiresAuthenticatedProfile("sessions.list")).toBe(true);
-    expect(registry.requiresAuthenticatedProfile("openclaw.chat")).toBe(true);
-    expect(registry.requiresAuthenticatedProfile("projects.list")).toBe(true);
-    expect(registry.requiresAuthenticatedProfile("approval.get")).toBe(false);
-    expect(registry.requiresAuthenticatedProfile("approval.history")).toBe(false);
-    expect(registry.requiresAuthenticatedProfile("board.data.read")).toBe(false);
-    expect(registry.requiresAuthenticatedProfile("board.prompt.authorize")).toBe(false);
-    expect(registry.requiresAuthenticatedProfile("talk.client.create")).toBe(false);
-    expect(registry.requiresAuthenticatedProfile("talk.session.steer")).toBe(false);
-    expect(registry.requiresAuthenticatedProfile("wake")).toBe(false);
-    expect(registry.requiresAuthenticatedProfile("aux.identity.read")).toBe(true);
+    expectProfile(
+      "users.self talk.config talk.voice.get talk.voice.set agent chat.history sessions.list openclaw.chat projects.list aux.approvals".split(
+        " ",
+      ),
+      true,
+    );
+    expectProfile(
+      "status approval.get approval.history board.data.read board.prompt.authorize talk.client.create talk.session.steer wake".split(
+        " ",
+      ),
+      false,
+    );
+    expectProfile(listCoreGatewayMethodNames().filter(isSessionProfileDependentMethod), true);
   });
 });

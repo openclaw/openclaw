@@ -516,7 +516,7 @@ export function* loadRuntimePluginCandidate(params: {
       ),
     };
     try {
-      if (!recovery && candidate.origin !== "bundled") {
+      if (!recovery) {
         // Host callers await acquisition after selection and policy checks. Synchronous
         // CLI consumers skip this step and use the same loader's inline acquisition.
         yield async () => {

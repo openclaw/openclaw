@@ -8,6 +8,25 @@ const sharedWorktrees = registerSessionOrganizationSharedEnglish.catalog.worktre
 // Preserve catalog order while shared labels load independently of menu and management copy.
 const enSessionOrganization = {
   sessionsView: {
+    personalGroups: "Personal groups",
+    personalGroupNew: "New personal group",
+    personalGroupEdit: "Edit personal group",
+    personalGroupName: "Group name",
+    personalGroupHint: "Only your layout changes. Sessions and shared groups stay unchanged.",
+    personalGroupEmpty: "Drag sessions here or choose Edit group to add them.",
+    personalGroupSessions: "Sessions",
+    personalGroupSearch: "Search available sessions",
+    personalGroupNoMatches: "No matching sessions in the loaded list.",
+    personalGroupOptions: "Options for personal group {group}",
+    personalGroupEditMenu: "Edit group",
+    personalGroupMoveUp: "Move up",
+    personalGroupMoveDown: "Move down",
+    personalGroupRemove: "Remove personal group",
+    personalGroupRemoved: "Personal group removed. Sessions are unchanged.",
+    personalGroupUnavailable: "Connection changed. Reopen the group to edit it.",
+    personalGroupChanged: "This group changed. Reopen it before saving your edits.",
+    personalGroupCapacity:
+      "Personal groups are full. Remove a group or some sessions before adding more.",
     pullRequestCount: en.sessionsView.pullRequestCount,
     advanced: "Advanced",
     searchGroups: "Search groups",
@@ -303,6 +322,17 @@ const enSessionOrganization = {
     archiveSessionNestedOffline:
       'Archive only "{session}"? Its directly nested sessions move to the top level. Reconnect to archive the complete subtree.',
     archiveAllSessions: "Archive all ({count})",
+    automationPauseTitle: "Pause automations?",
+    automationPauseArchiveOne: 'Archiving "{session}" pauses its automations.',
+    automationPauseArchiveOther:
+      "Automations are bound to {count} of these conversations. Archiving a conversation pauses its automations.",
+    automationPauseDeleteOne: 'Deleting "{session}" pauses its automations.',
+    automationPauseDeleteOther:
+      "Automations are bound to {count} of these conversations. Deleting a conversation pauses its automations.",
+    automationPauseUnlisted: "Automation names are unavailable right now.",
+    automationPauseMore: "+{count} more",
+    archiveAnyway: "Archive anyway",
+    deleteAnyway: "Delete anyway",
     moveToTopLevel: en.sessionsView.moveToTopLevel,
     archiveTreeRootRequired:
       "Archive a persistent conversation and its children, not a hidden worker run.",

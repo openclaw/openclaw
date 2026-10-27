@@ -79,6 +79,7 @@ import {
   inheritSessionCreateParentFields,
   prepareSessionCreateParent,
   resolveSessionCreateInheritance,
+  resolveSessionCreateRoot,
   resolveSessionCreateSpawnPolicy,
 } from "./session-create-inheritance.js";
 import {
@@ -371,19 +372,13 @@ async function createGatewaySessionInScope(
       return initializingSessionFailure();
     }
   }
-  const agentMainSessionKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId });
-  // Durable dashboard sessions parent to main for flow-up notices and sidebar threads.
-  // Incognito roots omit durable lineage so notices cannot cross the storage boundary.
-  const dashboardParentSessionKey =
-    !parentSessionKey &&
-    !params.authorizedPluginId &&
-    !incognito &&
-    params.fork !== true &&
-    (params.cfg.session?.dmScope ?? "main") === "main" &&
-    params.cfg.session?.scope !== "global" &&
-    targetSessionKey !== agentMainSessionKey
-      ? agentMainSessionKey
-      : undefined;
+  const { standalone: standaloneRoot, mainParentSessionKey: dashboardParentSessionKey } =
+    resolveSessionCreateRoot(params, {
+      parentSessionKey,
+      incognito,
+      targetSessionKey,
+      mainSessionKey: resolveAgentMainSessionKey({ cfg: params.cfg, agentId }),
+    });
 
   const authorityTargets = params.operatorAuthority
     ? [
@@ -900,14 +895,15 @@ async function createGatewaySessionInScope(
         };
         const explicitParentSessionKey =
           canonicalParentSessionKey ?? normalizeOptionalString(initializedEntry.parentSessionKey);
+        const newStandaloneRoot = createdNewEntry && standaloneRoot && !explicitParentSessionKey;
         const entry: InternalSessionEntry = {
           ...initializedEntry,
           ...inheritSessionCreateParentFields({
             parent: currentParentSessionEntry,
             overrides: params,
             newExplicitChild: createdNewEntry && Boolean(canonicalParentSessionKey),
-            newDashboardRoot:
-              createdNewEntry && Boolean(dashboardParentSessionKey) && !explicitParentSessionKey,
+            newDashboardRoot: newStandaloneRoot && Boolean(dashboardParentSessionKey),
+            newOperatorRoot: newStandaloneRoot && creation?.via === "operator",
             selectedModel: initializedEntry.modelOverride,
           }),
           ...buildSessionParentLink({

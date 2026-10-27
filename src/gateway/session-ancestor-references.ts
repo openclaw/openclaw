@@ -200,9 +200,10 @@ export class ConnectionSessionRows {
       let encoding: string | undefined;
       if (retain && previous && sameGeneration) {
         const patch = { ...header, base: previous.version, ...diff(previous.fields, fields, row) };
-        const fullBytes = fullRowByteLength(row, header);
         const patchJSON = JSON.stringify(patch);
-        if (Buffer.byteLength(patchJSON) < fullBytes) {
+        const patchBytes = Buffer.byteLength(patchJSON);
+        // Each serialized member needs at least `"":0,` (five bytes), plus the outer braces.
+        if (patchBytes < 5 * fields.fieldCount + 1 || patchBytes < fullRowByteLength(row, header)) {
           result = patch;
           encoding = patchJSON;
         }

@@ -45,7 +45,17 @@ export function isSameSubagentRun(
   expected: SubagentRunIdentity | undefined | null,
 ): boolean {
   return Boolean(
-    current && expected && getSubagentRunIdentity(current) === getSubagentRunIdentity(expected),
+    current &&
+    expected &&
+    current.runId === expected.runId &&
+    (current.taskRunId ?? current.runId) === (expected.taskRunId ?? expected.runId) &&
+    normalizeGeneration(current) === normalizeGeneration(expected) &&
+    asFiniteNumber(current.createdAt) === asFiniteNumber(expected.createdAt) &&
+    current.childSessionKey === expected.childSessionKey &&
+    current.childAgentId === expected.childAgentId &&
+    current.requesterSessionKey === expected.requesterSessionKey &&
+    current.requesterAgentId === expected.requesterAgentId &&
+    current.requesterStorePath === expected.requesterStorePath,
   );
 }
 

@@ -6,6 +6,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import * as sessions from "../../config/sessions/session-accessor.js";
+import * as transcript from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { prepareConsumedSessionSendSource } from "../../gateway/session-send-recovery-source.js";
@@ -214,6 +215,65 @@ it("leaves authenticated consumed inputs to their private requester recovery own
       expect(await sessions.loadTranscriptEvents(target)).toEqual(originalTranscript);
     }
   }));
+
+it.each(["peer", "requester-settle", "parent-notice-retry"] as const)(
+  "keeps a denied %s child continuation resumable and records the action for its parent",
+  (kind) =>
+    withPeerState(async ({ endpoint, seed, restart, recover }) => {
+      const { source, target } = await seed(
+        kind === "requester-settle"
+          ? "announce:requester-settle:main:child:missing-cohort"
+          : "denied-child-input",
+        {
+          target: endpoint("subagent:child"),
+        },
+      );
+      await sessions.updateSessionEntry(target, () => ({
+        spawnedBy: source.sessionKey,
+        spawnedBySessionId: source.sessionId,
+        parentSessionLifecycleRevision: source.lifecycleRevision,
+      }));
+      await restart();
+      await sessions.updateSessionEntry(source, () => ({ communication: { send: "never" } }));
+      const runtime = idleRuntime();
+      if (kind === "parent-notice-retry") {
+        const parentBefore = await sessions.loadTranscriptEvents(source);
+        const append = transcript.appendAssistantMessageToSessionTranscript;
+        const failedWrite = vi
+          .spyOn(transcript, "appendAssistantMessageToSessionTranscript")
+          .mockImplementation(async (params) => {
+            if (params.sessionKey === source.sessionKey) {
+              throw new Error("Synthetic parent notice write failed");
+            }
+            return await append(params);
+          });
+        try {
+          expect(await recover(runtime)).toEqual({ started: 0, settled: 0, failed: 1, skipped: 0 });
+          expect(sessions.loadSessionEntry(target)).toMatchObject({ abortedLastRun: true });
+          expect(sessions.loadSessionEntry(target)?.mainRestartRecovery?.tombstone).toBeUndefined();
+          expect(await sessions.loadTranscriptEvents(source)).toEqual(parentBefore);
+        } finally {
+          failedWrite.mockRestore();
+        }
+      }
+      expect(await recover(runtime)).toEqual({
+        started: 0,
+        settled: kind === "requester-settle" ? 1 : 0,
+        failed: 0,
+        skipped: kind === "requester-settle" ? 0 : 1,
+      });
+      expect(runtime.dispatchAgent).not.toHaveBeenCalled();
+      expect(sessions.loadSessionEntry(target)?.mainRestartRecovery?.tombstone).toBeDefined();
+      const parentTranscript = await sessions.loadTranscriptEvents(source);
+      expect(JSON.stringify(parentTranscript.at(-1))).toContain("use Resume");
+      expect(JSON.stringify(parentTranscript.at(-1))).toContain(target.sessionKey);
+      await restart();
+      expect(await recover(runtime)).toEqual({ started: 0, settled: 0, failed: 0, skipped: 0 });
+      expect(runtime.dispatchAgent).not.toHaveBeenCalled();
+      expect(sessions.loadSessionEntry(target)?.mainRestartRecovery?.tombstone).toBeDefined();
+      expect(await sessions.loadTranscriptEvents(source)).toEqual(parentTranscript);
+    }),
+);
 
 it("recovers a consumed peer input through two process losses without replaying the input", () =>
   withPeerState(async ({ cfg, stateDir, seed, restart, recover }) => {

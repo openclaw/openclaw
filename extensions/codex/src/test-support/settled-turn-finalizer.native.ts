@@ -29,7 +29,15 @@ const liveProvider = LIVE
 
 export type NativeFixture = Awaited<ReturnType<typeof createNativeFixture>>;
 export type Cleanup = () => Promise<void>;
-type NativePhase = "probe" | "action" | "side" | "hold" | "overload" | "summary" | "health";
+type NativePhase =
+  | "probe"
+  | "action"
+  | "side"
+  | "hold"
+  | "overload"
+  | "summary"
+  | "health"
+  | "patch";
 
 function event(type: string, fields: JsonObject) {
   return `event: ${type}\ndata: ${JSON.stringify({ type, ...fields })}\n\n`;
@@ -136,7 +144,14 @@ async function createNativeFixture(
       }
       let item: JsonObject | undefined;
       if (!live && phase !== "hold" && phase !== "overload") {
-        if (actionRequests === 1 && actionPhase) {
+        if (phase === "patch" && requests.length === 1) {
+          item = {
+            type: "custom_tool_call",
+            call_id: "denied-patch",
+            name: "apply_patch",
+            input: `*** Begin Patch\n*** Update File: ${marker}\n@@\n-completed-once\n+repeated-action\n*** End Patch`,
+          };
+        } else if (actionRequests === 1 && actionPhase) {
           item = {
             type: "function_call",
             call_id: "completed-action",

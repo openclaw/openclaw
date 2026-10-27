@@ -29,7 +29,12 @@ import { ChatModelSearchContext, type ChatModelSearchCatalog } from "./chat-mode
 import { createModelPickerWindow } from "./chat-model-picker-window.tsx";
 import type { ChatModelPickerParams } from "./chat-model-picker.tsx";
 
-function prepareChatModelPickerPanel(params: ChatModelPickerParams) {
+function prepareChatModelPickerPanel(
+  params: Pick<
+    ChatModelPickerParams,
+    "modelOptions" | "selectedModelValue" | "selectedAgentRuntime" | "targetGroups"
+  >,
+) {
   const defaultModelOption = params.modelOptions.find((option) => option.isDefault);
   const activeModelOption = params.modelOptions.find((option) =>
     isModelPickerOptionSelected(option, params.selectedModelValue, params.selectedAgentRuntime),
@@ -121,24 +126,52 @@ export function ChatModelPickerPanel(panel: {
   searchRef: (element: HTMLInputElement) => void;
 }) {
   const search = useContext(ChatModelSearchContext);
-  const state = createMemo(() => prepareChatModelPickerPanel(panel.params));
+  // Parent controls also publish effort and copy changes; retain unchanged model facts.
+  const modelOptions = createMemo(() => panel.params.modelOptions);
+  const modelTargetGroups = createMemo(() => panel.params.targetGroups);
+  const selectedModelValue = createMemo(() => panel.params.selectedModelValue);
+  const selectedAgentRuntime = createMemo(() => panel.params.selectedAgentRuntime);
+  const disabled = createMemo(() => panel.params.disabled);
+  const sessionModelPinned = createMemo(() => panel.params.sessionModelPinned);
+  const onModelSetup = createMemo(() => panel.params.onModelSetup);
+  const modelSelectionLocked = createMemo(() => panel.params.modelSelectionLocked);
+  const state = createMemo(() =>
+    prepareChatModelPickerPanel({
+      modelOptions: modelOptions(),
+      targetGroups: modelTargetGroups(),
+      selectedModelValue: selectedModelValue(),
+      selectedAgentRuntime: selectedAgentRuntime(),
+    }),
+  );
   const accounts = createMemo(() =>
     panel.params.accountSection?.viewProps(
       state().orderedOptions.length + state().targetOptionCount,
     ),
   );
+  // Search uses these four labels; other lazy English catalogs do not change its rows.
+  const searchCopy = createMemo(
+    () =>
+      [
+        t("chat.modelControls.default"),
+        t("chat.modelControls.routes.claudeCli.label"),
+        t("chat.modelControls.routes.anthropicApi.label"),
+        t("chat.modelControls.routes.anthropicConfigured.label"),
+      ] as const,
+    { equals: (before, after) => before.every((value, index) => value === after[index]) },
+  );
   const catalog = createMemo<ChatModelSearchCatalog>(() => {
+    const [defaultLabel] = searchCopy();
     const current = state();
-    const unlocked = !panel.params.modelSelectionLocked;
+    const unlocked = !modelSelectionLocked();
     const providerGroups = unlocked ? current.orderedProviderGroups : [];
     const targetGroups = unlocked ? current.targetGroups : [];
     const account = accounts();
     const modelSearchProps = {
-      disabled: panel.params.disabled,
-      selectedModelValue: panel.params.selectedModelValue,
-      selectedAgentRuntime: panel.params.selectedAgentRuntime,
-      sessionModelPinned: panel.params.sessionModelPinned,
-      onModelSetup: panel.params.onModelSetup,
+      disabled: disabled(),
+      selectedModelValue: selectedModelValue(),
+      selectedAgentRuntime: selectedAgentRuntime(),
+      sessionModelPinned: sessionModelPinned(),
+      onModelSetup: onModelSetup(),
     };
     return {
       activeProvider: current.activeProvider,
@@ -155,14 +188,14 @@ export function ChatModelPickerPanel(panel: {
         ...providerGroups.flatMap(([provider, group]) =>
           group.lead
             .map((entry) =>
-              Object.assign(modelOptionSearchRow({ ...modelSearchProps, entry }), {
+              Object.assign(modelOptionSearchRow({ ...modelSearchProps, entry }, defaultLabel), {
                 provider,
                 list: provider,
               }),
             )
             .concat(
               group.more.map((entry) =>
-                Object.assign(modelOptionSearchRow({ ...modelSearchProps, entry }), {
+                Object.assign(modelOptionSearchRow({ ...modelSearchProps, entry }, defaultLabel), {
                   provider,
                   more: true,
                   list: `${provider}:more`,
@@ -179,7 +212,7 @@ export function ChatModelPickerPanel(panel: {
             reference: entry.value,
             selected: false,
             hasShortcut: true,
-            disabled: panel.params.disabled,
+            disabled: disabled(),
           })),
         ),
         ...(account?.options.map((entry) => ({
@@ -257,12 +290,8 @@ export function ChatModelPickerPanel(panel: {
   const selectModel = (entry: ModelPickerOption, event: MouseEvent) => {
     event.stopPropagation();
     // Resetting a pin does not require the inherited model to be available.
-    const resetsPin = entry.isDefault && panel.params.sessionModelPinned;
-    if (
-      panel.params.disabled ||
-      panel.params.modelSelectionLocked ||
-      (entry.disabled && !resetsPin)
-    ) {
+    const resetsPin = entry.isDefault && sessionModelPinned();
+    if (disabled() || modelSelectionLocked() || (entry.disabled && !resetsPin)) {
       event.preventDefault();
       return;
     }
@@ -276,7 +305,7 @@ export function ChatModelPickerPanel(panel: {
   };
   const selectTarget = (groupId: string, value: string, event: MouseEvent) => {
     event.stopPropagation();
-    if (panel.params.disabled || panel.params.modelSelectionLocked) {
+    if (disabled() || modelSelectionLocked()) {
       event.preventDefault();
       return;
     }
@@ -302,7 +331,7 @@ export function ChatModelPickerPanel(panel: {
               <>
                 {renderRow(key(), () => (
                   <ChatModelPickerTargetOption
-                    disabled={panel.params.disabled}
+                    disabled={disabled()}
                     entry={entry()}
                     groupId={props.group.id}
                     groupLabel={props.group.label}
@@ -332,7 +361,7 @@ export function ChatModelPickerPanel(panel: {
             retryTarget={
               panel.params.onTargetRetry
                 ? {
-                    disabled: panel.params.disabled,
+                    disabled: disabled(),
                     groupId: props.group.id,
                     onRetry: panel.params.onTargetRetry!,
                   }
@@ -352,14 +381,14 @@ export function ChatModelPickerPanel(panel: {
       <>
         {renderRow(key(), () => (
           <ChatModelPickerOption
-            disabled={panel.params.disabled}
+            disabled={disabled()}
             entry={props.entry}
             index={state().optionIndex.get(modelPickerOptionKey(props.entry)) ?? 0}
-            selectedModelValue={panel.params.selectedModelValue}
-            selectedAgentRuntime={panel.params.selectedAgentRuntime}
-            sessionModelPinned={panel.params.sessionModelPinned}
+            selectedModelValue={selectedModelValue()}
+            selectedAgentRuntime={selectedAgentRuntime()}
+            sessionModelPinned={sessionModelPinned()}
             onSelect={selectModel}
-            onModelSetup={panel.params.onModelSetup}
+            onModelSetup={onModelSetup()}
           />
         ))}
       </>
@@ -419,7 +448,7 @@ export function ChatModelPickerPanel(panel: {
               ].join(" ")}
               aria-label={`${groupLabel()} (${options().length})`}
               aria-description={routeDetail()}
-              disabled={panel.params.disabled}
+              disabled={disabled()}
               onClick={(event) => {
                 event.stopPropagation();
                 searchView?.toggleProvider(props.provider);
@@ -483,7 +512,7 @@ export function ChatModelPickerPanel(panel: {
                   searchView?.moreOpen(props.provider) ||
                   !searchView?.providerOpen(props.provider)
                 }
-                disabled={panel.params.disabled}
+                disabled={disabled()}
                 onClick={(event) => searchView?.expandMore(props.provider, event)}
               >
                 <span class="chat-controls__model-option-provider" aria-hidden="true" />
@@ -511,7 +540,7 @@ export function ChatModelPickerPanel(panel: {
       aria-label={t("chat.selectors.model")}
       data-chat-model-filtering={searchView?.filtering() ? "" : undefined}
     >
-      {panel.params.modelSelectionLocked ? (
+      {modelSelectionLocked() ? (
         <div class="chat-controls__locked-model" aria-label={t("chat.selectors.modelLockedLabel")}>
           <span class="chat-controls__inline-select-section-label">
             {t("chat.selectors.modelSection")}
@@ -541,14 +570,14 @@ export function ChatModelPickerPanel(panel: {
                 spellcheck="false"
                 placeholder={t("chat.modelControls.searchModels")}
                 aria-label={t("chat.modelControls.searchModels")}
-                disabled={panel.params.disabled}
+                disabled={disabled()}
                 onInput={(event: InputEvent) =>
                   // SAFETY: This input handler belongs to the model search input.
                   updateModelSearch(event.currentTarget as HTMLInputElement)
                 }
                 onKeyDown={handleModelSearchKeydown}
               />
-              {panel.params.modelOptions.length > 0 ? (
+              {modelOptions().length > 0 ? (
                 <ChatModelCatalogRefresh state={panel.params.modelCatalogState} />
               ) : undefined}
             </div>
@@ -556,11 +585,11 @@ export function ChatModelPickerPanel(panel: {
           {renderCatalogStatus()(() => (
             <ChatModelCatalogState
               state={panel.params.modelCatalogState}
-              hasOptions={panel.params.modelOptions.length > 0}
+              hasOptions={modelOptions().length > 0}
               hasSelectableOptions={state().hasSelectableModelOptions}
-              onModelSetup={panel.params.onModelSetup}
+              onModelSetup={onModelSetup()}
               emptyLabel={
-                panel.params.modelOptions.some(
+                modelOptions().some(
                   (option) =>
                     option.unavailableReason === "missing-auth" &&
                     resolveModelRuntimeRoute(option.provider, option.agentRuntimeId) ===
@@ -640,21 +669,9 @@ export function ChatModelPickerPanel(panel: {
           ) : undefined}
         </>
       )}
-      {panel.params.modelSelectionLocked && panel.params.accountSection ? (
+      {modelSelectionLocked() && panel.params.accountSection ? (
         <div class="chat-controls__model-options">
           <ChatModelAccountSectionView {...accounts()!} startIndex={0} />
-        </div>
-      ) : undefined}
-      {panel.params.accessProgramRecovery ? (
-        <div class="chat-controls__model-catalog-state">
-          <button
-            class="chat-controls__model-catalog-action"
-            type="button"
-            disabled={panel.params.accessProgramRecovery.disabled}
-            onClick={() => panel.params.accessProgramRecovery?.onClear(panel.params.sessionKey)}
-          >
-            {t("chat.modelControls.clearSavedAccess")}
-          </button>
         </div>
       ) : undefined}
       {panel.params.modelCatalogState?.modelSelectionPolicy?.restricted ? (

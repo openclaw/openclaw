@@ -27,6 +27,7 @@ vi.mock(import("../../config/io.js"), async (original) => ({
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(readSourceConfigBestEffort).mockResolvedValue({});
+  vi.mocked(inspectSessionSqliteRecovery).mockReturnValue(cleanupReport());
   vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
 });
@@ -43,9 +44,12 @@ function cleanupReport(status: "preview" | "complete" = "preview") {
   );
 }
 
+function expectJson(result: unknown) {
+  expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(result, 2);
+}
+
 it("streams progress before one final JSON result", async () => {
   const report = cleanupReport("complete");
-  vi.mocked(inspectSessionSqliteRecovery).mockReturnValue({ ...report, status: "preview" });
   vi.mocked(retireSessionSqliteRecovery).mockImplementation(async ({ onProgress }) => {
     for (const phase of ["verifying", "claiming", "removing-capture"] as const) {
       onProgress?.({ phase, path: "/fixture/original", index: 1, total: 2, bytes: 42 });
@@ -62,22 +66,18 @@ it("streams progress before one final JSON result", async () => {
     "Retiring original 1/2: /fixture/original (42 bytes)\n",
     "Removing capture 1/2: /fixture/original (42 bytes)\n",
   ]);
-  expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith({ ...report, dryRun: false }, 2);
+  expectJson({ ...report, dryRun: false });
 });
 
 it.each(["refused", "blocked"] as const)("reports %s once", async (status) => {
   const report = cleanupReport();
-  vi.mocked(inspectSessionSqliteRecovery).mockReturnValue(report);
   vi.mocked(retireSessionSqliteRecovery).mockResolvedValue({ ...report, status: "blocked" });
 
   await expect(updateCleanupCommand({ json: true, yes: status === "blocked" })).rejects.toEqual(
     new ExitError(1),
   );
 
-  expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(
-    { ...report, status, dryRun: false },
-    2,
-  );
+  expectJson({ ...report, status, dryRun: false });
   expect(retireSessionSqliteRecovery).toHaveBeenCalledTimes(status === "blocked" ? 1 : 0);
   expect(vi.mocked(defaultRuntime.error).mock.calls.flat().join("\n")).not.toContain("exit 1");
 });
@@ -98,10 +98,7 @@ it.each([
   vi.mocked(readSourceConfigBestEffort).mockRejectedValueOnce(error);
   vi.stubEnv("OPENCLAW_PROFILE", "work");
   await expect(updateCleanupCommand({ json: true, yes: true })).rejects.toEqual(new ExitError(1));
-  expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(
-    { ok: false, status: "blocked", error: { type: "cli_error", message } },
-    2,
-  );
+  expectJson({ ok: false, status: "blocked", error: { type: "cli_error", message } });
   expect(retireSessionSqliteRecovery).not.toHaveBeenCalled();
 });
 

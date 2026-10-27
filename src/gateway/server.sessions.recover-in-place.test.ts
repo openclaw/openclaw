@@ -2,7 +2,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import type { SessionsRecoverResult } from "../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
-import { settleFailedWorkerRestartRecovery } from "../agents/main-session-recovery/main-session-restart-recovery-failure.js";
+import {
+  finishDelegatedRestartRecovery,
+  settleFailedWorkerRestartRecovery,
+} from "../agents/main-session-recovery/main-session-restart-recovery-failure.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
 import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
@@ -408,14 +411,14 @@ test.for(["none", "ownerless", "intent", "deliveries"] as const)(
   },
 );
 
-test.for(["builtin", "native", "pending", "pending-child"] as const)(
+test.for(["builtin", "native", "pending", "pending-child", "denied-child"] as const)(
   "operator resume keeps session identity and admits one durable continuation (%s)",
   async (scenario, { signal }) => {
     const native = scenario === "native";
     const current = await fixture(`${scenario}-resume`, native ? "codex" : undefined, true);
-    if (scenario === "pending" || scenario === "pending-child") {
+    if (scenario === "pending" || scenario === "pending-child" || scenario === "denied-child") {
       await patchSessionEntryCore(current.scope, () => ({
-        ...(scenario === "pending-child"
+        ...(scenario === "pending-child" || scenario === "denied-child"
           ? {
               spawnDepth: 1,
               spawnedBy: "agent:requester:discord:group:synthetic",
@@ -430,6 +433,20 @@ test.for(["builtin", "native", "pending", "pending-child"] as const)(
           chargedAttempts: 0,
         },
       }));
+    }
+    if (scenario === "denied-child") {
+      await finishDelegatedRestartRecovery({
+        ...current.scope,
+        entry: expectDefined(current.entry(), "interrupted child recovery source"),
+        observation: {
+          sessionId: current.sessionId,
+          cycleId: current.recoveryCycleId,
+          revision: 4,
+        },
+        gatewayRuntime: createMockGatewayRecoveryRuntime(),
+        assertCurrent() {},
+        reason: "The original operator authority is unavailable.",
+      });
     }
     const before = await current.transcript();
     const dispatched = createDeferredCore();

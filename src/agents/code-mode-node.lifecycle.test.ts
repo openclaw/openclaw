@@ -316,8 +316,8 @@ it("reuses idle workers and expires them without retaining completed caller cont
   try {
     await caller.run("completed-turn", () => Promise.all([run(), run()]));
     const count = fixture.pools.length;
-    const previous = fixture.pools.at(-1)!;
-    const reused = fixture.pools.at(-2)!;
+    const previous = fixture.pools.at(-2)!;
+    const reused = fixture.pools.at(-1)!;
     for (const pool of [previous, reused]) {
       pool.close.mockImplementation(async () => {
         retiredContexts.push(caller.getStore());
@@ -337,6 +337,20 @@ it("reuses idle workers and expires them without retaining completed caller cont
   } finally {
     caller.disable();
   }
+});
+
+it("lets a completed burst retire while serial work keeps one worker warm", async () => {
+  vi.useFakeTimers();
+  const start = fixture.pools.length;
+  await Promise.all(Array.from({ length: 8 }, run));
+  const burst = fixture.pools.slice(start);
+  expect(burst).toHaveLength(8);
+  for (let turn = 0; turn < 20; turn++) {
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(await run()).toMatchObject({ status: "completed" });
+  }
+  expect(fixture.pools).toHaveLength(start + 8);
+  expect(burst.filter((pool) => !pool.isClosed)).toHaveLength(1);
 });
 
 it.each([

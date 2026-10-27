@@ -113,13 +113,15 @@ it("uses fresh prepared caller, alias, role, and membership facts without queryi
       [new Set([owner.id]), undefined, true, "member", true],
       [new Set([owner.id]), "write", false, "member", true],
       [new Set([owner.id]), "none", true, "viewer", false],
+      [new Set([owner.id]), "invited", false, "viewer", false],
+      [new Set([owner.id]), "invited", true, "member", true],
     ] as const) {
       const sharing = prepareSessionSharing(
         { cfg, client },
         { aliases, sessionCap, isMember: () => member },
       );
       expect(sharing.roleForTarget(target)).toBe(expectedRole);
-      expect(sharing.entryFilter?.(target.canonicalKey, target.entry)).toBe(visible);
+      expect(sharing.canReadTarget(target)).toBe(visible);
       expect(sharing.authorizeTarget(target) === null).toBe(visible);
     }
     client.authenticatedUserProfile!.profileId = oldOwner.id;

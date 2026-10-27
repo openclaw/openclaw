@@ -37,6 +37,9 @@ type ScheduledDecisionField =
   | "sandbox"
   | "parentState";
 
+/** Decision fields plus the bound inference runtime, which the replay supplies separately. */
+type ScheduledLabeledField = ScheduledDecisionField | "inference";
+
 /**
  * The owner-only surface a run's tools get: `owner` (no sender bit), `non-owner`
  * (`senderIsOwner: false`), or the in-session turn's own command-owner check.
@@ -221,13 +224,39 @@ function labelField(
   return INTENDED_GAINS.has(field) ? "gain-intended" : "gain-unexpected";
 }
 
+/**
+ * The runtime the existing run picks for a bound job from its copied cron session entry,
+ * read from the rows and config the run reads.
+ */
+export type ScheduledInferenceRuntimeFacts = Readonly<{ legacy: string }>;
+
+// A recorded runtime replaces the legacy pick; a binding without one keeps the legacy pick.
+function labelInference(
+  result: Extract<ScheduledExecutionContextResult, { status: "ready" }>,
+  runtimes: ScheduledInferenceRuntimeFacts,
+): Readonly<{ label: ScheduledDivergenceLabel; legacy: string; context: string }> | undefined {
+  const { inference } = result.facts;
+  if (inference.kind !== "bound") {
+    return undefined;
+  }
+  const recorded = inference.binding.runtime;
+  if (recorded) {
+    return {
+      label: recorded === runtimes.legacy ? "equal" : "retarget",
+      legacy: runtimes.legacy,
+      context: recorded,
+    };
+  }
+  return { label: "equal", legacy: runtimes.legacy, context: runtimes.legacy };
+}
+
 export type ScheduledDivergence = Readonly<{
   status: "ready" | "pause" | "fail";
-  labels: Readonly<Partial<Record<ScheduledDecisionField, ScheduledDivergenceLabel>>>;
+  labels: Readonly<Partial<Record<ScheduledLabeledField, ScheduledDivergenceLabel>>>;
   /** Only fields that differ, with both values. */
   changes: ReadonlyArray<
     Readonly<{
-      field: ScheduledDecisionField;
+      field: ScheduledLabeledField;
       legacy: unknown;
       context: unknown;
       label: ScheduledDivergenceLabel;
@@ -255,6 +284,7 @@ export function compareScheduledDecisions(
   job: ProjectionJob,
   facts: ScheduledAdmissionFacts,
   result: ScheduledExecutionContextResult,
+  inferenceRuntimes?: ScheduledInferenceRuntimeFacts,
 ): ScheduledDivergence {
   const legacy = projectLegacyDecisions(job, facts);
   const context = projectContextDecisions(result, legacy);
@@ -270,13 +300,23 @@ export function compareScheduledDecisions(
           : {}),
     };
   }
-  const labels: Partial<Record<ScheduledDecisionField, ScheduledDivergenceLabel>> = {};
+  const labels: Partial<Record<ScheduledLabeledField, ScheduledDivergenceLabel>> = {};
   const changes: Array<ScheduledDivergence["changes"][number]> = [];
   for (const field of FIELDS) {
     const label = labelField(field, legacy, context);
     labels[field] = label;
     if (label !== "equal") {
       changes.push({ field, legacy: legacy[field], context: context[field], label });
+    }
+  }
+  const inference =
+    result.status === "ready" && inferenceRuntimes
+      ? labelInference(result, inferenceRuntimes)
+      : undefined;
+  if (inference) {
+    labels.inference = inference.label;
+    if (inference.label !== "equal") {
+      changes.push({ field: "inference", ...inference });
     }
   }
   return { status: "ready", labels, changes };

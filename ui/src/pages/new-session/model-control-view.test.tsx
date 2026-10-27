@@ -1,8 +1,13 @@
 import { createSignal, flush, untrack } from "solid-js";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ModelCatalogResult } from "../../api/types.ts";
+import { i18n, t } from "../../i18n/index.ts";
+import { mergeCatalog } from "../../i18n/lib/merge-catalog.ts";
+import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
+import { en } from "../../i18n/locales/en.ts";
 import { invalidateModelCatalogCache } from "../../lib/model-catalog-cache.ts";
+import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { installModelPickerLayout } from "../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -86,6 +91,9 @@ it("keeps one mounted model view live without depending on draft revisions", asy
     render.mockClear();
     const labels = vi.spyOn(String.prototype, "toLocaleLowerCase");
     try {
+      // A lazy view can register unrelated copy while the model picker is retained.
+      registerEnglishCatalog(() => undefined);
+      flush();
       const result = sessions.state.result!;
       result.sessions.push({ key: "agent:main:unrelated", kind: "direct", label: "Background" });
       first.publish("sessions");
@@ -149,6 +157,102 @@ it("keeps one mounted model view live without depending on draft revisions", asy
   expect(Object.values(second.ownerListeners).every((listeners) => listeners.size === 0)).toBe(
     true,
   );
+});
+
+it("refreshes retained runtime labels, descriptions, and search without new props", async () => {
+  const restoreI18n = captureI18nStateForTesting();
+  onTestFinished(restoreI18n);
+  await i18n.setLocale("en");
+  installModelPickerLayout();
+  const models = [
+    {
+      id: "model-0",
+      name: "Model 0",
+      provider: "anthropic",
+      contextTokens: 1_000,
+      contextWindow: 2_000,
+    },
+  ];
+  const { context } = contextWith(models);
+  const agent = { id: "main", model: { primary: "anthropic/model-0" } };
+  const control = new NewSessionModelControl(() => undefined);
+  control.load(context, "main", true, { agent });
+  const options = { agent, agentId: "main", context, sending: false };
+  await waitForFast(() => expect(control.renderProps(options).modelCatalog).toHaveLength(1));
+  const view = mountSolid(() => <NewSessionModelControlView control={control} options={options} />);
+  const option = () =>
+    view.container.querySelector<HTMLButtonElement>('[data-chat-model-option="anthropic/model-0"]');
+  const labelKey = "chat.modelControls.routes.anthropicConfigured.label";
+  const detailKey = "chat.modelControls.routes.anthropicConfigured.detail";
+  const contextKey = "chat.modelControls.contextActiveAndMax";
+  const original = { label: t(labelKey), detail: t(detailKey), context: t(contextKey) };
+  const installRoute = (label: string, detail: string, contextLabel = original.context) =>
+    registerEnglishCatalog(() =>
+      mergeCatalog(en, {
+        chat: {
+          modelControls: {
+            contextActiveAndMax: contextLabel,
+            routes: { anthropicConfigured: { label, detail } },
+          },
+        },
+      }),
+    );
+  try {
+    const picker = view.container.querySelector<HTMLDetailsElement>(
+      ".chat-controls__model-picker",
+    )!;
+    await waitForSolid(() => expect(picker.hasAttribute("data-chat-native-picker")).toBe(true));
+    picker.querySelector<HTMLElement>("[data-chat-model-select]")!.click();
+    await waitForSolid(() => expect(option()).not.toBeNull(), { timeout: 5_000 });
+    const search = await focusModelSearch(view.container);
+    const mountedOption = option();
+    const rendered = vi.spyOn(control, "renderProps");
+    try {
+      // Keep the locale and every other model label unchanged: only this route's copy changes.
+      installRoute("Synthetic runtime label", original.detail);
+      await waitForSolid(() =>
+        expect(option()?.getAttribute("aria-label")).toContain("Synthetic runtime label"),
+      );
+      search.value = "Synthetic runtime label";
+      search.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      await waitForSolid(() => expect(option()?.hidden).toBe(false));
+      expect(option()).toBe(mountedOption);
+      search.value = "";
+      search.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      installRoute("Synthetic runtime label", "Synthetic runtime detail");
+      await waitForSolid(() =>
+        expect(option()?.closest("openclaw-tooltip")?.content).toBe("Synthetic runtime detail"),
+      );
+      installRoute(
+        "Synthetic runtime label",
+        "Synthetic runtime detail",
+        "{active} test active / {maximum} test max",
+      );
+      await waitForSolid(() =>
+        expect(option()?.textContent).toContain("1k test active / 2k test max"),
+      );
+      installRoute(original.label, original.detail);
+      await i18n.setLocale("de");
+      const translatedLabel = t(labelKey);
+      expect(translatedLabel).not.toBe(original.label);
+      await waitForSolid(() => {
+        expect(option()?.getAttribute("aria-label")).toContain(translatedLabel);
+        expect(option()?.closest("openclaw-tooltip")?.content).toBe(t(detailKey));
+        expect(option()?.textContent).toContain(t(contextKey, { active: "1k", maximum: "2k" }));
+      });
+      search.value = translatedLabel;
+      search.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      await waitForSolid(() => expect(option()?.hidden).toBe(false));
+      expect(view.container.querySelector("[data-chat-model-search]")).toBe(search);
+      expect(rendered).not.toHaveBeenCalled();
+    } finally {
+      rendered.mockRestore();
+    }
+  } finally {
+    view.unmount();
+    control.reset();
+    installRoute(original.label, original.detail);
+  }
 });
 
 it("keeps CLI targets and a typed search live while initial model metadata is pending", async () => {

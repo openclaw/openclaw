@@ -160,7 +160,10 @@ Announce context is normalized to a stable internal event block:
 
 The result is the child's complete visible final answer for the completed run,
 including ACP-backed runs and CLI fallback transcripts. A later turn in the same
-child session does not replace that run's answer. Once cleanup and requester obligations
+child session does not replace that run's answer. Native answers preserve the same
+text-block boundaries as terminal results. Already displayed replies retain their
+recorded display text, and media references remain available for parent review.
+Once cleanup and requester obligations
 have settled, the in-memory registry keeps a short task preview and lifecycle
 metadata. Full task and result text remain in SQLite and are loaded for selected
 reads or later mutations. Pending delivery, suspended delivery, cancellation, and

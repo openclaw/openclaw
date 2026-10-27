@@ -28,9 +28,9 @@ function CopyAction(props: { value: string; label: string; class: string }) {
   );
 }
 
-function ProviderBadge(props: { providerId?: string; providerLabel?: string; waiting: boolean }) {
+function ProviderBadge(props: { brandId?: string; providerLabel?: string; waiting: boolean }) {
   const iconProvider = () =>
-    props.providerId && resolveProviderIconName(props.providerId) ? props.providerId : undefined;
+    props.brandId && resolveProviderIconName(props.brandId) ? props.brandId : undefined;
   return (
     <div class={["wizard-sign-in__badge", { "wizard-sign-in__badge--waiting": props.waiting }]}>
       <Show when={props.waiting}>
@@ -40,7 +40,7 @@ function ProviderBadge(props: { providerId?: string; providerLabel?: string; wai
         when={iconProvider()}
         fallback={
           <ProviderFallbackIcon
-            label={props.providerLabel || props.providerId || "?"}
+            label={props.providerLabel || props.brandId || "?"}
             class="wizard-sign-in__icon"
           />
         }
@@ -59,7 +59,7 @@ export function ModelSetupSignIn(props: {
   step: WizardStep;
   /** True when a browser callback or Gateway poll settles this step without another answer. */
   waiting: boolean;
-  providerId?: string;
+  brandId?: string;
   providerLabel?: string;
   onAutofocusRef?: (element: HTMLElement) => void;
 }) {
@@ -115,7 +115,7 @@ export function ModelSetupSignIn(props: {
   return (
     <div class="wizard-sign-in">
       <ProviderBadge
-        providerId={props.providerId}
+        brandId={props.brandId}
         providerLabel={props.providerLabel}
         waiting={props.waiting && !expired()}
       />

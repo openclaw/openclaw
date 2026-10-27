@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import type { SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
 import {
   hasSqliteWorkerOutcomeUnknown,
@@ -290,6 +291,7 @@ export function createSqliteSessionActorExecutor(
       outcome = await params.transport.run(
         (scope) => {
           running = (async (): Promise<Outcome> => {
+            using phase = observeDiagnosticsTimelinePhases("session.actor.command.commit");
             if (fenced) {
               return unknown(
                 new Error("Session actor requires reconciliation before another command", {
@@ -356,6 +358,7 @@ export function createSqliteSessionActorExecutor(
                   committed = { ...committed, failure: reply.value.failure };
                 }
                 result = committed;
+                phase.mark("session.actor.command.publication");
                 try {
                   conversation?.settle(committed.receipt.conversationPublication);
                   const metadata = committed.receipt.entryMetadata;

@@ -119,7 +119,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     this.sidebarSnapshot = model;
     this.navigationView = model.navigationView;
     this.sessionOrganizer.collapsedSessionSections = new Set(model.collapsedSections);
-    const rows = [...model.sessions, ...model.sections.flatMap((section) => section.rows)];
+    const rows = [...model.pinnedSessions, ...model.sections.flatMap((section) => section.rows)];
     for (const row of rows) {
       rows.push(...row.children);
     }
@@ -133,7 +133,13 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   releaseSidebarSnapshot(): void {
     const snapshot = this.sidebarSnapshot;
     if (snapshot) {
-      this.pinnedSessions.seed(snapshot.pinnedSessions);
+      const rows = this.reconciledSidebarZone().sessionRows;
+      this.pinnedSessions.seed(
+        snapshot.pinnedSessions.flatMap(({ key }) => {
+          const row = rows.get(key);
+          return row ? [row] : [];
+        }),
+      );
       // Newer pagination choices override the saved view, independently per mode.
       const limits = snapshot.sections.map(({ id, visibleLimit }) => [id, visibleLimit] as const);
       this.sessionData.visibleSessionLimits = new Map([
@@ -495,9 +501,8 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       );
       const toolbar = renderSessionListToolbar(this);
       const menus = this.sidebarMenus.render(this);
-      const statusVisible = () =>
-        this.gatewayStatus?.kind &&
-        (this.gatewayStatus.kind !== "connected" || this.connectionRecovery);
+      // Connection state changes in a fixed slot; reconnects must not resize the session list.
+      const statusVisible = () => this.gatewayStatus?.kind;
       return (
         <aside
           class="sidebar sidebar--rail"
@@ -561,23 +566,23 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                 />
               </Show>
             </div>
-            <Show when={statusVisible() || this.devGitBranch}>
-              <div class="sidebar-shell__footer">
+            <div class="sidebar-shell__footer">
+              <div class="sidebar-shell__connection">
                 <Show when={statusVisible()}>
                   <GatewayStatus {...this.gatewayStatus!} row />
                 </Show>
-                <Show when={this.devGitBranch}>
-                  <openclaw-tooltip prop:content={this.devGitBranch ?? undefined}>
-                    <div class="sidebar-footer-branch">
-                      <span class="sidebar-footer-branch__icon" aria-hidden="true">
-                        <Icon name="gitBranch" />
-                      </span>
-                      <span class="sidebar-footer-branch__name">{this.devGitBranch}</span>
-                    </div>
-                  </openclaw-tooltip>
-                </Show>
               </div>
-            </Show>
+              <Show when={this.devGitBranch}>
+                <openclaw-tooltip prop:content={this.devGitBranch ?? undefined}>
+                  <div class="sidebar-footer-branch">
+                    <span class="sidebar-footer-branch__icon" aria-hidden="true">
+                      <Icon name="gitBranch" />
+                    </span>
+                    <span class="sidebar-footer-branch__name">{this.devGitBranch}</span>
+                  </div>
+                </openclaw-tooltip>
+              </Show>
+            </div>
             <Show
               when={
                 this.context.theme.branding.communityLinks &&

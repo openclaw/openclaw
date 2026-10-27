@@ -75,8 +75,10 @@ For `ssh` and OpenShell `remote`, recreate matters more than with Docker: the re
 
 When a newly generated guest file exceeds the 64 MiB reconciliation limit, its
 pending checkpoint is preserved and later messages cannot prepare the workspace.
-Use explicit recovery to move that selected file out of synchronization without
-losing its bytes:
+When that file is eligible for recovery, the local workspace error includes the
+exact recovery command and asks for a Gateway administrator. Use explicit
+recovery to move that selected file out of synchronization without losing its
+bytes:
 
 ```bash
 openclaw sandbox recover --session agent:main:dashboard:example --path artifacts/archive.tgz

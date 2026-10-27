@@ -2,7 +2,7 @@ import type { Locator, Page } from "playwright";
 
 export async function openSidebarMenu(page: Page) {
   const menu = page.locator(".sidebar-session-sort-menu");
-  const trigger = page.getByRole("button", { name: "Filter & sort", exact: true });
+  const trigger = page.getByRole("button", { name: /^Filter & sort · /, exact: true });
   if ((await trigger.getAttribute("aria-expanded")) !== "true") {
     await trigger.click();
   }

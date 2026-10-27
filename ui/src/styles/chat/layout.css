@@ -652,6 +652,11 @@ openclaw-pending-session-create {
   content-visibility: auto;
 }
 
+/* Small notice rows must enter at their real height, not the virtual estimate. */
+.chat-virtual-row:has(> .chat-notice) {
+  content-visibility: visible;
+}
+
 .chat-virtual-row:focus-within {
   /* Footer controls use a -4px block margin. Paint containment must clear
      that overhang plus the 2px focus outline and its 3px offset. */
