@@ -208,6 +208,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       config: attempt.config,
       preparedGitCoauthorPrompt: attempt.gitCoauthorPrompt,
       preparedSessionEntry,
+      sessionPromptDelivery: attempt.sessionPromptDelivery,
       agentId: params.setup.sessionAgentId,
       workspaceDir: params.setup.effectiveWorkspace,
       cwd: params.setup.effectiveCwd,
@@ -256,7 +257,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     provider: attempt.provider,
     modelId: attempt.modelId,
     promptMode: effectivePromptMode,
-    runtimeChannel,
+    runtimeChannel: runtimePrompt.runtimeInfo.channel,
     runtimeCapabilities,
     agentId: params.setup.sessionAgentId,
   };
@@ -427,8 +428,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       ...resolveSessionPromptDelivery({
         config: attempt.config,
         sessionKey: attempt.sessionKey,
-        chatType: attempt.chatType,
-        channel: runtimeChannel,
+        chatType: runtimePrompt.runtimeInfo.chatType,
+        channel: runtimePrompt.runtimeInfo.channel,
       }),
       silentReplyPromptMode: attempt.silentReplyPromptMode,
       proactiveSubagentOrchestration: params.setup.proactiveSubagentOrchestration,
