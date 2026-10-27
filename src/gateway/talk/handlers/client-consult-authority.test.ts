@@ -13,7 +13,6 @@ import {
   observeSqliteReadSql,
 } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { createEnteredGate } from "../../../agents/entered-gate.test-support.js";
 import { captureRuntimeConfigAsyncReader } from "../../../config/io.runtime.js";
 import {
   loadSessionEntry,
@@ -158,69 +157,6 @@ function registerConsult(
   });
 }
 
-<<<<<<< HEAD
-||||||| parent of 7af8caca786a (test(gateway): consolidate j0217 duplicate proof layers)
-function createRelay(
-  context: GatewayRequestHandlerOptions["context"],
-  connId: string,
-  sessionTarget: Awaited<ReturnType<typeof prepareTalkSessionTarget>>,
-) {
-  const { relaySessionId } = createTalkRealtimeRelaySession({
-    context,
-    connId,
-    sessionTarget,
-    cfg: context.getRuntimeConfig(),
-    provider: createIdleRelayProvider(),
-    providerConfig: {},
-    instructions: "brief",
-    tools: [],
-    controlSource: "transcript",
-  });
-  return relaySessions.get(relaySessionId)!;
-}
-
-function targetPaths(target: Parameters<typeof resolveOpenClawAgentSqlitePath>[0]) {
-  const targetPath = resolveOpenClawAgentSqlitePath(target);
-  return new Set([targetPath, readDatabasePathIdentitySync(targetPath).canonicalPath]);
-}
-
-=======
-function createRelay(
-  context: GatewayRequestHandlerOptions["context"],
-  connId: string,
-  sessionTarget: Awaited<ReturnType<typeof prepareTalkSessionTarget>>,
-) {
-  const { relaySessionId } = createTalkRealtimeRelaySession({
-    context,
-    connId,
-    sessionTarget,
-    cfg: context.getRuntimeConfig(),
-    provider: createIdleRelayProvider(),
-    providerConfig: {},
-    instructions: "brief",
-    tools: [],
-    controlSource: "transcript",
-  });
-  return relaySessions.get(relaySessionId)!;
-}
-
-function observeTargetSql(
-  target: Parameters<typeof resolveOpenClawAgentSqlitePath>[0],
-  pattern: RegExp,
-  when = () => true,
-) {
-  const targetPath = resolveOpenClawAgentSqlitePath(target);
-  const paths = new Set([targetPath, readDatabasePathIdentitySync(targetPath).canonicalPath]);
-  const matching: string[] = [];
-  const observation = observeHostDataSql((sql, database) => {
-    if (database && paths.has(database.location() ?? "") && when() && pattern.test(sql)) {
-      matching.push(sql);
-    }
-  });
-  return { ...observation, matching };
-}
-
->>>>>>> 7af8caca786a (test(gateway): consolidate j0217 duplicate proof layers)
 function toolCall(
   params: Record<string, unknown>,
   context: GatewayRequestHandlerOptions["context"],
@@ -327,7 +263,8 @@ describe("voice consult registration authority", () => {
           : undefined;
       const relay = created ? relaySessions.get(created.relaySessionId)! : undefined;
       const selectedVoiceSessionId = relay?.id ?? voiceSessionId;
-      const gate = createEnteredGate();
+      const waiting = createDeferred();
+      const resume = createDeferred();
       let pending: Promise<unknown> | undefined;
       const registration = registerConsult(sessionTarget, client.connId);
       try {
@@ -351,26 +288,30 @@ describe("voice consult registration authority", () => {
           const lookup = voiceSessionReaders.resolveOpenClientVoiceSessionId;
           vi.spyOn(voiceSessionReaders, "resolveOpenClientVoiceSessionId").mockImplementationOnce(
             async (...args) => {
-              await gate.wait();
+              waiting.resolve();
+              await resume.promise;
               return lookup(...args);
             },
           );
         } else {
-          chat.beforeRegistration.mockImplementationOnce(gate.wait);
+          chat.beforeRegistration.mockImplementationOnce(async () => {
+            waiting.resolve();
+            await resume.promise;
+          });
         }
         const call = toolCall(params, context, authorized.authorization, client as never);
         const { respond } = call;
         pending = call.pending;
         await withinTest(
           awaitGateBeforeSettlement(
-            gate.entered,
+            waiting.promise,
             pending,
             "Tool call ended before source handoff waited",
           ),
           signal,
         );
         setTestEnvValue("OPENCLAW_STATE_DIR", successor);
-        gate.release();
+        resume.resolve();
         await pending;
         expect(respond.mock.lastCall?.[0], respond.mock.lastCall?.[2]?.message).toBe(true);
         expect(chat.dispatched).toHaveBeenCalledOnce();
@@ -385,7 +326,7 @@ describe("voice consult registration authority", () => {
           status: "open",
         });
       } finally {
-        gate.release();
+        resume.resolve();
         await pending?.catch(() => {});
         env.restore();
         if (relay) {
@@ -418,12 +359,14 @@ describe("voice consult registration authority", () => {
       const relay = relaySessions.get(created.relaySessionId)!;
       const runId = "queued-consult";
       const registration = registerConsult(sessionTarget, client.connId);
-      const gate = createEnteredGate();
+      const held = createDeferred();
+      const resume = createDeferred();
       const register = voiceSessions.registerClientVoiceConsultRun;
       vi.spyOn(voiceSessions, "registerClientVoiceConsultRun").mockImplementationOnce(
         async (params) => {
           const release = await register(params);
-          await gate.wait();
+          held.resolve();
+          await resume.promise;
           return release;
         },
       );
@@ -443,7 +386,7 @@ describe("voice consult registration authority", () => {
         client as never,
       );
       try {
-        await withinTest(gate.entered, signal);
+        await withinTest(held.promise, signal);
         const replacement = {
           relaySessionId: relay.id,
           connId: relay.connId,
@@ -465,7 +408,7 @@ describe("voice consult registration authority", () => {
             }),
           ).rejects.toThrow("replacement registration refused");
         }
-        gate.release();
+        resume.resolve();
         await pending;
         expect(respond.mock.lastCall?.[0]).toBe(false);
         expect(chat.dispatched).not.toHaveBeenCalled();
@@ -481,7 +424,7 @@ describe("voice consult registration authority", () => {
           expect(registration.controller.signal.aborted).toBe(true);
         }
       } finally {
-        gate.release();
+        resume.resolve();
         await pending;
         registration.cleanup();
         await closeRelaySession(relay, "completed");
@@ -499,7 +442,6 @@ describe("voice consult registration authority", () => {
       const params = consultParams("cold-consult-call");
       const authorized = await authorizeConsult(params, context);
       expect(getOpenClawAgentDatabaseIfOpen(scope)).toBeUndefined();
-<<<<<<< HEAD
       const targetPath = resolveOpenClawAgentSqlitePath(scope);
       const targetPaths = new Set([
         targetPath,
@@ -535,28 +477,6 @@ describe("voice consult registration authority", () => {
         observeColdSchemaSql(this, sql);
         return execute.call(this, sql);
       });
-||||||| parent of 7af8caca786a (test(gateway): consolidate j0217 duplicate proof layers)
-      const paths = targetPaths(scope);
-      const coldSchemaSql: string[] = [];
-      observeHostDataSql((sql, database) => {
-        if (
-          database &&
-          paths.has(database.location() ?? "") &&
-          !getOpenClawAgentDatabaseIfOpen(scope) &&
-          /\b(?:sqlite_master|sqlite_schema|(?:pragma_)?(?:table_(?:xinfo|info)|index_(?:list|xinfo|info)|foreign_key_(?:list|check)|quick_check|integrity_check)|create\s+(?:(?:unique|virtual)\s+)?(?:table|index|trigger|view)|alter\s+table|drop\s+(?:table|index|trigger|view))\b/i.test(
-            sql,
-          )
-        ) {
-          coldSchemaSql.push(sql);
-        }
-      });
-=======
-      const sql = observeTargetSql(
-        scope,
-        /\b(?:sqlite_master|sqlite_schema|(?:pragma_)?(?:table_(?:xinfo|info)|index_(?:list|xinfo|info)|foreign_key_(?:list|check)|quick_check|integrity_check)|create\s+(?:(?:unique|virtual)\s+)?(?:table|index|trigger|view)|alter\s+table|drop\s+(?:table|index|trigger|view))\b/i,
-        () => !getOpenClawAgentDatabaseIfOpen(scope),
-      );
->>>>>>> 7af8caca786a (test(gateway): consolidate j0217 duplicate proof layers)
       let checkedWhileCold = false;
       const { respond, pending } = toolCall(
         params,
@@ -573,7 +493,7 @@ describe("voice consult registration authority", () => {
       await pending;
       expect(respond.mock.lastCall?.[0], respond.mock.lastCall?.[2]?.message).toBe(true);
       expect(chat.dispatched).toHaveBeenCalledOnce();
-      expect(sql.matching).toEqual([]);
+      expect(coldSchemaSql).toEqual([]);
       expect(checkedWhileCold).toBe(sdk);
       expect(workerGrantReads.filter(isSessionEntryDataSql)).toEqual([]);
     },
@@ -586,14 +506,18 @@ describe("voice consult registration authority", () => {
       const params = consultParams("queued-consult-call");
       const authorized = await authorizeConsult(params, context);
       const queued = createDeferred();
-      const gate = createEnteredGate();
+      const entered = createDeferred();
+      const releaseQueue = createDeferred();
       let sdkCurrent = true;
       let nativeSdkCommitObserved = false;
       let blocker: Promise<void> | undefined;
       const register = voiceSessions.registerClientVoiceConsultRun;
       vi.spyOn(voiceSessions, "registerClientVoiceConsultRun").mockImplementation(async (input) => {
-        blocker = runOpenClawAgentWriteAdmission(scope, gate.wait);
-        await gate.entered;
+        blocker = runOpenClawAgentWriteAdmission(scope, async () => {
+          entered.resolve();
+          await releaseQueue.promise;
+        });
+        await entered.promise;
         const pending = register(input);
         queued.resolve();
         return await pending;
@@ -632,7 +556,7 @@ describe("voice consult registration authority", () => {
         } else if (revoked === "chat") {
           chat.current = false;
         }
-        gate.release();
+        releaseQueue.resolve();
         await running;
         await blocker;
         const record = clientVoiceSessionTesting.readRecord(scope.agentId, voiceSessionId);
@@ -654,7 +578,7 @@ describe("voice consult registration authority", () => {
           expect(respond.mock.lastCall?.[0]).toBe(false);
         }
       } finally {
-        gate.release();
+        releaseQueue.resolve();
         await running;
         await blocker;
       }
@@ -683,23 +607,18 @@ describe("voice consult registration authority", () => {
         ? { agentId: "main", sessionKey: sourceKey }
         : { agentId: `cold-native-${kind}`, sessionKey: `agent:cold-native-${kind}:main` };
       const targetPath = resolveOpenClawAgentSqlitePath(target);
-<<<<<<< HEAD
       const targetPaths = new Set([
         targetPath,
         readDatabasePathIdentitySync(targetPath).canonicalPath,
       ]);
-||||||| parent of 7af8caca786a (test(gateway): consolidate j0217 duplicate proof layers)
-      const paths = targetPaths(target);
-=======
->>>>>>> 7af8caca786a (test(gateway): consolidate j0217 duplicate proof layers)
       if (!memorySource) {
         expect(existsSync(targetPath)).toBe(false);
       }
       let nativeAuthorityObserved = false;
       let workerAuthorityObserved = false;
+      const schemaSql: string[] = [];
       sqlReads?.restore();
       sqlReads = undefined;
-<<<<<<< HEAD
       const sql = observeHostDataSql((query, database) => {
         if (
           database &&
@@ -711,24 +630,6 @@ describe("voice consult registration authority", () => {
           schemaSql.push(query);
         }
       });
-||||||| parent of 7af8caca786a (test(gateway): consolidate j0217 duplicate proof layers)
-      const sql = observeHostDataSql((query, database) => {
-        if (
-          database &&
-          paths.has(database.location() ?? "") &&
-          /\b(?:create\s+(?:(?:unique|virtual)\s+)?(?:table|index|trigger|view)|alter\s+table|drop\s+(?:table|index|trigger|view)|quick_check|integrity_check)\b/i.test(
-            query,
-          )
-        ) {
-          schemaSql.push(query);
-        }
-      });
-=======
-      const sql = observeTargetSql(
-        target,
-        /\b(?:create\s+(?:(?:unique|virtual)\s+)?(?:table|index|trigger|view)|alter\s+table|drop\s+(?:table|index|trigger|view)|quick_check|integrity_check)\b/i,
-      );
->>>>>>> 7af8caca786a (test(gateway): consolidate j0217 duplicate proof layers)
       try {
         const assertCurrent = composeSessionSourceAssertion(
           [authorized.authorization!.assertCurrent],
@@ -756,7 +657,7 @@ describe("voice consult registration authority", () => {
         if (memorySource) {
           expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
         } else {
-          expect(sql.matching).toEqual([]);
+          expect(schemaSql).toEqual([]);
         }
         expect(workerAuthorityObserved).toBe(true);
         expect(nativeAuthorityObserved).toBe(false);

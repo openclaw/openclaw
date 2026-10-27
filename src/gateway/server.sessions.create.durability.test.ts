@@ -7,7 +7,6 @@ import {
   recoverRestartAbortedMainSessions,
   markStartupOrphanedMainSessionsForRecovery,
 } from "../agents/main-session-recovery/main-session-restart-recovery.js";
-import { managedWorktrees } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import * as sessionInputActors from "../config/sessions/session-input-actor.js";
@@ -28,7 +27,10 @@ import { runOutsideStoreWriterContext } from "../shared/store-writer-queue.js";
 import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
 import type { StartChatDispatchParams } from "./server-methods/chat-send-agent-dispatch.types.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
-import { createGitWorkspace } from "./server.sessions.create.projects.test-support.js";
+import {
+  createGitWorkspace,
+  removeOwnedSessionWorktree,
+} from "./server.sessions.create.projects.test-support.js";
 import {
   chatSendOwner,
   dashboardTitleScheduleMocks,
@@ -651,14 +653,7 @@ test.for([
     } finally {
       releaseDispatches();
       ws.close();
-      const owned = await managedWorktrees.findLiveByOwner("session", key);
-      if (owned) {
-        await managedWorktrees.remove({
-          id: owned.id,
-          reason: "test-cleanup",
-          allowSnapshotLoss: true,
-        });
-      }
+      await removeOwnedSessionWorktree(key);
       testState.agentConfig = undefined;
     }
   },

@@ -100,16 +100,11 @@ describe("MCP App standalone host", () => {
     expect(mintTicket("agent:main:main", { requesterId: "alice" })).toBeUndefined();
   });
 
-  it("bounds ticket lifetime and omits issuance at capacity", () => {
+  it("bounds ticket lifetime by the view lease", () => {
     const shortView = { ...view, expiresAtMs: nowMs + 1_000 };
     expect(issueTicket({ sessionKey: "short", view: shortView, nowMs }).expiresAtMs).toBe(
       nowMs + 1_000,
     );
-    vi.spyOn(Date, "now").mockReturnValue(nowMs + 1_001);
-    for (let index = 0; index < 256; index += 1) {
-      expect(mintTicket(`agent:${index}`, { viewId: `mcp-app-${index}` })).toBeDefined();
-    }
-    expect(mintTicket("agent:overflow", { viewId: "mcp-app-overflow" })).toBeUndefined();
   });
 
   it.each([false, true])(
@@ -481,32 +476,6 @@ describe("MCP App standalone host", () => {
     expect(mocks.completeRetirement).toHaveBeenCalledWith(runtime);
   });
 
-  it("inherits post-catalog grant revalidation from the shared operation boundary", async () => {
-    const catalogStarted = createDeferred();
-    const releaseCatalog = createDeferred<Awaited<ReturnType<typeof runtime.getCatalog>>>();
-    runtime.getCatalog.mockImplementationOnce(async () => {
-      catalogStarted.resolve();
-      return await releaseCatalog.promise;
-    });
-    let grantActive = true;
-    view.authorizeAppInteraction = vi.fn(async () => grantActive);
-    const issued = issue();
-
-    const pending = appRequest(issued.ticket, {
-      method: "POST",
-      body: appCall(),
-    });
-    await catalogStarted.promise;
-    grantActive = false;
-    releaseCatalog.resolve({
-      tools: [{ serverName: "demo", toolName: "app-only", uiVisibility: ["app"] }],
-    });
-
-    const denied = await pending;
-    expect(denied.res.statusCode).toBe(403);
-    expect(runtime.callTool).not.toHaveBeenCalled();
-  });
-
   it.each(["read-only", "unbound", "rejected-authority"])(
     "denies server operations for a %s view",
     async (mode) => {
@@ -620,26 +589,16 @@ describe("standalone channel launch", () => {
   it("emits only a typed launch action with a usable tool-authorized opaque ticket", async () => {
     publish();
     const presentation = materialize();
-    expect(presentation).toEqual({
-      blocks: [
-        {
-          type: "buttons",
-          buttons: [
-            {
-              label: "Open app",
-              action: {
-                type: "web-app",
-                url: expect.stringMatching(
-                  /^https:\/\/node\.tailnet\.ts\.net\/__openclaw__\/mcp-app#v1\.[A-Za-z0-9_-]+\.\d+\.[A-Za-z0-9_-]+$/u,
-                ),
-              },
-            },
-          ],
-        },
-      ],
+    expect(JSON.stringify(presentation)).not.toContain(view.html);
+    const button = presentation?.blocks.find((block) => block.type === "buttons")?.buttons[0];
+    expect(button?.label).toBe("Open app");
+    const action = button?.action;
+    expect(action).toEqual({
+      type: "web-app",
+      url: expect.stringMatching(
+        /^https:\/\/node\.tailnet\.ts\.net\/__openclaw__\/mcp-app#v1\.[A-Za-z0-9_-]+\.\d+\.[A-Za-z0-9_-]+$/u,
+      ),
     });
-    const action = presentation?.blocks.find((block) => block.type === "buttons")?.buttons[0]
-      ?.action;
     if (action?.type !== "web-app" || !action.url) {
       throw new Error("missing app launch action");
     }
