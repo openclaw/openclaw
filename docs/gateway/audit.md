@@ -492,8 +492,8 @@ what was recorded, not as proof of what happened:
   A rejected metadata record does not stop the queue from accepting later records.
 - Shutdown drops waiting metadata at its existing deadline but joins submitted
   worker operations before releasing the writer.
-  Idle arrivals dispatch immediately. After an in-flight write settles, a remaining
-  partial batch can wait one fixed 5 ms window for neighboring events before submitting
+  Idle arrivals and lone queued items dispatch immediately. After an in-flight write
+  settles, a partial batch of at least two items can wait one fixed 5 ms window before submitting
   up to 32 queued items in one transaction, preserving FIFO order. Later arrivals do
   not extend that window. A full batch, maintenance, or shutdown flushes it immediately.
   Per-item savepoints isolate rejected records; successful items are

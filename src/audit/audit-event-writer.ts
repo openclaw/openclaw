@@ -280,7 +280,11 @@ export function createAuditEventWriter(options: {
       } else if (retry) {
         scheduleRetry();
       } else if (queue.length > 0 || maintenancePending) {
-        const coalesce = !stopped && !maintenancePending && queue.length < MAX_AUDIT_BATCH_SIZE;
+        const coalesce =
+          !stopped &&
+          !maintenancePending &&
+          queue.length > 1 &&
+          queue.length < MAX_AUDIT_BATCH_SIZE;
         schedule(coalesce ? AUDIT_BATCH_DELAY_MS : 0);
       } else if (stopped) {
         finishStop();

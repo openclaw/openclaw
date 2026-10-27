@@ -106,9 +106,9 @@ describe("audit writer async settlement", () => {
       await vi.advanceTimersByTimeAsync(5);
       await writer.ready;
       execute.mockClear();
-      for (const sourceId of ["first", "second", "third"]) {
+      for (const sourceId of ["first", "second", "third", "fourth"]) {
         expect(writer.record(event(sourceId))).toBe(true);
-        if (sourceId === "second") {
+        if (sourceId === "third") {
           first.resolve({ status: "settled" });
         }
         await vi.advanceTimersByTimeAsync(1);
@@ -118,7 +118,7 @@ describe("audit writer async settlement", () => {
         void writer.stop();
       }
       await vi.advanceTimersByTimeAsync(stopEarly ? 0 : 3);
-      expect(requests).toEqual(["first", "second", "third"]);
+      expect(requests).toEqual(["first", "second", "third", "fourth"]);
       expect(execute).toHaveBeenCalledTimes(stopEarly ? 3 : 2);
     } finally {
       first.resolve({ status: "settled" });
