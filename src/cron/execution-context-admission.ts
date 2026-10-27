@@ -143,6 +143,7 @@ async function readParent(parentSessionKey: string, storePath: string) {
     sessionKey: parentSessionKey,
     storePath,
     readConsistency: "latest",
+    projection: "list",
   });
   const worktreePath = entry?.worktree ? entry.spawnedCwd : undefined;
   const worktreeExists = worktreePath

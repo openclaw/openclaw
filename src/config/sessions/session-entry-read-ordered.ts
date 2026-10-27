@@ -7,7 +7,10 @@ import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js
 import type { AgentDatabaseGenerationClaim } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import { runOpenClawAgentWriteAdmissions } from "../../state/openclaw-agent-write-admission.js";
-import type { SessionAccessScope, SessionEntryTargetPatchScope } from "./session-accessor.types.js";
+import type {
+  SessionEntryReadScope,
+  SessionEntryTargetPatchScope,
+} from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import { assertSessionEntryCohortScope } from "./session-entry-cohort-scope.js";
 import { SessionEntryChangedDuringReadError } from "./session-entry-read-errors.js";
@@ -43,13 +46,13 @@ type ReadSessionStore = <T>(
 /** Data-only return; decisions/effects consume withRead's synchronous callback directly. */
 export async function readAdmittedSessionEntry(
   reader: SessionEntryCohortReader,
-  input: SessionAccessScope,
+  input: SessionEntryReadScope,
   assertCurrent: () => void,
   onReadTarget?: (target: SessionEntryTargetPatchScope) => void,
 ) {
   assertCurrent();
   const key = assertSessionEntryCohortScope(reader, input);
-  const read = await reader.readEntry(assertCurrent);
+  const read = await reader.readEntry(assertCurrent, input.projection);
   assertCurrent();
   reader.assertCurrent();
   onReadTarget?.({
@@ -89,13 +92,16 @@ export function createAdmittedSessionEntryCohortReader(params: {
       ...new Set([...params.storePaths, database.path].map((p) => path.resolve(p))),
     ]),
     assertCurrent: assertOwnerCurrent,
-    async readEntry(assertCallerCurrent) {
+    async readEntry(assertCallerCurrent, projection) {
       const assertCurrent = () => {
         assertOwnerCurrent();
         assertCallerCurrent();
       };
       assertCurrent();
-      const request = { sessionKeys: [params.sessionKey] };
+      const request = {
+        sessionKeys: [params.sessionKey],
+        snapshotFields: projection === "list" ? [] : projection === "full" ? undefined : projection,
+      };
       const read = await readSessionEntriesWithRetainedFacts(database, request, () =>
         withSessionHistoryWorkerDatabase(
           database,
