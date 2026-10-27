@@ -93,6 +93,7 @@ import {
 } from "./native-subagent-notification.js";
 import {
   canNativeParentConsumeCompletion,
+  hasNativeChildExecution,
   readNativeSubagentObservations,
   listNativePendingChildren,
   listNativeRequesterParents,
@@ -1294,6 +1295,10 @@ class Monitor {
     });
   }
 
+  hasPendingCatalogCustody(parentThreadId: string): boolean {
+    return !this.disposed && this.completionDelivery.hasPendingCatalogCustody(parentThreadId);
+  }
+
   readNativeSubagents(request: NativeSubagentsReadRequest) {
     return readNativeSubagentObservations(request, {
       states: this.parentStates,
@@ -2288,11 +2293,7 @@ class Monitor {
   }
 
   private releaseClientRetentionIfIdle(): void {
-    if (
-      [...this.childStates.values()].some(
-        (childState) => !childState.terminal && !childState.settledWithoutCompletion,
-      )
-    ) {
+    if (hasNativeChildExecution(this.childStates)) {
       return;
     }
     this.releaseRetainedClient();
@@ -2340,14 +2341,8 @@ class Monitor {
   }
 
   private releaseParentThreadIfChildrenSettled(parentThreadId: string): void {
-    for (const childState of this.childStates.values()) {
-      if (
-        childState.parentThreadId === parentThreadId &&
-        !childState.terminal &&
-        !childState.settledWithoutCompletion
-      ) {
-        return;
-      }
+    if (hasNativeChildExecution(this.childStates, parentThreadId)) {
+      return;
     }
     // Pending completion delivery keeps its own custody, but must not block
     // the parent from resuming to receive those results.
