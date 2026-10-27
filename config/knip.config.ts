@@ -606,6 +606,7 @@ const repositoryScriptEntries = [
   "scripts/perf/channel-presence-suppression.ts!",
   "scripts/perf/config-guard-startup-measure.ts!",
   "scripts/perf/connect-device-identity-measure.ts!",
+  "scripts/perf/connect-link-readers-measure.ts!",
   "scripts/perf/core-object-copy-measure.ts!",
   "scripts/perf/core-quadratic-scans-measure.ts!",
   "scripts/perf/diff-baseline-measure.ts!",
