@@ -550,7 +550,7 @@ it("selects collector children only when the recipient has a sharing filter", as
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const owner = ensureProfileForEmail("collector-owner@presentation.test");
     const viewer = ensureProfileForEmail("collector-viewer@presentation.test");
-    using _catalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const parent = "agent:main:dashboard:collector-visibility";
     const visible = "agent:main:subagent:collector-visible";
     const hidden = "agent:main:subagent:collector-hidden";
