@@ -175,7 +175,7 @@ function truncateForSummary(text: string, maxChars: number): string {
   const displacedHead = sliceUtf16Safe(text, Math.max(0, head.length - 32), maxChars);
   // Prefer an existing diagnostic over a routine footer, but otherwise retain
   // ordinary terminal facts too. The marker shares the same result budget.
-  const displacedMatch = diagnosticMatch && IMPORTANT_TOOL_RESULT_TAIL.exec(displacedHead);
+  const displacedMatch = IMPORTANT_TOOL_RESULT_TAIL.exec(displacedHead);
   if (displacedMatch) {
     tailStart = Math.max(0, head.length - 32) + displacedMatch.index;
     head = truncateUtf16Safe(head, tailStart);
