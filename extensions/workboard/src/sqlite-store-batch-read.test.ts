@@ -28,7 +28,7 @@ import { sqliteTestAuxStores } from "./test/sqlite-store.js";
 
 const sqliteStatements = vi.hoisted(() => ({
   count: 0,
-  reads: 0,
+  executed: [] as string[],
 }));
 
 vi.mock("openclaw/plugin-sdk/sqlite-worker-runtime", async (importOriginal) => {
@@ -47,9 +47,7 @@ vi.mock("openclaw/plugin-sdk/sqlite-worker-runtime", async (importOriginal) => {
             value: new Proxy(statement[method], {
               apply(target, receiver, methodArgs) {
                 sqliteStatements.count++;
-                if (/^select\b/i.test(sql.trimStart())) {
-                  sqliteStatements.reads++;
-                }
+                sqliteStatements.executed.push(sql);
                 return Reflect.apply(target, receiver, methodArgs);
               },
             }),
@@ -236,12 +234,13 @@ describe("workboard sqlite batch card persistence", () => {
     await using stores = openKernel();
     const store = new WorkboardStore(stores.cards, sqliteTestAuxStores(stores));
     const card = await store.create({ title: "Hydration budget" });
-    const beforeWrite = sqliteStatements.reads;
+    const before = sqliteStatements.executed.length;
     const updated =
       operation === "worker log"
         ? await store.addWorkerLog(card.id, { message: "Recorded progress" })
         : await store.addProof(card.id, { status: "passed", label: "Verified result" });
-    expect(sqliteStatements.reads - beforeWrite).toBe(14);
+    const statements = sqliteStatements.executed.slice(before);
+    expect(statements.filter((sql) => /^select\b/i.test(sql.trimStart()))).toHaveLength(14);
     expect(
       operation === "worker log"
         ? updated.metadata?.workerLogs?.[0]?.message
@@ -296,35 +295,16 @@ describe("workboard sqlite batch card persistence", () => {
     await expect(read()).resolves.toEqual([{ key: card.id, value: expected }]);
   });
 
-  it.each([
-    ["stale revision", "conflict", { status: "running" }],
-    ["unrelated malformed children", "updated", {}],
-    ["running execution", "owner_busy", { status: "done", execution: execution("occupied") }],
-    [
-      "another claim owner",
-      "updated",
-      {
-        status: "running",
-        metadata: {
-          claim: {
-            ownerId: "other",
-            token: "synthetic-claim-token",
-            claimedAt: 1,
-            lastHeartbeatAt: 1,
-            expiresAt: 1_000_001,
-          },
-        },
-      },
-    ],
-  ] satisfies Array<[string, string, Partial<WorkboardCard>]>)(
-    "preserves conditional claim admission for %s",
-    async (_name, result, occupiedPatch) => {
+  // Injects malformed rows and counts native SQLite statements.
+  test.each(["conflict", "updated"] as const)(
+    "claims return %s without hydrating unrelated malformed children",
+    async (result) => {
       await using stores = openKernel();
       using raw = new DatabaseSync(stores.dbPath);
       const target = fixtureCard(2);
       const next = { ...target, updatedAt: target.updatedAt + 1 };
-      const occupied = { ...fixtureCard(0), agentId: "slot-owner", ...occupiedPatch };
-      for (const card of [occupied, fixtureCard(1), target]) {
+      const busy = { ...fixtureCard(0), status: "running" as const, agentId: "slot-owner" };
+      for (const card of [result === "conflict" ? busy : fixtureCard(0), fixtureCard(1), target]) {
         await stores.cards.register(card.id, persisted(card));
       }
       raw
@@ -337,17 +317,64 @@ describe("workboard sqlite batch card persistence", () => {
           persisted(next),
           target.updatedAt - (result === "conflict" ? 1 : 0),
           "slot-owner",
-          1_000_000,
+          3000,
         ),
       ).resolves.toBe(result);
       if (result === "conflict") {
         expect(sqliteStatements.count - before).toBe(1);
+      } else {
+        await expect(stores.cards.lookup("card-1")).rejects.toMatchObject({
+          code: "ERR_OUT_OF_RANGE",
+        });
       }
-      await expect(stores.cards.lookup("card-1")).rejects.toMatchObject({
-        code: "ERR_OUT_OF_RANGE",
-      });
       await expect(stores.cards.lookup(target.id)).resolves.toEqual(
-        persisted(result === "updated" ? next : target),
+        persisted(result === "conflict" ? target : next),
+      );
+    },
+  );
+
+  it.each([
+    {
+      name: "running execution",
+      expected: "owner_busy",
+      card: { status: "done", execution: execution("occupied") },
+    },
+    {
+      name: "another claim owner",
+      card: {
+        status: "running",
+        metadata: {
+          claim: {
+            ownerId: "other",
+            token: "synthetic-claim-token",
+            claimedAt: 1,
+            lastHeartbeatAt: 1,
+            expiresAt: 1_000_001,
+          },
+        },
+      },
+      expected: "updated",
+    },
+  ] satisfies Array<{ name: string; card: Partial<WorkboardCard>; expected: string }>)(
+    "preserves owner capacity for $name",
+    async (scenario) => {
+      await using stores = openKernel();
+      const occupied = { ...fixtureCard(0), agentId: "slot-owner", ...scenario.card };
+      const target = fixtureCard(2);
+      await stores.cards.register(occupied.id, persisted(occupied));
+      await stores.cards.register(target.id, persisted(target));
+      const next = { ...target, updatedAt: target.updatedAt + 1 };
+      await expect(
+        stores.cards.claimIfOwnerAvailable(
+          target.id,
+          persisted(next),
+          target.updatedAt,
+          "slot-owner",
+          1_000_000,
+        ),
+      ).resolves.toBe(scenario.expected);
+      await expect(stores.cards.lookup(target.id)).resolves.toEqual(
+        persisted(scenario.expected === "updated" ? next : target),
       );
     },
   );
