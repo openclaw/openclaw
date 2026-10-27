@@ -751,15 +751,18 @@ the installed updater: installing a candidate does not retrofit its parent drive
 
 ## Runtime retention failures
 
-Runtime retention is best effort. When the updater cannot retain its running
-runtime, for example because of a `host-owned-plugin-link`, unsafe temporary
-storage, a changed source file, or a failed retention worker, it logs the reason
-with "continuing update without a verified retained rollback runtime" and
-continues. It retains nothing and leaves the installed runtime unchanged; native
-recovery and the existing rollback protections still apply. Cancellation or a
-lost update lease still stops the update. Updaters released before this change
-stopped at this step instead, and the guidance below explains their recorded
-failures; it also explains a retention warning worth repairing.
+Runtime retention is best effort once the updater has kept its own copy of the
+native recovery helper. When it then cannot retain the rest of its running
+runtime, for example because of a `host-owned-plugin-link`, a changed source
+file, or a failed retention worker, it logs the reason with "continuing update
+without a verified retained rollback runtime" and continues. It retains nothing
+else and leaves the installed runtime unchanged; native recovery and the
+existing rollback protections still apply. The update still stops before
+activation when no private storage outside the installation is available for
+that helper, when the retention worker's process cleanup cannot be confirmed,
+or on cancellation or a lost update lease. Updaters released before this change
+stopped at every retention failure, and the guidance below explains their
+recorded failures; it also explains a retention warning worth repairing.
 
 **Fix now:** `host-owned-plugin-link` means a dependency symlink reaches
 OpenClaw-owned files that the updater cannot safely retain as an independent

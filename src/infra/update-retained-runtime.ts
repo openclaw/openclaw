@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { UPDATE_NATIVE_GATE_SOURCE } from "../cli/update-cli/update-command-native-gate.generated.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { hasErrnoCode, ignoreMissingPath as ignoreMissingUpdateCandidateFile } from "./errno.js";
@@ -90,6 +91,7 @@ async function runWithRetainedUpdateRuntime<T>(
           }
           params.assertCurrent();
         };
+        let nativeGateBound = false;
         let importsBound = false;
         preparation = (async () => {
           const { mutationRoots, installTarget, env, timeoutMs } = params;
@@ -201,6 +203,7 @@ async function runWithRetainedUpdateRuntime<T>(
           assertCurrent();
           // Native recovery still runs when full rollback retention is unavailable.
           bind((url) => (url.href === nativeGateSource.href ? nativeGate : url));
+          nativeGateBound = true;
           const candidateRoot = projectRetainedRuntimePath(privateRoot, sourceRoot);
           const roots: string[] = [];
           for (const name of ["package.json", "dist", "node_modules"]) {
@@ -270,9 +273,10 @@ async function runWithRetainedUpdateRuntime<T>(
           prepared = true;
           return metrics;
         })().catch((error: unknown) => {
-          // Retention is best effort. Only cancellation, a lost update fence, or a
-          // half-bound runtime stops the update; anything else continues without it.
-          if (importsBound) {
+          // Retention is best effort once native recovery has its retained helper.
+          // Earlier failures, uncertain subprocess cleanup, cancellation, a lost
+          // update fence, or a half-bound runtime still stop the update.
+          if (!nativeGateBound || importsBound || hasCommandProcessCleanupError(error)) {
             throw error;
           }
           assertCurrent();

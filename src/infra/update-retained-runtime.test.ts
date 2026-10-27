@@ -12,9 +12,12 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { UPDATE_NATIVE_GATE_SOURCE } from "../cli/update-cli/update-command-native-gate.generated.js";
 import { flushLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+} from "../process/exec-result.js";
 import * as commands from "../process/exec.js";
 import * as processCensus from "./openclaw-process-census.js";
 import {
@@ -27,7 +30,10 @@ import { openSqliteWorkerStore, type SqliteWorkerStore } from "./sqlite-worker-s
 import * as temporaryArtifacts from "./temp-artifact-cleanup.js";
 import { runUpdateStateInspectionWorker } from "./update-candidate-state.inspection.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
-import { expectRetainedNativeGate } from "./update-retained-native-gate.test-support.js";
+import {
+  expectRetainedNativeGate,
+  stageLiveNativeGate,
+} from "./update-retained-native-gate.test-support.js";
 import { type RetainUpdateRuntime, withRetainedUpdateRuntime } from "./update-retained-runtime.js";
 
 const inspectionFixture = vi.hoisted(() => ({ moduleUrl: "", nativeGateModuleUrl: "" }));
@@ -215,13 +221,9 @@ it("reports the retained runtime and reason when a borrowed worker cannot settle
   const root = await fixture(base, "npm");
   const moduleUrl = moduleUrlFor(root);
   const failure = new Error("native close unconfirmed");
-  const log = path.join(base, "cleanup.log");
-  await writeFile(log, "");
-  const previousLoggerOverride = loggingState.overrideSettings;
   let retained: string | undefined;
   const receipt: { metrics?: Awaited<ReturnType<RetainUpdateRuntime>> } = {};
-  try {
-    setLoggerOverride({ level: "warn", consoleLevel: "silent", file: log });
+  const warnings = await retentionWarnings(base, async () => {
     const operation = withRetainedUpdateRuntime(moduleUrl.href, async (retain) => {
       receipt.metrics = await retain(retainOptions(root));
       retained = await retainedDirectory(base);
@@ -232,19 +234,16 @@ it("reports the retained runtime and reason when a borrowed worker cannot settle
       });
     });
     await expect(operation).rejects.toMatchObject({ errors: [failure] });
-    assert.ok(receipt.metrics);
-    expect(receipt.metrics.linked + receipt.metrics.copied).toBe(6);
-    assert.ok(retained);
-    expect((await stat(retained)).isDirectory()).toBe(true);
-    await flushLogger();
-    expect(await readFile(log, "utf8")).toContain(
-      JSON.stringify(
-        `Runtime retained at ${retained}: retained updater workers did not settle; keep it until the workers stop`,
-      ),
-    );
-  } finally {
-    setLoggerOverride(previousLoggerOverride as Parameters<typeof setLoggerOverride>[0]);
-  }
+  });
+  assert.ok(receipt.metrics);
+  expect(receipt.metrics.linked + receipt.metrics.copied).toBe(6);
+  assert.ok(retained);
+  expect((await stat(retained)).isDirectory()).toBe(true);
+  expect(warnings).toContain(
+    JSON.stringify(
+      `Runtime retained at ${retained}: retained updater workers did not settle; keep it until the workers stop`,
+    ),
+  );
 });
 
 const backend = `
@@ -480,12 +479,8 @@ process.stdout.write(JSON.stringify({ generation, mode: JSON.parse(input).mode }
 it("warns and continues the update without binding a replaced retained runtime", async () => {
   const { base, root, moduleUrl } = await runtimeFixture("retained-integrity-");
   const replaced = path.join(root, "dist/shared-old-hash.mjs");
-  inspectionFixture.nativeGateModuleUrl = pathToFileURL(
-    path.join(root, "dist/infra/runtime-process-entrypoints.js"),
-  ).href;
-  const nativeGate = path.join(root, "dist/cli/update-cli/update-command-native-gate.worker.js");
-  await mkdir(path.dirname(nativeGate), { recursive: true });
-  await writeFile(nativeGate, UPDATE_NATIVE_GATE_SOURCE);
+  const { liveEntry: nativeGate, entrypointsUrl } = await stageLiveNativeGate(root);
+  inspectionFixture.nativeGateModuleUrl = entrypointsUrl;
   const wrapper = path.join(base, "replace-before-link.mjs");
   await writeFile(
     wrapper,
@@ -506,11 +501,8 @@ it("warns and continues the update without binding a replaced retained runtime",
   const sabotagedRetention = vi
     .spyOn(commands, "runUtf8CommandWithTimeout")
     .mockImplementation((argv, options) => run([argv[0]!, wrapper, ...argv.slice(1)], options));
-  const log = path.join(base, "retention.log");
-  const previousLoggerOverride = loggingState.overrideSettings;
-  try {
-    setLoggerOverride({ level: "warn", consoleLevel: "silent", file: log });
-    await withRetainedUpdateRuntime(moduleUrl, async (retain) => {
+  const warnings = await retentionWarnings(base, () =>
+    withRetainedUpdateRuntime(moduleUrl, async (retain) => {
       const options = {
         ...retainOptions(root),
         env: { ...process.env, HOME: base, OPENCLAW_STATE_DIR: path.join(base, "state") },
@@ -522,20 +514,16 @@ it("warns and continues the update without binding a replaced retained runtime",
       await expectRetainedNativeGate(nativeGate);
       await writeFile(path.join(root, "dist/updater.mjs"), "export const updated = true;\n");
       expect(await import(moduleUrlFor(root).href)).toMatchObject({ updated: true });
-    });
-    await flushLogger();
-    const warnings = await readFile(log, "utf8");
-    expect(warnings).toContain(`Retained runtime verification failed (sha256): ${replaced}`);
-    expect(warnings).toContain("continuing update without a verified retained rollback runtime");
-    expect(
-      (await fs.readdir(base)).filter((name) => name.startsWith("openclaw-update-runtime-")),
-    ).toEqual([]);
-  } finally {
-    setLoggerOverride(previousLoggerOverride as Parameters<typeof setLoggerOverride>[0]);
-  }
+    }),
+  );
+  expect(warnings).toContain(`Retained runtime verification failed (sha256): ${replaced}`);
+  expect(warnings).toContain("continuing update without a verified retained rollback runtime");
+  expect(
+    (await fs.readdir(base)).filter((name) => name.startsWith("openclaw-update-runtime-")),
+  ).toEqual([]);
 });
 
-it("continues without retention when its worker fails, and removes the private runtime", async () => {
+it("continues without retention when its worker fails, keeping the native recovery helper", async () => {
   const { base, root, moduleUrl } = await runtimeFixture("retained-worker-failure-");
   const worker = path.join(root, "dist/infra/update-candidate-state.worker.js");
   await mkdir(path.dirname(worker));
@@ -545,16 +533,35 @@ it("continues without retention when its worker fails, and removes the private r
     `process.stderr.write("fixture retention worker crashed\\n");\nprocess.exit(3);\n`,
   );
   inspectionFixture.moduleUrl = moduleUrlFor(root).href;
+  const { liveEntry: nativeGate, entrypointsUrl } = await stageLiveNativeGate(root);
+  inspectionFixture.nativeGateModuleUrl = entrypointsUrl;
   const warnings = await retentionWarnings(base, () =>
-    expectRetentionSkipped(moduleUrl, {
-      ...retainOptions(root),
-      env: { ...process.env, HOME: base, OPENCLAW_STATE_DIR: path.join(base, "state") },
+    withRetainedUpdateRuntime(moduleUrl, async (retain) => {
+      const env = { ...process.env, HOME: base, OPENCLAW_STATE_DIR: path.join(base, "state") };
+      expect(await retain({ ...retainOptions(root), env })).toBeUndefined();
+      expect(captureRuntimeWorkerSource(new URL(moduleUrl)).runtimeGeneration).toBeUndefined();
+      // Replacement removes the installed helper; native recovery still runs the retained copy.
+      await expectRetainedNativeGate(nativeGate);
     }),
   );
   expect(warnings).toContain("continuing update without a verified retained rollback runtime");
   expect(
     (await fs.readdir(base)).filter((name) => name.startsWith("openclaw-update-runtime-")),
   ).toEqual([]);
+  expect(await contents(root, "dist/updater.mjs")).toBe("export {};\n");
+});
+
+it("stops the update when the retention worker's process cleanup is uncertain", async () => {
+  const { base, root, moduleUrl } = await runtimeFixture("retained-cleanup-uncertain-");
+  inspectionFixture.moduleUrl = moduleUrlFor(root).href;
+  vi.spyOn(commands, "runUtf8CommandWithTimeout").mockRejectedValue(
+    new CommandProcessCleanupError(),
+  );
+  const env = { ...process.env, HOME: base, OPENCLAW_STATE_DIR: path.join(base, "state") };
+  // A fallback would resolve undefined; unsettled subprocess custody must reach the caller.
+  await expect(
+    withRetainedUpdateRuntime(moduleUrl, (retain) => retain({ ...retainOptions(root), env })),
+  ).rejects.toSatisfy(hasCommandProcessCleanupError);
   expect(await contents(root, "dist/updater.mjs")).toBe("export {};\n");
 });
 
@@ -865,7 +872,8 @@ it.each(["npm", "npm-linked", "npm-unresolved", "pnpm11"] as const)(
   },
 );
 
-it("skips retention when only unsafe storage is available, leaving the runtime unchanged", async () => {
+// Native recovery has no retained helper without private storage, so the update stops before activation.
+it("refuses unsafe fallback storage without changing the installed runtime", async () => {
   const base = tempDirs.make("retained-owner-refusal-");
   const owner = path.join(base, "manager-project");
   const globalRoot = path.join(owner, "v11");
@@ -882,17 +890,14 @@ it("skips retention when only unsafe storage is available, leaving the runtime u
   });
   const original = await contents(root, "dist/state/store.js");
   const moduleUrl = moduleUrlFor(root).href;
-  const logs = tempDirs.make("retained-owner-refusal-log-");
-  const warnings = await retentionWarnings(logs, () =>
-    expectRetentionSkipped(moduleUrl, {
-      ...retainOptions(root),
-      installTarget: { manager: "pnpm", command: "pnpm", globalRoot, packageRoot: root },
+  await expect(
+    withRetainedUpdateRuntime(moduleUrl, async (retain) => {
+      await retain({
+        ...retainOptions(root),
+        installTarget: { manager: "pnpm", command: "pnpm", globalRoot, packageRoot: root },
+      });
     }),
-  );
-  expect(warnings).toContain(
-    "Updater temporary directory is inside an installation being replaced",
-  );
-  expect(warnings).toContain("continuing update without a verified retained rollback runtime");
+  ).rejects.toThrow("Updater temporary directory is inside an installation being replaced");
   expect(await contents(root, "dist/state/store.js")).toBe(original);
   expect(await fs.readdir(base)).toEqual(["manager-project"]);
 });
