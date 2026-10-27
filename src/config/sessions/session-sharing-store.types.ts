@@ -5,12 +5,9 @@ import type { SessionActorVersion } from "./session-actor-state.types.js";
 import type { SessionActor, SessionOwnerAssignment } from "./session-entry-provenance.js";
 import type { SessionMember, SessionParticipantRecord } from "./session-membership-facts.types.js";
 import type { SessionParticipantIdentity } from "./session-participant-identity.js";
+import type { SessionSharingExpectedEntry } from "./session-sharing-authority.types.js";
 import type { SessionEntry, SessionProfileInvolvement } from "./types.js";
 
-export type SessionSharingExpectedEntry = Pick<
-  SessionEntry,
-  "sessionId" | "createdActor" | "visibility" | "incognito"
->;
 export type SessionMetadataExpectedEntry = SessionSharingExpectedEntry &
   Pick<SessionEntry, "lifecycleRevision">;
 export type SessionOwnerAssignParams = {

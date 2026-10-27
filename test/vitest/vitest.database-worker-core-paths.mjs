@@ -744,6 +744,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugin-sdk/session-transcript-runtime.channel-mirror.test.ts",
   "src/plugin-sdk/session-transcript-runtime.configured-store.test.ts",
   "src/plugin-sdk/session-transcript-runtime.guarded.test.ts",
+  "src/plugin-sdk/session-transcript-runtime.invitation.test.ts",
   "src/plugin-sdk/session-transcript-runtime.worker-preparation.test.ts",
   "src/plugin-sdk/persistent-dedupe.worker.test.ts",
   "src/acp/runtime/session-meta.legacy-migration.test.ts",

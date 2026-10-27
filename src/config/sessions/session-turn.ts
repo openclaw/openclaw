@@ -86,6 +86,7 @@ export async function appendSessionTurnInWorker(
   const cliWriter = getCliHistoryWriter({ ...scope, storePath: scope.path });
   let custodyRequired = false;
   const freshCommitGuards = new Set<() => void>();
+  const mentionCommitGuards: Array<(() => void) | undefined> = [];
   const sources: (PreparedSessionSourceAuthority | undefined)[] = [];
   const committedCompletions: Promise<void>[] = [];
   const assertOwnerCurrent = () =>
@@ -252,16 +253,24 @@ export async function appendSessionTurnInWorker(
         }
         if (isRecord(facts) && facts.kind === "session-turn-fresh") {
           const source = typeof facts.index === "number" ? sources[facts.index] : undefined;
-          if (!source) {
+          const mentionGuard =
+            typeof facts.index === "number" ? mentionCommitGuards[facts.index] : undefined;
+          if (!source && !mentionGuard) {
             throw new Error("Session turn omitted its fresh-message authority");
           }
-          acceptSessionSourceValidation(
-            source,
-            // SAFETY: The paired worker read these facts in the current transaction.
-            facts.sourceValidation as SessionSourceValidation,
-          );
-          source.assertCurrent();
-          freshCommitGuards.add(source.assertCurrent);
+          if (source) {
+            acceptSessionSourceValidation(
+              source,
+              // SAFETY: The paired worker read these facts in the current transaction.
+              facts.sourceValidation as SessionSourceValidation,
+            );
+            source.assertCurrent();
+            freshCommitGuards.add(source.assertCurrent);
+          }
+          if (mentionGuard) {
+            mentionGuard();
+            freshCommitGuards.add(mentionGuard);
+          }
           return true;
         }
         if (
@@ -417,6 +426,19 @@ export async function appendSessionTurnInWorker(
           }
           if (!facts?.pending && message !== undefined && options.atomicGroup !== true) {
             message = sanitizeTranscriptMessageForStorage(message);
+          }
+          if (
+            !facts?.pending &&
+            !facts?.existing &&
+            message !== undefined &&
+            hooks?.prepareMentionInvitation
+          ) {
+            const preparedMention = hooks.prepareMentionInvitation(message);
+            if (preparedMention) {
+              append.mentionInvitation = structuredClone(preparedMention.invitation);
+              mentionCommitGuards[index] = preparedMention.assertCurrent;
+              append.freshGuard = true;
+            }
           }
           plan.options.messages[index] = {
             ...append,

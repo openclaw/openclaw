@@ -57,6 +57,7 @@ import { readLegacySessionTranscriptCatalogTitle } from "../gateway/session-tran
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { AgentMessage } from "./agent-core.js";
+import { projectSessionTranscriptAppendOptions } from "./session-transcript-append-options.js";
 import { withProjectedSessionTranscriptWriteLock } from "./session-transcript-lock-runtime.js";
 import {
   formatSessionTranscriptMemoryHitKey,
@@ -565,7 +566,7 @@ export async function appendSessionTranscriptMessageByIdentity<TMessage>(
 ): Promise<TranscriptMessageAppendResult<TMessage> | undefined> {
   return await appendTranscriptMessage(
     bindSessionTranscriptStoreScope(params, params.config),
-    params,
+    projectSessionTranscriptAppendOptions(params),
   );
 }
 
@@ -663,7 +664,11 @@ export async function appendSessionTranscriptMessageByIdentityStrict<TMessage>(
 export async function appendSessionTranscriptMessagesByIdentity<TMessage>(
   params: SessionTranscriptAppendMessagesParams<TMessage>,
 ): Promise<TranscriptMessageAppendResult<TMessage>[]> {
-  return await appendTranscriptMessages(params, params);
+  return await appendTranscriptMessages(params, {
+    config: params.config,
+    cwd: params.cwd,
+    messages: params.messages.map(projectSessionTranscriptAppendOptions),
+  });
 }
 
 /**

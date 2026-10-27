@@ -54,6 +54,10 @@ import {
   type SessionPendingInputAuthority,
 } from "./session-pending-input-authority.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
+import {
+  bindPendingInputMentionInvitation,
+  finishPendingInputSources,
+} from "./session-pending-input-live-owner.js";
 import type { PendingInputCustodyGrant } from "./session-pending-input-operations.types.js";
 import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
 import type { SessionPendingInputReceipt } from "./session-pending-input-receipt.types.js";
@@ -63,6 +67,7 @@ import {
   isFinalInputCompletion,
   parseSessionPendingInputMessage,
 } from "./session-pending-input-value.js";
+import type { PreparedSessionMentionInvitation } from "./session-sharing-authority.types.js";
 import {
   runWithSessionSourceScope,
   type SessionSourceAssertion,
@@ -77,6 +82,14 @@ export type { SessionPendingInputReceipt } from "./session-pending-input-receipt
 
 const receiptOwners = new WeakMap<SessionPendingInputReceipt, SessionPendingInputOwner>();
 const withdrawnOwners = new WeakSet<SessionPendingInputOwner>();
+
+/** Bind authority to the private accepted bytes, never a mutable receipt or imported transcript. */
+export function bindSessionPendingInputMentionInvitation(
+  receipt: SessionPendingInputReceipt,
+  prepare: (message: PersistedUserTurnMessage) => PreparedSessionMentionInvitation | undefined,
+): void {
+  bindPendingInputMentionInvitation(receiptOwners.get(receipt), prepare);
+}
 
 /** The private accepted bytes survive mutable receipt projections and replay preparation. */
 export function readSessionPendingInputRequesterOrigin(
@@ -138,23 +151,6 @@ export function withSessionPendingInputPersistence<T>(
   return owner ? runWithSessionPendingInputPersistence(owner, persist) : receipt.run(persist);
 }
 
-function finishPendingInputSources(
-  sources: readonly SessionPendingInputOwner[],
-  disposition: "cancelled" | "interrupted",
-): void {
-  const failures: unknown[] = [];
-  for (const source of sources) {
-    try {
-      source.finish(disposition);
-    } catch (error) {
-      failures.push(error);
-    }
-  }
-  if (failures.length) {
-    throw new AggregateError(failures, "Failed to finish collected input custody");
-  }
-}
-
 /** Bind one collected message to its private admitted sources without creating another durable queue. */
 export function bindSessionPendingInputSources(
   receipts: readonly SessionPendingInputReceipt[],
@@ -210,6 +206,7 @@ export function bindSessionPendingInputSources(
     ...first,
     // Source owners release their admission closures when settlement completes.
     assertCurrent: assertSessionPendingInputLifetimeCurrent.bind(undefined, first),
+    assertMentionInvitationCurrent: undefined,
     authority: undefined,
     requesterOrigin: undefined,
     inputId: aggregateInputId,

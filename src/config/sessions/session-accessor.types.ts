@@ -17,6 +17,10 @@ import type { SessionEntryCommitContext } from "./session-entry-commit-context.j
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type { SessionEntryProjection } from "./session-entry-snapshot-values.js";
+import type {
+  PreparedSessionMentionInvitation,
+  SessionMentionInvitation,
+} from "./session-sharing-authority.types.js";
 import type { SessionSourceAssertion } from "./session-source-authority.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type {
@@ -414,11 +418,14 @@ export type LockedTranscriptMessageAppendOptions<TMessage> = Omit<
 export type SessionTranscriptTurnUpdateMode = "inline" | "file-only" | "none";
 
 export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<unknown> & {
+  /** Internal worker effect; public transcript append options never carry invitation authority. */
+  mentionInvitation?: SessionMentionInvitation;
   /** Audited preparation runs once on the host against worker-read idempotency facts. */
   workerPreparation?: Pick<
     TranscriptMessageAppendOptions<unknown>,
     "prepareMessageAfterIdempotencyCheck" | "beforeFreshMessageCommit"
   > & {
+    prepareMentionInvitation?: (message: unknown) => PreparedSessionMentionInvitation | undefined;
     /** Requires expectedSessionId and one message without transaction predicates; awaited after duplicate detection. */
     prepareMessageAfterIdempotencyCheckAsync?: (message: unknown) => Promise<unknown>;
   };
