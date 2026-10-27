@@ -634,8 +634,6 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         releaseHeldResponse(recoveredResponse);
         await startup;
         startupAwaitCompleted = true;
-        providerDiagnostics = captureProviderDiagnostics();
-        restartObservedAt = undefined;
         expect(gateway.child?.pid).not.toBe(firstPid);
         client = await connect();
         await expectPersistedSteer();
@@ -687,6 +685,8 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           ["cancelled", accepted.get("ARCHIVED_SOURCE_UPDATE")],
           ["cancelled", cancelledChatId],
         ]);
+        providerDiagnostics = captureProviderDiagnostics();
+        restartObservedAt = undefined;
         await client.stopAndWait();
         client = undefined;
         await gateway.stopGateway();
