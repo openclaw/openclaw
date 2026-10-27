@@ -145,6 +145,7 @@ export async function withNodeGateway(
       stopReceiver = () => stopQaGatewayFixture(owner);
       const receiver = await owner.start({
         repoRoot: process.cwd(),
+        initializeCurrentRuntimeState: true,
         command: {
           executablePath: process.execPath,
           argsPrefix: [path.resolve("openclaw.mjs")],
