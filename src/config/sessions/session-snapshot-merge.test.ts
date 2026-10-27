@@ -295,3 +295,4 @@ describe("session snapshot merge", () => {
 
     expect(mergeSessionSnapshotChanges({ initial, next, current })).toEqual(current);
   });
+});

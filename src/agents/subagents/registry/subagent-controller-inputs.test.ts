@@ -219,3 +219,138 @@ it(
   },
 );
 
+it.for(["queued", "delete"] as const)(
+  "preserves the expired live delivery's %s owner",
+  async (owner) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const now = Date.now();
+      const entry = child({
+        cleanup: owner === "delete" ? "delete" : "keep",
+        childSessionIdentity: { sessionId: "child-session", lifecycleRevision: "child-revision" },
+        execution: {
+          status: "terminal",
+          endedAt: now - 1_000,
+          outcome: { status: "ok" },
+          lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        },
+        delivery: {
+          status: owner === "queued" ? "in_progress" : "pending",
+          queueId: owner === "queued" ? "requester-completion" : undefined,
+          deadlineAt: now - 1,
+        },
+      });
+      const harness = createSubagentSweeperHarness(entry, subagentRuns);
+      if (owner === "delete") {
+        // The second sweep reloads compacted payloads from the durable writer.
+        vi.mocked(stateWorker.runOpenClawStateWorkerOperation).mockRestore();
+        const lifecycle = createLifecycleControllerFixture(
+          { entry, runs: subagentRuns, realWorker: true },
+          {
+            callGateway: harness.callGateway,
+            cleanupBrowserSessionsForLifecycleEnd: vi.fn(),
+            ownersByEntry: new Map(),
+          },
+        );
+        harness.completeCleanupBookkeeping.mockImplementation(lifecycle.completeCleanupBookkeeping);
+      }
+      harness.discardTerminalDelivery.mockImplementation(
+        SubagentLifecycleController.discardTerminalDelivery,
+      );
+      await harness.sweeper.sweepOnce();
+      if (owner === "queued") {
+        expect(subagentRuns.get(entry.runId)?.delivery).toMatchObject({
+          status: "in_progress",
+          queueId: "requester-completion",
+        });
+        expect(harness.discardTerminalDelivery).not.toHaveBeenCalled();
+      } else {
+        expect(subagentRuns.has(entry.runId)).toBe(true);
+        await harness.sweeper.sweepOnce();
+        expect(harness.callGateway).toHaveBeenCalledWith(
+          expect.objectContaining({
+            method: "sessions.delete",
+            params: expect.objectContaining({
+              key: entry.childSessionKey,
+              expectedSessionId: "child-session",
+              expectedLifecycleRevision: "child-revision",
+            }),
+          }),
+        );
+        expect(subagentRuns.has(entry.runId)).toBe(false);
+      }
+    });
+  },
+);
+
+const batchIds = ["child-a", "child-b", "child-c"];
+it.each<[string, string, Partial<SubagentRunRecord> | undefined]>([
+  ["explicit", "retired", undefined],
+  ["explicit", "generation", { requesterSettleWake: pendingWake(batchIds, 5) }],
+  ["explicit", "store", { requesterStorePath: "/private/tmp/other/sessions.json" }],
+  ["explicit", "key", { requesterSessionKey: "other-requester" }],
+  ["explicit", "agent", { requesterAgentId: "research" }],
+  ["explicit", "no wake", { requesterSettleWake: undefined }],
+  ["legacy", "retired", undefined],
+])(
+  "uses surviving %s batch members and excludes a member with different %s",
+  (representation, _difference, overrides) => {
+    const legacy = representation === "legacy";
+    const requesterSessionKey = legacy ? "agent:main:global" : requesterKey;
+    const requester = { requesterSessionKey, requesterAgentId: legacy ? undefined : "main" };
+    const wake = pendingWake(batchIds);
+    const entry = child({ ...requester, requesterSettleWake: wake });
+    const sibling = child({ ...requester, runId: "child-b", requesterSettleWake: { ...wake } });
+    subagentRuns.set(entry.runId, entry);
+    subagentRuns.set(sibling.runId, sibling);
+    if (overrides) {
+      const excluded = child({
+        ...requester,
+        runId: "child-c",
+        requesterSettleWake: { ...wake },
+        ...overrides,
+      });
+      subagentRuns.set(excluded.runId, excluded);
+    }
+    const batchPrefix = `requester-settle:${legacy ? "unknown" : "main"}:${requesterSessionKey}`;
+    const scope = { sessionKey: requesterSessionKey };
+    const obsolete = reserve(`${batchPrefix}:child-a,child-b,child-c:yield-4`, scope);
+    const foreignOnly = reserve(`${batchPrefix}:child-c:yield-4`, scope);
+    expect(hasInput(entry)).toBe(false);
+
+    const surviving = reserve(`${batchPrefix}:child-a,child-b:yield-4`, scope);
+    expectRetired(entry, surviving, obsolete, foreignOnly);
+  },
+);
+
+it("keeps a pause notice's singleton identity separate from its completion batch", () => {
+  const wake = {
+    ...pendingWake(["child-a", "child-b"]),
+    pauseNotice: { acknowledgment: "Waiting for direction" },
+  };
+  const entry = child({ pauseReason: "sessions_yield", requesterSettleWake: wake });
+  subagentRuns.set(entry.runId, entry);
+  subagentRuns.set("child-b", child({ runId: "child-b", requesterSettleWake: { ...wake } }));
+  const completionBatch = reserve("requester-settle:main:global:child-a,child-b:yield-4");
+  const groupedPause = reserve("requester-settle:main:global:child-a,child-b:yield-4:pause");
+  expect(hasInput(entry)).toBe(false);
+
+  const pause = reserve("requester-settle:main:global:child-a:yield-4:pause");
+  expectRetired(entry, pause, completionBatch, groupedPause);
+});
+
+it("retires unclaimed reservations while a selected turn retains its input", async () => {
+  const entry = child();
+  const selected = reserve("subagent-completion:child-a:4");
+  const claim = expectDefined(tryClaimSessionControllerTask(selected), "controller claim");
+  const queued = reserve("subagent-completion:child-a:4");
+
+  retireInputs(entry);
+
+  expect(selected.abortSignal.aborted).toBe(false);
+  expect(queued.abortSignal.aborted).toBe(true);
+  expect(hasInput(entry)).toBe(true);
+  releaseSessionControllerClaim(claim);
+  await claim.settlement.promise;
+  expect(hasInput(entry)).toBe(false);
+});

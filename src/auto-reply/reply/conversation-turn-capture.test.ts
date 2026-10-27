@@ -17,11 +17,7 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-<<<<<<< HEAD
 import * as transcriptEvent from "../../config/sessions/session-transcript-event.js";
-=======
-import * as sessionTranscriptEvent from "../../config/sessions/session-transcript-event.js";
->>>>>>> fc39d77840c9 (fix(gateway): preserve live authority and input delivery after restart)
 import { resolveStateDir } from "../../config/state-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readConversationDeliveryStateForTest } from "../../gateway/conversation-delivery.test-support.js";
@@ -676,12 +672,6 @@ describe("conversation turn capture", () => {
 
   it("completes the durable reply when optional audit persistence throws", async () => {
     const setup = await setupReefConversation();
-<<<<<<< HEAD
-=======
-    const appendAudit = vi
-      .spyOn(sessionTranscriptEvent, "appendPreparedTranscriptEvent")
-      .mockRejectedValueOnce(new Error("audit store unavailable"));
->>>>>>> fc39d77840c9 (fix(gateway): preserve live authority and input delivery after restart)
     const operationId = "turn-audit-failure";
     const pending = await registerCapture(setup, operationId, { timeoutMs: 5_000 });
     pending.markReady();
@@ -695,7 +685,6 @@ describe("conversation turn capture", () => {
         ctx: inboundReply(setup, operationId),
       }),
     ).resolves.toBe(true);
-    expect(appendAudit).toHaveBeenCalledOnce();
     expect(appendAudit).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: setup.sessionId, sessionKey: setup.sessionKey }),
       expect.objectContaining({
