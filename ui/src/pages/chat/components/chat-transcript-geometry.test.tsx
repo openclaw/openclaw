@@ -78,6 +78,7 @@ it("reserves only the matching width and appearance, including text scale, width
       cachedKey ??= key;
       return key === cachedKey ? 300 : undefined;
     },
+    readRows: () => undefined,
     write: vi.fn(),
     writeRows: vi.fn(),
     invalidateRow: vi.fn(),

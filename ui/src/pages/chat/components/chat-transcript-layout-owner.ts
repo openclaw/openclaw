@@ -94,8 +94,13 @@ export class TranscriptLayoutOwner {
     this.rowWidth = width;
     this.paneWidth = paneWidth;
     this.rowGutter = gutter;
+    const heights = this.rowLayout?.readRows();
+    if (!heights) {
+      return;
+    }
     this.rows.forEach((row, index) => {
-      const minimum = this.rowMinimum(index);
+      const key = this.rowLayoutKey(index);
+      const minimum = key ? (heights[key] ?? 0) : 0;
       if (minimum > (instance.itemSizeCache.get(row.key) ?? 0)) {
         instance.resizeItem(index, minimum);
       }
@@ -210,6 +215,7 @@ export class TranscriptLayoutOwner {
       observer.observe(slot, { box });
       return observer;
     });
+    this.sync();
   }
 
   sync(size?: ResizeObserverSize, refreshActivity = false): void {

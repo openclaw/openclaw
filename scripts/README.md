@@ -134,7 +134,8 @@ NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-contr
 
 Use `--steps chat-typing,session-switch` for focused comparisons and `--trace`
 for separate Playwright/Inspector attribution runs. `--compare-bundle-dir` and
-`--control-bundle-dir` add candidate and A/A control builds. Reports retain the
+`--control-bundle-dir` add candidate and A/A control builds. Repeat the control
+option for interleaved base/base/head/head observations. Reports retain the
 metric time domain: WebKit Inspector durations are wall time, while Chromium
 CDP uses thread CPU. Untraced WebKit runs leave those counters null. `--cpu-only`
 collects WebKit's sampled process utilization without Timeline or ScriptProfiler;

@@ -43,7 +43,7 @@ const { values } = parseArgs({
   options: {
     "bundle-dir": { type: "string", default: "dist/control-ui" },
     "compare-bundle-dir": { type: "string" },
-    "control-bundle-dir": { type: "string" },
+    "control-bundle-dir": { type: "string", multiple: true },
     output: { type: "string", default: ".artifacts/control-ui-engines" },
     engines: { type: "string", default: "chromium,webkit" },
     viewport: { type: "string", default: "both" },
@@ -66,7 +66,7 @@ if (!Number.isInteger(pairs) || pairs < 1 || new Set(engines).size !== engines.l
 if (!["desktop", "mobile", "both"].includes(values.viewport)) {
   throw new Error("Invalid viewport");
 }
-if (values["control-bundle-dir"] && !values["compare-bundle-dir"]) {
+if (values["control-bundle-dir"]?.length && !values["compare-bundle-dir"]) {
   throw new Error("--control-bundle-dir requires --compare-bundle-dir");
 }
 if (values.trace && values["cpu-only"]) {
@@ -80,7 +80,7 @@ const viewports = [
 const directories = [
   values["bundle-dir"],
   values["compare-bundle-dir"],
-  values["control-bundle-dir"],
+  ...(values["control-bundle-dir"] ?? []),
 ].filter((directory): directory is string => Boolean(directory));
 const servers: Array<{
   directory: string;

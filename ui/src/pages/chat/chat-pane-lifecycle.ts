@@ -399,6 +399,11 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     if (this.draft !== undefined) {
       this.state.handleChatDraftChange(this.draft, []);
     }
+    // Admit the initial history read before installing secondary observers.
+    // Its replies run after this task, when all subscriptions below are in place.
+    this.applyApplicationConfig(this.context.config.current);
+    this.applySessionsState(this.context.sessions.state);
+    this.applyGatewaySnapshot(this.context.gateway.snapshot);
     const handleBrowserAnnotation = (event: Event) => this.receiveBrowserAnnotation(event);
     chatState.addCleanup(listen(window, BROWSER_ANNOTATION_EVENT, handleBrowserAnnotation));
     // Each connection edge retires media custody and transcript subscriptions synchronously.
@@ -506,10 +511,8 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         }
       }),
     );
-    this.applyApplicationConfig(this.context.config.current);
     // Apply execution/media policy at publication, not at Solid's deferred render boundary.
     chatState.addCleanup(this.context.config.subscribe(this.applyApplicationConfig.bind(this)));
-    this.applySessionsState(this.context.sessions.state);
     // Roster receipts also evict deleted history, settle pending aborts, and admit queued sends.
     chatState.addCleanup(this.context.sessions.subscribe(this.applySessionsState.bind(this)));
     chatState.addCleanup(
@@ -539,7 +542,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         },
       ),
     );
-    this.applyGatewaySnapshot(this.context.gateway.snapshot);
     this.synchronizeForegroundTranscript();
     const composerPresentation = new ChatPaneComposerHandoff(this.context, {
       state: () => this.state,
