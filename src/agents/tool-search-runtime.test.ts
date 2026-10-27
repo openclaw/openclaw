@@ -292,28 +292,41 @@ describe("Tool Search input schemas", () => {
     });
   });
 
-  it("keeps the canonical contract after descriptor publication and reuse", async () => {
+  it("keeps the canonical contract through publication, metadata change, and reuse", async () => {
     const cleanups: Array<(reason: string) => Promise<void>> = [];
-    const attempt = () =>
+    const attempt = (description: string) =>
       finalizeAgentTools({
-        tools: [fakeTool("read", readToolInputSchema)],
+        tools: [{ ...fakeTool("read", readToolInputSchema), description }],
         hookContext: { sessionId: "gemini-read-reuse" },
         modelProvider: "google",
         modelId: "gemini-4-argon",
         wrapBeforeToolCallHook: false,
         registerRunCleanup: (cleanup) => cleanups.push(cleanup),
       });
-    const cold = attempt();
-    expect(cold[0]?.parameters).toHaveProperty("properties.optional.enum", ["true"]);
-    await Promise.all(cleanups.map((cleanup) => cleanup("finished")));
+    const settle = async () => {
+      await Promise.all(cleanups.splice(0).map((cleanup) => cleanup("finished")));
+    };
 
-    const { catalogRef, runtime } = createRuntime(attempt());
-    expect(catalogRef.current?.entries[0]?.parameters).toHaveProperty("properties.optional.enum", [
-      "true",
-    ]);
+    const cold = attempt("Run read");
+    expect(cold[0]?.parameters).toHaveProperty("properties.optional.enum", ["true"]);
+    await settle();
+
+    // A metadata change rebuilds the pending descriptor from the published schema.
+    const warm = attempt("Run read with a new description");
     await expect(
-      runtime.call("read", { path: "nonexistent.txt", optional: true }),
+      createRuntime(warm).runtime.call("read", { path: "nonexistent.txt", optional: true }),
     ).resolves.toBeDefined();
+    await settle();
+
+    const rebuilt = createRuntime(attempt("Run read with a new description"));
+    expect(rebuilt.catalogRef.current?.entries[0]?.parameters).toHaveProperty(
+      "properties.optional.enum",
+      ["true"],
+    );
+    await expect(
+      rebuilt.runtime.call("read", { path: "nonexistent.txt", optional: true }),
+    ).resolves.toBeDefined();
+    await settle();
   });
 
   it("advertises the canonical contract in catalog discovery", async () => {

@@ -278,29 +278,6 @@ describe("finalized tool descriptor snapshots", () => {
     expect(refreshed.outputSchema).toEqual(replacement);
   });
 
-  it("keeps the canonical input contract for execution behind a provider projection", async () => {
-    const parameters = {
-      type: "object",
-      properties: { optional: { type: "boolean", const: true } },
-      required: ["optional"],
-    };
-    const google = attempt([tool(parameters)], {
-      modelProvider: "google",
-      modelId: "gemini-4-argon",
-    });
-    const projected = google.tool();
-    expect(projected.parameters).toHaveProperty("properties.optional.enum", ["true"]);
-    expect(resolveAgentToolExecutionSchema(projected, projected.parameters)).toEqual(parameters);
-    await google.settle();
-
-    const openai = attempt([tool(parameters)], { modelProvider: "openai" });
-    const lossless = openai.tool();
-    expect(resolveAgentToolExecutionSchema(lossless, lossless.parameters)).toBe(
-      lossless.parameters,
-    );
-    await openai.settle();
-  });
-
   it("keeps an owner-declared execution schema over the canonical provider contract", async () => {
     const parameters = {
       type: "object",

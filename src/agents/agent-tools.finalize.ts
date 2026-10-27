@@ -245,7 +245,11 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
       normalized: normalizedSchemas[index]!,
       finalSource: tool.parameters,
       outputSource: tool.outputSchema,
-      executionSchema: getCanonicalToolParameterSchema(normalizedSchemas[index]!),
+      // A rebuilt descriptor may reuse the previous attempt's published schema, which has no
+      // canonical entry of its own; the matched source schema keeps that contract alive.
+      executionSchema:
+        getCanonicalToolParameterSchema(normalizedSchemas[index]!) ??
+        (entry?.source === sources[index] ? entry.executionSchema : undefined),
       descriptor: {
         name: tool.name,
         description: tool.description,
