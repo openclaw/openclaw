@@ -204,13 +204,17 @@ export async function shouldSwitchToLiveModel(params: {
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
   });
+  // An unpinned selection permits the credential prepared automatically for
+  // this run. A user pin removal still requires a restart to release that pin.
+  const compareAuthProfile =
+    persisted.authProfileId !== undefined || params.currentAuthProfileIdSource === "user";
   if (
     !hasDifferentLiveSessionModelSelection(
       {
         provider: params.currentProvider,
         model: params.currentModel,
         agentRuntimeOverride: params.currentAgentRuntimeOverride,
-        authProfileId: params.currentAuthProfileId,
+        authProfileId: compareAuthProfile ? params.currentAuthProfileId : undefined,
         authProfileIdSource: params.currentAuthProfileIdSource,
       },
       persisted,

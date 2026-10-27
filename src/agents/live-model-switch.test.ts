@@ -139,6 +139,78 @@ it("treats auth-profile-source changes as no-op when no auth profile is selected
   ).toBeUndefined();
 });
 
+it.each([undefined, "auto"] as const)(
+  "does not restart an applied model for an unpinned automatic credential (%s)",
+  async (currentAuthProfileIdSource) => {
+    const sessionEntry = {
+      sessionId: "same-conversation",
+      liveModelSwitchPending: true,
+      providerOverride: "openai",
+      modelOverride: "synthetic-model",
+      agentRuntimeOverride: "codex",
+    };
+    state.loadSessionStoreMock.mockReturnValue({ main: sessionEntry });
+
+    await expect(
+      mod.shouldSwitchToLiveModel(
+        makeShouldSwitchParams({
+          currentProvider: "openai",
+          currentModel: "synthetic-model",
+          currentAgentRuntimeOverride: "codex",
+          currentAuthProfileId: "automatically-prepared-profile",
+          currentAuthProfileIdSource,
+        }),
+      ),
+    ).resolves.toBeUndefined();
+    await state.updateSessionStoreMock.mock.results[0]?.value;
+    expect(sessionEntry).toEqual({
+      sessionId: "same-conversation",
+      providerOverride: "openai",
+      modelOverride: "synthetic-model",
+      agentRuntimeOverride: "codex",
+    });
+  },
+);
+
+it("still restarts when the user removes a pinned credential", async () => {
+  await expect(
+    resolvePendingSelection(
+      { providerOverride: "openai", modelOverride: "synthetic-model" },
+      {
+        currentProvider: "openai",
+        currentModel: "synthetic-model",
+        currentAuthProfileId: "user-selected-profile",
+        currentAuthProfileIdSource: "user",
+      },
+    ),
+  ).resolves.toMatchObject({
+    provider: "openai",
+    model: "synthetic-model",
+    authProfileId: undefined,
+  });
+  expect(state.updateSessionStoreMock).not.toHaveBeenCalled();
+});
+
+it("still restarts for a newly selected automatic credential", async () => {
+  await expect(
+    resolvePendingSelection(
+      {
+        providerOverride: "openai",
+        modelOverride: "synthetic-model",
+        authProfileOverride: "new-profile",
+        authProfileOverrideSource: "auto",
+      },
+      {
+        currentProvider: "openai",
+        currentModel: "synthetic-model",
+        currentAuthProfileId: "previous-profile",
+        currentAuthProfileIdSource: "auto",
+      },
+    ),
+  ).resolves.toMatchObject({ authProfileId: "new-profile", authProfileIdSource: "auto" });
+  expect(state.updateSessionStoreMock).not.toHaveBeenCalled();
+});
+
 it("returns undefined when liveModelSwitchPending is false", async () => {
   state.loadSessionStoreMock.mockReturnValue({
     main: {
@@ -264,6 +336,47 @@ describe.each(["already-applied", "accepted"] as const)(
     });
   },
 );
+
+it("preserves an automatic credential removal committed before the pending clear", async () => {
+  const sessionEntry = {
+    liveModelSwitchPending: true,
+    providerOverride: "openai",
+    modelOverride: "synthetic-model",
+    authProfileOverride: "profile-a" as string | undefined,
+    authProfileOverrideSource: "auto" as string | undefined,
+  };
+  state.loadSessionStoreMock.mockReturnValue({ main: sessionEntry });
+  const applyPatch = state.updateSessionStoreMock.getMockImplementation();
+  if (!applyPatch) {
+    throw new Error("Session patch fixture is unavailable");
+  }
+  const gate = createDeferredCore();
+  state.updateSessionStoreMock.mockImplementationOnce(async (...args: unknown[]) => {
+    await gate.promise;
+    return applyPatch(...args);
+  });
+  try {
+    await expect(
+      mod.shouldSwitchToLiveModel(
+        makeShouldSwitchParams({
+          currentProvider: "openai",
+          currentModel: "synthetic-model",
+          currentAuthProfileId: "profile-a",
+          currentAuthProfileIdSource: "auto",
+        }),
+      ),
+    ).resolves.toBeUndefined();
+    expect(state.updateSessionStoreMock).toHaveBeenCalledTimes(1);
+    delete sessionEntry.authProfileOverride;
+    delete sessionEntry.authProfileOverrideSource;
+  } finally {
+    gate.resolve();
+    await state.updateSessionStoreMock.mock.results[0]?.value;
+  }
+  expect(sessionEntry).toMatchObject({ liveModelSwitchPending: true });
+  expect(sessionEntry).not.toHaveProperty("authProfileOverride");
+  expect(sessionEntry).not.toHaveProperty("authProfileOverrideSource");
+});
 
 it("clearLiveModelSwitchPending is a no-op when sessionKey is missing", async () => {
   await mod.clearLiveModelSwitchPending({
