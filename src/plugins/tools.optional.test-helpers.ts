@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import path from "node:path";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runPluginRegisterSyncInRegistry } from "./loader-module-runtime.js";
 import { createPluginRecord as createLoaderPluginRecord } from "./loader-records.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
@@ -19,19 +20,54 @@ export type MockRegistryToolEntry = {
   factory: (ctx: OpenClawPluginToolContext) => unknown;
 };
 
-const toolManifest = (id: string, tool: string) => ({
-  id,
-  origin: "bundled",
-  enabledByDefault: true,
-  channels: [],
-  providers: [],
-  contracts: { tools: [tool] },
-});
+export function createOptionalToolManifest(
+  id: string,
+  toolNames: readonly string[],
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    id,
+    origin: "bundled" as const,
+    enabledByDefault: true,
+    channels: [],
+    providers: [],
+    contracts: { tools: [...toolNames] },
+    ...overrides,
+  };
+}
+
+export function createOptionalToolContext(): { config: OpenClawConfig; workspaceDir: string } {
+  return {
+    config: {
+      plugins: {
+        enabled: true,
+        load: { paths: ["/tmp/plugin.js"] },
+        slots: { memory: "none" },
+      },
+    },
+    workspaceDir: "/tmp",
+  };
+}
+
+export function createConfiguredFeishuToolContext<T extends string>(conversationReadOrigin: T) {
+  const context = createOptionalToolContext();
+  return {
+    ...context,
+    config: {
+      ...context.config,
+      plugins: {
+        ...context.config.plugins,
+        allow: ["feishu"],
+      },
+    },
+    conversationReadOrigin,
+  };
+}
 
 export function createXaiToolManifest() {
   const rootPath = "plugins.entries.xai.config";
   return {
-    ...toolManifest("xai", "x_search"),
+    ...createOptionalToolManifest("xai", ["x_search"]),
     providers: ["xai"],
     setup: { providers: [{ id: "xai", envVars: ["XAI_API_KEY"] }] },
     toolMetadata: {
@@ -47,7 +83,7 @@ export function createXaiToolManifest() {
 export function createFeishuToolManifest() {
   const credentials = { rootPath: "channels.feishu", required: ["appId", "appSecret"] };
   return {
-    ...toolManifest("feishu", "feishu_doc"),
+    ...createOptionalToolManifest("feishu", ["feishu_doc"]),
     channels: ["feishu"],
     toolMetadata: {
       feishu_doc: {

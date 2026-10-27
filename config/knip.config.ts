@@ -169,6 +169,7 @@ const repositoryScriptEntries = [
   "scripts/perf/diagnostic-profile-measure.ts!",
   "scripts/perf/owned-directory-events-measure.ts!",
   "scripts/perf/plugin-gateway-scope-measure.ts!",
+  "scripts/perf/plugin-tool-resolution-measure.ts!",
   // pg-footprint.md and the pool proof commands execute these entries by path.
   "scripts/perf/pg-footprint.ts!",
   "scripts/perf/pg-footprint-preload.mjs!",
