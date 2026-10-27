@@ -259,10 +259,16 @@ async function migrateLegacyRootMemoryFile(
       `${CANONICAL_ROOT_MEMORY_FILENAME}.pre-merge`,
     );
     await fs.promises.copyFile(detection.canonicalPath, canonicalBackupPath);
+    // Publication must address the workspace through its real directory:
+    // configured workspace aliases are supported inputs (detection keeps the
+    // alias), but the atomic writer rejects symlinked parents by design. The
+    // final-file symlink rejection is unaffected — earlier bounded reads
+    // already verified the canonical file itself as a regular file.
+    const publicationDir = await fs.promises.realpath(detection.workspaceDir);
     await replaceFileAtomic({
-      filePath: detection.canonicalPath,
+      filePath: path.join(publicationDir, CANONICAL_ROOT_MEMORY_FILENAME),
       content: merged,
-      dirMode: (await fs.promises.stat(detection.workspaceDir)).mode & 0o7777,
+      dirMode: (await fs.promises.stat(publicationDir)).mode & 0o7777,
       preserveExistingMode: true,
       tempPrefix: CANONICAL_ROOT_MEMORY_FILENAME,
       syncTempFile: true,

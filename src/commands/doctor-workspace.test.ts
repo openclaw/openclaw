@@ -238,6 +238,36 @@ describe("root memory repair", () => {
     },
   );
 
+  it("merges through a symlinked workspace directory alias", async () => {
+    if (!(await seedMemory())) {
+      return;
+    }
+    // Configured workspace aliases are supported inputs: the repair must
+    // resolve the alias for atomic publication instead of failing on the
+    // symlinked parent, while still writing the same canonical file.
+    const aliasDir = `${tmpDir}-alias`;
+    await fs.symlink(tmpDir, aliasDir, process.platform === "win32" ? "junction" : "dir");
+    try {
+      await maybeRepairWorkspaceMemoryHealth({
+        prompter,
+        scope: { ...scope, workspaceDir: aliasDir },
+      });
+
+      const canonical = await fs.readFile(canonicalPath, "utf8");
+      expect(canonical).toContain("# Canonical\n");
+      expect(canonical).toContain("# Legacy\n");
+      await expectPathMissing(legacyPath);
+      const repairDir = path.join(tmpDir, ".openclaw-repair", "root-memory");
+      const archives = await fs.readdir(repairDir);
+      await expect(
+        fs.readFile(path.join(repairDir, archives[0]!, "MEMORY.md.pre-merge"), "utf8"),
+      ).resolves.toBe("# Canonical\n");
+      await expect(fs.readFile(path.join(aliasDir, "MEMORY.md"), "utf8")).resolves.toBe(canonical);
+    } finally {
+      await fs.rm(aliasDir, { force: true, recursive: true });
+    }
+  });
+
   it("preserves the workspace mode across a successful merge", async () => {
     if (!(await seedMemory())) {
       return;
