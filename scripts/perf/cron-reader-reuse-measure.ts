@@ -109,7 +109,7 @@ try {
     for (let index = 0; index < iterations; index++) {
       const loaded = await loadCronJobsStoreWithConfigJobsReadOnly(storePath);
       assert.equal(loaded.store.jobs.length, 40);
-      assert.equal(loaded.store.jobs[0].name, jobs[0].name);
+      assert.equal(loaded.store.jobs[0]?.name, jobs[0]?.name);
     }
     const wallMs = performance.now() - start;
     const used = process.cpuUsage(cpu);
