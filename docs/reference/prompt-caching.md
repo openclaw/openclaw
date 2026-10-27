@@ -41,6 +41,21 @@ necessarily delete the provider's older cache entry before its normal expiry.
 
 ## Stable tools between turns
 
+Computer definitions capture the capabilities and target scope present when the
+session's tool surface is established, using the provider-specific guidance and
+action schema. The session checkpoint retains those description and schema bytes
+across later discovery and reconnects. Selecting or refreshing a desktop reports
+its current capabilities in a tool result; it never rewrites that definition.
+An unavailable action returns a structured refusal naming the currently available
+actions. Current observation references and authorization still govern execution.
+Provider configuration changes invalidate the tool pin; device readiness does not.
+The existing route and history-boundary refresh contracts remain in effect.
+
+The `sessions_yield` description does not change with sibling tool availability.
+Per-turn prompt-hook tool restrictions gate execution while retaining the session's
+provider definitions. Genuine config, skill, and tool refreshes still apply; the
+tool set is not permanently frozen to the first request.
+
 Within an embedded run, bounded transcript reloads retain the admitted history
 boundary even when its compaction summary falls outside the loaded window.
 Actual compaction or reset starts a new prompt series. Permission changes still
@@ -89,6 +104,15 @@ Live embedded turns carry watched-group membership and titles beside the current
 turn instead of rebuilding the system suffix. Routes that retain runtime context
 replay earlier snapshots unchanged. The watch registry and existing read-access
 gates still determine what the model may see; a watch never grants send access.
+
+Embedded turns also carry producer-marked conversation and delivery instructions
+beside the current turn. Subagent role, rules, output format, restrictions, and
+conditional spawning rules remain in the system prompt on launch and follow-up.
+The task message carries the actual completion mode, depth, requester, and label.
+Unmarked spawn-profile and attachment additions keep their existing system placement.
+Configured instructions outside the marked conversation section remain in the
+system prompt. Skill, tool, memory, and configuration refreshes retain their
+existing update behavior.
 
 ## Keep replayed tool results stable
 
@@ -549,7 +573,7 @@ diagnostics:
 
 ### What to inspect
 
-Prompt-cache observations record `input`, `cacheRead`, and `cacheWrite` per completed foreground model request alongside its stable system-prefix, volatile-suffix, and tools fingerprints, and flag cache-read drops from the previous request, including reported zero reads; billing totals remain separate. A flagged drop lists the tracked changes since the last request (`model`, `cacheRetention`, `transport`, `streamStrategy`, `systemPrompt`, `systemPromptSuffix`, `tools`, `aggregateToolResultTruncation`). `systemPrompt` and `systemPromptSuffix` changes name the sections that changed: built-in sections such as `Skills` or `Runtime` by name, any other heading by its heading line (for example `## Silent Replies`), and text before the first heading as `Other`. Only section digests are kept, never section text; long heading lines, very many headings, and long change lists are capped. Trace results require cache tracing (`diagnostics.cacheTrace.enabled` or `OPENCLAW_CACHE_TRACE=1`) and identify each request within its attempt.
+Prompt-cache observations record `input`, `cacheRead`, and `cacheWrite` per completed foreground model request alongside its stable system-prefix, volatile-suffix, and tools fingerprints, and flag cache-read drops from the previous request, including reported zero reads; billing totals remain separate. A flagged drop lists the tracked changes since the last request (`model`, `cacheRetention`, `transport`, `streamStrategy`, `systemPrompt`, `systemPromptSuffix`, `tools`, `aggregateToolResultTruncation`). `systemPrompt` and `systemPromptSuffix` changes identify built-in sections such as `Skills` or `Runtime` by name, other headings by bounded section positions, and text before the first heading as `Other`. Reported suffix drops also name changed facts, such as `Runtime.model`, `Session routing.hidden delegation`, or `Tooling.tool list order`; arbitrary context uses line positions. Changed tool descriptions use tool positions (or the built-in `computer` name) and line or capability-clause labels. These fact details never print values, arbitrary headings, custom tool names, descriptions, or fact digests. Fact comparison and hashing run only when a drop is reported. The tracker privately retains at most 32,768 UTF-16 code units of suffix text and 16,384 code units of tool descriptions per request snapshot, alongside its existing digests. Unchanged suffixes share the retained text; oversized sources report that fact detail is unavailable. These before-images follow the current/last-measured snapshot lifecycle and the existing 512-tracker bound and session cleanup. Trace snapshots contain digests, never these before-images; section and fact change lists are capped. Trace results require cache tracing (`diagnostics.cacheTrace.enabled` or `OPENCLAW_CACHE_TRACE=1`) and identify each request within its attempt.
 
 When an adapter marks cache telemetry unavailable, observations omit its cache
 read/write counts and preserve the last measured comparison baseline. A later

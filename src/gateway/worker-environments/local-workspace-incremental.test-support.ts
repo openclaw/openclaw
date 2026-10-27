@@ -10,6 +10,7 @@ import {
 } from "../../../test/helpers/promise.js";
 import type { SandboxBackendHandle } from "../../agents/sandbox/backend-handle.types.js";
 import { stagedInputDirectory, STAGED_INPUT_GITIGNORE } from "../../media/staged-inputs.js";
+import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,
@@ -89,7 +90,46 @@ export async function proveWorkerOwnedIncrementalWorkspace(owner: LocalWorkspace
   sql.calibrate();
   const projection = await prepare(owner);
   await writeText(projection, "source.txt", "worker-persisted edit\n");
-  await synchronize(owner);
+  const readFastState = () =>
+    Promise.all([
+      executeExistingOpenClawStateRead(
+        {},
+        { type: "config.health.read", input: undefined },
+        { current: true, live: true },
+      ),
+      executeExistingOpenClawStateRead(
+        {},
+        { type: "subagents.runs", scope: { kind: "ids", runIds: ["synthetic-missing-run"] } },
+        { current: true, live: true },
+      ),
+      executeExistingOpenClawStateRead(
+        {},
+        { type: "deliveryQueue.outbound", mode: "pending" },
+        { current: true, live: true },
+      ),
+    ]);
+  const expectedReads = await readFastState();
+  expect(expectedReads.map((reply) => reply?.type)).toEqual([
+    "config.health.read",
+    "subagents.runs",
+    "deliveryQueue.outbound",
+  ]);
+  let synchronized = false;
+  const synchronizing = synchronize(owner).finally(() => {
+    synchronized = true;
+  });
+  const reading = (async () => {
+    for (;;) {
+      expect(await readFastState()).toEqual(expectedReads);
+      if (synchronized) {
+        return;
+      }
+    }
+  })();
+  // Drain both owners on failure before the fixture can delete its workspace.
+  await Promise.allSettled([synchronizing, reading]);
+  await synchronizing;
+  await reading;
   await expectText(owner.worktree.path, "source.txt", "worker-persisted edit\n");
   await withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async (store) => {
     expect(store.get()!.baseline_json).toBeNull();

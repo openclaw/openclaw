@@ -13,6 +13,7 @@ import type {
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
+import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import type {
   AgentDatabaseExecutionFileIdentity,
@@ -52,25 +53,6 @@ import type { SessionTranscriptAuthorityReceipt } from "./session-transcript-aut
 import { collectSessionEntryLookupKeys, normalizeStoreSessionKey } from "./store-entry.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
-// Persisted entries are JSON; isolate mutable containers without copying immutable strings.
-function copySessionEntryForResult(entry: SessionEntry): SessionEntry {
-  const copied = { ...entry };
-  const pending: object[] = [copied];
-  while (pending.length) {
-    const parent = pending.pop()!;
-    for (const key of Object.keys(parent)) {
-      const value: unknown = Reflect.get(parent, key);
-      if (value === null || typeof value !== "object") {
-        continue;
-      }
-      const child = Array.isArray(value) ? [...value] : { ...value };
-      Reflect.set(parent, key, child);
-      pending.push(child);
-    }
-  }
-  return copied;
-}
-
 export async function patchSessionEntryInWorker(params: {
   database: OpenClawAgentDatabaseOptions & { path: string };
   databaseIdentity?: string;
@@ -87,7 +69,7 @@ export async function patchSessionEntryInWorker(params: {
   prepare(snapshot: SqliteLifecycleTargetSnapshot): Promise<SessionEntryPatchCommit | undefined>;
   onCommitted?: SessionEntryPatchCommitObserver;
   onCommittedSource?: (source: CapturedSessionEntryReadSource, entry: SessionEntry) => void;
-}): Promise<{ entry: SessionEntry | null; wrote: boolean }> {
+}): Promise<{ entry: Readonly<SessionEntry> | null; wrote: boolean }> {
   let source = params.preparedSource;
   const sourceChecks = source?.checks ?? [];
   const releaseSource = () => {
@@ -103,7 +85,7 @@ export async function patchSessionEntryInWorker(params: {
   let retainedEntry: SessionEntry | undefined;
   return await runSessionEntryWorkerOperation<
     SessionEntryPatchCommitted,
-    { entry: SessionEntry | null; wrote: boolean }
+    { entry: Readonly<SessionEntry> | null; wrote: boolean }
   >({
     ...params,
     releaseSource,
@@ -134,9 +116,10 @@ export async function patchSessionEntryInWorker(params: {
       if (actor) {
         actor.entry = entry;
       }
-      // Public results remain mutable and detached from the resident publication.
+      // Internal callers replace fields locally; nested facts belong to the frozen publication.
+      // SDK egress owns the fully mutable public copy.
       if (delta.returnEntry) {
-        candidate.entry = copySessionEntryForResult(entry);
+        candidate.entry = { ...freezeTrustedJsonSnapshot(entry) };
       }
       delete candidate.entryDelta;
     },

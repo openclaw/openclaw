@@ -1,3 +1,5 @@
+Pele renderer notices; legacy Mermaid dependency notices retained until the post-cutover cleanup.
+
 Third-party notices for the bundled Mermaid renderer
 
 The following upstream license texts accompany the bundled diagram engine and its dependencies.

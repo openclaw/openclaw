@@ -50,7 +50,8 @@ const fixture = vi.hoisted(() => {
     pools: [] as WorkerTaskPool[],
   };
 });
-vi.mock("../infra/runtime-worker-url.js", () => ({
+vi.mock("../infra/runtime-worker-url.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/runtime-worker-url.js")>()),
   resolveRuntimeWorkerUrl: () => new URL(fixture.workerUrl),
 }));
 // mock-isolation: Control worker execution and retirement without starting real worker threads.

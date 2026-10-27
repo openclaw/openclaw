@@ -341,6 +341,20 @@ match, and the registry must remain an unaliased regular file with verified agen
 ownership. Recovery preserves current SQLite settings and the archive's protection
 and disposal status. Automatic discovery keeps its strict identity checks; changed
 contents or other metadata remain deferred.
+
+This registry-only rebind does not relocate or adopt an entire migration
+archive. If `session-sqlite-import-archive` was moved to another volume and its
+original path now resolves through a directory symlink, import and archive
+restore refuse that topology. Copying the archived files back into a regular
+directory does not by itself restore their receipt-bound identities; matching
+contents alone is not enough. There is no supported automatic CLI recovery for
+this cross-volume layout. Preserve the symlink, relocated archive, and
+`<state-dir>/session-sqlite-migration-runs/` without edits, make a verified
+backup, and contact the maintainers for assisted recovery. Include the Doctor
+warning and `openclaw doctor --session-sqlite inspect --session-sqlite-all-agents`
+output, but keep transcript contents and raw manifests private. Do not delete
+or rewrite archives or receipts to silence the warning.
+
 The identity format is the same in 2026.9.4 and 2026.9.5; 2026.9.5 added historical
 archive discovery that checks these older receipts.
 

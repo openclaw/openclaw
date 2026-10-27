@@ -691,7 +691,10 @@ serveOwnedWorkerTasks(
             ? value.result.response?.body
             : undefined;
       const deflated = value.kind === "rpc" ? value.page.encodedMessagesDeflate : undefined;
-      return [...(body ? [body.buffer] : []), ...(deflated ? [deflated.buffer] : [])];
+      const activity = value.kind === "rpc" ? value.page.encodedResponse?.activity : undefined;
+      return [body?.buffer, deflated?.buffer, activity?.buffer].filter(
+        (buffer) => buffer !== undefined,
+      );
     },
     closeResource: (key) => {
       const request = decodeAgentDatabaseReaderRequest(key);

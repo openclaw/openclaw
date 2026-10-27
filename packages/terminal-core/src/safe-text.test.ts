@@ -1,6 +1,7 @@
+import { Chalk } from "chalk";
 // Terminal Core tests cover safe text behavior.
 import { describe, expect, it } from "vitest";
-import { hasTerminalControl, sanitizeTerminalText } from "./safe-text.js";
+import { hasTerminalControl, sanitizeTerminalText, terminalText } from "./safe-text.js";
 
 describe("hasTerminalControl", () => {
   it.each([
@@ -31,5 +32,18 @@ describe("sanitizeTerminalText", () => {
 
   it("escapes line controls while preserving printable text", () => {
     expect(sanitizeTerminalText("a\tb\nc\rd")).toBe("a\\tb\\nc\\rd");
+  });
+});
+
+describe("terminalText", () => {
+  it("escapes only interpolated values before styling, preserving literal layout and colors", () => {
+    const value =
+      "café\u001b[31mred\u001b[0m\u001b]8;;https://example.invalid\u0007link\u001b]8;;\u0007\u009b2J\r\n\tend";
+    const colors = new Chalk({ level: 1 });
+    const report = terminalText`Name:\t${value}\nCount: ${2}`;
+    expect(colors.green(report)).toBe(colors.green("Name:\tcaféredlink\\r\\n\\tend\nCount: 2"));
+    expect(report).not.toContain("\u001b");
+    expect(report).not.toContain("\u009b");
+    expect(colors.green(report)).toContain("\u001b[32m");
   });
 });

@@ -462,6 +462,8 @@ describe("worker turn execution", () => {
               },
             },
             currentInboundContext: { text: "Current sender: fixture-sender" },
+            extraSystemPrompt: "Current delivery: fixture-channel",
+            extraSystemPromptTurnContext: { start: 0, text: "Current delivery: fixture-channel" },
           }),
         ).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
         const request = launchTurn.mock.calls[0]![0];
@@ -480,6 +482,11 @@ describe("worker turn execution", () => {
         expect(runtimeContext).toContainEqual({
           kind: "conversation-data",
           text: "Current sender: fixture-sender",
+        });
+        expect(systemPrompt).not.toContain("Current delivery: fixture-channel");
+        expect(runtimeContext).toContainEqual({
+          kind: "runtime-instruction",
+          text: "Current turn instructions (apply only to this turn):\n\nCurrent delivery: fixture-channel",
         });
         const allowed = request.plan.assignment.toolAuthority.allowedToolNames;
         expect(allowed.length).toBeGreaterThan(0);
