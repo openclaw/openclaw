@@ -4,6 +4,7 @@ import {
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { upsertAcpSessionMeta } from "../../acp/runtime/session-meta.js";
+import * as thinking from "../../auto-reply/thinking.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -125,6 +126,7 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
       const statements = trackReads(database);
       const respond = vi.fn();
       const hostSql = observeHostDataSql();
+      const thinkingReads = vi.spyOn(thinking, "resolveThinkingProfile");
       try {
         await sessionMutationHandlers["sessions.patch"]!({
           params: { key: targetKey, ...patch },
@@ -133,7 +135,9 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
           client: humanClient(),
         } as never);
         expect(historyLane.pool.getSnapshot().workersCreated).toBe(historyWorkers.workersCreated);
+        expect(thinkingReads.mock.calls.length).toBe(0);
       } finally {
+        thinkingReads.mockRestore();
         hostSql.restore();
         statements.restore();
       }
