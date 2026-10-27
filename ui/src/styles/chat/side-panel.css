@@ -520,7 +520,7 @@ openclaw-chat-detail-panel,
   }
 }
 
-.sidebar-region--desktop .side-panel__header:not(.side-panel__header--occupied) {
+.sidebar-region--desktop .side-panel__header {
   background: transparent;
 }
 

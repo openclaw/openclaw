@@ -62,7 +62,11 @@ export function defineGatewayModuleBoundaryTests(
             await gateway.setOnline(true);
             await page.clock.resume();
             await waitForControlUiGatewayReady(page);
-            await connectionStatus.waitFor({ state: "detached" });
+            if (width === 390) {
+              await connectionStatus.waitFor({ state: "detached" });
+            } else {
+              await connectionStatus.getByText("Connected", { exact: true }).waitFor();
+            }
           },
         );
       },

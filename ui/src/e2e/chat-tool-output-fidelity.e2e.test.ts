@@ -50,8 +50,13 @@ const history = prepareChatHistoryFixture([
   },
   { role: "assistant", content: "Output is ready for inspection.", timestamp: timestamp + 3 },
 ]);
-const capture = (page: Page, dir: string, name: string) =>
-  page.screenshot({ path: path.join(dir, name + ".png"), animations: "disabled" });
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const capture = (page: Page, dir: string | undefined, name: string) => {
+  if (dir && captureUiProof) {
+    return page.screenshot({ path: path.join(dir, name + ".png"), animations: "disabled" });
+  }
+  return undefined;
+};
 async function expandGroups(page: Page, reply: string) {
   await page.getByText(reply, { exact: true }).waitFor();
   for (const group of await page
@@ -63,7 +68,9 @@ async function expandGroups(page: Page, reply: string) {
 
 suite.define(() => {
   it("renders native Code Mode results without transport envelopes", async () => {
-    const artifacts = createControlUiE2eArtifactDir("code-mode-output");
+    const artifacts = captureUiProof
+      ? createControlUiE2eArtifactDir("code-mode-output")
+      : undefined;
     const source =
       'text(await tools.exec_command({cmd: "check-service", max_output_tokens: 1000}));';
     const payload =

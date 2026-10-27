@@ -10,6 +10,7 @@ import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { assertNoRetainedSessionSharingReads } from "../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import * as sessionEntryReads from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -490,6 +491,7 @@ it.each(["ordinary", "fresh header", "stale header"] as const)(
             session.entry?.createdAt,
           ]).toEqual([undefined, undefined, undefined]);
           const respond = vi.fn();
+          using reads = vi.spyOn(sessionEntryReads, "withSessionEntriesFromStoresInWorker");
           await withoutHostSql(async () => {
             admitted = await admitChatSend({ ...admission, respond });
             expect(respond).not.toHaveBeenCalled();
@@ -500,6 +502,10 @@ it.each(["ordinary", "fresh header", "stale header"] as const)(
               admittedSessionId: entry.sessionId,
             });
             expect(Boolean(admitted.value.restartSafeAdmission)).toBe(freshness === "fresh header");
+            const lifecycleReads = reads.mock.calls.flatMap(([inputs]) =>
+              inputs.filter((input) => input.lifecycleSessionKey === scope.sessionKey),
+            );
+            expect(lifecycleReads).toHaveLength(restartSafe ? 1 : 0);
           });
         } finally {
           cleanupAdmission(admitted, runId);

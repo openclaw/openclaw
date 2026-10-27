@@ -125,6 +125,8 @@ export type CreateUpdateRunInput = Partial<
   preview?: boolean;
   /** Record an already completed repair without publishing a transient running row. */
   settlement?: { reason: string; detail: string };
+  /** Record an update its external supervisor accepted, from the time the update started. */
+  accepted?: { startedAtMs: number };
   /** Host-read update-request policy; storage records outcome eligibility only for a new run. */
   reportResult?: boolean;
 };

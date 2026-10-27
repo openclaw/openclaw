@@ -1,164 +1,115 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { sessionsListResponse } from "./session-management.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "Chat child attention" });
+const suite = createControlUiE2eSuite({ name: "Parent composer isolation" });
 
 suite.define(() => {
   it.each([
     { width: 1280, height: 900 },
     { width: 390, height: 844 },
-  ])("aligns a blocked child notice with its parent's composer at $width px", async (viewport) => {
-    await suite.withPage({ viewport, locale: "en-US" }, async ({ page }) => {
-      const now = Date.now();
-      const parent = {
-        key: "agent:main:dashboard:diagnostic-parent",
-        sessionId: "diagnostic-parent",
-        kind: "direct",
-        label: "Messaging channel setup",
-        status: "done",
-        hasActiveRun: false,
-        updatedAt: now,
-        childSessions: ["agent:main:subagent:debugger"],
-      } satisfies GatewaySessionRow;
-      const child = {
-        key: parent.childSessions![0]!,
-        sessionId: "debugger-child",
-        kind: "direct",
-        classification: "subagent",
-        label: "Debugger diagnostic",
-        spawnedBy: parent.key,
-        parentSessionKey: parent.key,
-        status: "done",
-        hasActiveRun: false,
-        updatedAt: now,
-        endedAt: now,
-        unread: true,
-        agentStatus: {
-          note: "Blocked: debugger attempt expired; no attach or visible prompt verified. Inspect the target device before another debugger attempt.",
-          attention: "key",
-          expiresAt: now + 60_000,
-        },
-      } satisfies GatewaySessionRow;
-      await installMockGateway(page, {
-        sessionKey: parent.key,
-        sessions: [parent, child],
-        communityInvite: false,
-        historyMessages: [
-          { role: "assistant", content: "The diagnostic has resumed. Waiting for its result." },
-        ],
-      });
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, parent.key));
-      const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
-      await pane
-        .getByText("The diagnostic has resumed. Waiting for its result.", { exact: true })
-        .waitFor();
-      const notice = pane.locator(".chat-child-attention");
-      const composer = pane.locator(".agent-chat__input");
-      try {
-        await notice.waitFor();
-        expect(await notice.textContent()).toContain(child.agentStatus!.note);
-        expect(await notice.getAttribute("data-child-session-key")).toBe(child.key);
-        expect(
-          await notice
-            .locator(".chat-composer-neighbor-card__copy span")
-            .evaluate((node) => getComputedStyle(node).whiteSpace),
-        ).toBe("normal");
-        await notice
-          .getByRole("button", { name: "Open session", exact: true })
-          .click({ trial: true });
-        const noticeBox = await notice.boundingBox();
-        const composerBox = await composer.boundingBox();
-        expect(noticeBox).not.toBeNull();
-        expect(composerBox).not.toBeNull();
-        expect(noticeBox!.x).toBeCloseTo(composerBox!.x, 0);
-        expect(noticeBox!.width).toBeCloseTo(composerBox!.width, 0);
-        // The compact mobile input is a capsule; its neighboring notice retains
-        // the reading card radius while sharing the same column.
-        expect(await notice.evaluate((node) => getComputedStyle(node).borderRadius)).toBe("25px");
-        expect(await composer.evaluate((node) => getComputedStyle(node).borderRadius)).toBe(
-          viewport.width === 390 ? "35px" : "25px",
+  ])(
+    "keeps failed children in Subagents, not the parent composer at $width px",
+    async (viewport) => {
+      await suite.withPage({ viewport, locale: "en-US" }, async ({ page }) => {
+        const now = Date.now();
+        const parentKey = "agent:main:dashboard:diagnostic-parent";
+        const children = Array.from(
+          { length: 6 },
+          (_, index): GatewaySessionRow & { updatedAt: number } => ({
+            key: "agent:main:subagent:diagnostic-" + index,
+            sessionId: "diagnostic-" + index,
+            kind: "direct",
+            classification: "subagent",
+            label: "Review diagnostic " + (index + 1),
+            spawnedBy: parentKey,
+            parentSessionKey: parentKey,
+            status: index === 1 ? "timeout" : "failed",
+            hasActiveRun: false,
+            updatedAt: now,
+            endedAt: now,
+            unread: true,
+            ...(index === 0
+              ? {
+                  agentStatus: {
+                    note: "Blocked: the review needs a service credential.",
+                    attention: "key" as const,
+                    expiresAt: now + 60_000,
+                  },
+                }
+              : {}),
+          }),
         );
-      } finally {
+        const parent = {
+          key: parentKey,
+          sessionId: "diagnostic-parent",
+          kind: "direct",
+          label: "Review the release",
+          status: "done",
+          hasActiveRun: false,
+          updatedAt: now,
+          childSessions: children.map((child) => child.key),
+        } satisfies GatewaySessionRow;
+        const gateway = await installMockGateway(page, {
+          sessionKey: parent.key,
+          sessions: [parent, ...children],
+          communityInvite: false,
+          historyMessages: [
+            {
+              role: "assistant",
+              content: "The delegated reviews need attention. You can continue here.",
+            },
+          ],
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, parent.key));
+        const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+        const message = pane.getByText(
+          "The delegated reviews need attention. You can continue here.",
+          { exact: true },
+        );
+        await message.waitFor();
+        await gateway.waitForRequest("sessions.list", { match: { spawnedBy: parent.key } });
+        await openChatSidePanelType(pane, "Subagents");
+        const panel = pane.locator("openclaw-chat-subagents-panel");
+        await panel.getByText(children[0]!.label!, { exact: true }).waitFor();
+        const composer = pane.locator(".agent-chat__input");
+        // Capture the same real parent surface before asserting, including on the broken base.
         if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            pane,
-            [
-              pane.getByText("The diagnostic has resumed. Waiting for its result.", {
-                exact: true,
-              }),
-              ...((await notice.isVisible()) ? [notice] : []),
-              composer,
-            ],
-            { animations: "disabled" },
-          );
+          const frame = await takeControlUiScreenshotFrame(page, pane, [message, composer], {
+            animations: "disabled",
+          });
           await writeFile(
-            path.join(suite.artifactDir, `child-attention-${viewport.width}.png`),
+            path.join(suite.artifactDir, "parent-composer-" + viewport.width + ".png"),
             frame.png,
           );
         }
-      }
-    });
-  });
-
-  it("never flashes a child the parent's child query no longer links", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const parent = {
-        key: "agent:main:dashboard:expired-parent",
-        sessionId: "expired-parent",
-        kind: "direct",
-        status: "done",
-        updatedAt: Date.now(),
-      } satisfies GatewaySessionRow;
-      // The broad roster keeps spawnedBy after the Gateway retires the child link.
-      const expired = {
-        key: "agent:main:subagent:expired",
-        sessionId: "expired-child",
-        kind: "direct",
-        classification: "subagent",
-        label: "Expired diagnostic",
-        spawnedBy: parent.key,
-        status: "timeout",
-        updatedAt: 1,
-        endedAt: 1,
-      } satisfies GatewaySessionRow;
-      await page.addInitScript(() => {
-        const seen = { flashed: false };
-        Object.assign(window, { childAttentionSeen: seen });
-        new MutationObserver(() => {
-          seen.flashed ||= document.querySelector(".chat-child-attention") !== null;
-        }).observe(document, { childList: true, subtree: true });
+        expect(await pane.locator(".agent-chat__composer-notices").textContent()).not.toContain(
+          children[0]!.label,
+        );
+        expect(await pane.locator(".chat-child-attention").count()).toBe(0);
+        await composer.locator("textarea").fill("Continue the parent review.");
+        await composer.locator("textarea").press("Enter");
+        await gateway.waitForRequest("chat.send");
+        expect(await pane.locator(".chat-child-attention").count()).toBe(0);
+        const patches = await gateway.getRequests("sessions.patch");
+        expect(
+          patches.some(
+            ({ params }) =>
+              isRecord(params) &&
+              children.some((child) => child.key === params.key) &&
+              params.unread === false,
+          ),
+        ).toBe(false);
+        await openChatSidePanelType(pane, "Subagents");
+        await expect.poll(() => panel.locator("[data-session-key]").count()).toBe(children.length);
+        await panel.getByText(children[1]!.label!, { exact: true }).waitFor();
       });
-      const gateway = await installMockGateway(page, {
-        sessionKey: parent.key,
-        sessions: [parent, expired],
-        communityInvite: false,
-        historyMessages: [{ role: "assistant", content: "Parent history loaded." }],
-        methodResponses: {
-          "sessions.list": {
-            cases: [
-              { match: { spawnedBy: parent.key }, response: sessionsListResponse([]) },
-              { response: sessionsListResponse([parent, expired]) },
-            ],
-          },
-        },
-      });
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, parent.key));
-      const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
-      await pane.getByText("Parent history loaded.", { exact: true }).waitFor();
-      await gateway.waitForRequest("sessions.list", { match: { spawnedBy: parent.key } });
-      await expect.poll(() => pane.locator("openclaw-chat-child-attention").count()).toBe(1);
-      expect(
-        await page.evaluate(
-          () => (window as { childAttentionSeen?: { flashed: boolean } }).childAttentionSeen,
-        ),
-      ).toEqual({ flashed: false });
-    });
-  });
+    },
+  );
 });

@@ -7,7 +7,7 @@ import { isResponsesOutputLimitToolCallError } from "../providers/openai-respons
 import type { SdkResponse } from "./openai-responses-sdk.test-support.js";
 
 const sseState = vi.hoisted(() => ({
-  outcomes: [] as SdkResponse[],
+  outcomes: [] as Array<Error | SdkResponse>,
   signal: undefined as AbortSignal | undefined,
 }));
 
@@ -329,6 +329,50 @@ it("logs the idle-timeout reason at warning level when the stream throws a gener
   expect(line).not.toContain("message=");
   expect(line).not.toContain("LLM idle timeout");
   expect(JSON.stringify(logWarn.mock.calls)).not.toContain("private-key");
+});
+
+it.each([
+  {
+    name: "rejected before streaming",
+    queue: () =>
+      sseState.outcomes.push(
+        Object.assign(new Error("401 Incorrect API key provided"), {
+          status: 401,
+          code: "invalid_api_key",
+          error: { code: "invalid_api_key", message: "Incorrect API key provided" },
+        }),
+      ),
+    billed: false,
+  },
+  {
+    name: "rate limited after acceptance",
+    queue: () =>
+      queueEvents(
+        { type: "response.created", response: { id: "resp_limited", status: "in_progress" } },
+        { type: "error", error: { code: "rate_limit_exceeded", message: "Rate limit reached" } },
+      ),
+    billed: false,
+  },
+  {
+    name: "dropped after acceptance",
+    queue: () =>
+      queueStream(async function* () {
+        yield { type: "response.created", response: { id: "resp_dropped", status: "in_progress" } };
+        throw Object.assign(new Error("terminated"), { code: "ECONNRESET" });
+      }),
+    billed: true,
+  },
+])("records usage for a failure without output when $name", async ({ queue, billed }) => {
+  queue();
+  const result = await (await run()).result();
+  expect(result.stopReason).toBe("error");
+  expect(result.content).toEqual([]);
+  // Unbilled failures are complete zeros; an accepted request may have billed hidden work.
+  expect(result.usage).toMatchObject(
+    billed
+      ? { usageReport: { state: "unavailable" } }
+      : { input: 0, output: 0, totalTokens: 0, usageReport: { state: "available" } },
+  );
 });
 
 it("omits provider error messages, headers, and bodies from transport logs", async () => {
