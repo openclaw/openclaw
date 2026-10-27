@@ -63,6 +63,9 @@ export function createMessageImagePresentation(props: MessageImageProps) {
   let loadedBlob: Blob | undefined;
   let thumbnail: { blob: Blob; url: string } | undefined;
   const displayKey = (image: ImageBlock) => {
+    if (!display?.()) {
+      return undefined;
+    }
     const source = image.url && chatDisplaySourceKey(image.url);
     return image.url && !source
       ? undefined
@@ -189,7 +192,7 @@ export function createMessageImagePresentation(props: MessageImageProps) {
         isCanonicalInboundMediaSource(image.url) &&
         managedImageInlineVariant(image) === "thumbnail"
       ) {
-        const source = new URL(element.src, location.origin);
+        const source = new URL(element.currentSrc || element.src, location.origin);
         if (
           source.origin === location.origin &&
           source.searchParams.get("variant") === "thumbnail"
@@ -222,9 +225,6 @@ export function createMessageImagePresentation(props: MessageImageProps) {
   function readPresentation(image: ImageBlock, options: ImageRenderOptions | undefined) {
     const key = displayKey(image);
     const saved = key ? display?.()?.read()?.images?.[key] : undefined;
-    if (saved && !(image.width && image.height)) {
-      image = { ...image, width: saved.width, height: saved.height };
-    }
     const previous = currentImage;
     if (previous?.url !== image.url || previous?.artifactId !== image.artifactId) {
       managed = image.url === undefined || isManagedOutgoingMediaSource(image.url);
@@ -445,6 +445,15 @@ export function createMessageImagePresentation(props: MessageImageProps) {
     });
   }
 
+  function knownImageSize(image: ImageBlock) {
+    // Gallery slots retain wire identity; saved dimensions describe presentation only.
+    if (image.width && image.height) {
+      return image;
+    }
+    const key = displayKey(image);
+    return (key ? display?.()?.read()?.images?.[key] : undefined) ?? image;
+  }
+
   function renderImageElement(image: ImageBlock, previewUrl: string): ImagePresentation {
     return {
       image,
@@ -452,7 +461,7 @@ export function createMessageImagePresentation(props: MessageImageProps) {
       managed,
       key: imageKey,
       previewSize: resolveChatImagePreviewSize(
-        image,
+        knownImageSize(image),
         loadedElement
           ? { width: loadedElement.naturalWidth, height: loadedElement.naturalHeight }
           : undefined,
@@ -506,11 +515,12 @@ export function createMessageImagePresentation(props: MessageImageProps) {
     } else {
       element.removeAttribute("srcset");
     }
+    const dimensions = knownImageSize(image);
     for (const name of ["width", "height"] as const) {
-      if (image[name] === undefined) {
+      if (dimensions[name] === undefined) {
         element.removeAttribute(name);
-      } else if (element.getAttribute(name) !== String(image[name])) {
-        element.setAttribute(name, String(image[name]));
+      } else if (element.getAttribute(name) !== String(dimensions[name])) {
+        element.setAttribute(name, String(dimensions[name]));
       }
     }
     // Assigning even an unchanged src can restart a no-cache native request.
@@ -528,6 +538,7 @@ export function createMessageImagePresentation(props: MessageImageProps) {
     return {
       image,
       managed,
+      previewSize: resolveChatImagePreviewSize(knownImageSize(image)),
       key: active ? imageKey : undefined,
       state: reason === undefined ? "loading" : "unavailable",
       reason,
