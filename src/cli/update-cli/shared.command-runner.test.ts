@@ -57,7 +57,7 @@ function checkout(
   return ensureGitCheckout({ dir, timeoutMs: 1_000, env: process.env, ...options });
 }
 
-async function expectFile(directory: string, name: string, content: string) {
+async function expectFile(directory: string, name = "checkout.marker", content = "complete\n") {
   await expect(fs.readFile(path.join(directory, name), "utf8")).resolves.toBe(content);
 }
 
@@ -73,6 +73,20 @@ function mockCompleteClone(git = false) {
     await writeClone(cloneTarget(argv), git);
     return successfulCommandResult;
   });
+}
+
+function expectCleanupAdvisory(
+  report: ReturnType<typeof vi.fn<NonNullable<UpdateStepProgress["onStepComplete"]>>>,
+  retained: string,
+) {
+  const steps = report.mock.calls
+    .map(([step]) => step)
+    .filter((step) => step.name === "git-clone-staging-cleanup");
+  const advisory = expect.objectContaining({
+    advisory: { kind: "recoverable-maintenance", message: expect.stringContaining(retained) },
+  });
+  expect(steps).toContainEqual(advisory);
+  return steps;
 }
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -260,7 +274,7 @@ it.each([false, true])(
     expect(result).toMatchObject({ checkoutDir, step: { exitCode: 0 } });
     expect(result.step?.warnings).toBeUndefined();
 
-    await expectFile(checkoutDir, "checkout.marker", "complete\n");
+    await expectFile(checkoutDir);
     await expect(fs.readdir(path.dirname(checkoutDir))).resolves.toEqual(["openclaw"]);
     expect((await fs.readdir(checkoutDir)).toSorted()).toEqual([".git", "checkout.marker"]);
   },
@@ -330,7 +344,7 @@ it.each([
       checkoutDir,
       step: { exitCode: 0 },
     });
-    await expectFile(checkoutDir, "checkout.marker", "complete\n");
+    await expectFile(checkoutDir);
     expect(runCommandWithTimeout).toHaveBeenCalledTimes(failure === "allocation" ? 1 : 2);
   },
 );
@@ -389,9 +403,9 @@ it.runIf(process.platform !== "win32").each([false, true])(
 
     expect((await fs.lstat(checkoutDir)).isSymbolicLink()).toBe(true);
     expect((await fs.lstat(targetDir)).isSymbolicLink()).toBe(false);
-    await expectFile(targetDir, "checkout.marker", "complete\n");
+    await expectFile(targetDir);
     if (!retargeted) {
-      await expectFile(checkoutDir, "checkout.marker", "complete\n");
+      await expectFile(checkoutDir);
     }
 
     await expect(fs.readdir(replacementDir)).resolves.toEqual([]);
@@ -434,8 +448,6 @@ it.each(["destination", "storage", "repository"] as const)(
       await expect(fs.readdir(replacementStage)).resolves.toEqual(["user.marker"]);
       await expectFile(
         replaced === "storage" ? path.join(displacedDir, "repository") : displacedDir,
-        "checkout.marker",
-        "complete\n",
       );
     }
   },
@@ -488,7 +500,7 @@ it.each([
           warnings: [expect.stringContaining("ownership could not be verified")],
         },
       });
-      await expectFile(checkoutDir, "checkout.marker", "complete\n");
+      await expectFile(checkoutDir);
       if (!missingStorage) {
         await expectFile(path.join(retained, "repository"), "user.marker", "keep\n");
       }
@@ -501,18 +513,11 @@ it.each([
     } else {
       await expectFile(retained, "build.marker", "keep\n");
     }
-    const cleanupSteps = onStepComplete.mock.calls.filter(
-      ([step]) => step.name === "git-clone-staging-cleanup",
-    );
+    const cleanupSteps = expectCleanupAdvisory(onStepComplete, retained);
     expect(cleanupSteps).toHaveLength(1);
-    expect(cleanupSteps[0]?.[0]).toMatchObject({
-      command: "",
-      advisory: {
-        kind: "recoverable-maintenance",
-        message: expect.stringContaining(retained),
-      },
-    });
-    expect(cleanupSteps[0]?.[0].advisory?.message).not.toMatch(/retained|rm -rf|Remove-Item/u);
+    const cleanupStep = cleanupSteps[0]!;
+    expect(cleanupStep.command).toBe("");
+    expect(cleanupStep.advisory?.message).not.toMatch(/retained|rm -rf|Remove-Item/u);
   },
 );
 
@@ -587,7 +592,7 @@ it.each([
         step: { exitCode: 0, warnings: [expect.stringContaining("cleanup denied")] },
       });
     }
-    await expectFile(checkoutDir, "checkout.marker", "complete\n");
+    await expectFile(checkoutDir);
     await expectFile(retained, "build.marker", "keep\n");
     if (cleanupFailure === "inspect") {
       expect(cleanup).not.toHaveBeenCalledWith(retained, expect.anything());
@@ -595,15 +600,7 @@ it.each([
         expect.objectContaining({ command: "", stderrTail: "cleanup denied" }),
       );
     }
-    expect(onStepComplete).toHaveBeenCalledWith(
-      expect.objectContaining({
-        name: "git-clone-staging-cleanup",
-        advisory: {
-          kind: "recoverable-maintenance",
-          message: expect.stringContaining(retained),
-        },
-      }),
-    );
+    expectCleanupAdvisory(onStepComplete, retained);
   },
 );
 
@@ -631,7 +628,7 @@ it("retains recovery files when publication and rollback both fail", async () =>
   mockCompleteClone(true);
 
   const realRename = fs.rename.bind(fs);
-  const rename = vi.spyOn(fs, "rename").mockImplementation(async (oldPath, newPath) => {
+  using _ = vi.spyOn(fs, "rename").mockImplementation(async (oldPath, newPath) => {
     const oldName = path.basename(oldPath.toString());
     const oldParent = path.dirname(oldPath.toString());
     const newParent = path.dirname(newPath.toString());
@@ -644,13 +641,9 @@ it("retains recovery files when publication and rollback both fail", async () =>
     await realRename(oldPath, newPath);
   });
 
-  try {
-    await expect(checkout(checkoutDir)).rejects.toThrow("recovery files remain");
-  } finally {
-    rename.mockRestore();
-  }
+  await expect(checkout(checkoutDir)).rejects.toThrow("recovery files remain");
 
-  await expectFile(checkoutDir, "checkout.marker", "complete\n");
+  await expectFile(checkoutDir);
   const recoveryDirs = (await fs.readdir(checkoutDir)).filter((entry) =>
     entry.startsWith(".openclaw-clone-"),
   );
