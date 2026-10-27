@@ -14,7 +14,7 @@ if (isMainThread && process.env.OPENCLAW_STATE_DIR) {
   const output = path.join(process.env.OPENCLAW_STATE_DIR, "worker-payload-census.json");
   const totals = new Map();
   // Reflect.apply below preserves the original caller's port receiver.
-  // eslint-disable-next-line @typescript-eslint/unbound-method
+  // oxlint-disable-next-line typescript/unbound-method
   const post = MessagePort.prototype.postMessage;
   MessagePort.prototype.postMessage = function (message, ...rest) {
     // Task envelopes carry domain input; control/authority ports are left alone.
