@@ -153,6 +153,28 @@ recorded separately from warm filters; per-cell memory snapshots do not establis
 bounded multi-snapshot retention. The unchanged UI cannot demonstrate a renderer
 optimization from a backend-only change. Keep failed output for diagnosis.
 
+For a fresh compiled cold comparison, add `--cold`. One invocation starts one
+fresh baseline/candidate/baseline triple, using separately seeded durable state,
+and measures only default readiness followed by the first 180-day population
+request at native Chromium CPU and localhost. It produces six observations and
+skips model filters. Run a screening triple first; repeated qualification needs
+separate invocations with new output directories, not `--pairs`. Twenty such
+triples provide 20 observations per role and phase. Keep A and C separate when
+reporting the cold baseline controls. Neither this native/localhost comparison
+nor reused later cells establish cold 4× or 100 ms RTT performance.
+
+For attribution, add `--diagnostic`. It runs only 1× at localhost and 100 ms RTT,
+prepares the normal page, runs an untraced model00/model01 pair, then traces
+model00 from model01. The six traced actions retain full synthetic Usage response
+payloads, raw trace events, a 1 ms sampling profile, mapped main-thread hotspots,
+and events from every renderer thread in the wider process-probe interval.
+Marks distinguish action, response observed by the page, visible readiness,
+the two animation frames, and process-probe bounds. Paint, raster, compositor
+and GC events remain in the raw artifacts; overlapping trace slice durations
+must not be summed as CPU. These traced actions are diagnostic evidence, never
+samples for the untraced timing acceptance table. Both narrow modes are mutually
+exclusive with `--smoke` and each other.
+
 ### Synthetic Gateway interactions
 
 Build with `pnpm ui:build`, then collect the production renderer's desktop and

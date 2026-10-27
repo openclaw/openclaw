@@ -20,6 +20,15 @@ import { acquireGatewayE2ePortBlock } from "../src/gateway/test-helpers.listener
 import { createRedactingStreamWriter } from "../src/logging/redacting-stream.ts";
 import { CONTROL_UI_TOKEN_SESSION_KEY_PREFIX } from "../src/shared/control-ui-storage.js";
 import {
+  mapColdLoadCpuProfile,
+  prepareColdLoadTraceEvent,
+  summarizeCpuProfile,
+} from "./lib/control-ui-cold-load-trace.ts";
+import {
+  clipInteractionCpuProfile,
+  summarizeInteractionTrace,
+} from "./lib/control-ui-interaction-trace.ts";
+import {
   measureRendererProcessMetrics,
   readControlUiPerformanceMetrics as metrics,
   readRendererProcessSnapshot,
@@ -50,12 +59,14 @@ const { values } = parseArgs({
     pairs: { type: "string", default: "20" },
     sessions: { type: "string", default: "12000" },
     smoke: { type: "boolean", default: false },
+    cold: { type: "boolean", default: false },
+    diagnostic: { type: "boolean", default: false },
     help: { type: "boolean", default: false },
   },
 });
 if (values.help) {
   console.log(
-    "Usage: node --import ./scripts/tsx.mjs scripts/bench-usage-gateway.ts --base <checkout> --head <checkout> --ui <frozen-build> --out <new-directory> [--sessions 12000] [--pairs 20] [--smoke]",
+    "Usage: node --import ./scripts/tsx.mjs scripts/bench-usage-gateway.ts --base <checkout> --head <checkout> --ui <frozen-build> --out <new-directory> [--sessions 12000] [--pairs 20] [--smoke | --cold | --diagnostic]",
   );
   process.exit(0);
 }
@@ -73,6 +84,8 @@ const helperFiles = [
   "lib/usage-bench-observer.mjs",
   "lib/usage-bench-rtt.ts",
   "lib/control-ui-renderer-metrics.ts",
+  "lib/control-ui-cold-load-trace.ts",
+  "lib/control-ui-interaction-trace.ts",
 ];
 const helperHashes = async () =>
   Object.fromEntries(
@@ -84,6 +97,10 @@ const pairs = Number(values.pairs);
 const population = Number(values.sessions);
 assert(Number.isInteger(pairs) && pairs > 0);
 assert(Number.isInteger(population) && population > 0);
+assert(
+  [values.smoke, values.cold, values.diagnostic].filter(Boolean).length <= 1,
+  "Choose at most one of --smoke, --cold and --diagnostic",
+);
 await mkdir(out, { recursive: false });
 
 type Ready = UsageBenchFixture & { port: number; token: string };
@@ -105,6 +122,7 @@ type PageEntry = {
   cdp: CDPSession;
   proxy: Awaited<ReturnType<typeof startUsageRttProxy>> | undefined;
   responses: ReturnType<typeof observeUsage>;
+  finishDiagnostic?: () => Promise<void>;
 };
 const owners: Owner[] = [];
 const fixtureTokens: string[] = [];
@@ -434,6 +452,7 @@ function observeUsage(page: Page) {
     ms: number;
     ok: boolean;
     partial: boolean;
+    payload?: unknown;
   }> = [];
   page.on("websocket", (socket) => {
     socket.on("framesent", ({ payload }) => {
@@ -464,6 +483,9 @@ function observeUsage(page: Page) {
         ms: performance.now() - request.started,
         ok: frame.ok === true,
         partial: frame.payload?.partial !== undefined,
+        ...(values.diagnostic && request.query === "model:fixture-model-00-end"
+          ? { payload: frame.payload }
+          : {}),
       });
     });
   });
@@ -496,7 +518,7 @@ async function waitForResponse(
   }
   throw new Error(`No actual Usage response for ${query}`);
 }
-async function settled(page: Page, count: number) {
+async function settled(page: Page, count: number, diagnostic = false) {
   await page.waitForFunction((expected) => {
     const button = document.querySelector<HTMLButtonElement>(
       '.usage-page button[aria-label="Refresh"]',
@@ -507,11 +529,25 @@ async function settled(page: Page, count: number) {
       .replaceAll(".", "");
     return button?.disabled === false && text?.startsWith(`${expected} `);
   }, count);
+  if (diagnostic) {
+    await page.evaluate(() => performance.mark("usage:visible"));
+  }
   await page.evaluate(
-    () =>
+    (tracing) =>
       new Promise<void>((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        requestAnimationFrame(() => {
+          if (tracing) {
+            performance.mark("usage:raf1");
+          }
+          requestAnimationFrame(() => {
+            if (tracing) {
+              performance.mark("usage:raf2");
+            }
+            resolve();
+          });
+        });
       }),
+    diagnostic,
   );
 }
 async function rendererProbe(cdp: CDPSession) {
@@ -563,6 +599,93 @@ function measureBrowserCpu(
   );
 }
 
+/** Attribution only: keep raw events and the wider process-probe interval. */
+async function startUsageDiagnostic(entry: PageEntry, prefix: string) {
+  const { cdp, page } = entry;
+  const events: unknown[] = [];
+  const collect = ({ value }: { value: unknown[] }) => events.push(...value);
+  cdp.on("Tracing.dataCollected", collect);
+  await cdp.send("Tracing.start", {
+    categories: "toplevel,blink.user_timing,devtools.timeline,cc,disabled-by-default-v8.gc",
+    transferMode: "ReportEvents",
+  });
+  await cdp.send("Profiler.enable");
+  await cdp.send("Profiler.setSamplingInterval", { interval: 1000 });
+  await cdp.send("Profiler.start");
+  entry.finishDiagnostic = async () => {
+    // Retire before awaits: cleanup must not stop this same capture twice.
+    entry.finishDiagnostic = undefined;
+    let profile: Awaited<ReturnType<typeof cdp.send<"Profiler.stop">>>["profile"];
+    try {
+      profile = (await cdp.send("Profiler.stop")).profile;
+    } finally {
+      const complete = new Promise<void>((resolve) => {
+        cdp.once("Tracing.tracingComplete", () => resolve());
+      });
+      await cdp.send("Tracing.end");
+      await complete;
+      cdp.off("Tracing.dataCollected", collect);
+      await writeFile(
+        path.join(out, `${prefix}.trace.json`),
+        JSON.stringify({ traceEvents: events }),
+      );
+    }
+    await writeFile(path.join(out, `${prefix}.cpuprofile`), JSON.stringify(profile));
+    const action = summarizeInteractionTrace(events, {
+      start: "usage:action-start",
+      end: "usage:action-end",
+    });
+    const probes = summarizeInteractionTrace(events, {
+      start: "usage:probe-start",
+      end: "usage:probe-end",
+    });
+    const prepared = events.map(prepareColdLoadTraceEvent);
+    const threadNames = new Map(
+      prepared
+        .filter((event) => event.pid === probes.rendererPid && event.name === "thread_name")
+        .map((event) => [event.tid, event.args?.name]),
+    );
+    await writeFile(
+      path.join(out, `${prefix}.renderer-events.json`),
+      JSON.stringify(
+        prepared
+          .filter(
+            (event) =>
+              event.pid === probes.rendererPid &&
+              event.ts >= probes.startUs &&
+              event.ts <= probes.endUs,
+          )
+          .map((event) => Object.assign(event, { threadName: threadNames.get(event.tid) })),
+        null,
+        2,
+      ),
+    );
+    const clipped = clipInteractionCpuProfile(profile, action.startUs, action.endUs);
+    const mapped = await mapColdLoadCpuProfile(clipped, {
+      assetBaseUrl: new URL("assets/", page.url()).href,
+      assetDirectory: path.join(ui, "assets"),
+    });
+    await writeFile(
+      path.join(out, `${prefix}.attribution.json`),
+      JSON.stringify(
+        {
+          diagnosticOnly: true,
+          action,
+          probes,
+          mappedFrames: mapped.mappedFrames,
+          unmappedFrames: mapped.unmappedFrames,
+          ...summarizeCpuProfile(mapped.profile, { includeTables: true }),
+          limitation:
+            "Raw trace retains other renderer threads; main-thread summaries are not whole-renderer CPU. Traced timing is not acceptance evidence.",
+        },
+        null,
+        2,
+      ),
+    );
+  };
+  await page.evaluate(() => performance.mark("usage:probe-start"));
+}
+
 try {
   for (const [role, root] of [
     ["base-a", base],
@@ -571,8 +694,8 @@ try {
   ] as const) {
     owners.push(await start(root, role));
   }
-  for (const cpu of values.smoke ? [4] : [1, 4]) {
-    for (const rtt of [0, 100]) {
+  for (const cpu of values.cold || values.diagnostic ? [1] : values.smoke ? [4] : [1, 4]) {
+    for (const rtt of values.cold ? [0] : [0, 100]) {
       const pages: PageEntry[] = [];
       try {
         for (const owner of owners) {
@@ -613,6 +736,48 @@ try {
               JSON.stringify({ dismissedAtMs: 1770000000000 }),
             ),
           );
+          if (values.diagnostic) {
+            await page.addInitScript(() => {
+              // oxlint-disable-next-line typescript/unbound-method -- Forward the original socket receiver with call.
+              const send = WebSocket.prototype.send;
+              const requests = new WeakMap<WebSocket, Set<string>>();
+              WebSocket.prototype.send = function (this: WebSocket, data) {
+                if (typeof data === "string") {
+                  let frame;
+                  try {
+                    frame = JSON.parse(data);
+                  } catch {
+                    return send.call(this, data);
+                  }
+                  if (
+                    frame?.type === "req" &&
+                    frame.method === "sessions.usage" &&
+                    frame.params?.query === "model:fixture-model-00-end"
+                  ) {
+                    let ids = requests.get(this);
+                    if (!ids) {
+                      ids = new Set();
+                      requests.set(this, ids);
+                      this.addEventListener("message", (event) => {
+                        let response;
+                        try {
+                          response = JSON.parse(event.data);
+                        } catch {
+                          return;
+                        }
+                        if (requests.get(this)?.delete(response?.id)) {
+                          // Observed in the page's message task, after earlier app listeners.
+                          performance.mark("usage:response-observed");
+                        }
+                      });
+                    }
+                    ids.add(frame.id);
+                  }
+                }
+                return send.call(this, data);
+              };
+            });
+          }
           const url = new URL(`http://127.0.0.1:${proxy?.port ?? owner.ready.port}/usage`);
           const gatewayUrl = `ws://${url.host}`;
           await page.addInitScript(({ key, token }) => sessionStorage.setItem(key, token), {
@@ -712,7 +877,8 @@ try {
             load: os.loadavg(),
           });
         }
-        for (let iteration = 0; iteration < (values.smoke ? 2 : pairs * 2); iteration++) {
+        const iterations = values.cold ? 0 : values.diagnostic ? 3 : values.smoke ? 2 : pairs * 2;
+        for (let iteration = 0; iteration < iterations; iteration++) {
           const pair = Math.floor(iteration / 2);
           const order = pair % 2 ? pages.toReversed() : pages;
           for (const entry of order) {
@@ -722,20 +888,34 @@ try {
             const truth = owner.ready.models[model]!;
             const requestsBefore = responses.length;
             const dispatchBefore = (await owner.snapshot()).length;
+            const diagnostic = values.diagnostic && iteration === 2;
+            if (diagnostic) {
+              await startUsageDiagnostic(entry, `${owner.role}-${cpu}x-${rtt}ms-model00`);
+            }
             const rendererBefore = await rendererProbe(processSession);
             const cpuBefore = await readGatewayCpuUsage(owner.child);
             const browserBefore = await metrics(cdp);
             const started = performance.now();
+            if (diagnostic) {
+              await page.evaluate(() => performance.mark("usage:action-start"));
+            }
             await page.locator(".usage-query-input").fill(query);
             await page.locator(".usage-query-input").press("Enter");
             const response = await waitForResponse(responses, requestsBefore, query);
             assert.equal(response.tokens, truth.tokens);
             assert.equal(response.sessions, truth.sessions);
-            await settled(page, truth.sessions);
+            await settled(page, truth.sessions, diagnostic);
             const wallMs = performance.now() - started;
+            if (diagnostic) {
+              await page.evaluate(() => performance.mark("usage:action-end"));
+            }
             const browserAfter = await metrics(cdp);
             const cpuAfter = await readGatewayCpuUsage(owner.child);
             const rendererAfter = await rendererProbe(processSession);
+            if (diagnostic) {
+              await page.evaluate(() => performance.mark("usage:probe-end"));
+              await entry.finishDiagnostic?.();
+            }
             const dispatches = (await owner.snapshot()).slice(dispatchBefore);
             if (owner.role === "head") {
               assert.deepEqual(
@@ -750,6 +930,7 @@ try {
             samples.push({
               role: owner.role,
               phase: "filter",
+              diagnostic,
               pair,
               cpu,
               rtt,
@@ -786,6 +967,11 @@ try {
         }
       } finally {
         for (const entry of pages.toReversed()) {
+          try {
+            await entry.finishDiagnostic?.();
+          } catch (error) {
+            failures.push(`${entry.owner.role} diagnostic cleanup: ${errorText(error)}`);
+          }
           for (const cdp of [entry.processSession, entry.cdp]) {
             try {
               await cdp.detach();
@@ -863,10 +1049,17 @@ try {
         failures,
         samples: samples.length,
         browserResourceSamples: samples.filter((sample) => sample.browserResources.complete).length,
-        pairsPerQuery: values.smoke ? 1 : pairs,
-        queries: ["model:fixture-model-00-end", "model:fixture-model-01-end"],
+        mode: values.cold ? "fresh-cold-triple" : values.diagnostic ? "attribution-only" : "warm",
+        pairsPerQuery: values.cold ? 0 : values.diagnostic ? null : values.smoke ? 1 : pairs,
+        queries: values.cold ? [] : ["model:fixture-model-00-end", "model:fixture-model-01-end"],
         limitations:
-          "Backend runs at native CPU; 1x/4x applies only to Chromium. Non-navigation browser metrics use threadTicks; default-readiness document CPU is unavailable because navigation resets those counters. Each role owns an isolated browser. Whole-renderer CPU and RSS probes bracket each action; their recorded bounds include collection overhead outside wall/main-thread intervals. Heap and RSS are sampled endpoints, not retained heap, peaks, or GPU memory. Same frozen UI for all roles. Population has one/two actual turns per session spread over180days. Durable source seeding and compiled startup recorded separately; no source server or report prewarming. Gateway reused across CPU/RTT cells; default/readiness and population-range phases are not independent cold-process samples. Setup logs retained. No provider calls.",
+          "Backend runs at native CPU; 1x/4x applies only to Chromium. Non-navigation browser metrics use threadTicks; default-readiness document CPU is unavailable because navigation resets those counters. Each role owns an isolated browser. Whole-renderer CPU and RSS probes bracket each action; their recorded bounds include collection overhead outside wall/main-thread intervals. Heap and RSS are sampled endpoints, not retained heap, peaks, or GPU memory. Same frozen UI for all roles. Population has one/two actual turns per session spread over180days. Durable source seeding and compiled startup recorded separately; no source server or report prewarming. Setup logs retained. No provider calls. " +
+          (values.cold
+            ? "One fresh, independently seeded Gateway/browser per role, measuring default then first full-range request at native CPU and localhost. One invocation is one triple, not repeated cold qualification."
+            : "Gateway reused across CPU/RTT cells; default/readiness and population-range phases are not independent cold-process samples.") +
+          (values.diagnostic
+            ? " Traced actions are attribution only, never timing acceptance."
+            : ""),
       },
       null,
       2,
