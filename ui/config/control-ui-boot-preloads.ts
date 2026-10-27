@@ -176,6 +176,14 @@ export function controlUiBootPreloadsPlugin(): Plugin {
           return html;
         }
         const assets = collectControlUiBootAssets(bundle);
+        const importedStyles = new Set<string>();
+        for (const output of Object.values(bundle)) {
+          if (output.type === "chunk") {
+            for (const file of output.viteMetadata?.importedCss ?? []) {
+              importedStyles.add(file);
+            }
+          }
+        }
         const templates = (["chat", "new"] as const).map((route) => {
           const links = [...assets[route]]
             // URL assets such as attachment workers belong to the offline cache,
@@ -183,7 +191,7 @@ export function controlUiBootPreloadsPlugin(): Plugin {
             .filter(
               (file) =>
                 !assets.initial.has(file) &&
-                (bundle[file]?.type === "chunk" || file.endsWith(".css")),
+                (bundle[file]?.type === "chunk" || importedStyles.has(file)),
             )
             .map((file) => ({
               tag: "link",

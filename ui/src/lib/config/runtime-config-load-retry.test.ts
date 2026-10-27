@@ -84,16 +84,25 @@ describe("runtime config load retries", () => {
     },
   );
 
-  it("keeps reload available when editing opens after a failed display read", async () => {
+  it("keeps reload available when editing opens as a failed display read settles", async () => {
     vi.useFakeTimers();
     const request = vi
       .fn()
       .mockRejectedValueOnce(new Error("gateway restarting"))
       .mockResolvedValue(makeSnapshot());
     const { runtimeConfig, state } = createConfigCapabilityHarness(request);
+    let activating = false;
+    let editing: Promise<void> | undefined;
+    const stop = runtimeConfig.subscribe(() => {
+      if (!activating && state.lastError && !state.configLoading) {
+        activating = true;
+        editing = runtimeConfig.ensureLoaded();
+      }
+    });
     try {
       await runtimeConfig.ensureDisplayLoaded();
-      await runtimeConfig.ensureLoaded();
+      expect(editing).toBeDefined();
+      await editing;
       expect(state.configLoading).toBe(false);
       expect(request).toHaveBeenCalledOnce();
 
@@ -102,6 +111,7 @@ describe("runtime config load retries", () => {
       expect(state.configLoading).toBe(false);
       expect(request).toHaveBeenCalledTimes(2);
     } finally {
+      stop();
       runtimeConfig.dispose();
       vi.useRealTimers();
     }

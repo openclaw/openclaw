@@ -8,6 +8,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium as chromiumEngine, webkit as webkitEngine, type Browser } from "playwright";
+import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
 import { createControlUiE2eArtifactDir } from "../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
 import type { MockGatewayWindow } from "../ui/src/test-helpers/control-ui-e2e-contract.ts";
@@ -60,6 +61,7 @@ const { values } = parseArgs({
     "control-source-root": { type: "string", multiple: true },
     output: { type: "string", default: ".artifacts/control-ui-engines" },
     engines: { type: "string", default: "chromium,webkit" },
+    "network-profiles": { type: "string", default: "localhost" },
     viewport: { type: "string", default: "both" },
     steps: { type: "string" },
     pairs: { type: "string", default: "1" },
@@ -68,12 +70,23 @@ const { values } = parseArgs({
   },
 });
 const pairs = Number(values.pairs);
-const engines = values.engines.split(",").map((name) => {
+const engines: ControlUiEngine[] = values.engines.split(",").map((name) => {
   if (name !== "chromium" && name !== "webkit") {
     throw new Error(`Unsupported engine: ${name}`);
   }
   return name;
 });
+const networkProfiles = values["network-profiles"].split(",").map((name) => {
+  if (name !== "localhost" && name !== "rtt-100ms") {
+    throw new Error(`Unsupported network profile: ${name}`);
+  }
+  const latencyMs = name === "localhost" ? 0 : 100;
+  return { name, httpLatencyMs: latencyMs, gatewayLatencyMs: latencyMs };
+});
+type NetworkProfile = (typeof networkProfiles)[number];
+if (new Set(networkProfiles.map(({ name }) => name)).size !== networkProfiles.length) {
+  throw new Error("Use distinct --network-profiles");
+}
 if (!Number.isInteger(pairs) || pairs < 1 || new Set(engines).size !== engines.length) {
   throw new Error("Use positive integer --pairs and distinct engines");
 }
@@ -162,6 +175,7 @@ function processMemory(browser: Browser) {
 let planned = 0;
 type Observation = {
   engine: ControlUiEngine;
+  networkProfile: NetworkProfile["name"];
   viewport: string;
   step: string;
   bundle: number;
@@ -248,7 +262,19 @@ try {
   ) {
     throw new Error("Unknown or empty --steps selection");
   }
-  planned = scenarios.length * viewports.length * pairs * engines.length * servers.length;
+  if (
+    networkProfiles.some(({ name }) => name !== "localhost") &&
+    scenarios.some(({ id }) => id !== "cold-boot" && id !== "warm-boot")
+  ) {
+    throw new Error("Nonlocal --network-profiles require --steps cold-boot,warm-boot");
+  }
+  planned =
+    scenarios.length *
+    viewports.length *
+    pairs *
+    engines.length *
+    servers.length *
+    networkProfiles.length;
   await writeJson("manifest.json", {
     revision: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
     harnessSources: Object.fromEntries(
@@ -281,6 +307,7 @@ try {
     host: { platform: os.platform(), arch: os.arch(), cpus: os.cpus().length, load: os.loadavg() },
     pairs,
     viewports,
+    networkProfiles,
     trace: values.trace,
     cpuOnly: values["cpu-only"],
     collection: values.trace
@@ -289,11 +316,11 @@ try {
         ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
         : "Untraced wall time; Chromium CDP counters only, unavailable WebKit counters are null",
     order:
-      "Serial engine and bundle order alternates each pair; fresh browser context per observation",
+      "Serial network profile, engine and bundle order alternates each pair; fresh browser context per observation",
     acceptance:
       "Census ranks >1.5x WebKit/Chromium. Fix proof: ten interleaved pairs plus A/A control; median regression <=5% and p95 no worse, otherwise ten more pairs. Profile/CPU and structural counts decide on a noisy host; >20% attributable regression blocks.",
     boundary:
-      "Production bundle and HTTP owner; synthetic Gateway. Cold means fresh context; warm means same-context document reload. Mock routing disables HTTP cache in both engines. Mobile transcript-top uses a native scrollport jump, not wheel input. No live Gateway/provider latency.",
+      "Production bundle and HTTP owner; synthetic Gateway. Cold means fresh context; warm means same-context document reload. Mock routing disables HTTP cache in both engines. Nonlocal profiles add the configured delay to every HTTP request and every incoming mock Gateway frame (including the connect challenge); RPC replies thus include a simulated round trip, with no added throughput cap. Mobile transcript-top uses a native scrollport jump, not wheel input. No live Gateway/provider latency.",
     memoryContract:
       "Opt-in memory-* scenes retain one document, drain 4.1 s retirement timers, clear synthetic request history, then force two collections at each named checkpoint. Compare warm and late checkpoints; heap/native categories/RSS and DOM wrapper/native counts have different engine-specific meanings. Memory-scene elapsed times include forced GC and snapshots and are not latency evidence.",
     scenarios: scenarios.map(({ id, route, expected, navigation, memory }) => ({
@@ -309,14 +336,23 @@ try {
       for (let pair = 0; pair < pairs; pair++) {
         const orderedEngines = pair % 2 ? engines.toReversed() : engines;
         const slots = pair % 2 ? [...servers.entries()].toReversed() : [...servers.entries()];
-        for (const engine of orderedEngines) {
+        const orderedProfiles = pair % 2 ? networkProfiles.toReversed() : networkProfiles;
+        for (const { networkProfile, engine } of orderedProfiles.flatMap((selectedProfile) =>
+          orderedEngines.map((selectedEngine) => ({
+            networkProfile: selectedProfile,
+            engine: selectedEngine,
+          })),
+        )) {
           for (const [bundle, slot] of slots) {
+            slot.server.setAssetLatencyMs(networkProfile.httpLatencyMs);
             const scenario =
-              createEngineBootScenarios(slot.server.baseUrl).find(({ id }) => id === item.id) ??
-              item;
-            const artifactPrefix = `${viewport.name}-${scenario.id}-${pair + 1}-${engine}-${bundle}`;
+              createEngineBootScenarios(slot.server.baseUrl, networkProfile.gatewayLatencyMs).find(
+                ({ id }) => id === item.id,
+              ) ?? item;
+            const artifactPrefix = `${viewport.name}-${scenario.id}-${networkProfile.name}-${pair + 1}-${engine}-${bundle}`;
             const observation: Observation = {
               engine,
+              networkProfile: networkProfile.name,
               viewport: viewport.name,
               step: scenario.id,
               bundle,
@@ -432,6 +468,15 @@ try {
                   afterInitScript: scenario.initScript,
                 },
               );
+              if (networkProfile.httpLatencyMs) {
+                // The mock fulfills bootstrap configuration before it reaches the HTTP owner.
+                await page.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, async (route) => {
+                  await new Promise((resolve) => {
+                    setTimeout(resolve, networkProfile.httpLatencyMs);
+                  });
+                  await route.fallback();
+                });
+              }
               await scenario.setup?.(page);
               if (scenario.navigation !== "measured") {
                 await page.goto(new URL(scenario.route, slot.server.baseUrl).href);
@@ -614,12 +659,21 @@ function distribution(samples: number[]) {
     max: sorted.at(-1)!,
   };
 }
-const cells = new Map<string, Pick<Observation, "viewport" | "step" | "engine" | "bundle">>();
-for (const { viewport, step, engine, bundle, memory } of observations) {
+const cells = new Map<
+  string,
+  Pick<Observation, "viewport" | "step" | "engine" | "bundle" | "networkProfile">
+>();
+for (const { viewport, step, engine, bundle, networkProfile, memory } of observations) {
   if (memory) {
     continue;
   }
-  cells.set(JSON.stringify([viewport, step, engine, bundle]), { viewport, step, engine, bundle });
+  cells.set(JSON.stringify([viewport, step, engine, bundle, networkProfile]), {
+    viewport,
+    step,
+    engine,
+    bundle,
+    networkProfile,
+  });
 }
 const summary = [...cells.values()].map((cell) => {
   const rows = observations.filter(
@@ -627,7 +681,8 @@ const summary = [...cells.values()].map((cell) => {
       row.viewport === cell.viewport &&
       row.step === cell.step &&
       row.engine === cell.engine &&
-      row.bundle === cell.bundle,
+      row.bundle === cell.bundle &&
+      row.networkProfile === cell.networkProfile,
   );
   const passing = rows.filter((row) => row.status === "passed");
   // Keep completed intervals with browser errors visible; dropping them biases a buggy base.
@@ -637,6 +692,7 @@ const summary = [...cells.values()].map((cell) => {
     step: cell.step,
     engine: cell.engine,
     bundle: cell.bundle,
+    networkProfile: cell.networkProfile,
     passed: passing.length,
     failed: rows.length - passing.length,
     measured: measured.length,
@@ -683,6 +739,7 @@ await writeJson("summary.json", {
           step: row.step,
           bundle: row.bundle,
           pair: row.pair,
+          networkProfile: row.networkProfile,
           status: row.status,
         },
         checkpoint,
@@ -698,7 +755,8 @@ const rows = summary
         row.engine === "webkit" &&
         row.step === chromium.step &&
         row.viewport === chromium.viewport &&
-        row.bundle === chromium.bundle,
+        row.bundle === chromium.bundle &&
+        row.networkProfile === chromium.networkProfile,
     );
     const ratio =
       chromium.wallMs && webkit?.wallMs ? webkit.wallMs.median / chromium.wallMs.median : null;
@@ -714,14 +772,16 @@ await writeFile(
     "",
     `Completed ${observations.length}/${planned} observations; ${observations.filter(({ status }) => status === "failed").length} failed. Timing summaries retain completed intervals with browser errors; failures are never passing proof. Browser-local boot milestones, metrics, counts, CPU coverage, host load and errors: [observations](observations.json), [summary](summary.json), [manifest](manifest.json).`,
     "",
-    "| Viewport | Scenario | Bundle | Chromium wall median/p95 (ms) | WebKit wall median/p95 (ms) | WebKit/Chromium |",
-    "| --- | --- | --- | --- | --- | --- |",
+    `Network profiles: ${networkProfiles.map(({ name, httpLatencyMs, gatewayLatencyMs }) => `${name} (${httpLatencyMs} ms per HTTP request; ${gatewayLatencyMs} ms per incoming Gateway frame)`).join("; ")}. The Gateway probe retains event ordering and uses no extra frame gap or throughput cap.`,
+    "",
+    "| Viewport | Scenario | Network | Bundle | Chromium wall median/p95 (ms) | WebKit wall median/p95 (ms) | WebKit/Chromium |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
     ...rows.map(({ chromium, webkit, ratio }) => {
       const format = (value: ReturnType<typeof distribution> | undefined) =>
         value
           ? `${value.median.toFixed(1)} / ${value.p95.toFixed(1)} (n=${value.n})`
           : "failed/absent";
-      return `| ${chromium.viewport} | ${chromium.step} | ${chromium.bundle} | ${format(chromium.wallMs)} | ${format(webkit?.wallMs)} | ${ratio?.toFixed(2) ?? "—"} |`;
+      return `| ${chromium.viewport} | ${chromium.step} | ${chromium.networkProfile} | ${chromium.bundle} | ${format(chromium.wallMs)} | ${format(webkit?.wallMs)} | ${ratio?.toFixed(2) ?? "—"} |`;
     }),
     "",
     "Memory checkpoints follow two explicit GCs. WebKit snapshot self sizes omit some backing stores; engine categories and browser-tree RSS provide separate native/allocation evidence. RSS includes Inspector overhead and may exclude reparented platform services. Compare warm-to-late checkpoints within an engine, not absolute heap sizes between engines. Detached counts cover JSC wrappers versus V8 native DOM nodes; see per-checkpoint notes and unresolved counts. Memory scenario durations are excluded from the timing table.",

@@ -8,9 +8,10 @@ import {
   publishSnapshotInvalidation,
   subscribeSnapshotInvalidation,
 } from "./session-snapshot-invalidation-events.ts";
-import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.runtime.ts";
+import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import * as snapshots from "./session-snapshot-store.ts";
+import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 
 const key = 'scope:["wss://cache.example","account-a"]\u0000agent:main:routed';
 const otherKey = 'scope:["wss://cache.example","account-a"]\u0000agent:main:other';
@@ -23,8 +24,8 @@ const stored: ChatSessionSnapshot = {
 
 async function seed() {
   const writer = new snapshots.SessionSnapshotStore();
-  writer.write(key, stored);
-  writer.write(otherKey, { ...stored, sessionId: "other-session" });
+  writeSnapshotFixture(writer, key, stored);
+  writeSnapshotFixture(writer, otherKey, { ...stored, sessionId: "other-session" });
   await writer.flush();
   return writer;
 }
@@ -143,7 +144,7 @@ describe("routed transcript prewarm", () => {
       await settled.promise;
       const latest = { ...stored, deltaCursor: "latest-cursor" };
       if (change === "write") {
-        writer.write(key, latest);
+        writeSnapshotFixture(writer, key, latest);
         await writer.flush();
       } else {
         writer.forget(key);

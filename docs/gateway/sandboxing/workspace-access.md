@@ -80,6 +80,11 @@ workspace owner before container allocation, while the skill mounts remain
 read-only. This also keeps normal retention cleanup independent of container
 user-namespace ownership.
 
+Git metadata at the checkout root or in nested repositories (`.git` path
+components) stays local to its runtime and is excluded from synchronization and
+recovery, including previously retained inputs. Similarly named source files
+such as `.gitignore`, `.gitmodules`, and `.git-notes` still reconcile normally.
+
 At the checkout root, `.cache/vitest/`, `.cache/bun-transpiler/`, `.cache/openclaw/bun/`,
 `.cache/ms-playwright/`, and `.local/share/pnpm/store/` caches stay with the runtime
 that produced them, along with `.artifacts/vitest-workers/` compiler outputs,
@@ -181,7 +186,11 @@ this checkout while capturing or applying changes, records pending results and
 rollback journals in SQLite, and resumes
 only after settlement. New shell calls and command preparation wait for an active
 checkpoint to release the workspace before proceeding; background commands do not
-hold that preparation lease for their entire lifetime. Captured workspace authority is checked again after
+hold that preparation lease for their entire lifetime. Concurrent Files requests
+and command checkpoints share equivalent captures while waiting for workspace
+custody. Requests arriving after capture starts trigger a fresh checkpoint so
+later guest writes remain visible. Each caller retains its own authority checks.
+Captured workspace authority is checked again after
 filesystem and engine preparation, immediately before filesystem commands,
 container creation/start/setup, and late browser restarts. Closing the owner
 during preparation prevents those effects rather than rejecting only afterward.

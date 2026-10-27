@@ -4026,7 +4026,6 @@
 ["src/commands/plugin-control-plane-cold-imports.test.ts","../agents/sandbox/docker.js","924bcd9ce784666a43ad432a9fa6e539dd488db89fa6337c42fc4deaaf109bda",1]
 ["src/commands/reset.sessions.test.ts","../daemon/service.js","cc2bd1916b9ab6a9fd899c1671cba9b1feb6700194b3810d50c8bab7f74761a0",1]
 ["src/commands/sandbox.test.ts","../cli/local-state-owner.js","2bc9d6ee0f3d96e6e13bd856bae0de35125a06a40422ccc205cf36062bf00411",1]
-["src/commands/session-store-targets.test.ts","../config/sessions.js","227404c9ef5161099bd5b8679c11346de01e7bd9ac5ae408947dd5956e88cc82",1]
 ["src/commands/sessions-cleanup.test.ts","./session-store-targets.js","a9f81b6997f6e4de38c7bff926c335223114bd67564183326b83aca9f6479da0",1]
 ["src/commands/sessions-cleanup.test.ts","./sessions-cleanup.runtime.js","3c47c904313053ce8d8bd8644a397a834cb9fe5f7f9d1a57046e2f9985a1f71f",1]
 ["src/commands/sessions-lifecycle.test.ts","../cli/gateway-rpc.js","a3378aca893f3d661c920d39da072b7302a3174db6dbc65fdebd10b613f1d439",1]

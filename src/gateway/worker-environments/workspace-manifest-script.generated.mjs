@@ -93,6 +93,10 @@ export async function runWorkspaceManifestProgram(
   );
   function isRuntimeOwnedWorkspacePath(relativePath) {
     return (
+      relativePath === ".git" ||
+      relativePath.startsWith(".git/") ||
+      relativePath.endsWith("/.git") ||
+      relativePath.includes("/.git/") ||
       isManagedSandboxSkillsPath(relativePath) ||
       RUNTIME_WORKSPACE_ROOT_PATHS.some(
         (root) => relativePath === root || relativePath.startsWith(root + "/"),
