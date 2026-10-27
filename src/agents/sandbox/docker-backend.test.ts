@@ -15,7 +15,6 @@ const mocks = vi.hoisted(() => ({
   ensureSandboxContainer: vi.fn(),
   execContainer: vi.fn(),
   execContainerRaw: vi.fn(),
-  resolvePodmanSandboxRuntimeInfo: vi.fn(),
   validateSandboxContainerEngineTarget: vi.fn(),
 }));
 
@@ -107,8 +106,8 @@ function assertMasked(bridge: Bridge, paths: string[]) {
   }
 }
 
-function provision(containerName = "sandbox-container") {
-  mocks.ensureSandboxContainer.mockResolvedValueOnce({ containerName, containerId });
+function provision(containerName = "sandbox-container", podmanTarget?: typeof localTarget) {
+  mocks.ensureSandboxContainer.mockResolvedValueOnce({ containerName, containerId, podmanTarget });
 }
 
 const bind = (source: string, target: string, writable: boolean) => ({ source, target, writable });
@@ -203,11 +202,6 @@ beforeEach(() => {
           : "unused-image",
     stderr: "",
   }));
-  mocks.resolvePodmanSandboxRuntimeInfo.mockResolvedValue({
-    machine: false,
-    rootless: true,
-    target: localTarget,
-  });
 });
 
 it.each(["allocation", "mount inspection", "engine validation"] as const)(
@@ -410,7 +404,6 @@ it("rejects an unreadable filesystem snapshot", async () => {
 });
 
 it("binds Podman provisioning and later execs to the resolved target", async () => {
-  provision("sandbox-podman");
   const podmanTarget = {
     key: `machine:${"a".repeat(32)}`,
     globalArgs: [
@@ -420,11 +413,7 @@ it("binds Podman provisioning and later execs to the resolved target", async () 
       "/tmp/podman-machine-key",
     ],
   };
-  mocks.resolvePodmanSandboxRuntimeInfo.mockResolvedValueOnce({
-    machine: true,
-    rootless: true,
-    target: podmanTarget,
-  });
+  provision("sandbox-podman", podmanTarget);
   const backend = await createPodmanSandboxBackend(
     backendParams({
       scopeKey,
@@ -435,7 +424,11 @@ it("binds Podman provisioning and later execs to the resolved target", async () 
   const execSpec = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
 
   expect(mocks.ensureSandboxContainer).toHaveBeenCalledWith(
-    expect.objectContaining({ podmanTarget, scopeKey, readOnlyResourceMounts }),
+    expect.objectContaining({
+      engine: expect.objectContaining({ id: "podman" }),
+      scopeKey,
+      readOnlyResourceMounts,
+    }),
   );
   expect(mocks.execContainer).toHaveBeenCalledWith(
     expect.objectContaining({ id: "podman", globalArgs: podmanTarget.globalArgs }),
@@ -488,7 +481,7 @@ process.stdout.write(JSON.stringify({
 `,
       { mode: 0o700 },
     );
-    provision("sandbox-github");
+    provision("sandbox-github", engine === "podman" ? localTarget : undefined);
     const createBackend =
       engine === "docker" ? createDockerSandboxBackend : createPodmanSandboxBackend;
     const backend = await createBackend(

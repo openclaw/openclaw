@@ -153,6 +153,89 @@ async function seedLegacyRuntime() {
 }
 
 describe("durable sandbox runtime generations", () => {
+  it("keeps an expired runtime while a turn holds it, then prunes after release", async () => {
+    const remove = install();
+    const sandbox = await resolve();
+    try {
+      await pruneImmediately();
+      expect(remove).not.toHaveBeenCalled();
+      await expectRuntime("reserved-1", { runtimeState: "ready" });
+    } finally {
+      sandbox?.[Symbol.dispose]?.();
+    }
+    await pruneImmediately();
+    expect(remove).toHaveBeenCalledOnce();
+    await expectAbsent("reserved-1");
+  });
+
+  it("waits only for the runtime slot whose pruning already started", async () => {
+    await seedLegacyRuntime();
+    const removal = createEnteredGate();
+    install(
+      undefined,
+      vi.fn(async () => removal.wait()),
+    );
+    const pruning = pruneImmediately();
+    await awaitGateBeforeSettlement(removal.entered, pruning, "Prune did not remove the runtime");
+    let settled = false;
+    const waiting = resolve().then((context) => {
+      settled = true;
+      return context;
+    });
+    try {
+      const unrelated = await resolveSandboxContext({
+        config,
+        workspaceDir,
+        sessionKey: "agent:test:unrelated",
+      });
+      try {
+        expect(unrelated?.runtimeId).toBe("reserved-1");
+        expect(settled).toBe(false);
+      } finally {
+        unrelated?.[Symbol.dispose]?.();
+      }
+    } finally {
+      removal.release();
+      await pruning;
+      (await waiting)?.[Symbol.dispose]?.();
+    }
+    expect(settled).toBe(true);
+    await expectAbsent("legacy-runtime");
+  });
+
+  it("returns a prepared context before unrelated background pruning settles", async () => {
+    config.agents!.defaults!.sandbox!.prune = { idleHours: 1, maxAgeDays: 0 };
+    await updateRegistry({
+      containerName: "expired-unrelated",
+      backendId: "reserved-test",
+      sessionKey: "agent:test:unrelated",
+      image: "provider-image",
+      createdAtMs: 1,
+      lastUsedAtMs: 1,
+    });
+    const removal = createEnteredGate();
+    const remove = install(
+      undefined,
+      vi.fn(async () => removal.wait()),
+    );
+    const preparing = resolve();
+    try {
+      const sandbox = await awaitGateBeforeSettlement(
+        preparing,
+        removal.entered,
+        "Run start waited for unrelated pruning",
+      );
+      expect(sandbox?.runtimeId).toBe("reserved-1");
+      await removal.entered;
+      expect(remove).toHaveBeenCalledOnce();
+    } finally {
+      removal.release();
+      (await preparing)?.[Symbol.dispose]?.();
+      await maybePruneSandboxes(config);
+    }
+    await expectAbsent("expired-unrelated");
+  });
+
   it("rejects hosted custody released during reserved backend discovery before allocation", async () => {
     using owner = acquireSandboxGatewayOwner(workspaceDir);
     const discovery = createEnteredGate();
@@ -330,12 +413,29 @@ describe("durable sandbox runtime generations", () => {
       operation === "prune" ? pruneImmediately() : removeSandboxContainer(id);
     const intent = observeRemovalIntent();
     const legacyRemoval = legacy ? startRemoval("legacy-runtime") : undefined;
-    const creating = expect(resolve()).rejects.toThrow("removed or is being removed");
+    const preparation = resolve();
+    const creating =
+      operation === "prune"
+        ? preparation
+        : expect(preparation).rejects.toThrow("removed or is being removed");
     const id = await started.promise;
     if (legacy) {
       expect(id).toBe("legacy-runtime");
     }
     const removing = legacyRemoval ?? startRemoval(id);
+    if (operation === "prune") {
+      try {
+        await removing;
+        expect(remove).not.toHaveBeenCalled();
+      } finally {
+        finish.resolve();
+        (await preparation)?.[Symbol.dispose]?.();
+      }
+      await pruneImmediately();
+      expect(remove).toHaveBeenCalledOnce();
+      await expectAbsent(id);
+      return;
+    }
     try {
       await awaitGateBeforeSettlement(intent, removing, "Removal intent was not acknowledged");
       await expectRuntime(id, { runtimeState: "removing-pending" });

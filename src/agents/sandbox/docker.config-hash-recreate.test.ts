@@ -116,6 +116,7 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
         prepareCreation(true);
         const params = { ...containerParams(cfg, workspaceDir), sessionKey: "shared" };
         const first = await createSandboxBackend(params);
+        expect(calls("info")).toHaveLength(backendId === "podman" ? 1 : 0);
         expect(registryMocks.updateRegistry).toHaveBeenCalledTimes(1);
         const published = registryMocks.updateRegistry.mock.calls[0]?.[0];
         expect(published).toMatchObject({
@@ -128,6 +129,7 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
         });
         registryMocks.readRegistryEntry.mockResolvedValue(published);
         const second = await createSandboxBackend(params);
+        expect(calls("info")).toHaveLength(backendId === "podman" ? 2 : 0);
         expect(second.runtimeId).toBe(first.runtimeId);
         expect(registryMocks.updateRegistry).toHaveBeenCalledTimes(2);
         expect(calls("create")).toHaveLength(1);
@@ -423,6 +425,18 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
       );
     },
   );
+
+  it("rejects a preselected Podman target that changed before allocation", async () => {
+    await expect(
+      harness.ensureSandboxContainer({
+        ...podmanParams(createSandboxConfig([])),
+        podmanTarget: { key: "socket:previous", globalArgs: ["--url", "unix:///previous.sock"] },
+      }),
+    ).rejects.toThrow("active Podman connection changed");
+    expect(calls("info")).toHaveLength(1);
+    expect(calls("inspect")).toHaveLength(0);
+    expectNoMutation();
+  });
 
   it.each(["changed", "missing", "unreachable"] as const)(
     "handles a recorded Podman target that is %s",

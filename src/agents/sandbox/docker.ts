@@ -381,6 +381,7 @@ async function ensureSandboxContainerLifecycle(
       return {
         containerName,
         containerId,
+        ...(podmanRuntimeInfo ? { podmanTarget: podmanRuntimeInfo.target } : {}),
         configHash: expectedHash,
         mountPlan,
         currentConfig: true,
@@ -437,6 +438,7 @@ async function ensureSandboxContainerLifecycle(
   return {
     containerName,
     containerId,
+    ...(podmanRuntimeInfo ? { podmanTarget: podmanRuntimeInfo.target } : {}),
     configHash: hashMismatch ? currentHash : expectedHash,
     mountPlan,
     currentConfig: !hashMismatch,
