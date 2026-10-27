@@ -11,7 +11,7 @@ const reviewJob = {
   declarationKey: "knowledge:scribe:unlinked-review",
   enabled: true,
   configRevision: "rev-7",
-  schedule: { kind: "cron", expr: "45 3 * * *" },
+  schedule: { kind: "cron", expr: "45 3 * * 0" },
   failureAlert: { after: 2 },
   state: { lastRunStatus: "ok", lastRunAtMs: 1_793_000_000_000, nextRunAtMs: 1_793_090_000_000 },
 };
@@ -252,6 +252,7 @@ it("runs, pauses, turns off and opens an On scribe from its detail", async () =>
   expect(view.textContent).toContain("1 recent run, all succeeded");
   expect(view.querySelector(".scribe-run span")?.textContent).toBe("9 filed · 2 pages created");
   expect(view.textContent).toContain("Alert after 2 failed runs");
+  expect(view.textContent).toMatch(/Weekly on Sunday, 3:45\sAM/);
   buttonNamed(view, "Run now").click();
   await flush();
   expect(calls.at(-1)).toEqual(["cron.run", { id: "job-review", mode: "force" }]);

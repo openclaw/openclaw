@@ -4,6 +4,7 @@ import { button, chip, clock, el } from "./page-dom.js";
 import { openConfirmDialog, openStartDialog, scribeTile } from "./scribe-dialog.js";
 import {
   repairScribe,
+  retryScribe,
   runScribeNow,
   setScribePaused,
   startScribe,
@@ -33,6 +34,13 @@ const STATUS: Record<ScribeStatus, [string, string]> = {
   done: ["Done", "scribe-chip-on"],
   reauth: ["Needs reauthorization", "scribe-chip-warn"],
 };
+/**
+ * Jobs whose first run this page already forced. A job reads as never run until its forced run
+ * starts, so this keeps reloads in that gap from forcing it again. Another page open at the same
+ * moment could force a second run; that is a visible, harmless extra run.
+ */
+const firstRuns = new Set<string>();
+
 /** Scribes the list shows under "On": everything set up that is not finished or startable. */
 const isOn = (status: ScribeStatus) => status !== "available" && status !== "done";
 
@@ -55,11 +63,20 @@ const plural = (n: number, one: string) => `${n.toLocaleString()} ${one}${n === 
 function scheduleText(job: ScribeJob) {
   const { schedule } = job;
   if (schedule.kind === "cron" && schedule.expr) {
-    const daily = /^(\d{1,2}) (\d{1,2}) \* \* \*$/.exec(schedule.expr.trim());
+    // Daily ("M H * * *") and weekly ("M H * * D", one day 0-7) read as a time of day.
+    const fields = /^(\d{1,2}) (\d{1,2}) \* \* (\*|[0-7])$/.exec(schedule.expr.trim());
     const tz = schedule.tz ? ` · ${schedule.tz}` : "";
-    if (daily) {
-      const at = new Date(2000, 0, 1, Number(daily[2]), Number(daily[1]));
-      return `Daily, ${at.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}${tz}`;
+    if (fields) {
+      const at = new Date(2000, 0, 1, Number(fields[2]), Number(fields[1]));
+      const clockText = at.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+      if (fields[3] === "*") {
+        return `Daily, ${clockText}${tz}`;
+      }
+      // 2000-01-02 was a Sunday, so day N of the week is January 2 + N.
+      const day = new Date(2000, 0, 2 + (Number(fields[3]) % 7)).toLocaleDateString(undefined, {
+        weekday: "long",
+      });
+      return `Weekly on ${day}, ${clockText}${tz}`;
     }
     return `${schedule.expr}${tz}`;
   }
@@ -116,6 +133,8 @@ function activeMeta(snapshot: ScribeSnapshot) {
     parts.push("Its conversation is archived or gone. Repair reconnects it.");
   } else if (status === "paused") {
     parts.push("Paused");
+  } else if (firstRunPending(snapshot)) {
+    parts.push("First run in progress");
   }
   if (job && status !== "reauth") {
     parts.push(scheduleText(job));
@@ -174,6 +193,9 @@ export async function scribes(ui: Page, n: number, target: HTMLElement) {
     loadScribes(host, agentId),
     selected ? Promise.resolve({}) : detectSources(host, agentId).catch(() => ({})),
   ]);
+  if (host.connection.canWrite) {
+    await Promise.all(snapshots.map((snapshot) => startFirstRun(ui, snapshot)));
+  }
   const snapshot = selected && snapshots.find((entry) => entry.scribe.id === selected.id);
   const runs = snapshot?.job ? await loadRuns(host, snapshot.job, agentId).catch(() => []) : [];
   if (!live(n)) {
@@ -182,6 +204,32 @@ export async function scribes(ui: Page, n: number, target: HTMLElement) {
   renderScribesTab(ui.scribesTab, snapshots.filter((entry) => isOn(entry.status)).length);
   target.replaceChildren(snapshot ? detail(ui, snapshot, runs) : list(ui, snapshots, detection));
 }
+
+/**
+ * Force an ongoing scribe's first run once its setup turn reported `on`. Setup turns never run
+ * their own job, so the page does it, at most once per job from this page.
+ */
+async function startFirstRun(ui: Page, snapshot: ScribeSnapshot) {
+  const { job } = snapshot;
+  if (!snapshot.firstRunDue || !job || firstRuns.has(job.id)) {
+    return;
+  }
+  firstRuns.add(job.id);
+  try {
+    await runScribeNow(ui.s.context.host, job);
+    ui.announce(`${snapshot.scribe.title}: first run started.`);
+  } catch (error) {
+    ui.announce(`${snapshot.scribe.title}: the first run did not start. ${ui.errorText(error)}`);
+  }
+}
+
+/** The first run is forced or running and nothing has finished yet. */
+const firstRunPending = (snapshot: ScribeSnapshot) =>
+  Boolean(
+    snapshot.job &&
+    !snapshot.job.state.lastRunAtMs &&
+    (snapshot.job.state.runningAtMs || firstRuns.has(snapshot.job.id)),
+  );
 
 /** Tab label with the count of scribes that are on. */
 function renderScribesTab(tab: HTMLButtonElement, on: number) {
@@ -419,7 +467,17 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[]) {
       ),
     );
   }
-  if (status === "reauth" || status === "failing") {
+  // A failed one-time scribe starts over with its setup; an ongoing one repairs its automation.
+  const once = !job && (snapshot.setup?.mode ?? scribe.modes[0]) === "once";
+  if (status === "failing" && once) {
+    actions.append(
+      control(
+        "Retry",
+        () => retryScribe(host, snapshot, agentId),
+        `Asked ${scribeLabel(scribe)} to start over.`,
+      ),
+    );
+  } else if (status === "reauth" || status === "failing") {
     actions.append(
       control(
         "Repair",
@@ -554,7 +612,11 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[]) {
     );
     rows.append(line);
   }
-  if (!runs.length && snapshot.result) {
+  if (!runs.length && firstRunPending(snapshot)) {
+    const line = el("div", undefined, "scribe-run");
+    line.append(el("time", "First run"), el("span", "Running now"), el("span"));
+    rows.append(line);
+  } else if (!runs.length && snapshot.result) {
     const line = el("div", undefined, "scribe-run");
     line.append(el("time", "Latest"), el("span", snapshot.result.summary), el("span"));
     rows.append(line);
