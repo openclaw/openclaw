@@ -210,6 +210,7 @@ const repositoryScriptEntries = [
   "scripts/perf/session-delete-measure.ts!",
   "scripts/perf/session-history-prewarm-measure.mjs!",
   "scripts/perf/session-prepared-list-measure.ts!",
+  "scripts/perf/session-list-search-measure.ts!",
   "scripts/perf/transcript-boot-preload.mjs!",
   "scripts/perf/worker-pool-churn-preload.mjs!",
   "scripts/perf/worktree-prompt-native-measure.ts!",
