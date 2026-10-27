@@ -74,6 +74,10 @@ export function connectShellViewport(): () => void {
     frame = null;
     const layoutHeight = root.clientHeight || window.innerHeight;
     const nextWidth = root.clientWidth || window.innerWidth;
+    // WebKit flushes layout for these getters; read them before publishing CSS.
+    const height = viewport.height;
+    const offsetTop = viewport.offsetTop;
+    const nativeScale = viewport.scale === 1;
     const focused = hasKeyboardFocus();
     // Rotation changes the unoccluded reference; a portrait height must not
     // classify the following landscape viewport as a still-open keyboard.
@@ -82,13 +86,12 @@ export function connectShellViewport(): () => void {
     }
     width = nextWidth;
     if (focused) {
-      focusHeight ??= Math.max(layoutHeight, viewport.height);
+      focusHeight ??= Math.max(layoutHeight, height);
     }
-    const nativeScale = viewport.scale === 1;
     const keyboard =
       nativeScale &&
       focused &&
-      Math.max(layoutHeight, focusHeight ?? 0) - viewport.height >= KEYBOARD_MIN_SHRINK;
+      Math.max(layoutHeight, focusHeight ?? 0) - height >= KEYBOARD_MIN_SHRINK;
     if (keyboard) {
       root.style.setProperty("--shell-safe-area-bottom", "0px");
     } else {
@@ -103,7 +106,7 @@ export function connectShellViewport(): () => void {
       // twice. Insets are consumed by the app's CSS, not subtracted here too.
       root.style.setProperty(
         "--shell-viewport-height",
-        String(Math.max(0, viewport.height + viewport.offsetTop)) + "px",
+        String(Math.max(0, height + offsetTop)) + "px",
       );
     } else {
       root.style.removeProperty("--shell-viewport-height");
@@ -111,8 +114,8 @@ export function connectShellViewport(): () => void {
     publish({
       width,
       layoutHeight,
-      height: viewport.height,
-      offsetTop: viewport.offsetTop,
+      height,
+      offsetTop,
       nativeScale,
       keyboardVisible: keyboard,
       focusHeight,
