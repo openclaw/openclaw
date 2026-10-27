@@ -215,8 +215,7 @@ it.skipIf(process.platform === "win32").each(["all", "uncommitted"] as const)(
 
       await write("file.txt", "changed\n");
       await write("new.txt", "new\n");
-      const changed = await read();
-      expect(changed.files).toMatchObject([
+      expect((await read()).files).toMatchObject([
         { path: "file.txt", status: "modified", additions: 1, deletions: 1 },
         { path: "new.txt", untracked: true, additions: 1 },
       ]);
