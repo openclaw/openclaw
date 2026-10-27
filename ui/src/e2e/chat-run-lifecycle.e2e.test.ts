@@ -372,7 +372,7 @@ suite.define(() => {
     expect(await assistantGroup.count()).toBe(1);
     expect(await page.locator(".chat-reading-indicator").count()).toBe(0);
     expect(
-      await assistantGroup.getByText("Waiting for turn to start…", { exact: true }).count(),
+      await assistantGroup.getByText("Waiting for turn to start", { exact: true }).count(),
     ).toBe(1);
   });
 
@@ -660,10 +660,10 @@ suite.define(() => {
       .poll(() => page.locator(".chat-working-indicator__elapsed").textContent())
       .toBe("2m 57s");
     const workingLabel = page.locator(".chat-working-indicator__status > span:first-child");
-    expect(await workingLabel.textContent()).toBe("Waiting for turn to start…");
+    expect(await workingLabel.textContent()).toBe("Waiting for turn to start");
     expect(
       await page.locator(".chat-working-indicator__status > span:not(.sr-only)").allTextContents(),
-    ).toEqual(["Waiting for turn to start…", "·"]);
+    ).toEqual(["Waiting for turn to start", "·"]);
   });
 
   it.each(["final", "error"] as const)(

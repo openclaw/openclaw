@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   officialCatalog: vi.fn(),
   providerAuthChoices: vi.fn(),
   pluginVersionCategories: vi.fn(),
+  pluginDetail: vi.fn(),
   recommendedInstalls: vi.fn(),
 }));
 
@@ -47,6 +48,7 @@ vi.mock("../infra/clawhub-plugin-catalog.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/clawhub-plugin-catalog.js")>()),
   fetchClawHubPluginVersionCategories: (...args: unknown[]) =>
     mocks.pluginVersionCategories(...args),
+  fetchClawHubPluginDetail: (...args: unknown[]) => mocks.pluginDetail(...args),
 }));
 
 vi.mock("./recommended-tool-installs.js", () => ({
@@ -78,6 +80,7 @@ describe("managed plugin catalog", () => {
     }
     mocks.providerAuthChoices.mockReturnValue([]);
     mocks.pluginVersionCategories.mockResolvedValue([]);
+    mocks.pluginDetail.mockResolvedValue({});
     mocks.recommendedInstalls.mockReturnValue([]);
     mockHostedOfficialCatalog(mocks.officialCatalog, []);
   });
@@ -650,6 +653,83 @@ describe("managed plugin catalog", () => {
     expect(
       await resolveManagedPluginActivityIconSource({ config: {}, env: {}, pluginId: "workboard" }),
     ).toBeUndefined();
+  });
+
+  it.each([
+    ["external publisher, including an OpenClaw package scope", "global", "clawhub", "alice", true],
+    ["OpenClaw publisher", "global", "clawhub", "OpenClaw", false],
+    ["unknown publisher", "global", "clawhub", undefined, false],
+    ["bundled plugin", "bundled", "clawhub", "alice", false],
+    ["npm scope is not publisher provenance", "global", "npm", "alice", false],
+    ["local package is not publisher provenance", "global", "path", "alice", false],
+  ] as const)(
+    "gates tool branding on authoritative provenance: %s",
+    async (_label, origin, source, ownerHandle, eligible) => {
+      mocks.metadata.mockReturnValue(
+        metadataSnapshot({
+          enabled: true,
+          origin,
+          iconPath: "/tmp/workboard/assets/icon.png",
+          categories: ["tools"],
+          installRecord: {
+            source,
+            clawhubUrl: "https://clawhub.ai",
+            clawhubPackage: "@openclaw/workboard",
+            spec: "@openclaw/workboard",
+          },
+        }),
+      );
+      mocks.pluginDetail.mockResolvedValue({ ownerHandle });
+
+      const catalog = await listLocalPlugins();
+
+      expect(catalog.plugins[0]?.hasIcon).toBe(true);
+      expect(catalog.plugins[0]?.hasToolBrandIcon).toBe(eligible ? true : undefined);
+      expect(mocks.pluginDetail).toHaveBeenCalledTimes(
+        origin !== "bundled" && source === "clawhub" ? 1 : 0,
+      );
+    },
+  );
+
+  it("prepares registry-scoped tool publisher facts without blocking the cold list", async () => {
+    const installed = (clawhubUrl: string) =>
+      metadataSnapshot({
+        enabled: true,
+        origin: "global",
+        categories: ["tools"],
+        installRecord: { source: "clawhub", clawhubUrl, clawhubPackage: "community/workboard" },
+      });
+    mocks.metadata.mockReturnValue(installed("https://clawhub.ai"));
+    const detail = createDeferred<{ ownerHandle: string }>();
+    mocks.pluginDetail.mockReturnValue(detail.promise);
+    const params = {
+      config: {},
+      env: {},
+      officialCatalog: { entries: [] },
+      cachedCatalogOnly: true,
+    };
+    const first = await listManagedPlugins(params);
+    expect(first.plugins[0]?.hasIcon).toBe(true);
+    expect(first.plugins[0]).not.toHaveProperty("hasToolBrandIcon");
+    detail.resolve({ ownerHandle: "alice" });
+    expect((await listLocalPlugins()).plugins[0]?.hasToolBrandIcon).toBe(true);
+    expect((await listManagedPlugins(params)).plugins[0]?.hasToolBrandIcon).toBe(true);
+    expect(mocks.pluginDetail).toHaveBeenCalledOnce();
+    expect(mocks.pluginDetail).toHaveBeenCalledWith({
+      baseUrl: "https://clawhub.ai",
+      packageName: "community/workboard",
+      skipAuth: true,
+    });
+
+    mocks.metadata.mockReturnValue(installed("https://private.example/clawhub"));
+    mocks.pluginDetail.mockRejectedValue(new Error("offline"));
+    expect((await listLocalPlugins()).plugins[0]).not.toHaveProperty("hasToolBrandIcon");
+    await listLocalPlugins();
+    expect(mocks.pluginDetail).toHaveBeenCalledTimes(2);
+    clearManagedPluginCatalogCache();
+    mocks.pluginDetail.mockResolvedValue({ ownerHandle: "openclaw" });
+    expect((await listLocalPlugins()).plugins[0]).not.toHaveProperty("hasToolBrandIcon");
+    expect(mocks.pluginDetail).toHaveBeenCalledTimes(3);
   });
 
   it.each([true, false])(
