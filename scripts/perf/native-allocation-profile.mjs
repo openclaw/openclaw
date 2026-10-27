@@ -85,6 +85,11 @@ function observe() {
   assert(output && path.isAbsolute(output), "absolute synthetic profile directory required");
   assert(addon && path.isAbsolute(addon), "absolute profiling addon path required");
   const { isMainThread, threadId } = threads;
+  const ancestryKey = "openclaw.nativeAllocationProfile.ancestors";
+  const ancestors = threads.getEnvironmentData(ancestryKey) ?? [];
+  // Environment data is inherited even with an explicit env or SHARE_ENV.
+  // Keep the full chain: an intermediate ready record can disappear first.
+  threads.setEnvironmentData(ancestryKey, [...ancestors, threadId]);
   const NativeWorker = threads.Worker;
   threads.Worker = class extends NativeWorker {
     constructor(filename, options = {}) {
@@ -103,11 +108,29 @@ function observe() {
                 OPENCLAW_NATIVE_PROFILE_ADDON: addon,
               },
       });
-      // terminate() does not run the child's JavaScript exit handler.
+      // Node joins the entire subtree before this event, but terminating its parent
+      // suppresses descendant JavaScript exit observers. The surviving owner cleans up.
       const childId = this.threadId;
-      this.once("exit", () =>
-        fs.rmSync(path.join(output, `${process.pid}-${childId}.ready.json`), { force: true }),
-      );
+      this.once("exit", () => {
+        for (const name of fs.readdirSync(output)) {
+          if (!name.startsWith(`${process.pid}-`) || !name.endsWith(".ready.json")) {
+            continue;
+          }
+          const file = path.join(output, name);
+          let observed;
+          try {
+            observed = read(file);
+          } catch (error) {
+            if (error.code === "ENOENT") {
+              continue; // Another live parent can retire its own worker concurrently.
+            }
+            throw error;
+          }
+          if (observed.threadId === childId || observed.ancestors.includes(childId)) {
+            fs.rmSync(file, { force: true });
+          }
+        }
+      });
     }
   };
   syncBuiltinESMExports();
@@ -115,6 +138,7 @@ function observe() {
     pid: process.pid,
     threadId,
     isMainThread,
+    ancestors,
     argv: process.argv,
     node: process.version,
   };

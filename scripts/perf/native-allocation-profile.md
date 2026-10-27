@@ -43,9 +43,10 @@ jeprof --text /absolute/node-distribution/bin/node \
 Use unique sample labels and one controller at a time. A snapshot requests forced
 GC from every observed isolate, waits for replies, then captures main-process RSS,
 allocator counters, `/proc/self/smaps`, and a jemalloc profile. It rejects a changing
-worker census, missing replies, or a failed dump. Terminated workers are removed by
-their parent's exit observer, since `Worker.terminate()` does not run child exit
-handlers. Keep all observations, including rejected startup samples.
+worker census, missing replies, or a failed dump. Each observed worker carries its
+ancestor IDs. The surviving parent's exit observer removes the entire terminated
+subtree, since native teardown joins descendants without running their JavaScript
+exit observers. Keep all observations, including rejected startup samples.
 
 The allocator configuration is
 `background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000,prof:true,lg_prof_sample:19`.
