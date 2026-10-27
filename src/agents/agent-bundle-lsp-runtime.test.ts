@@ -39,6 +39,10 @@ class MockChildProcess extends EventEmitter implements OwnedStdioProcess {
   constructor(
     private readonly initializeResponsePrefix = "",
     private readonly respondMethods?: ReadonlySet<string>,
+    private readonly frameResponse: (
+      body: Record<string, unknown>,
+      method: string,
+    ) => string | readonly string[] = encodeLspMessage,
   ) {
     super();
     this.stdin = new Writable({
@@ -129,9 +133,12 @@ class MockChildProcess extends EventEmitter implements OwnedStdioProcess {
     };
     const result = method === "initialize" ? { capabilities } : null;
     queueMicrotask(() => {
-      this.stdout.write(
-        this.initializeResponsePrefix + encodeLspMessage({ jsonrpc: "2.0", id: body.id, result }),
-      );
+      const response = { jsonrpc: "2.0", id: body.id, result };
+      const frame = this.frameResponse(response, method);
+      const chunks = typeof frame === "string" ? [frame] : frame;
+      for (const [index, chunk] of chunks.entries()) {
+        this.stdout.write(`${index === 0 ? this.initializeResponsePrefix : ""}${chunk}`);
+      }
     });
   }
 }

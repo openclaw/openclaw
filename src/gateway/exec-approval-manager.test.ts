@@ -94,7 +94,10 @@ describe("ExecApprovalManager", () => {
     };
   }
 
-  function blockStorage({ dir, databaseOptions }: ReturnType<typeof createManager>) {
+  function blockStorage({
+    dir,
+    databaseOptions,
+  }: Pick<ReturnType<typeof createManager>, "dir" | "databaseOptions">) {
     const validPath = databaseOptions.path;
     const blocker = path.join(dir, "storage-blocker");
     fs.writeFileSync(blocker, "blocked");

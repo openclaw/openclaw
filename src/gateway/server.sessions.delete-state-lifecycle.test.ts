@@ -535,13 +535,17 @@ async function createCompanion(runModel?: () => Promise<string>) {
   return service;
 }
 
-const ask = (service: SessionCompanionService, sessionKey: string, question: string) =>
-  service.ask({ agentId: "main", sessionKey, question, connId: "conn-main" });
+const ask = (
+  service: SessionCompanionService,
+  sessionKey: string,
+  question: string,
+  agentId = "main",
+) => service.ask({ agentId, sessionKey, question, connId: `conn-${agentId}` });
 
-async function readState(service: SessionCompanionService, sessionKey: string) {
+async function readState(service: SessionCompanionService, sessionKey: string, agentId = "main") {
   const response = await directSessionReq<SessionsCompanionStateResult>(
     "sessions.companion.state",
-    { sessionKey, agentId: "main" },
+    { sessionKey, agentId },
     { context: { sessionCompanion: service } },
   );
   expect(response.ok, response.error?.message).toBe(true);
@@ -558,7 +562,7 @@ test("sessions.delete isolates Side chat for the same global key and session ID 
     entries: { global: sessionStoreEntry("sess-main-global") },
     storePath: stores.workStorePath,
   });
-  const { service } = await createCompanion();
+  const service = await createCompanion();
   cleanups.push(() => resetConfiguredGlobalAgentSessionStore(stores));
   await ask(service, "global", "Main agent question?", "main");
   await ask(service, "global", "Work agent question?", "work");

@@ -450,6 +450,30 @@ describe("worker environment service", () => {
     });
   });
 
+  it("records provider-proven teardown without local intent as a failure", async () => {
+    await support.seedReady("worker-destroyed-ready");
+    await seedAttached("worker-destroyed-attached");
+    await support.seedReady("worker-destroyed-draining");
+    await transition("worker-destroyed-draining", "ready", "draining");
+    const workerService = service({
+      inspect: async () => ({ status: "destroyed" }),
+      destroy: fail("destroy must not run for provider-proven teardown"),
+    });
+
+    await workerService.reconcileOnce();
+
+    for (const environmentId of [
+      "worker-destroyed-ready",
+      "worker-destroyed-attached",
+      "worker-destroyed-draining",
+    ]) {
+      expectState(environmentId, "failed", {
+        attachedSessionIds: [],
+        lastError: "Worker environment disappeared before teardown was requested",
+      });
+    }
+  });
+
   it("adopts a provider-proven bootstrap teardown as failed after restart", async () => {
     const bootstrapping = await support.seedBootstrapping("worker-bootstrap-teardown-crash");
     await beginTeardown(bootstrapping, "remote bootstrap failed");

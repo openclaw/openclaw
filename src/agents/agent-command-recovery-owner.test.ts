@@ -324,6 +324,27 @@ describe("agent command restart recovery ownership", () => {
     );
   });
 
+  it.each([
+    { mode: "claim", status: "failed", cleared: true },
+    { mode: "reject_uncoordinated", status: "done", cleared: false },
+  ] as const)("handles terminal residue in $mode mode", async ({ mode, status, cleared }) => {
+    const target = createTarget();
+    const restartRecoveryRuns = [{ runId: "stale-run", lifecycleGeneration: "dead-generation" }];
+    await write(target, {
+      status,
+      abortedLastRun: false,
+      restartRecoveryRuns,
+      restartRecoveryTerminalRunIds: ["stale-run"],
+    });
+    const run = vi.fn(async () => "ran");
+    await expect(execute(target, { mode, run })).resolves.toBe("ran");
+    expect(run).toHaveBeenCalledOnce();
+    const stored = read(target);
+    expect(stored).toMatchObject({ status, abortedLastRun: false });
+    expect(stored?.restartRecoveryRuns).toEqual(cleared ? undefined : restartRecoveryRuns);
+    expect(stored?.mainRestartRecovery).toBeUndefined();
+  });
+
   it.each([false, true])(
     "restores failed command preparation (restoration fails: %s)",
     async (fails) => {

@@ -494,7 +494,7 @@ describe("board authenticated GitHub Actions", () => {
     await expectResult(otherSession.read());
     await expectResult(read());
     expect(actionCalls()).toHaveLength(1);
-    const [url] = actionCalls()[0]!;
+    const [url, init] = actionCalls()[0]!;
     expect(url).toBe(
       "https://api.github.com/repos/owner/repo/actions/runs?per_page=20&exclude_pull_requests=true",
     );

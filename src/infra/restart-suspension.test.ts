@@ -115,6 +115,23 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     expect(hooks.onReady).not.toHaveBeenCalled();
   });
 
+  it("cancels a pending restart before it emits", async () => {
+    let pending = 1;
+    const preparation = createDeferred();
+    const handle = deferGatewayRestartUntilIdle({
+      getPendingCount: () => pending,
+      emitHooks: { beforeEmit: async () => await preparation.promise, emitRestart },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(isGatewayWorkAdmissionClosed()).toBe(false);
+    handle.cancel();
+    expect(isGatewayWorkAdmissionClosed()).toBe(false);
+    pending = 0;
+    preparation.resolve();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(emitRestart).not.toHaveBeenCalled();
+  });
+
   it("forces a timed-out restart while an admitted root remains", async () => {
     const root = tryBeginGatewayRootWorkAdmission();
     expect(root).not.toBeNull();

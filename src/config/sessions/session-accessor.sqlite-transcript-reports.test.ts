@@ -496,7 +496,7 @@ describe("SQLite report payload selection", () => {
       ...value,
       toJSON(key: string) {
         serializedKeys.push(key);
-        return value;
+        return { ...this, toJSON: undefined };
       },
     });
     await expect(

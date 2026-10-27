@@ -553,7 +553,7 @@ it("returns no row for missing or hidden targets without provisioning missing st
     }
   });
   await withFixture(async ({ describe }) => {
-    await upsertSessionEntryCore(targetScope, { visibility: "draft" });
+    await putSession(targetKey, { visibility: "draft" });
     expect(await describe()).toEqual({ session: null });
   });
 });

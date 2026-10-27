@@ -132,13 +132,10 @@ it.each([String.raw`C:\OpenClaw\agent.sqlite`, String.raw`\\Server\Share\agent.s
 
 describe("runSqliteDeferredTransactionSync", () => {
   it("keeps multiple reads on one snapshot while another connection commits", () => {
-    const tempDir = tempDirs.make("openclaw-sqlite-read-snapshot-");
-    const databasePath = path.join(tempDir, "snapshot.sqlite");
-    const reader = openDatabase(databasePath);
-    const writer = openDatabase(databasePath);
-    reader.exec(
+    const { db: reader, databasePath } = fileDatabase(
       "PRAGMA journal_mode = WAL; CREATE TABLE entries (id TEXT PRIMARY KEY); INSERT INTO entries VALUES ('first');",
     );
+    const writer = openDatabase(databasePath);
     writer.exec("PRAGMA busy_timeout = 1000;");
 
     const counts = runSqliteDeferredTransactionSync(reader, () => {
