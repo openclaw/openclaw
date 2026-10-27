@@ -63,49 +63,15 @@ import type { SqliteWorkerAdmissionFactory } from "./sqlite-worker-operation-adm
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 import { sqliteWorkerRequestBytes } from "./sqlite-worker-state-context.js";
+import {
+  resolveSqliteWorkerStoreCap,
+  resolveSqliteWorkerStoreIdleSweepMs,
+  resolveSqliteWorkerStoreIdleTtlMs,
+  resolveSqliteWorkerStoreRetainLimit,
+} from "./sqlite-worker-store-limits.js";
 import { resolveSqliteBrokerWorkerCount } from "./worker-pool-sizing.js";
 import { trackWorkerRequest, type WorkerRequestObservation } from "./worker-request-diagnostics.js";
 
-const DEFAULT_MAX_STORES = 64;
-const DEFAULT_STORE_RETAIN_LIMIT = 64;
-const DEFAULT_STORE_IDLE_TTL_MS = 5 * 60_000;
-const DEFAULT_STORE_IDLE_SWEEP_MS = 60_000;
-
-/** The store cap is a deployment knob: burst concurrency can raise it without a rebuild. */
-export function resolveSqliteWorkerStoreCap(): number {
-  const raw = process.env.OPENCLAW_SQLITE_WORKER_MAX_STORES?.trim();
-  if (!raw) return DEFAULT_MAX_STORES;
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed < 1) return DEFAULT_MAX_STORES;
-  return Math.min(parsed, 4096);
-}
-
-/** Live clients kept before idle clients are retired; bounds the retained floor. */
-export function resolveSqliteWorkerStoreRetainLimit(): number {
-  const raw = process.env.OPENCLAW_SQLITE_WORKER_STORE_RETAIN_LIMIT?.trim();
-  if (!raw) return DEFAULT_STORE_RETAIN_LIMIT;
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed < 1) return DEFAULT_STORE_RETAIN_LIMIT;
-  return Math.min(parsed, 4096);
-}
-
-/** Idle age before a store client may release its retained state. */
-export function resolveSqliteWorkerStoreIdleTtlMs(): number {
-  const raw = process.env.OPENCLAW_SQLITE_WORKER_STORE_IDLE_TTL_MS?.trim();
-  if (!raw) return DEFAULT_STORE_IDLE_TTL_MS;
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_STORE_IDLE_TTL_MS;
-  return Math.min(parsed, 86_400_000);
-}
-
-/** How often the broker sweeps for idle store clients. */
-export function resolveSqliteWorkerStoreIdleSweepMs(): number {
-  const raw = process.env.OPENCLAW_SQLITE_WORKER_STORE_IDLE_SWEEP_MS?.trim();
-  if (!raw) return DEFAULT_STORE_IDLE_SWEEP_MS;
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed < 1_000) return DEFAULT_STORE_IDLE_SWEEP_MS;
-  return Math.min(parsed, 3_600_000);
-}
 const MAX_QUEUED_COMMAND_BYTES = 64 * 1024 * 1024;
 export const SQLITE_WORKER_MAX_REQUESTS_PER_WORKER = 128;
 const SQLITE_WORKER_MAX_QUEUED_BYTES = 256 * 1024 * 1024;
@@ -185,7 +151,9 @@ export class SqliteWorkerBroker {
     let retired = 0;
     for (const client of selected) {
       const pending = client.retireIdle?.() ?? client.retire?.();
-      if (!pending) continue;
+      if (!pending) {
+        continue;
+      }
       retired += 1;
       void pending.catch(() => undefined);
     }
@@ -442,14 +410,14 @@ export class SqliteWorkerBroker {
     }
     const releasePaths = retainSqliteWorkerAdmissionPathReferences(owned, admittedPaths);
     let referenceReleased = false;
-    let brokerClient: StoreClient | undefined;
+    const brokerClient: { current?: StoreClient } = {};
     const { store, client: storeClient } = createSqliteWorkerClient<Operations>({
       actor: owned,
       isDraining: () => this.draining !== undefined,
       isAvailable: () => !owned.slot.failed && !owned.cleanupState && !owned.retirementRequested,
       // The broker owns retirement when the opener does not provide one: an idle client
       // must release its retained state instead of pinning it for the process lifetime.
-      retireIdle: options.retireIdle ?? (() => brokerClient?.retire?.()),
+      retireIdle: options.retireIdle ?? (() => brokerClient.current?.retire?.()),
       dispatch: (payload, signal, scope, assertCurrent, createAdmission, requestClass) =>
         this.enqueue(
           owned.slot,
@@ -496,7 +464,7 @@ export class SqliteWorkerBroker {
         }
       },
     });
-    brokerClient = storeClient;
+    brokerClient.current = storeClient;
     this.stores.set(store, storeClient);
     return store;
   }

@@ -84,9 +84,15 @@ export function selectIdleSqliteWorkerClients(
   const clients = [...stores];
   const selected: StoreClient[] = [];
   for (const client of clients) {
-    if (!options.force && clients.length - selected.length <= options.retainLimit) break;
-    if (!client.isIdle()) continue;
-    if (!options.force && options.now - client.lastUsedAt < options.idleTtlMs) continue;
+    if (!options.force && clients.length - selected.length <= options.retainLimit) {
+      break;
+    }
+    if (!client.isIdle()) {
+      continue;
+    }
+    if (!options.force && options.now - client.lastUsedAt < options.idleTtlMs) {
+      continue;
+    }
     selected.push(client);
   }
   return selected;
