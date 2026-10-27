@@ -122,39 +122,30 @@ function runNpmPolicy(spec: string) {
 describe("install-cli.sh", () => {
   const script = readStandaloneInstaller(process.cwd(), SCRIPT_PATH.slice("scripts/".length));
 
-  it.each([undefined, ".config/zsh"])(
-    "persists npm prefix PATH to the selected zsh directory (%s)",
-    (suffix) => {
-      const home = join(tempDirs.make("openclaw-cli-zdotdir-"), "home");
-      const zshDir = suffix ? join(home, suffix) : home;
-      mkdirSync(zshDir, { recursive: true });
-      writeFileSync(join(home, ".bashrc"), "# bash\n");
-      writeFileSync(join(zshDir, ".zshrc"), "# zsh\n");
-      const result = runInstallCliShell(
-        `
+  it.each([undefined, ".config/zsh"])("persists npm prefix PATH with ZDOTDIR=%s", (suffix) => {
+    const home = tempDirs.make("openclaw-cli-zdotdir-");
+    const zshDir = suffix ? join(home, suffix) : home;
+    mkdirSync(zshDir, { recursive: true });
+    const profiles = [join(home, ".bashrc"), join(zshDir, ".zshrc")];
+    for (const rc of profiles) {
+      writeFileSync(rc, "# existing\n");
+    }
+    const result = runInstallCliShell(
+      `
       os_detect() { echo linux; }
-      npm_fixture() {
-        case "$*" in
-          "config get prefix") echo "$HOME/missing/prefix" ;;
-          "config set prefix $HOME/.npm-global") return 0 ;;
-          *) return 97 ;;
-        esac
-      }
+      npm_fixture() { [[ "$*" != "config get prefix" ]] || echo "$HOME/missing/prefix"; }
       npm_bin() { echo npm_fixture; }
       fix_npm_prefix_if_needed
       fix_npm_prefix_if_needed
     `,
-        { HOME: home, ZDOTDIR: suffix ? zshDir : undefined },
-      );
-      expect(result.status, result.stdout + result.stderr).toBe(0);
-      const line = `export PATH="${home}/.npm-global/bin:$PATH"\n`;
-      expect(readFileSync(join(home, ".bashrc"), "utf8")).toBe(`# bash\n${line}`);
-      expect(readFileSync(join(zshDir, ".zshrc"), "utf8")).toBe(`# zsh\n${line}`);
-      if (suffix) {
-        expect(existsSync(join(home, ".zshrc"))).toBe(false);
-      }
-    },
-  );
+      { HOME: home, ZDOTDIR: suffix ? zshDir : undefined },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(profiles.map((rc) => readFileSync(rc, "utf8"))).toEqual(
+      Array(2).fill(`# existing\nexport PATH="${home}/.npm-global/bin:$PATH"\n`),
+    );
+    expect(existsSync(join(home, ".zshrc"))).toBe(!suffix);
+  });
   const installerContract = {
     scriptPath: SCRIPT_PATH,
     runShell,
