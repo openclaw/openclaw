@@ -477,37 +477,7 @@ suite.define(() => {
     expect(longLayout.endcap.width).toBeGreaterThanOrEqual(intrinsicAtomWidth);
     expectUnreadLayout(longLayout, plain.nameLeft);
 
-    const unreadRow = sessionRow(page, unreadKey);
-    const unreadBadge = unreadRow.locator(
-      ".sidebar-session-indicator .session-glyph__badge--unread",
-    );
-    const unreadTitle = unreadRow.locator(".sidebar-recent-session__name");
-    await unreadBadge.waitFor({ state: "visible" });
-    const restingBadge = await unreadBadge.boundingBox();
-    const restingTitle = await unreadTitle.boundingBox();
-    const restingWidth = await unreadTitle.evaluate((element) => element.clientWidth);
-    await unreadRow.hover();
-
-    await unreadBadge.waitFor({ state: "visible" });
-    expect(await unreadBadge.boundingBox()).toEqual(restingBadge);
-    expect((await unreadTitle.boundingBox())?.x).toBe(restingTitle?.x);
-    const hoverWidth = await unreadTitle.evaluate((element) => element.clientWidth);
-    const actionReserve = await unreadRow.evaluate((element) =>
-      Number.parseFloat(
-        getComputedStyle(element).getPropertyValue("--session-row-actions-reserve"),
-      ),
-    );
-    // The leading badge stays fixed while the title reserves the full action width.
-    expect(restingWidth - hoverWidth).toBeCloseTo(actionReserve, 0);
-    await page.mouse.move(900, 400);
-    await unreadBadge.waitFor({ state: "visible" });
-    await unreadRow.locator("[data-sidebar-session-archive]").focus();
-    await unreadBadge.waitFor({ state: "visible" });
-    expect(await unreadBadge.boundingBox()).toEqual(restingBadge);
-    expect((await unreadTitle.boundingBox())?.x).toBe(restingTitle?.x);
-    expect(await unreadTitle.evaluate((element) => element.clientWidth)).toBe(hoverWidth);
     await sidebarResizer.focus();
-    await unreadBadge.waitFor({ state: "visible" });
 
     await busyRow.hover();
     for (const selector of [

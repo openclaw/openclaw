@@ -1,4 +1,9 @@
 import { performance } from "node:perf_hooks";
+import {
+  SESSIONS_PATCH_MANY_MAX_TARGETS,
+  SessionsPatchMutationSchema,
+  type SessionsPatchMutation,
+} from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
 import { createPhaseTimings } from "./phase-timings.js";
 import { sessionLog } from "./sessions-shared.js";
 
@@ -30,7 +35,20 @@ export function startSessionPatchDiagnostics(method: "sessions.patch" | "session
   const startedAt = performance.now();
   const timing = createPhaseTimings<SessionPatchPhase>();
   let finished = false;
+  let requestDetails = "";
   return {
+    describeRequest(targetCount: number, patch: SessionsPatchMutation) {
+      const fields = Object.entries(patch)
+        .filter(
+          ([key, value]) =>
+            value !== undefined && Object.hasOwn(SessionsPatchMutationSchema.properties, key),
+        )
+        .map(([key]) => key)
+        .toSorted();
+      const names =
+        fields.slice(0, 8).join(",") + (fields.length > 8 ? `,+${fields.length - 8}` : "");
+      requestDetails = ` targets=${Math.min(targetCount, SESSIONS_PATCH_MANY_MAX_TARGETS)} fields=${names || "none"}`;
+    },
     scope: (phase: SessionPatchPhase) => (finished ? undefined : timing.scope(phase)),
     finish() {
       if (finished) {
@@ -46,7 +64,7 @@ export function startSessionPatchDiagnostics(method: "sessions.patch" | "session
       }
       try {
         // Message text survives transports that omit structured fields; the logger retains trace context.
-        let message = `slow session patch ${Math.round(elapsedMs)}ms method=${method}`;
+        let message = `slow session patch ${Math.round(elapsedMs)}ms method=${method}${requestDetails}`;
         for (const phase of PHASES) {
           const total = timing.totals.get(phase);
           if (total !== undefined) {

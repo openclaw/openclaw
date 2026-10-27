@@ -136,6 +136,8 @@ export class EmbeddedAgentSubscribeState {
   /** Native source boundary from which the prepared block chunker's frame begins. */
   blockReplyScopeStart: { contentIndex: number; itemId?: string; after?: boolean } | undefined =
     undefined;
+  /** Preserve the projection's hold across updates without a new text snapshot. */
+  blockReplyTextUnsettled = false;
   /** Scanner state shares deltaBuffer's lifecycle so each provider byte is parsed once. */
   thinkingTagStream = createThinkingTagStreamState();
   /**

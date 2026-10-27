@@ -19,6 +19,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import * as fsSafe from "../../infra/fs-safe.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -172,12 +173,29 @@ it("avoids lease requests for absent projections and checkpoints a later project
 it("joins waiting sandbox checkpoints across handles without losing later writes", ({ signal }) =>
   proveSharedSandboxCheckpoints(owner, signal));
 
-it("recovers an explicitly selected oversized artifact before the next sandbox preparation", async () => {
-  await archiveFixture();
-  const { proveOversizedWorkspaceRecovery } =
-    await import("./local-workspace-recovery.test-support.js");
-  await proveOversizedWorkspaceRecovery({ owner, canonical, stateRoot });
-});
+it.each([false, true])(
+  "recovers an oversized artifact before sandbox preparation (EXDEV: %s)",
+  async (crossDevice) => {
+    await archiveFixture();
+    if (crossDevice) {
+      const openRoot = fsSafe.root;
+      vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
+        const stateFs = await openRoot(...args);
+        const move = stateFs.move;
+        stateFs.move = async (from, to, options) => {
+          if (to.startsWith("workspace-recovery/")) {
+            throw Object.assign(new Error("cross-device rename"), { code: "EXDEV" });
+          }
+          return await move(from, to, options);
+        };
+        return stateFs;
+      });
+    }
+    const { proveOversizedWorkspaceRecovery } =
+      await import("./local-workspace-recovery.test-support.js");
+    await proveOversizedWorkspaceRecovery({ owner, canonical, stateRoot });
+  },
+);
 
 it.each([false, true])(
   "settles old runtime-file results (source already copied: %s)",

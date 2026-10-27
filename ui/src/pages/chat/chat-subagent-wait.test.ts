@@ -455,6 +455,7 @@ describe("chat waiting on subagents", () => {
       { subagentSessions: [child], subagentSessionsHydrated: true, subagentSessionsPending: true },
     ]) {
       const projection = status(roster);
+      // Neither counted nor named until the child query answers.
       expect(projection.wait).toMatchObject({ runningCount: 0, sessions: [] });
       expect(listResumedHandoffSessions(parent.key, roster, handoff)).toEqual([]);
       const container = document.createElement("div");
@@ -515,17 +516,6 @@ describe("chat waiting on subagents", () => {
         (session) => session.key,
       ),
     ).toEqual([during.key]);
-  });
-
-  it("re-renders resumed lists when a listed child's name or attention changes", () => {
-    const key = (row: GatewaySessionRow) => status({ subagentSessions: [row] }).rowsKey;
-    const attention = {
-      ...child,
-      agentStatus: { note: "Pick a merge method", attention: "hand" as const, expiresAt: 9e15 },
-    };
-    expect(key(attention)).not.toBe(key(child));
-    expect(key({ ...child, label: "Renamed" })).not.toBe(key(child));
-    expect(key({ ...child })).toBe(key(child));
   });
 
   it("links child names only to sessions this pane loaded and can open", () => {

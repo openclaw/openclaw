@@ -222,7 +222,7 @@ describe("gateway lock namespaces", () => {
     },
   );
 
-  it("reads the Linux namespace identity without following its procfs magic link", () => {
+  it("reads Android's Linux namespace identity without following its procfs magic link", () => {
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     const boot = vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader");
     boot.mockReturnValue(() => ({
@@ -230,11 +230,9 @@ describe("gateway lock namespaces", () => {
       identity: "01234567-89ab-cdef-0123-456789abcdef",
     }));
     readGatewayLockProcessNamespace();
-    platform.mockReturnValue("linux");
-    boot.mockReturnValue(() => ({
-      platform: "linux",
-      identity: "01234567-89ab-cdef-0123-456789abcdef",
-    }));
+    boot.mockRestore();
+    platform.mockReturnValue("android");
+    vi.spyOn(fsSync, "readFileSync").mockReturnValueOnce("01234567-89ab-cdef-0123-456789abcdef\n");
     const readlink = fsSync.readlinkSync.bind(fsSync);
     vi.spyOn(fsSync, "readlinkSync").mockImplementation((file, options) =>
       file === "/proc/self/ns/pid" ? "pid:[4026532609]" : readlink(file, options),

@@ -234,8 +234,9 @@ and can exceed `1`. See
 
 `sessions.patch` and `sessions.patchMany` calls lasting at least one second add
 an info-level `slow session patch` record even when diagnostics are disabled.
-The message includes total elapsed milliseconds, the method, and fixed phase
-durations, for example `slow session patch 1176ms method=sessions.patch catalog=1100ms response=20ms`.
+The message includes total elapsed milliseconds, the method, target count (at most
+100), up to eight sorted mutation field names (plus an omitted-field count), and fixed phase
+durations, for example `slow session patch 1176ms method=sessions.patch targets=1 fields=unread catalog=1100ms response=20ms`.
 Replacement snapshots use the metadata reader for bounded exact-key selections
 and the maintenance reader for larger or label-owner selections, independently of
 the transcript-history reader. Snapshot time includes worker preparation and reads.

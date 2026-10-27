@@ -84,9 +84,20 @@ async function send(page: Page, prompt: string) {
   await page.getByRole("button", { name: "Send message" }).click();
 }
 
-async function deliveryFixture(page: Page, prompt: string) {
+async function deliveryFixture(page: Page, prompt: string, shared = false) {
   const gateway = await installMockGateway(page, {
-    historyMessages: [assistant([{ text: ready, type: "text" }], Date.now() - 1_000)],
+    historyMessages: [
+      ...(shared
+        ? [
+            userMessage(
+              profile("profile-riley", "Riley Chen"),
+              "A shared delivery check.",
+              Date.now() - 2_000,
+            ),
+          ]
+        : []),
+      assistant([{ text: ready, type: "text" }], Date.now() - 1_000),
+    ],
     presenceUsers: [
       { ...profile("c3e32452-0467-47e5-aafa-233cd5dae29f", "Collin Johnson"), self: true },
     ],
@@ -728,6 +739,7 @@ suite.define(() => {
       const { gateway, request, group } = await deliveryFixture(
         page,
         "Keep my identity stable when delivery fails.",
+        true,
       );
       const firstRunId = String((request.params as { idempotencyKey?: unknown }).idempotencyKey);
       await expect(group).toHaveCSS("flex-direction", "row-reverse");
@@ -749,7 +761,22 @@ suite.define(() => {
       await expect(composer(page)).toHaveValue("");
       const status = group.locator(".chat-send-status");
       await expect(status.locator(".chat-send-status__discard")).toBeVisible();
-      await expect(group.locator(".chat-sender-name")).toHaveCount(0);
+      await expect(group.locator(".chat-sender-name")).toHaveText("Collin Johnson");
+      await page.mouse.move(0, 0);
+      const [actions, metadata] = await Promise.all(
+        [
+          group.locator(".chat-group-footer-actions"),
+          group.locator(".chat-group-footer__meta"),
+        ].map((element) => element.boundingBox()),
+      );
+      expect(actions).not.toBeNull();
+      expect(metadata).not.toBeNull();
+      expect(
+        actions!.x + actions!.width <= metadata!.x ||
+          metadata!.x + metadata!.width <= actions!.x ||
+          actions!.y + actions!.height <= metadata!.y ||
+          metadata!.y + metadata!.height <= actions!.y,
+      ).toBe(true);
       const footerLineCenters = await Promise.all(
         [
           status.getByText("Not sent", { exact: true }),

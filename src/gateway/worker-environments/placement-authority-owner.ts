@@ -164,7 +164,10 @@ export function withLocalPlacementTurn(
   ) {
     const claim = current?.turnClaim;
     if (!claim || (claim.owner === "local" && claim.ownerEpoch === null)) {
-      return { ...placement, turnClaim: claim ? { ...claim } : null };
+      // Local claims and releases never reach SQLite, so their in-memory stamp is the
+      // newest change; a persisted re-read must not move it back and fake a placement change.
+      const updatedAtMs = Math.max(placement.updatedAtMs, current?.updatedAtMs ?? 0);
+      return { ...placement, updatedAtMs, turnClaim: claim ? { ...claim } : null };
     }
   }
   return placement;
