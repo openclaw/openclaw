@@ -205,7 +205,10 @@ export function createDiagnosticsMetrics(
       "Inbound message dispatch duration",
     ),
     messageProcessedCounter: createCounter("message.processed", "Messages processed by outcome"),
-    messageDurationHistogram: createHistogram("message.duration_ms", "Message processing duration"),
+    messageDurationHistogram: createDurationHistogram(
+      "message.duration_ms",
+      "Message processing duration",
+    ),
     messageDeliveryStartedCounter: createCounter(
       "message.delivery.started",
       "Outbound message delivery attempts started",

@@ -39,6 +39,20 @@ beforeEach(() => {
 });
 const visibleTools = { showToolCalls: true, showReasoning: true };
 
+it("commits a cached activity summary with its transcript row", () => {
+  const group = createToolGroup("cached", [
+    createMessageEntry(
+      "cached-tool",
+      createAssistantMessage([], { activity: [preparedOutcome("failed")] }),
+    ),
+  ]);
+  activityRoot.render([group], visibleTools);
+  const row = summaryContainer.querySelector('[data-chat-row-key="cached"]');
+  expect(row).not.toBeNull();
+  expect(row?.querySelector(".chat-activity-group__summary")?.textContent).toContain("1 read");
+  expect(row?.querySelector(".chat-tool-failure")?.textContent).toBe("1 failed");
+});
+
 function read(id: string, overrides: Record<string, unknown> = {}) {
   return createToolCall(id, "read", { path: `/repo/${id}.ts` }, overrides);
 }
@@ -354,11 +368,11 @@ it.each([
     expected: `Worked · 1 tool call · 1 ${kind === "blocked" ? "blocked" : "skipped"}`,
   })),
   {
-    name: "unresolved anonymous raw call",
+    name: "unpaired anonymous raw call does not claim an unknown outcome",
     messages: [
       createAssistantMessage([{ type: "toolCall", name: "exec", arguments: { command: "pwd" } }]),
     ],
-    expected: "Worked · 1 tool call · 1 unknown",
+    expected: "Worked · 1 tool call",
   },
 ])("summarizes work outcomes: $name", async ({ messages, expected }) => {
   expect(await workSummaryText(messages)).toBe(expected);

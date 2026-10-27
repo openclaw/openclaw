@@ -138,6 +138,33 @@ it("serializes first creation, preserves the winner and cancels queued writes wi
   expect(fs.existsSync(path.join(root, "state"))).toBe(false);
 });
 
+it.skipIf(process.platform === "win32")(
+  "keeps credential authority bound to the current root alias",
+  async () => {
+    const first = fixture();
+    const second = fixture();
+    const alias = path.join(dirs.make("cc-alias-"), "root");
+    const env = { ...first.env, OPENCLAW_STATE_DIR: alias };
+    const identity = storedDeviceIdentityToRow("primary", generateStoredDeviceIdentity());
+    fs.symlinkSync(first.root, alias);
+    await runClientCredentialOperationAsync(env, { kind: "identity.create", identity });
+    expect(await runClientCredentialOperationAsync(env, identityRead)).toEqual({
+      kind: "identity",
+      identity,
+    });
+    fs.unlinkSync(alias);
+    fs.symlinkSync(second.root, alias);
+    expect(await runClientCredentialOperationAsync(env, identityRead)).toEqual({
+      kind: "identity",
+      identity: null,
+    });
+    expect(await runClientCredentialOperationAsync(first.env, identityRead)).toEqual({
+      kind: "identity",
+      identity,
+    });
+  },
+);
+
 it("waits for a short-lived offline owner when no app endpoint exists", async () => {
   const { env } = fixture();
   const identity = storedDeviceIdentityToRow("primary", generateStoredDeviceIdentity());

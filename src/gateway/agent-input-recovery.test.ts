@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { GatewayInputRecovery } from "./agent-input-recovery.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
@@ -21,10 +21,7 @@ it("retains every deferred group member when recovery fails before handoff", asy
   await gate.track(
     Promise.resolve({
       initial: Promise.resolve(),
-      pending: new Map([
-        ["main", pending.promise],
-        ["child", pending.promise],
-      ]),
+      pending: new Map(["main", "child"].map((id) => [id, pending.promise])),
       settled: pending.promise,
     }),
   );
@@ -41,60 +38,44 @@ it("retains an initial recovery failure for later input waiters", async () => {
   const gate = new GatewayInputRecovery();
   const error = new Error("recovery discovery failed");
   const failed = Promise.reject(error);
-  await expect(
-    gate.track(
-      Promise.resolve({
-        initial: failed,
-        pending: new Map(),
-        settled: failed,
-      }),
-    ),
-  ).rejects.toBe(error);
+  const progress = { initial: failed, pending: new Map<string, Promise<void>>(), settled: failed };
+  await expect(gate.track(Promise.resolve(progress))).rejects.toBe(error);
   await expect(gate.waitForAgentInputRecovery("main")).rejects.toBe(error);
   expect(gate.isPending("main")).toBe(true);
 });
 
-function authorization(method: string) {
+function authorize(
+  method: string,
+  recoveryInput?: Parameters<typeof authorizeGatewayRequestPreDispatch>[0]["recoveryInput"],
+) {
   const context = createContext();
   context.inputRecovery = new GatewayInputRecovery();
-  return {
+  return authorizeGatewayRequestPreDispatch({
     method,
     requestParams: request,
     context,
     client: createSyntheticPluginRuntimeClient({ scopes: ["operator.admin"] }),
     methodRegistry: createGatewayMethodRegistry([]),
-  };
+    recoveryInput,
+  });
 }
 
-it.each(["agent", "chat.send"])(
-  "does not exempt a generic synthetic %s request from recovery",
-  async (method) => {
-    const result = await authorizeGatewayRequestPreDispatch(authorization(method));
-    expect(result.error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
-  },
-);
+it.each(["agent", "chat.send"])("gates synthetic %s requests during recovery", async (method) => {
+  const result = await authorize(method);
+  expect(result.error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
+});
 
 it("revalidates an exact saved-input handoff and rejects a different target", async () => {
-  const assertCurrent = vi.fn(() => {
-    throw new Error("recovery custody revoked");
-  });
   const recoveryInput = {
     agentId: request.agentId,
     sessionKey: request.sessionKey,
     sessionId: request.expectedExistingSessionId,
     runId: request.idempotencyKey,
-    assertCurrent,
+    assertCurrent() {
+      throw new Error("recovery custody revoked");
+    },
   };
-  const rejected = await authorizeGatewayRequestPreDispatch({
-    ...authorization("agent"),
-    recoveryInput: { ...recoveryInput, sessionId: "replaced-session" },
-  });
+  const rejected = await authorize("agent", { ...recoveryInput, sessionId: "replaced-session" });
   expect(rejected.error).toMatchObject({ code: "UNAVAILABLE" });
-  expect(assertCurrent).not.toHaveBeenCalled();
-  await expect(
-    authorizeGatewayRequestPreDispatch({
-      ...authorization("agent"),
-      recoveryInput,
-    }),
-  ).rejects.toThrow("recovery custody revoked");
+  await expect(authorize("agent", recoveryInput)).rejects.toThrow("recovery custody revoked");
 });

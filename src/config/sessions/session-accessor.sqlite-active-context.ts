@@ -40,7 +40,7 @@ import type { SessionTranscriptContextSelection } from "./session-history-read.t
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
-  transcriptEventJsonSql,
+  readTranscriptPayload,
   transcriptEventResetNavigationSql,
   transcriptPredicateSql,
 } from "./transcript-payload.js";
@@ -400,7 +400,7 @@ export function readSessionTranscriptBoundedActiveContextCore(
     const selection = selectBoundedContextRows(metadata, headerBytes, limits);
     const { selectedRows } = selection;
     let { serializedBytes, truncated } = selection;
-    const selectedSequences = selectedRows.map((row) => row.event_seq);
+    const contextSequences = selectedRows.map((row) => row.event_seq);
     let boundary = covered
       ? undefined
       : executeSqliteQueryTakeFirstSync(
@@ -455,9 +455,9 @@ export function readSessionTranscriptBoundedActiveContextCore(
         }
       }
     }
-    const contextSequences = selectedSequences.toSorted((left, right) => left - right);
+    contextSequences.sort((left, right) => left - right);
     let injectedBoundarySeq: number | undefined;
-    if (boundary && !selectedSequences.includes(boundary.seq)) {
+    if (boundary && !contextSequences.includes(boundary.seq)) {
       if (!limits || serializedBytes + boundary.serialized_bytes <= limits.maxBytes) {
         injectedBoundarySeq = boundary.seq;
         contextSequences.unshift(boundary.seq);
@@ -473,10 +473,10 @@ export function readSessionTranscriptBoundedActiveContextCore(
       for (const row of iterateSqliteQuerySync(
         projection.database.db,
         transcript
-          .select(["seq", transcriptEventJsonSql(projection.database.db).as("event_json")])
+          .select(["seq", "event_json", "event_zstd", "event_utf8_bytes"])
           .where("seq", "in", transcriptPositionSet(projection, payloadSequences)),
       )) {
-        payloads.set(row.seq, JSON.parse(row.event_json));
+        payloads.set(row.seq, JSON.parse(readTranscriptPayload(row)));
       }
     }
     // Retain logical ancestry across the byte cutoff without loading parent payloads.

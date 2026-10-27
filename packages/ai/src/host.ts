@@ -271,10 +271,6 @@ const inertAiTransportHost: ActiveAiTransportHost = {
 };
 
 let activeAiTransportHost: ActiveAiTransportHost = inertAiTransportHost;
-type AiTransportHostScope = {
-  getStore(): ActiveAiTransportHost | undefined;
-  run<T>(store: ActiveAiTransportHost, callback: () => T): T;
-};
 type ProcessWithAsyncHooksBuiltin = NodeJS.Process & {
   getBuiltinModule?: (id: "node:async_hooks") => {
     AsyncLocalStorage: new <T>() => {
@@ -284,7 +280,7 @@ type ProcessWithAsyncHooksBuiltin = NodeJS.Process & {
   };
 };
 
-function createAiTransportHostScope(): AiTransportHostScope | undefined {
+function createAiTransportHostScope() {
   if (typeof process === "undefined") {
     return undefined;
   }

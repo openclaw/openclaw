@@ -690,8 +690,8 @@ export function getTrackedWorkerLifecycleSnapshot() {
   };
 }
 
-/** Read completed samples without blocking the heartbeat on a busy native isolate. */
-export function sampleTrackedWorkerMemory() {
+/** Read completed samples; only the heartbeat requests the next native samples. */
+export function sampleTrackedWorkerMemory(options?: { refresh?: boolean }) {
   const workerHeaps: NonNullable<DiagnosticMemoryUsage["workerHeaps"]> = [];
   const workerMemoryMissing: NonNullable<DiagnosticMemoryUsage["workerMemoryMissing"]> = [];
   const memory = {
@@ -731,6 +731,9 @@ export function sampleTrackedWorkerMemory() {
         threadId: worker.threadId,
         reason: source.heap ? "stale" : source.memoryUnavailable ? "unavailable" : "pending",
       });
+    }
+    if (options?.refresh === false) {
+      continue;
     }
     // Native heap interrupts cannot be canceled. Never queue another behind a stall.
     if (source.memoryPort) {

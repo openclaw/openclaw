@@ -42,7 +42,11 @@ import {
   readUpdateStateDatabaseSizesInProcess,
 } from "./update-candidate-state.sizes.js";
 import { checkUpdateDatabaseBackupSpace } from "./update-database-backup-space.js";
-import { readUpdatePhysicalDatabaseGenerations } from "./update-physical-database-generations.js";
+import {
+  readUpdatePhysicalDatabaseGenerations,
+  readUpdatePhysicalDatabaseObservation,
+  readUpdatePostgresDatabaseGenerations,
+} from "./update-physical-database-generations.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 
 export const UpdateDatabaseBackupSchema = z.object({
@@ -279,8 +283,19 @@ export async function createUpdateDatabaseBackupInProcess(
   const sourceGenerations: UpdateDatabaseBackup["sourceGenerations"] = Object.fromEntries(
     inventory.missing.map((file) => [file, null]),
   );
-  const readGeneration = async (file: string) => {
+  const readGeneration = async (
+    file: string,
+    observation?: ReturnType<typeof readUpdatePhysicalDatabaseObservation>,
+  ) => {
     try {
+      if (observation) {
+        if (!observation.generation.ok) {
+          throw observation.generation.error;
+        }
+        return observation.engine?.engine === "postgres"
+          ? (await readUpdatePostgresDatabaseGenerations([file], input.pluginOwners))[file]
+          : (observation.generation.value ?? undefined);
+      }
       return (
         (await readUpdatePhysicalDatabaseGenerations([file], input.pluginOwners))[file] ?? undefined
       );
@@ -293,7 +308,22 @@ export async function createUpdateDatabaseBackupInProcess(
   };
   const { readBackupEngine, capturePostgresBackup } =
     await import("../snapshot/database-backup.js");
-  const engines = new Map(inventory.present.map((file) => [file, readBackupEngine(file)]));
+  const requestedOriginalSources = new Set(input.originalCaptureSourcePaths);
+  const observations = new Map<string, ReturnType<typeof readUpdatePhysicalDatabaseObservation>>();
+  // Reuse classification from the generation image; only a failed acquisition needs
+  // an engine-only image. PostgreSQL access still waits for the inventory custody gate.
+  const engines = new Map(
+    inventory.present.map((file) => {
+      const observation =
+        !input.stopped && !requestedOriginalSources.has(file)
+          ? readUpdatePhysicalDatabaseObservation(file)
+          : undefined;
+      if (observation) {
+        observations.set(file, observation);
+      }
+      return [file, observation?.engine ?? readBackupEngine(file)];
+    }),
+  );
   const originalCaptureSources = new Set(
     input.originalCaptureSourcePaths?.filter((file) => engines.get(file)?.engine === "sqlite"),
   );
@@ -320,7 +350,9 @@ export async function createUpdateDatabaseBackupInProcess(
       !identities.has(`${sourcePath}-journal`) &&
       (identities.get(`${sourcePath}-wal`)?.size ?? 0n) === 0n;
     const retainGeneration = !input.stopped && !originalCaptureSources.has(sourcePath);
-    const before = retainGeneration ? await readGeneration(sourcePath) : undefined;
+    const before = retainGeneration
+      ? await readGeneration(sourcePath, observations.get(sourcePath))
+      : undefined;
     const snapshot = stopped
       ? await createStoppedSqliteSnapshot({
           sourcePath,

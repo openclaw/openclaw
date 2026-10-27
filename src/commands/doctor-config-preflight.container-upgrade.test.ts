@@ -7,11 +7,14 @@ import { DatabaseSync } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
+import {
+  updateFinishCommand,
+  updateMigrateCommand,
+} from "../cli/update-cli/update-command-migrate.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
-import { runDoctorHealthFlow } from "../flows/doctor-health.js";
+import * as doctorHealth from "../flows/doctor-health.js";
 import { inspectScopedMigrationSnapshot } from "../infra/sqlite-migration-scoped-snapshot.js";
 import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
-import { createUpdateRun, finishUpdateRun } from "../infra/update-run-ledger.js";
 import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
@@ -54,7 +57,7 @@ afterEach(async () => {
 
 async function repairContainerState() {
   const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-  await runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
+  await doctorHealth.runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
   expect(runtime.exit, runtime.error.mock.calls.flat().join("\n")).not.toHaveBeenCalled();
 }
 
@@ -176,18 +179,22 @@ describe("container image replacement Doctor repair and startup readiness", () =
       fs.writeFileSync(store, "{}");
       await runDoctorSessionSqlite({ env, cfg: {}, agent: "main", store, mode: "import" });
       await cleanupSessionStateForTest();
-      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1000);
-      try {
-        const later = createUpdateRun({ trigger: "cli" }, { env });
+      // A later update counts once its external supervisor accepts it, not at migration.
+      const now = Date.now;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + 1000);
+      vi.spyOn(doctorHealth, "runDoctorHealthFlow").mockResolvedValue();
+      const backupRoot = path.join(path.dirname(stateDir), ".openclaw-update", "next", "native");
+      await withEnvAsync({ OPENCLAW_SUPERVISOR_MODE: "external" }, async () => {
+        await updateMigrateCommand(backupRoot);
+        await cleanupSessionStateForTest();
         expect(
           inspect().artifacts.filter(
             (item) => item.path.endsWith(".bak") && item.outcome === "candidate",
           ),
         ).toHaveLength(0);
-        finishUpdateRun(later.runId, { status: "succeeded" }, { env });
-      } finally {
-        clock.mockRestore();
-      }
+        await updateFinishCommand(backupRoot);
+      });
+      clock.mockRestore();
       await cleanupSessionStateForTest();
       const preview = inspect();
       expect(preview.artifacts.filter((item) => item.outcome === "candidate")).toHaveLength(3);

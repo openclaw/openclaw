@@ -51,6 +51,7 @@ export async function proveHotReloadChannels({
       const mock = provider;
       const active = await owner.start({
         repoRoot,
+        initializeCurrentRuntimeState: true,
         useRepoCli: true,
         command: {
           executablePath: process.execPath,

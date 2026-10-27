@@ -409,7 +409,16 @@ export class SettledTurnPriorContext {
   }
 
   prependTo(current: JsonValue[]): JsonValue[] {
-    this.finishGroup();
+    if (this.active.pending.size) {
+      // The verified current turn is a safe boundary; earlier user steering was not.
+      // An unfinished exchange leaves no contiguous, complete prior suffix to replay.
+      this.groups = [];
+      this.count = 0;
+      this.bytes = 0;
+      this.omitted = true;
+    } else {
+      this.finishGroup();
+    }
     const includeNotice = this.trim(
       current.length,
       current.reduce<number>((bytes, item) => bytes + responseItemBytes(item), 0),

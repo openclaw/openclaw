@@ -16,9 +16,9 @@ import { withEngineStoreAdmission } from "../infra/database-engine/admission-sco
 import { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
 import {
-  seedDeviceAuthToken,
-  readDeviceAuthTokenForTest,
-} from "../infra/device-auth-store.test-support.js";
+  storeDeviceAuthToken as seedDeviceAuthToken,
+  loadDeviceAuthToken as readDeviceAuthTokenForTest,
+} from "../infra/device-auth-store.js";
 import {
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
@@ -78,14 +78,16 @@ describe("automatic client credential preparation", () => {
   async function bootstrap(postgresConnection?: string) {
     const fixture = target();
     const identity = loadOrCreateDeviceIdentity({ env: fixture.env });
-    const token = seedDeviceAuthToken({
+    const tokenClock = vi.spyOn(Date, "now").mockReturnValueOnce(123);
+    const tokenWrite = seedDeviceAuthToken({
       env: fixture.env,
       deviceId: identity.deviceId,
       role: "node",
       token: "synthetic-startup-token",
       scopes: ["node.invoke"],
-      updatedAtMs: 123,
     });
+    tokenClock.mockRestore();
+    const token = await tokenWrite;
     const shared = path.join(fixture.root, "state", "openclaw.sqlite");
     if (postgresConnection) {
       const config = {
@@ -117,10 +119,10 @@ describe("automatic client credential preparation", () => {
     };
   }
   type Fixture = Awaited<ReturnType<typeof bootstrap>>;
-  function expectCredentials(fixture: Fixture) {
+  async function expectCredentials(fixture: Fixture) {
     expect(loadDeviceIdentityIfPresent({ env: fixture.env })).toEqual(fixture.identity);
     expect(
-      readDeviceAuthTokenForTest({
+      await readDeviceAuthTokenForTest({
         env: fixture.env,
         deviceId: fixture.identity.deviceId,
         role: "node",
@@ -225,9 +227,9 @@ describe("automatic client credential preparation", () => {
     });
     fs.writeFileSync(sourcePath, source);
     await fixture.prepare({ config: {} });
-    expectCredentials(fixture);
+    await expectCredentials(fixture);
     expect(
-      readDeviceAuthTokenForTest({
+      await readDeviceAuthTokenForTest({
         env: fixture.env,
         deviceId: fixture.identity.deviceId,
         role: "operator",
@@ -294,7 +296,7 @@ describe("automatic client credential preparation", () => {
     vi.stubEnv("OPENCLAW_CONFIG_PATH", other.env.OPENCLAW_CONFIG_PATH);
     changeRecordedDevice(fixture.env);
     await fixture.prepare();
-    expectCredentials(fixture);
+    await expectCredentials(fixture);
     expect(fs.readdirSync(other.root)).toEqual([]);
     expect(process.env.OPENCLAW_STATE_DIR).toBe(other.root);
     const bytes = fs.readFileSync(fixture.local);
@@ -322,7 +324,7 @@ describe("automatic client credential preparation", () => {
     await fixture.prepare();
     changeRecordedDevice(fixture.env);
     await fixture.prepare();
-    expectCredentials(fixture);
+    await expectCredentials(fixture);
   });
 
   it("keeps healthy legacy credentials readable while a Gateway owns shared state", async () => {
@@ -343,7 +345,7 @@ describe("automatic client credential preparation", () => {
     try {
       await fixture.prepare();
       expect(fs.readFileSync(fixture.local)).toEqual(before);
-      expectCredentials(fixture);
+      await expectCredentials(fixture);
     } finally {
       serving.release();
     }
@@ -389,7 +391,7 @@ describe("automatic client credential preparation", () => {
             expect(error).toHaveBeenCalledWith(
               "Client credential metadata upgrade deferred; existing credentials remain available. Startup will retry automatically.",
             );
-            expectCredentials(fixture);
+            await expectCredentials(fixture);
           }
           expect(fs.readFileSync(fixture.local)).toEqual(before);
           expect(fs.readFileSync(fixture.env.OPENCLAW_CONFIG_PATH)).toEqual(originalConfig);
@@ -432,7 +434,7 @@ describe("automatic client credential preparation", () => {
       } else {
         await expect(preparation).rejects.toBe(failure);
       }
-      expectCredentials(fixture);
+      await expectCredentials(fixture);
     },
   );
 

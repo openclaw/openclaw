@@ -98,13 +98,26 @@ try {
   git(["init", "-q"]);
   git(["remote", "add", "origin", "https://github.com/openclaw/openclaw.git"]);
   const preparedGit = path.join(cwd, ".git");
+  const preparedEnv = { ...env, GIT_DIR: preparedGit,
+    GIT_INDEX_FILE: path.join(preparedGit, "index") };
   const reuseBase = stat(preparedGit)?.isDirectory() &&
     git(["for-each-ref", "--format=%(objectname)", "refs/remotes/origin/main"], {
-      env: { ...env, GIT_DIR: preparedGit, GIT_INDEX_FILE: path.join(preparedGit, "index") }
+      env: preparedEnv,
     }).trim() === expected.baseSha;
-  // A reused lease already owns this exact base. Fetch its objects into the new
-  // private Git directory; no alternates may survive replacement of preparedGit.
-  git(["fetch", "-q", "--depth=2", reuseBase ? preparedGit : "origin",
+  // A promisor checkout can own the exact commit and tree while omitting blobs
+  // needed by later checkout and content-diff operations. Inspect the base and
+  // each immediate parent's tree without lazy fetching, matching fetch depth 2.
+  const preparedDepth = reuseBase ? git(["rev-list", "--parents", "--max-count=1",
+    expected.baseSha], {
+    env: { ...preparedEnv, GIT_NO_LAZY_FETCH: "1" }, phase: "base-inspect",
+  }).trim().split(" ") : [];
+  const preparedBaseComplete = reuseBase && preparedDepth.every(commit =>
+    !git(["rev-list", "--objects", "--missing=print", "--max-count=1", commit], {
+      env: { ...preparedEnv, GIT_NO_LAZY_FETCH: "1" }, phase: "base-inspect",
+    }).split("\n").some(line => line.startsWith("?")));
+  // Complete prepared objects stay local. An incomplete or absent prepared base
+  // uses the existing depth-bounded canonical fetch and keeps every exact-SHA guard.
+  git(["fetch", "-q", "--depth=2", preparedBaseComplete ? preparedGit : "origin",
     expected.baseSha + ":refs/remotes/origin/main"], { phase: "base-fetch" });
   if (git(["rev-parse", "refs/remotes/origin/main"]).trim() !== expected.baseSha)
     fail("source base mismatch");

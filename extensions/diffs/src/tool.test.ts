@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -191,6 +192,27 @@ describe("diffs tool", () => {
       name: "ToolInputError",
       message: _name === "patch syntax" ? message : expect.stringContaining(message),
     });
+  });
+
+  it("preserves trailing patch whitespace in the viewer payload", async () => {
+    const result = await createTool().execute("patch-whitespace", {
+      patch: "--- a/sample.txt\n+++ b/sample.txt\n@@ -1 +1 @@\n-old\n+new  \n",
+      mode: "view",
+    });
+    const details = requireRecord(result.details, "diffs tool result details");
+    const [id = "", token = ""] = String(details.viewerPath).split("/").slice(-2);
+    const viewer = await fixture.store.readAuthorizedViewer(id, token);
+    assert(viewer, "viewer artifact missing");
+    const encoded = Buffer.from(viewer.html)
+      .toString("utf8")
+      .match(
+        /<script type="application\/json" data-openclaw-diff-payload>([\s\S]*?)<\/script>/,
+      )?.[1];
+    assert(encoded, "viewer payload missing");
+    const payload = requireRecord(JSON.parse(encoded), "viewer payload");
+    const fileDiff = requireRecord(payload.fileDiff, "file diff");
+    expect(fileDiff.additionLines).toEqual(["new  \n"]);
+    expect(fileDiff.deletionLines).toEqual(["old\n"]);
   });
 
   it("prefers explicit tool params over configured defaults", async () => {

@@ -5,12 +5,15 @@ import path from "node:path";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { positiveSecondsToSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { ignoreMissingPath } from "./errno.js";
 import type { ManagedHandoffRepairFacts } from "./update-managed-service-handoff-database.js";
 import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease-types.js";
 
 type DiscoveredRepairFacts = ManagedHandoffRepairFacts & {
   windowsUserSid?: string;
   drivers?: ManagedHandoffLease["helper"][];
+  /** Other lease keys retired with this handoff. */
+  installationRoots?: string[];
 };
 
 /** v1 shipped in 2026.8.2. This proves cleanup eligibility, never v2 authority. */
@@ -94,10 +97,16 @@ export async function inspectManagedHandoffRepairFacts(
     );
   }
   const { inspectOtherOpenClawProcesses } = await import("./openclaw-process-census.js");
+  // Candidate and child roots are this run's own; installation and service roots are shared.
+  const sharedRoots = [...new Set([previous.key, ...(discovered.installationRoots ?? [])])].filter(
+    (key) => !key.includes("/.openclaw-update-child-"),
+  );
   for (const runId of facts.runIds) {
     const census = inspectOtherOpenClawProcesses({
       runId,
       artifactPaths: facts.artifactPaths,
+      sharedRoots,
+      familyDeadline: previous.updatedAt + grace,
       windowsUserSid: discovered.windowsUserSid,
       drivers: [previous.helper, previous.executor, ...(discovered.drivers ?? [])],
       familyExited,
@@ -127,8 +136,23 @@ export async function readManagedHandoffRepairFacts(
   const runIds = new Set<string>(boundRunId ? [boundRunId] : []);
   const artifactPaths = new Set<string>();
   let timeoutMs = 0;
-  const root = await fs.realpath(os.tmpdir());
-  for (const entry of await fs.readdir(root, { withFileTypes: true })) {
+  const roots = new Set([await fs.realpath(os.tmpdir())]);
+  if (process.platform === "darwin") {
+    // A Gateway-started handoff lives under the service TMPDIR, not this CLI's.
+    const { resolveServiceTmpDir } = await import("../daemon/service-tmp-dir.js");
+    const serviceRoot = await fs
+      .realpath(resolveServiceTmpDir(env, "darwin"))
+      .catch(ignoreMissingPath);
+    if (serviceRoot) {
+      roots.add(serviceRoot);
+    }
+  }
+  const entries = await Promise.all(
+    [...roots].map(async (root) =>
+      (await fs.readdir(root, { withFileTypes: true })).map((entry) => ({ root, entry })),
+    ),
+  );
+  for (const { root, entry } of entries.flat()) {
     if (
       !entry.isDirectory() ||
       !entry.name.startsWith(MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX)

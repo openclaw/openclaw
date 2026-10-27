@@ -166,6 +166,59 @@ const writeMessages = async (...entries: unknown[]) => {
   return file;
 };
 
+it("counts a stored request the provider never ran as zero usage, not a lower bound", async () => {
+  const failed = (timestamp: string, content: unknown[], extra: Record<string, unknown> = {}) =>
+    assistant(
+      timestamp,
+      {
+        input: 0,
+        output: 0,
+        totalTokens: 0,
+        cost: { total: 0 },
+        usageReport: { state: "unavailable" },
+      },
+      {
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-5.5",
+        content,
+        stopReason: "error",
+        errorMessage: "Connection error.",
+        ...extra,
+      },
+    );
+  // Written before transports recorded unbilled failures as zero usage.
+  const sessionFile = await writeMessages(
+    modelMessage("2026-02-05T12:00:00.000Z", 10),
+    failed("2026-02-05T12:01:00.000Z", []),
+  );
+  const summary = await readSummary({ sessionFile });
+  expect(summary).toMatchObject({
+    totalTokens: 10,
+    missingCostEntries: 0,
+    messageCounts: { assistant: 2, errors: 1 },
+  });
+  expect(summary?.usageReport).toBeUndefined();
+  // Accepted then dropped, failed after output, or tool calls dropped by transport cleanup.
+  for (const [sessionId, entry] of [
+    ["dropped-after-acceptance", failed("2026-02-05T12:02:00.000Z", [], { responseId: "resp_1" })],
+    ["failed-after-output", failed("2026-02-05T12:03:00.000Z", [textBlock("partial answer")])],
+    [
+      "tool-call-dropped",
+      failed("2026-02-05T12:04:00.000Z", [], {
+        api: "anthropic-messages",
+        responseId: "msg_1",
+        errorBody: { type: "overloaded_error" },
+      }),
+    ],
+  ] as const) {
+    const file = await writeTranscript(sessionId, entry);
+    expect((await readSummary({ sessionFile: file }))?.usageReport).toEqual({
+      state: "unavailable",
+    });
+  }
+});
+
 it("prices and aggregates usage with each row's agent-local registry", async () => {
   const provider = "demo-agent-scope";
   const model = "demo-model";
@@ -390,7 +443,7 @@ it("preserves rollups and aborts when the transcript directory cannot be read", 
   expect(readSessionCostUsageRollupRows("main")).toEqual(rowsBefore);
 });
 
-it("refreshes the requested range before background aggregate catch-up", async () => {
+it("includes sessions outside the refreshed range in the first aggregate read", async () => {
   const oldSessionFile = await writeTranscript(
     "sess-cache-cold-sync-old",
     assistant("2026-02-05T12:00:00.000Z", billed(100, 100, 200, 0.2)),
@@ -414,16 +467,8 @@ it("refreshes the requested range before background aggregate catch-up", async (
     startMs: Date.UTC(2026, 1, 5),
     endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
   };
-  const summary = await readCachedAggregate(range);
-
-  expect(summary.totals.totalTokens).toBe(30);
-  await vi.waitFor(
-    async () => {
-      const refreshed = await readCachedAggregate({ ...range, requestRefresh: false });
-      expect(refreshed.totals.totalTokens).toBe(230);
-    },
-    { interval: 1, timeout: 2_000 },
-  );
+  // The read refreshes the uncached session before it answers.
+  expect((await readCachedAggregate(range)).totals.totalTokens).toBe(230);
 });
 
 it("waits for a busy refresh before loading a direct session summary", async () => {

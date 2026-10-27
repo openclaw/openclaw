@@ -290,7 +290,7 @@ API-backed providers first:
 9. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey` (order 70)
 10. **Parallel** -- paid Parallel Search API via `PARALLEL_API_KEY` or `plugins.entries.parallel.config.webSearch.apiKey`; optional `plugins.entries.parallel.config.webSearch.baseUrl` overrides the endpoint (order 75)
 
-11. **DeepSeek** -- `DEEPSEEK_API_KEY`, `plugins.entries.deepseek.config.webSearch.apiKey`, or `models.providers.deepseek.apiKey` (order 80; install the official DeepSeek plugin first)
+11. **DeepSeek** -- `DEEPSEEK_API_KEY`, `plugins.entries.deepseek.config.webSearch.apiKey`, or `models.providers.deepseek.apiKey` while that provider and its models use `https://api.deepseek.com` (order 80; install the official DeepSeek plugin first)
 
 Configured endpoint providers after that:
 

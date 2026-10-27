@@ -5,18 +5,28 @@ import {
 } from "./agent-tool-availability.js";
 import { isSchedulerSystemTurn, resolveTurnToolSurface } from "./agent-tools.turn-authority.js";
 import { expectOwnerGated } from "./agent-tools.turn-authority.test-support.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { prepareCronToolArguments } from "./tools/cron-tool-canonicalize.js";
 
 function tool(name: string): AnyAgentTool {
   return {
-    name,
-    label: name,
-    description: `${name} tool`,
-    parameters: { type: "object", properties: {} },
+    ...fakeTool(name, `${name} tool`),
     execute: async () => ({ content: [], details: { ran: name } }),
-  } as unknown as AnyAgentTool;
+  };
 }
+
+const surfaceFor = (
+  turnTools: AnyAgentTool[],
+  sessionTools = turnTools,
+  schedulerSystemTurn = true,
+) =>
+  resolveTurnToolSurface({
+    turnTools,
+    sessionTools,
+    schedulerSystemTurn,
+    ownerOnlyDenied: new Set(["automations", "gateway"]),
+  });
 
 describe("resolveTurnToolSurface", () => {
   it("keeps a gated dependency non-callable for dependent affordances", () => {
@@ -45,18 +55,13 @@ describe("resolveTurnToolSurface on a system turn", () => {
     schedulerSystemTurn: boolean,
     prepareArguments?: AnyAgentTool["prepareArguments"],
   ) =>
-    resolveTurnToolSurface({
-      turnTools: [{ ...tool("automations"), prepareArguments }, tool("gateway")],
-      ownerOnlyDenied: new Set(["automations", "gateway"]),
+    surfaceFor(
+      [{ ...tool("automations"), prepareArguments }, tool("gateway")],
+      undefined,
       schedulerSystemTurn,
-    });
+    );
   const run = (tools: AnyAgentTool[], name: string, args: object) => {
-    const target = tools.find((entry) => entry.name === name);
-    const execute = target?.execute as (
-      id: string,
-      input: object,
-    ) => Promise<{ details?: unknown }>;
-    return execute(`call-${name}`, args);
+    return tools.find((entry) => entry.name === name)!.execute(`call-${name}`, args);
   };
 
   it.each([undefined, prepareCronToolArguments])(
@@ -92,12 +97,7 @@ describe("resolveTurnToolSurface on a system turn", () => {
   });
 
   it("keeps a completion handoff's requester denial over the scheduler reads", async () => {
-    const { tools } = resolveTurnToolSurface({
-      turnTools: [tool("gateway")],
-      sessionTools: [tool("automations"), tool("gateway")],
-      ownerOnlyDenied: new Set(["automations", "gateway"]),
-      schedulerSystemTurn: true,
-    });
+    const { tools } = surfaceFor([tool("gateway")], [tool("automations"), tool("gateway")]);
 
     const result = await run(tools, "automations", { action: "list" });
     expect(result.details).toMatchObject({ gated: true });
@@ -105,14 +105,10 @@ describe("resolveTurnToolSurface on a system turn", () => {
 
   it("runs scheduler reads on the turn-policy instance, not the session one", async () => {
     const turnInstance = tool("automations");
-    const { tools } = resolveTurnToolSurface({
-      turnTools: [turnInstance],
-      sessionTools: [
-        { ...tool("automations"), execute: async () => ({ content: [], details: { session: 1 } }) },
-      ] as AnyAgentTool[],
-      ownerOnlyDenied: new Set(["automations"]),
-      schedulerSystemTurn: true,
-    });
+    const { tools } = surfaceFor(
+      [turnInstance],
+      [{ ...tool("automations"), execute: async () => ({ content: [], details: { session: 1 } }) }],
+    );
 
     await expect(run(tools, "automations", { action: "runs" })).resolves.toMatchObject({
       details: { ran: "automations" },

@@ -11,6 +11,7 @@ import {
 } from "../sessions/session-lifecycle-admission.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -18,13 +19,16 @@ import {
 import { createAgentDedupeLifecycle } from "./agent-turn/agent-dedupe-lifecycle.js";
 import { prepareAgentRequestRouting } from "./agent-turn/agent-request-routing.js";
 import { createAgentTurnIo } from "./agent-turn/io.js";
+import { boardStore } from "./board-store.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import {
   dispatchAuthorizationRequest,
   startExactAuthorizationRequest,
 } from "./server-methods.authorization.test-support.js";
 import { createRequestGate } from "./server-methods.request-gate.test-support.js";
+import { createBoardHandlers } from "./server-methods/board.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
+import { createHistoryReadContext } from "./server-methods/chat-history.test-helpers.js";
 import { admitChatSend } from "./server-methods/chat-send-admission.js";
 import * as chat from "./server-methods/chat-send-external-entry.js";
 import { normalizeChatSendRequest } from "./server-methods/chat-send-request.js";
@@ -101,19 +105,164 @@ function expectAborted(respond: ReturnType<typeof vi.fn>, method: string, runId:
   );
 }
 
+function reportContent(text: string) {
+  return {
+    kind: "plugin" as const,
+    pluginKind: "session:report",
+    props: { blocks: [{ type: "text", text }] },
+  };
+}
+
+async function finishRun(runId: string, run: ReturnType<typeof createActiveRun>) {
+  abortSessionControllerInput(run.input, "Fixture case finished");
+  await run.input.settlement.promise;
+  rpcSourceTesting.deleteExpected(runId, run);
+}
+
 const stopHandlers = {
   "chat.abort": handleChatAbortRequest,
   "sessions.abort": sessionAbortHandlers["sessions.abort"]!,
 };
 
 describe("invocation-owned session mutations", () => {
+  it("lets session-only guests manage their own dashboard while preserving shared VIEW", () =>
+    withState(async () => {
+      const { client, cfg } = ownerFixture("board-owner");
+      const member = roleClient("view", "board-member");
+      member.connect.scopes = ["operator.sessions.write"];
+      await upsertSessionEntryCore(scope, {
+        ...ownedEntry(client, "board-owned"),
+        visibility: "shared",
+      });
+      const context = await createHistoryReadContext({ getRuntimeConfig: () => cfg });
+      context.resolveGatewayContext = () => context;
+      const extraHandlers = createBoardHandlers(boardStore);
+      const dispatch = (method: string, params: Record<string, unknown>, requestClient = client) =>
+        dispatchAuthorizationRequest(
+          method,
+          { sessionKey: key, ...params },
+          {
+            client: requestClient,
+            context,
+            extraHandlers,
+          },
+        );
+      for (const [method, params] of [
+        ["board.update", { ops: [{ kind: "tab_create", tabId: "personal", title: "Personal" }] }],
+        [
+          "board.widget.put",
+          {
+            name: "summary",
+            placement: { tabId: "personal" },
+            content: reportContent("My report"),
+          },
+        ],
+      ] as const) {
+        const own = (await dispatch(method, params)).mock.calls[0];
+        expect(own?.[0], JSON.stringify(own)).toBe(true);
+        expect((await dispatch(method, params, member)).mock.calls[0]).toMatchObject([
+          false,
+          undefined,
+          { code: "FORBIDDEN" },
+        ]);
+      }
+      for (const requestClient of [client, member]) {
+        requestClient.connect.scopes = ["operator.sessions.read"];
+        expect((await dispatch("board.get", {}, requestClient)).mock.calls[0]).toMatchObject([
+          true,
+          {
+            tabs: expect.arrayContaining([
+              expect.objectContaining({ tabId: "personal", title: "Personal" }),
+            ]),
+            widgets: [expect.objectContaining({ name: "summary", pluginKind: "session:report" })],
+          },
+        ]);
+        expect(
+          (await dispatch("board.update", { ops: [] }, requestClient)).mock.calls[0]?.[0],
+        ).toBe(false);
+      }
+      await upsertSessionEntryCore(scope, {
+        ...ownedEntry(client, "board-owned"),
+        visibility: "draft",
+      });
+      expect((await dispatch("board.get", {}, member)).mock.calls[0]?.[0]).toBe(false);
+      client.connect.scopes = ["operator.sessions.write"];
+      expect(
+        (
+          await dispatch("board.widget.grant", {
+            name: "summary",
+            revision: 1,
+            instanceId: "not-a-grant",
+            decision: "granted",
+          })
+        ).mock.calls[0],
+      ).toMatchObject([false, undefined, { code: "FORBIDDEN" }]);
+    }));
+
+  it.each(["current", "revoked", "replaced"] as const)(
+    "fences pending narrow board reads after authority is %s",
+    (change) =>
+      withState(async () => {
+        const { client, cfg } = ownerFixture("board-read-owner");
+        cfg.gateway!.roles!.definitions!.none!.scopes = [];
+        const entry = { ...ownedEntry(client, "board-read"), visibility: "draft" as const };
+        await upsertSessionEntryCore(scope, entry);
+        await boardStore.putWidget({
+          ...scope,
+          name: "private-report",
+          content: reportContent("private report"),
+        });
+        const context = await createHistoryReadContext({ getRuntimeConfig: () => cfg });
+        context.resolveGatewayContext = () => context;
+        client.connect.scopes = ["operator.sessions.read"];
+        using gate = createRequestGate();
+        const load = boardStore.getSnapshotWithHtmlViewMetadata.bind(boardStore);
+        vi.spyOn(boardStore, "getSnapshotWithHtmlViewMetadata").mockImplementation(
+          async (target) => {
+            const result = await load(target);
+            await gate.pause();
+            return result;
+          },
+        );
+        const { request, respond } = startExactAuthorizationRequest(
+          "board.get",
+          { sessionKey: key },
+          { client, context, extraHandlers: createBoardHandlers(boardStore) },
+        );
+        const settled = Promise.allSettled([request]);
+        await gate.during(
+          request,
+          async () => {
+            expect(respond).not.toHaveBeenCalled();
+            if (change === "revoked") {
+              await setCanonicalUserProfileRole(client.authenticatedUserProfile!.profileId, "none");
+            } else if (change === "replaced") {
+              await upsertSessionEntryCore(scope, {
+                ...entry,
+                sessionId: "board-read-replacement",
+              });
+            }
+          },
+          settled,
+        );
+        expect(respond.mock.calls.some(([ok]) => ok)).toBe(change === "current");
+        if (change === "current") {
+          expect(respond.mock.calls[0]?.[1]).toMatchObject({
+            widgets: [expect.objectContaining({ name: "private-report" })],
+          });
+        } else {
+          expect(respond.mock.calls.every(([, payload]) => payload === undefined)).toBe(true);
+        }
+      }),
+  );
+
   it.each([
     { owner: "connection", broad: false, rebind: true },
     { owner: "device", broad: true, rebind: false },
   ] as const)(
     "sessions.abort retains its invocation scope for a $owner foreign run (broad=$broad, rebind=$rebind)",
-    async ({ owner, broad, rebind }) => {
-      await withState(async () => {
+    ({ owner, broad, rebind }) =>
+      withState(async () => {
         const { client, context, run } = ownerFixture("alias-stop-owner", "write");
         client.connId = "alias-stop-connection";
         client.connect.device = {
@@ -173,8 +322,7 @@ describe("invocation-owned session mutations", () => {
           expect(rpcSourceTesting.get("selected")).toBe(foreign);
           expect(rpcSourceTesting.size).toBe(1);
         }
-      });
-    },
+      }),
   );
 
   it.each([
@@ -182,8 +330,8 @@ describe("invocation-owned session mutations", () => {
     { method: "sessions.send", phase: "committed creation" },
     { method: "sessions.create", phase: "routing drift" },
     { method: "sessions.create", phase: "committed creation" },
-  ] as const)("$method preserves creation authority across $phase", async ({ method, phase }) => {
-    await withState(async (state) => {
+  ] as const)("$method preserves creation authority across $phase", ({ method, phase }) =>
+    withState(async (state) => {
       const client = roleClient("view", "creation-owner");
       client.connect.scopes = ["operator.sessions.write"];
       const originalStore = state.path("original", "sessions.json");
@@ -233,8 +381,8 @@ describe("invocation-owned session mutations", () => {
           expect(loadSessionEntry({ ...scope, storePath })).toBeUndefined();
         }
       }
-    });
-  });
+    }),
+  );
 
   it.each(
     (["active", "queued", "agent"] as const).flatMap((kind) =>
@@ -242,8 +390,8 @@ describe("invocation-owned session mutations", () => {
     ),
   )(
     "$method narrow single and bulk Stop match the original $kind producer incarnation",
-    async ({ kind, method }) => {
-      await withState(async () => {
+    ({ kind, method }) =>
+      withState(async () => {
         const { client, cfg } = ownerFixture("exact-stop-owner");
         client.connId = "exact-stop-connection";
 
@@ -294,36 +442,29 @@ describe("invocation-owned session mutations", () => {
               expectAborted(respond, method, runId);
             }
             expect(respond).toHaveBeenCalledOnce();
-            abortSessionControllerInput(run.input, "Fixture case finished");
-            await run.input.settlement.promise;
-            rpcSourceTesting.deleteExpected(runId, run);
+            await finishRun(runId, run);
           }
         }
-      });
-    },
+      }),
   );
 
   it.each(
     (
       [
-        { kind: "active", method: "chat.abort" },
-        { kind: "queued", method: "chat.abort" },
-        { kind: "queued", method: "sessions.abort" },
+        ["active", "chat.abort"],
+        ["queued", "chat.abort"],
+        ["queued", "sessions.abort"],
       ] as const
-    ).flatMap((entry) =>
-      (entry.kind === "active"
+    ).flatMap(([kind, method]) =>
+      (kind === "active"
         ? (["registration"] as const)
         : (["registration", "key", "sessionId", "agentId"] as const)
-      ).map((changed) => ({
-        kind: entry.kind,
-        method: entry.method,
-        changed,
-      })),
+      ).map((changed) => ({ kind, method, changed })),
     ),
   )(
     "$method does not adopt a reentrant $kind producer $changed during narrow Stop",
-    async ({ kind, method, changed }) => {
-      await withState(async () => {
+    ({ kind, method, changed }) =>
+      withState(async () => {
         const { client, cfg, context } = ownerFixture("reentrant-stop-owner");
         client.connId = "reentrant-stop";
         await upsertSessionEntryCore(scope, ownedEntry(client, "original"));
@@ -350,26 +491,20 @@ describe("invocation-owned session mutations", () => {
         first.input.abortSignal.addEventListener(
           "abort",
           () => {
-            if (kind === "active" || changed === "registration") {
+            if (changed === "registration") {
               // Reserve successors after Stop captures the original mailbox inputs.
-              replacement = createActiveRun(changed === "key" ? "agent:main:other" : key, {
-                ...target,
-                sessionId: changed === "sessionId" ? "replacement" : "original",
-                agentId: changed === "agentId" ? "replacement" : "main",
-              });
+              replacement = createActiveRun(key, target);
               runs.set("second", replacement);
-            } else if (changed === "key") {
-              setRpcSourceIdentityForTest(expectDefined(second, "queued narrow Stop source"), {
-                sessionKey: "agent:main:other",
-              });
-            } else if (changed === "sessionId") {
-              setRpcSourceIdentityForTest(expectDefined(second, "queued narrow Stop source"), {
-                sessionId: "replacement",
-              });
             } else {
-              setRpcSourceIdentityForTest(expectDefined(second, "queued narrow Stop source"), {
-                agentId: "replacement",
-              });
+              const identity = {
+                key: { sessionKey: "agent:main:other" },
+                sessionId: { sessionId: "replacement" },
+                agentId: { agentId: "replacement" },
+              }[changed];
+              setRpcSourceIdentityForTest(
+                expectDefined(second, "queued narrow Stop source"),
+                identity,
+              );
             }
           },
           { once: true },
@@ -386,46 +521,40 @@ describe("invocation-owned session mutations", () => {
             false,
           );
         }
-        if (kind === "active" || changed === "registration") {
+        if (changed === "registration") {
           expect(
             expectDefined(replacement, "reentrant narrow Stop successor").input.abortSignal.aborted,
           ).toBe(false);
         }
         expectAborted(respond, method, "first");
-      });
-    },
+      }),
   );
 
   it.each(["key", "incarnation"] as const)(
-    "does not borrow a different owned run %s for narrow Stop",
-    async (changed) => {
-      await withState(async () => {
+    "lets broad Stop abort a different owned run %s",
+    (changed) =>
+      withState(async () => {
         const { client, cfg } = ownerFixture("stop-owner");
         client.connId = "same-connection";
         await upsertSessionEntryCore(scope, ownedEntry(client, "own-row"));
-        for (const grant of ["operator.sessions.write", "operator.write"]) {
-          client.connect.scopes = [grant];
-          const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-          const run = createActiveRun(changed === "key" ? "agent:main:other" : key, {
-            agentId: "main",
-            sessionId: changed === "key" ? "own-row" : "prior-incarnation",
-            owner: { connId: client.connId },
-          });
-          rpcSourceTesting.set("different-run", run);
-          const respond = await dispatchAuthorizationRequest(
-            "chat.abort",
-            { sessionKey: key, runId: "different-run" },
-            { client, context, extraHandlers: { "chat.abort": handleChatAbortRequest } },
-            grant,
-          );
-          expect(run.input.abortSignal.aborted).toBe(grant === "operator.write");
-          expect(respond.mock.calls[0]?.[0]).toBe(grant === "operator.write");
-          abortSessionControllerInput(run.input, "Fixture case finished");
-          await run.input.settlement.promise;
-          rpcSourceTesting.deleteExpected("different-run", run);
-        }
-      });
-    },
+        client.connect.scopes = ["operator.write"];
+        const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+        const run = createActiveRun(changed === "key" ? "agent:main:other" : key, {
+          agentId: "main",
+          sessionId: changed === "key" ? "own-row" : "prior-incarnation",
+          owner: { connId: client.connId },
+        });
+        rpcSourceTesting.set("different-run", run);
+        const respond = await dispatchAuthorizationRequest(
+          "chat.abort",
+          { sessionKey: key, runId: "different-run" },
+          { client, context, extraHandlers: { "chat.abort": handleChatAbortRequest } },
+          changed,
+        );
+        expect(run.input.abortSignal.aborted).toBe(true);
+        expect(respond.mock.calls[0]?.[0]).toBe(true);
+        await finishRun("different-run", run);
+      }),
   );
 
   it("sessions.steer forwards the original source and exact target across the dispatch await", async () => {
@@ -499,8 +628,8 @@ describe("invocation-owned session mutations", () => {
 
   it.each(["source", "generation", "missing-single", "missing-batch"] as const)(
     "session mutation preserves the original %s fence",
-    async (changed) => {
-      await withState(async () => {
+    (changed) =>
+      withState(async () => {
         const { client, context } = ownerFixture("batch-owner");
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const entry = {
@@ -561,8 +690,7 @@ describe("invocation-owned session mutations", () => {
         } else {
           expect(payload).toBeUndefined();
         }
-      });
-    },
+      }),
   );
 });
 
@@ -590,8 +718,8 @@ describe("pending Stop admission", () => {
 
   it.each(["current", "replacement"] as const)(
     "does not treat an agent routing reservation as controller admission across %s row state",
-    async (target) => {
-      await withState(async () => {
+    (target) =>
+      withState(async () => {
         const { client, cfg, context, entry, stop } =
           await createPendingOwner("pending-agent-owner");
         const runId = `pending-agent-${target}`;
@@ -620,12 +748,11 @@ describe("pending Stop admission", () => {
         }
         expect(await stop(runId)).toMatchObject({ aborted: false });
         expect(context.dedupe.get(`agent:${runId}`)).toBe(pending);
-      });
-    },
+      }),
   );
 
-  it("keeps a real chat admission abortable while its original session lifecycle is held", async () => {
-    await withState(async () => {
+  it("keeps a real chat admission abortable while its original session lifecycle is held", () =>
+    withState(async () => {
       await loadOrCreateProcessDeviceIdentityAsync();
       const { client, context, stop } = await createPendingOwner("pending-chat-owner");
       const runId = "pending-chat-admission";
@@ -675,6 +802,5 @@ describe("pending Stop admission", () => {
         expect(settled.ok).toBe(false);
         expect(context.dedupe.get(`chat:${runId}`)?.payload).toMatchObject(aborted);
       }
-    });
-  });
+    }));
 });
