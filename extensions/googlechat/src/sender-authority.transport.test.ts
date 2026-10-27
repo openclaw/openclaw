@@ -192,12 +192,12 @@ describe("Google Chat sender authority through real guarded HTTP", () => {
 
   it("preferred send stops after an awaited DM lookup without marking preparation as dispatch", async () => {
     const authority = createAuthority();
-    const lookup = createDeferred<ServerResponse>();
+    const dmLookup = createDeferred<ServerResponse>();
     const dispatch = vi.fn(async () => {});
     await withChatServer(
       (request, response) => {
         if (request.method === "GET") {
-          lookup.resolve(response);
+          dmLookup.resolve(response);
         } else {
           respondWithMessage(request, response);
         }
@@ -208,7 +208,7 @@ describe("Google Chat sender authority through real guarded HTTP", () => {
           { assertDirectAdapterHandoff: authority.assert, onPlatformSendDispatch: dispatch },
           "users/alice@example.test",
         ).catch((error: unknown) => error);
-        const response = await lookup.promise;
+        const response = await dmLookup.promise;
         expect(dispatch).not.toHaveBeenCalled();
         authority.revoke();
         response.end(JSON.stringify({ name: "spaces/AAA" }));
