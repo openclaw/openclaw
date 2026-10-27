@@ -301,12 +301,9 @@ it.each([
     const proxy = findIssue(result, codes.gatewayProxyEnvEmbedded);
     if (embedded) {
       expect(managed?.environmentKeys).toEqual(["OPENROUTER_API_KEY", "TAVILY_API_KEY"]);
-      expect(proxy?.environmentKeys).toEqual([
-        "HTTPS_PROXY",
-        "HTTP_PROXY",
-        "NO_PROXY",
-        "https_proxy",
-      ]);
+      expect(proxy?.environmentKeys).toEqual(
+        "HTTPS_PROXY HTTP_PROXY NO_PROXY https_proxy".split(" "),
+      );
       expect(proxy?.detail).toContain("HTTPS_PROXY");
     } else {
       expect(managed).toBeUndefined();
@@ -529,46 +526,38 @@ describe("auditGatewayServiceConfig systemd", () => {
 
 describe("managed service environment drift", () => {
   it.each([
-    { name: "changed value", durable: "new-value", drift: true },
-    { name: "removed value", durable: undefined, drift: true },
-    { name: "exact whitespace", durable: "old-value ", drift: true },
-    { name: "matching value", durable: "old-value", drift: false },
-    { name: "generated file snapshot", durable: "new-value", source: "file", drift: true },
-    {
-      name: "overlapping inline value",
-      durable: "new-value",
-      source: "inline-and-file",
-      drift: true,
-    },
-    { name: "non-durable SecretRef", durable: undefined, secretRef: true, drift: false },
-    { name: "durable SecretRef", durable: "new-value", secretRef: true, drift: true },
-    { name: "dynamic systemd value", durable: "new-value", systemd: true, drift: false },
-    {
-      name: "unrecorded file value",
-      durable: "new-value",
-      source: "file",
-      unrecorded: true,
-      drift: false,
-    },
-  ] as const)("$name", (scenario) => {
+    ["changed value", "new-value", true, {}],
+    ["removed value", undefined, true, {}],
+    ["exact whitespace", "old-value ", true, {}],
+    ["matching value", "old-value", false, {}],
+    ["generated file snapshot", "new-value", true, { source: "file" }],
+    ["overlapping inline value", "new-value", true, { source: "inline-and-file" }],
+    ["non-durable SecretRef", undefined, false, { secretRef: true }],
+    ["durable SecretRef", "new-value", true, { secretRef: true }],
+    ["dynamic systemd value", "new-value", false, { systemd: true }],
+    ["unrecorded file value", "new-value", false, { source: "file", unrecorded: true }],
+  ] as const)("%s", (_name, durable, drift, options) => {
+    const scenario: {
+      source?: "file" | "inline-and-file";
+      secretRef?: boolean;
+      systemd?: boolean;
+      unrecorded?: boolean;
+    } = options;
     const result = checkManagedServiceEnvDrift({
       command: {
         programArguments: [],
         environment: {
-          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "unrecorded" in scenario ? "" : "TAVILY_API_KEY",
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: scenario.unrecorded ? "" : "TAVILY_API_KEY",
           tavily_api_key: "old-value",
-          ...("systemd" in scenario ? { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" } : {}),
+          ...(scenario.systemd ? { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" } : {}),
         },
-        environmentValueSources:
-          "source" in scenario && scenario.source !== undefined
-            ? { TAVILY_API_KEY: scenario.source }
-            : undefined,
+        environmentValueSources: scenario.source ? { TAVILY_API_KEY: scenario.source } : undefined,
       },
-      durableEnvironment: { TAVILY_API_KEY: scenario.durable },
-      secretRefKeys: "secretRef" in scenario ? ["tavily_api_key"] : [],
-      platform: "systemd" in scenario ? "linux" : "darwin",
+      durableEnvironment: { TAVILY_API_KEY: durable },
+      secretRefKeys: scenario.secretRef ? ["tavily_api_key"] : [],
+      platform: scenario.systemd ? "linux" : "darwin",
     });
-    expect(result?.environmentKeys ?? []).toEqual(scenario.drift ? ["TAVILY_API_KEY"] : []);
+    expect(result?.environmentKeys ?? []).toEqual(drift ? ["TAVILY_API_KEY"] : []);
     expect(JSON.stringify(result)).not.toMatch(/old-value|new-value/);
   });
 
