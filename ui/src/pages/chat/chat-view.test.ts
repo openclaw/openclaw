@@ -2045,11 +2045,8 @@ describe("chat slash menu accessibility", () => {
   });
 
   it("executes an inline command separately and removes only its token from the draft", async () => {
-    let draft = "";
     const onTypingChange = vi.fn();
-    const onDraftChange = vi.fn((next: string) => {
-      draft = next;
-    });
+    const onDraftChange = vi.fn();
     const onSend = vi.fn();
     const onSlashCommand = vi.fn(() => {
       expect(onTypingChange).toHaveBeenLastCalledWith(true, "hello ");
@@ -2063,13 +2060,14 @@ describe("chat slash menu accessibility", () => {
 
     inputDraftAtEnd(container, "hello /statu");
 
+    await import("./components/chat-composer-slash-menu.tsx");
     await waitForSolid(() => expect(container.querySelector(".slash-menu")).not.toBeNull());
     expect(container.querySelector(".slash-menu-name")?.textContent?.trim()).toBe("/status");
     keydownComposer(container, "Enter");
 
     expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/status");
-    expect(draft).toBe("hello ");
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
+    expect(onDraftChange).toHaveBeenLastCalledWith("hello ");
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("hello ");
     expect(onTypingChange).toHaveBeenLastCalledWith(true, "hello ");
     expect(onSend).not.toHaveBeenCalled();
   });

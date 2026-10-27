@@ -123,7 +123,7 @@ export async function withCurrentSessionListRows<T>(
         }
         return (
           !presentation.authorizeDescription(query) &&
-          presentation.sharing.entryFilter?.(record.key, record.entry) !== false
+          presentation.sharing.canReadTarget(presentation.target(query)!)
         );
       });
       return consume(visible, read);

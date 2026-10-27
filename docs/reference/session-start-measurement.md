@@ -27,6 +27,11 @@ The sandbox command requires Docker and an already-built sandbox image. Both
 commands launch and stop their own loopback Gateway and mock provider. They never
 connect to a running operator Gateway. Each output directory must be new.
 
+Fixtures default to the current clock. For a comparison, capture one fresh
+epoch-millisecond timestamp and pass it to both arms with `--now <epoch-ms>`.
+An old clock can expire the seeded 24-hour collector cohort before measurement,
+causing cleanup traffic and changing the workload. Normal maintenance stays enabled.
+
 Fresh turns use the Control UI's `sessions.create({message, worktree: true})`
 flow: the Gateway dispatches the initial `chat.send` internally. Its response is
 the session creation and initial-turn ACK; the harness does not send the message

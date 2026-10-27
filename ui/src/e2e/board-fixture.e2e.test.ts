@@ -461,7 +461,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     }
   });
 
-  it("keeps profile and presence HTTP inside the standalone mock", async () => {
+  it("keeps cold chat startup, sending, profile and presence inside the standalone mock", async () => {
     const artifacts = createControlUiE2eArtifactDir("standalone-network-isolation");
     const { context, page, origin, escaped, requests } = await isolatedPage(fixtureServer.url, {
       serviceWorkers: "block",
@@ -478,6 +478,44 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         if (captureUiProof) {
           await page.screenshot({ path: path.join(artifacts, "chat.png") });
         }
+        expect(await page.locator(".community-invite-card").count()).toBe(0);
+        expect(await page.getByText("Server updated", { exact: true }).count()).toBe(0);
+        const paneState = await page
+          .locator("openclaw-chat-pane.chat-pane-cache__pane--active")
+          .evaluate(async (pane) => {
+            const chatPane = pane as HTMLElement & {
+              transcriptReady: boolean;
+              updateComplete: Promise<unknown>;
+            };
+            await chatPane.updateComplete;
+            const constructor = customElements.get("openclaw-chat-pane");
+            return {
+              connected: chatPane.isConnected,
+              transcriptReady: chatPane.transcriptReady,
+              registered: constructor !== undefined,
+              upgraded: constructor !== undefined && chatPane instanceof constructor,
+            };
+          });
+        expect(paneState).toEqual({
+          connected: true,
+          transcriptReady: true,
+          registered: true,
+          upgraded: true,
+        });
+        expect(await page.getByRole("button", { name: "Stop" }).count()).toBe(0);
+
+        const prompt = "generic mock send probe";
+        const composer = page.locator(
+          ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
+        );
+        await composer.fill(prompt);
+        await page.getByRole("button", { name: "Send message" }).click();
+
+        await page
+          .locator(".chat-thread-inner")
+          .getByText(`Mock reply: ${prompt}`, { exact: true })
+          .waitFor();
+        expect(await composer.inputValue()).toBe("");
         await page.goto(`${origin}/profile`, { waitUntil: "domcontentloaded" });
         await expect
           .poll(() => page.getByRole("textbox", { name: "Display name", exact: true }).inputValue())
@@ -796,57 +834,6 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           .getByText("Cannot read properties of undefined (reading 'toReversed')", { exact: false })
           .count(),
       ).toBe(0);
-    }),
-  );
-
-  it(
-    "starts with aligned build identity and renders a deterministic reply after generic chat.send",
-    withFixturePage(async (page) => {
-      await page.goto(new URL("/chat", fixtureServer.url).toString(), {
-        waitUntil: "domcontentloaded",
-      });
-      await selectAllSidebarSessions(page);
-      await page.getByText("OpenClaw work checkout", { exact: true }).click();
-
-      await page.getByRole("button", { name: "Write a message to send." }).waitFor();
-      expect(await page.locator(".community-invite-card").count()).toBe(0);
-      expect(await page.getByText("Server updated", { exact: true }).count()).toBe(0);
-      const paneState = await page
-        .locator("openclaw-chat-pane.chat-pane-cache__pane--active")
-        .evaluate(async (pane) => {
-          const chatPane = pane as HTMLElement & {
-            transcriptReady: boolean;
-            updateComplete: Promise<unknown>;
-          };
-          await chatPane.updateComplete;
-          const constructor = customElements.get("openclaw-chat-pane");
-          return {
-            connected: chatPane.isConnected,
-            transcriptReady: chatPane.transcriptReady,
-            registered: constructor !== undefined,
-            upgraded: constructor !== undefined && chatPane instanceof constructor,
-          };
-        });
-      expect(paneState).toEqual({
-        connected: true,
-        transcriptReady: true,
-        registered: true,
-        upgraded: true,
-      });
-      expect(await page.getByRole("button", { name: "Stop" }).count()).toBe(0);
-
-      const prompt = "generic mock send probe";
-      const composer = page.locator(
-        ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
-      );
-      await composer.fill(prompt);
-      await page.getByRole("button", { name: "Send message" }).click();
-
-      await page
-        .locator(".chat-thread-inner")
-        .getByText(`Mock reply: ${prompt}`, { exact: true })
-        .waitFor();
-      expect(await composer.inputValue()).toBe("");
     }),
   );
 });
