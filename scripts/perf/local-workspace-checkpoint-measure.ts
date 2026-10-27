@@ -11,10 +11,13 @@
  * Count lease acquisitions and manifest scans first; timing and main-thread
  * allocation include real storage dispatch. Every burst must have identical
  * results; a later guest write must be present after the next request.
+ * The synthetic checkout uses a relative Git pointer and fixed file mtimes so
+ * independently rooted fixtures return identical Files metadata.
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
@@ -27,6 +30,7 @@ import { parseArgs } from "node:util";
 import { transformSync } from "esbuild";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.ts";
 import type { LocalWorkspaceOwner } from "../../src/gateway/worker-environments/local-workspace-types.ts";
+import type { DiagnosticEventInput } from "../../src/infra/diagnostic-events.ts";
 import {
   BASE_GATEWAY_BENCH_CONFIG,
   createGatewayBenchEnv,
@@ -140,6 +144,12 @@ for (let i = 0; i < files; i++) {
 git("add", ".");
 git("commit", "--quiet", "-m", "Synthetic workspace");
 git("worktree", "add", "--quiet", "-b", "fixture", canonical);
+if (values.mode === "gateway") {
+  const pointerPath = path.join(canonical, ".git");
+  const pointer = fs.readFileSync(pointerPath, "utf8");
+  assert(pointer.startsWith("gitdir: "));
+  fs.writeFileSync(pointerPath, `gitdir: ${path.relative(canonical, pointer.slice(8).trim())}\n`);
+}
 const plugins = values.mode === "gateway" ? writePluginFixtures(output, { count: 40 }) : undefined;
 const config: OpenClawConfig = {
   ...BASE_GATEWAY_BENCH_CONFIG,
@@ -197,6 +207,9 @@ for (const directory of [canonical, workspace]) {
     fs.utimesSync(path.join(directory, `file-${i}.txt`), 1_767_225_600, 1_767_225_600);
   }
 }
+if (values.mode === "gateway") {
+  fs.utimesSync(path.join(canonical, ".git"), 1_767_225_600, 1_767_225_600);
+}
 const checkpoint = () =>
   values.revision
     ? projection.withLocalWorkspaceProjection(owner, (operations) =>
@@ -207,6 +220,8 @@ let server:
   | Awaited<ReturnType<typeof import("../../src/gateway/server.js").startGatewayServer>>
   | undefined;
 const clients: Array<import("../../src/gateway/client.js").GatewayClient> = [];
+const handlerDurations: number[] = [];
+let stopRpcDiagnostics = () => {};
 try {
   if (values.mode === "gateway") {
     const db = agent.openOpenClawAgentDatabase({ agentId: "main" });
@@ -260,6 +275,20 @@ try {
       ? clients[i % clients.length]!.request("sessions.files.list", { sessionKey })
       : checkpoint();
   await runOne(0);
+  if (values.mode === "gateway") {
+    const rpcDiagnostics = channel("openclaw.gateway.rpc");
+    const observeHandler = (message: unknown) => {
+      // This native channel publishes the Gateway diagnostic owner's event contract.
+      const event = message as Extract<DiagnosticEventInput, { type: "gateway.rpc" }>;
+      if (event.phase === "handler" && event.method === "sessions.files.list") {
+        handlerDurations.push(event.durationMs);
+      }
+    };
+    rpcDiagnostics.subscribe(observeHandler);
+    stopRpcDiagnostics = () => {
+      rpcDiagnostics.unsubscribe(observeHandler);
+    };
+  }
   const initial = fs.readFileSync(path.join(canonical, "file-0.txt"), "utf8");
   assert.equal(initial, "synthetic 0\n");
   acquisitions = 0;
@@ -287,6 +316,7 @@ try {
   const latencies: number[] = [];
   let resultHash: string | undefined;
   let semanticResultHash: string | undefined;
+  let representativeResult: unknown;
   for (let offset = 0; offset < requests; offset += burst) {
     await Promise.all(
       Array.from({ length: Math.min(burst, requests - offset) }, async (_, i) => {
@@ -294,6 +324,7 @@ try {
           result = await runOne(i);
         latencies.push(performance.now() - begin);
         if (values.mode === "gateway") {
+          representativeResult ??= result;
           const hash = createHash("sha256").update(JSON.stringify(result)).digest("hex");
           resultHash ??= hash;
           assert.equal(hash, resultHash, "Concurrent readers must return identical lists");
@@ -310,6 +341,10 @@ try {
   }
   const elapsedMs = performance.now() - start,
     cpu = process.threadCpuUsage(before);
+  stopRpcDiagnostics();
+  if (values.mode === "gateway") {
+    assert.equal(handlerDurations.length, requests, "Every measured RPC needs a handler sample");
+  }
   const profile = await inspector?.post("HeapProfiler.stopSampling");
   inspector?.disconnect();
   loop.disable();
@@ -318,6 +353,7 @@ try {
     node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
   const sampledBytes = profile ? allocated(profile.profile.head) : undefined;
   latencies.sort((a, b) => a - b);
+  handlerDurations.sort((a, b) => a - b);
   const report = {
     mode: values.mode,
     revision: values.revision ?? "candidate",
@@ -341,12 +377,24 @@ try {
     eventLoopP99Ms: loop.percentile(99) / 1e6,
     eventLoopSamples: loop.count,
     requestP99Ms: latencies[Math.floor((latencies.length - 1) * 0.99)],
+    ...(values.mode === "gateway"
+      ? {
+          serverHandlerSamples: handlerDurations.length,
+          serverHandlerP99Ms: handlerDurations[Math.floor((handlerDurations.length - 1) * 0.99)],
+        }
+      : {}),
     gcMs,
     gcMsPerMinute: (gcMs * 60_000) / elapsedMs,
     memory: process.memoryUsage(),
     resultHash,
     semanticResultHash,
   };
+  if (representativeResult !== undefined) {
+    fs.writeFileSync(
+      path.join(output, "response.json"),
+      JSON.stringify(representativeResult, null, 2),
+    );
+  }
   fs.writeFileSync(path.join(workspace, "file-0.txt"), "fresh later guest write\n");
   await runOne(0);
   assert.equal(
@@ -357,6 +405,7 @@ try {
   fs.writeFileSync(path.join(output, "report.json"), JSON.stringify(verified, null, 2));
   console.log(JSON.stringify(verified));
 } finally {
+  stopRpcDiagnostics();
   for (const client of clients) {
     client.stop();
   }
