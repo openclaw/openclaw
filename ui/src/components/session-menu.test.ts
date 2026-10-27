@@ -25,8 +25,6 @@ import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { SessionMenuAction } from "./session-menu-solid.tsx";
 
-const reviewAction = { id: "review/open", label: "Open review" };
-
 function press(target: EventTarget, key: string, options: KeyboardEventInit = {}) {
   const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...options });
   target.dispatchEvent(event);
@@ -119,6 +117,7 @@ describe("session menu", () => {
     await selectMenuValue(menu, "reload-owners");
     await waitForOwners(menu, ["Me", "Research", "Bob", "Carol"]);
     expect(menu.querySelector('[role="alert"]')).toBeNull();
+    expect(request).toHaveBeenCalledTimes(3);
   });
 
   it.each(["reconnect", "replace gateway"] as const)(
@@ -161,7 +160,6 @@ describe("session menu", () => {
     Object.assign(profiles[0]!, { id: "research:one" });
     Object.assign(profiles[1]!, { displayName: "  ", emails: ["zed@example.test"] });
     Object.assign(profiles[2]!, { mergedInto: "research:one" });
-    profiles.push(profiles[0]!);
     const { context } = createSessionOwnerMenuHarness(() => ({ profiles }));
     const { menu, onAction, onClose } = await actionMenu({ context, currentOwner });
     await waitForOwners(menu, ["Me", "Research", "Colleague", "zed@example.test"]);
@@ -185,6 +183,27 @@ describe("session menu", () => {
     expect(batch.textContent).not.toContain("Assign to");
   });
 
+  it.each([
+    ["self only", ["Ada"], [], false],
+    ["two offline people", ["Ada", "Bob"], [], true],
+    ["one human and an agent", ["Ada"], ["research:one"], true],
+    ["duplicate and merged profiles", ["Ada", "Ada", "Merged"], [], false],
+    ["typed identity collision", ["Ada"], ["profile-ada"], true],
+  ] as const)("gates assignment for %s", async (_name, names, agents, expected) => {
+    const profiles = sessionOwnerProfiles(...names);
+    for (const profile of profiles.profiles) {
+      if (profile.displayName === "Merged") {
+        profile.mergedInto = "profile-ada";
+      }
+    }
+    const owner = createSessionOwnerMenuHarness(() => profiles);
+    owner.context.agents.state.agentsList!.agents = agents.map((id) => ({ id }));
+    const menu = await mountMenu({ context: owner.context });
+    await waitForFast(() => expect(owner.request).toHaveBeenCalledWith("users.list", {}));
+    await waitForFast(() => expect(menu.textContent).not.toContain("Loading"));
+    expect(menuItemLabels(menu).includes("Assign to…")).toBe(expected);
+  });
+
   it("keeps known assignees while refreshing and coalesces repeated opens", async () => {
     const owner = createSessionOwnerMenuHarness(() => sessionOwnerProfiles("Ada", "Bob"));
     owner.context.agents.state.agentsList!.agents = [];
@@ -202,9 +221,10 @@ describe("session menu", () => {
   });
 
   it.each([
+    [{}, "toggle-archived", { kind: "toggle-archived" }],
     [{ cloudWorkerStopAllowed: true }, "stop-cloud-worker", { kind: "stop-cloud-worker" }],
     [
-      { pluginActions: [reviewAction] },
+      { pluginActions: [{ id: "review/open", label: "Open review" }] },
       "plugin:review/open",
       { kind: "plugin", id: "review/open" },
     ],
@@ -228,25 +248,28 @@ describe("session menu", () => {
     expect(pin.disabled).toBe(true);
     expect(pin.getAttribute("title")).toBe("This action requires operator.write access.");
     expect(deleteItem.disabled).toBe(true);
-    press(pin, "d");
-    press(pin, "a", { metaKey: true });
-    press(pin, "x");
     await openSubmenu(menu, "Advanced");
     deleteItem.click();
     pin.click();
     expect(onAction).not.toHaveBeenCalled();
   });
 
-  it("returns nested compact details through Advanced without side flyouts", async () => {
-    const menu = await mountMenu({ compact: true });
-    await selectMenuValue(menu, "compact:open-advanced");
-    await selectMenuValue(menu, "compact:open-icon");
-    expect(menuPanel(menu).querySelector('[role="menu"]')).toBeNull();
-    expect(menuItemLabels(menu)[0]).toBe("Back");
-    await selectMenuValue(menu, "compact:back-advanced");
-    expect(menuItemLabels(menu)).toContain("Icon & color");
-    await selectMenuValue(menu, "compact:back");
-    expect(menuItemLabels(menu)).toContain("Pin session");
+  it("navigates compact groups without side flyouts", async () => {
+    const menu = await mountMenu({ compact: true, groups: ["Research"] });
+    for (const view of ["copy", "open-in", "icon", "group"] as const) {
+      const advanced = view !== "group";
+      if (advanced) {
+        await selectMenuValue(menu, "compact:open-advanced");
+      }
+      await selectMenuValue(menu, `compact:open-${view}`);
+      await settleSessionMenu(menu);
+      expect(menuPanel(menu).querySelector('[role="menu"]')).toBeNull();
+      expect(menuItemLabels(menu)[0]).toBe("Back");
+      await selectMenuValue(menu, advanced ? "compact:back-advanced" : "compact:back");
+      if (advanced) {
+        await selectMenuValue(menu, "compact:back");
+      }
+    }
   });
 
   it.each([
@@ -264,16 +287,17 @@ describe("session menu", () => {
   });
 
   it.each([
-    { pluginActions: [{ ...reviewAction, disabled: true }] },
+    { pluginActions: [{ id: "review/open", label: "Open review", disabled: true }] },
     {
-      pluginActions: [reviewAction],
+      pluginActions: [{ id: "review/open", label: "Open review" }],
       actionDisabledReasons: { plugin: "Admin access required" },
     },
-    { pluginActions: [reviewAction], selectionCount: 2 },
+    { pluginActions: [{ id: "review/open", label: "Open review" }], selectionCount: 2 },
+    { pluginActions: [] },
   ])("blocks unavailable plugin actions: %j", async (options) => {
     const { menu, onAction } = await actionMenu({ ...options });
     const action = queryButton(menu, 'button[value="plugin:review/open"]');
-    if (options.selectionCount === 2) {
+    if (options.selectionCount === 2 || options.pluginActions.length === 0) {
       expect(action).toBeNull();
     } else {
       expect(action?.disabled).toBe(true);
@@ -285,39 +309,48 @@ describe("session menu", () => {
   it.each([
     [
       { archiveAllowed: false, session: { archived: true } },
-      ["Restore session", "Delete…"],
-      "Pin session",
+      [
+        ["Restore session", false],
+        ["Delete…", false],
+        ["Pin session", true],
+      ],
     ],
-    [{ archiveAllowed: true, deleteAllowed: false }, ["Archive session"], "Delete…"],
+    [
+      { archiveAllowed: true, deleteAllowed: false },
+      [
+        ["Archive session", false],
+        ["Delete…", true],
+      ],
+    ],
     [
       { selectionCount: 2, archiveAllowed: false, deleteAllowed: false },
-      ["Archive 2"],
-      "Delete 2…",
+      [
+        ["Archive 2", false],
+        ["Delete 2…", true],
+      ],
     ],
-  ] as const)("gates archive, delete and pin: %j", async (options, enabled, disabled) => {
-    const { menu, onAction } = await actionMenu(options);
-    for (const label of enabled) {
-      expect(menuItem(menu, label).disabled).toBe(false);
-    }
-    expect(menuItem(menu, disabled).disabled).toBe(true);
-    if ("deleteAllowed" in options && !options.deleteAllowed) {
-      const pin = menuItem(menu, "Pin session");
-      pin.focus();
-      press(pin, "d");
-      expect(onAction).not.toHaveBeenCalled();
+  ] as const)("gates archive, delete and pin: %j", async (options, disabled) => {
+    const menu = await mountMenu(options);
+    for (const [label, expected] of disabled) {
+      expect(menuItem(menu, label).disabled).toBe(expected);
     }
   });
 
-  it("dispatches the advertised shortcut from a non-Latin keyboard", async () => {
+  it.each([
+    ["Pin session", "з", "KeyP", "P", "toggle-pin"],
+    ["Copy link", "c", undefined, "C", "copy-session-link"],
+  ] as const)("dispatches the advertised %s shortcut", async (label, key, code, hint, kind) => {
     const { menu, onAction, onClose } = await actionMenu();
-    const item = menuItem(menu, "Pin session");
-    expect(item.getAttribute("aria-keyshortcuts")).toBe("P");
+    const item = menuItem(menu, label);
+    expect(item.getAttribute("aria-keyshortcuts")).toBe(hint);
     item.focus();
-    const keydown = press(item, "з", { code: "KeyP" });
+    const keydown = press(item, key, code ? { code } : {});
     await settleSessionMenu(menu);
-    expect(onAction).toHaveBeenCalledWith({ kind: "toggle-pin" });
+    expect(onAction).toHaveBeenCalledWith({ kind });
     expect(onClose.mock.invocationCallOrder[0]).toBeLessThan(onAction.mock.invocationCallOrder[0]!);
-    expect(keydown.defaultPrevented).toBe(true);
+    if (kind !== "copy-session-link") {
+      expect(keydown.defaultPrevented).toBe(true);
+    }
   });
 
   it("gates unavailable copy and navigation actions at native controls", async () => {
@@ -461,9 +494,13 @@ describe("session menu", () => {
   });
 
   it.each([
+    ["absent", null],
     [
       "PR",
-      { pullRequestUrl: "https://github.com/openclaw/openclaw/pull/12345", worktreePath: null },
+      {
+        pullRequestUrl: "https://github.com/openclaw/openclaw/pull/12345",
+        worktreePath: null,
+      },
     ],
     ["editor", { pullRequestUrl: null, worktreePath: "/work/trees/demo" }],
   ] as const)("opens resolved workspace destinations: %s", async (_name, work) => {
@@ -488,6 +525,18 @@ describe("session menu", () => {
         path: work.worktreePath,
       });
     }
+  });
+
+  it("ignores shortcut keys for disabled items and modified keystrokes", async () => {
+    const { menu, onAction } = await actionMenu({ archiveAllowed: false, deleteAllowed: false });
+
+    const pin = menuItem(menu, "Pin session");
+    pin.focus();
+    press(pin, "d");
+    press(pin, "p", { metaKey: true });
+    press(pin, "x");
+
+    expect(onAction).not.toHaveBeenCalled();
   });
 
   it("closes the session menu before its mobile navigation drawer on Escape", async () => {
@@ -538,12 +587,16 @@ describe("sidebar snooze menu", () => {
     });
   });
 
-  it("selects snooze time and recalculates choices on reopen", async () => {
+  it.each([false, true])("selects snooze time (compact=%s)", async (compact) => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const now = new Date(2026, 8, 29, 9);
     vi.setSystemTime(now);
-    const { menu, onAction } = await actionMenu({ snoozeAllowed: true });
-    const choices = await openSubmenu(menu, "Snooze");
+    const { menu, onAction } = await actionMenu({ snoozeAllowed: true, compact });
+    if (compact) {
+      await selectMenuValue(menu, "compact:open-snooze");
+      await settleSessionMenu(menu);
+    }
+    const choices = compact ? menu : await openSubmenu(menu, "Snooze");
     expect(menuItemLabels(choices)).toContain("Choose another time");
     const value = menuItem(menu, "This evening · 6:00 PM").getAttribute("value")!;
     await selectMenuValue(menu, value);
@@ -553,7 +606,10 @@ describe("sidebar snooze menu", () => {
     });
     vi.setSystemTime(new Date(2026, 8, 29, 11));
     await reopen(menu);
-    const reopened = await openSubmenu(menu, "Snooze");
+    if (compact) {
+      await selectMenuValue(menu, "compact:open-snooze");
+    }
+    const reopened = compact ? menu : await openSubmenu(menu, "Snooze");
     expect(menuItemLabels(reopened)).toContain("In 1 hour · 12:00 PM");
   });
 
@@ -578,11 +634,12 @@ describe("sidebar snooze menu", () => {
   it.each([{ archived: true }, { isChild: true }, { pinnable: false }])(
     "omits ineligible snoozes: %j",
     async (session) => {
-      const menu = await mountMenu({ snoozeAllowed: true, session });
+      const { menu, onAction } = await actionMenu({ snoozeAllowed: true, session });
       expect(menuItemLabels(menu)).not.toContain("Snooze");
       expect(menuItemLabels(menu).some((label) => label.startsWith("Wake session"))).toBe(false);
       expect(menu.querySelector('button[value^="snooze:"]')).toBeNull();
       expect(menu.querySelector('button[value="wake"]')).toBeNull();
+      expect(onAction).not.toHaveBeenCalled();
     },
   );
 });

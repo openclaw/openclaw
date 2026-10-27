@@ -8,25 +8,18 @@ import {
 } from "./markdown-session-links.ts";
 import { htmlFragment, toStreamingMarkdownParts } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
+import { SessionLinkTitler } from "./session-link-titling.ts";
 
 const repoUrl = "https://github.com/openclaw/openclaw";
 const pullUrl = `${repoUrl}/pull/3434`;
 const directoryUrl = `${repoUrl}/tree/main/.agents/skills/test-audit`;
 const itemLabel = "openclaw/openclaw#3434";
 const longRepository = "a-very-long-organization-name/a-very-long-repository-name";
-const web = "https://example.com";
-const httpGitHub = "http://github.com/openclaw";
 const render = (input: string, options?: MarkdownRenderOptions) =>
   htmlFragment(toSanitizedMarkdownHtml(input, options));
 const renderStreaming = (input: string, options?: MarkdownRenderOptions, id?: string) =>
   htmlFragment(toStreamingMarkdownParts(input, options, id).join(""));
 const renderBoth = (input: string) => [render(input), renderStreaming(input)];
-
-function expectExternalLink(link: HTMLAnchorElement | null, href: string, text: string) {
-  expect(link).not.toBeNull();
-  expect(link).toMatchObject({ textContent: text, target: "_blank", rel: "noreferrer noopener" });
-  expect(link?.getAttribute("href")).toBe(href);
-}
 
 function onChatPage(assert: () => void) {
   const previous = location.href;
@@ -47,12 +40,10 @@ function expectWwwLink(input: string, label: string, prefix = "", suffix = "", p
 describe("toSanitizedMarkdownHtml links", () => {
   describe("www autolinks", () => {
     it.each([
-      [
-        "See www.foo_bar.example.com:3000/path?a=1#section",
-        "www.foo_bar.example.com:3000/path?a=1#section",
-        "See ",
-      ],
+      ["See www.example.com/path?a=1#section", "www.example.com/path?a=1#section", "See "],
+      ["Visit www.localhost:3000/path for dev", "www.localhost:3000/path", "Visit ", " for dev"],
       ["Visit www.münich.de", "www.münich.de", "Visit ", "", "www.xn--mnich-kva.de"],
+      ["Visit www.foo_bar.example.com", "www.foo_bar.example.com", "Visit "],
       ["See www.example.com!", "www.example.com", "See ", "!"],
       [
         "www.google.com/search?q=commonmark&hl;",
@@ -94,30 +85,41 @@ describe("toSanitizedMarkdownHtml links", () => {
     });
 
     it.each([
-      [`Visit ${httpGitHub}`, httpGitHub, "github.com/openclaw", "Visit "],
-      [`${web}/path重新解读`, `${web}/path`, `${web}/path`, "", "重新解读"],
-      [`${web}/你/test`, `${web}/%E4%BD%A0/test`, `${web}/你/test`],
-      [`${web}/path/%E4%BD%A0%E5%A5%BD`, `${web}/path/`, `${web}/path/`, "", "你好"],
+      [
+        "Visit http://github.com/openclaw",
+        'Visit <a href="http://github.com/openclaw" class="markdown-bare-url markdown-github-link" title="http://github.com/openclaw"',
+        "github.com/openclaw</a>",
+      ],
+      [
+        "https://example.com/path重新解读",
+        '<a href="https://example.com/path" class="markdown-bare-url"',
+        "https://example.com/path</a>重新解读",
+      ],
+      [
+        "https://example.com/你/test",
+        '<a href="https://example.com/%E4%BD%A0/test" class="markdown-bare-url"',
+        "https://example.com/你/test</a>",
+      ],
+      [
+        "https://example.com/path/%E4%BD%A0%E5%A5%BD",
+        '<a href="https://example.com/path/" class="markdown-bare-url"',
+        "https://example.com/path/</a>你好",
+      ],
+      [
+        "[OpenClaw中文](https://docs.openclaw.ai)",
+        '<a href="https://docs.openclaw.ai"',
+        "OpenClaw中文</a>",
+      ],
       [
         "Contact test@example.com 中文说明",
-        "mailto:test@example.com",
-        "test@example.com",
-        "Contact ",
-        " 中文说明",
+        'Contact <a href="mailto:test@example.com"',
+        "test@example.com</a> 中文说明",
       ],
-    ] as const)(
-      "preserves protocol and CJK boundaries in %s",
-      (input, href, label, before = "", after = "") => {
-        const fragment = render(input);
-        expectExternalLink(fragment.querySelector("a"), href, label);
-        expect(fragment.textContent).toBe(`${before}${label}${after}\n`);
-        if (href === httpGitHub) {
-          const link = fragment.querySelector("a");
-          expect(link?.className).toBe("markdown-bare-url markdown-github-link");
-          expect(link?.getAttribute("title")).toBe(httpGitHub);
-        }
-      },
-    );
+    ])("preserves protocol and CJK boundaries in %s", (input, opening, ending) => {
+      expect(toSanitizedMarkdownHtml(input)).toBe(
+        `<p>${opening} rel="noreferrer noopener" target="_blank">${ending}</p>\n`,
+      );
+    });
   });
 
   it("preserves adjacent quoted links and authored or encoded URL content", () => {
@@ -179,23 +181,27 @@ describe("toSanitizedMarkdownHtml links", () => {
     });
 
     it.each([
+      ["absolute href", `[Open session](${location.origin}/chat/roboclaw/d0effac9)`],
+      ["literal with a file extension", "[Open session](/chat/roboclaw/d0effac9.md)"],
+    ])("decorates host-local session URLs in %s", (_kind, input) => {
+      const fragment = render(input, { sessionLinks: true, fileLinks: true });
+      const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-session-link");
+      expect(link?.getAttribute("href")).toContain("/chat/roboclaw/d0effac9");
+      expect(link?.hasAttribute("target")).toBe(false);
+      expect(link?.hasAttribute("data-file-path")).toBe(false);
+      expect(link?.hasAttribute("data-session-key")).toBe(false);
+      expect(fragment.querySelector("a a")).toBeNull();
+    });
+
+    it.each([
       ["source", "src/utils/foo.ts", "file"],
       ["root session", "/chat/main/cafebabe", "session"],
-      ["session file extension", "/chat/main/cafebabe.md", "session"],
-      [
-        "CJK-adjacent session",
-        `${location.origin}/chat/main/cafebabe?view=full#latest`,
-        "session",
-        `${location.origin}/chat/main/cafebabe?view=full#latest重新解读`,
-      ],
+      ["absolute session", `${location.origin}/chat/main/cafebabe`, "session"],
       ["relative route", "chat/main/x", "plain"],
       ["other application page", "/activity", "plain"],
-    ])("classifies %s independently of the current chat route", (label, href, kind, source) => {
+    ])("classifies %s independently of the current chat route", (label, href, kind) => {
       onChatPage(() => {
-        const fragment = render(source ?? `[${label}](${href})`, {
-          sessionLinks: true,
-          fileLinks: true,
-        });
+        const fragment = render(`[${label}](${href})`, { sessionLinks: true, fileLinks: true });
         const link = fragment.querySelector<HTMLAnchorElement>("a")!;
         expect(link.classList.contains("markdown-session-link")).toBe(kind === "session");
         expect(link.hasAttribute("data-session-href")).toBe(kind === "session");
@@ -203,14 +209,6 @@ describe("toSanitizedMarkdownHtml links", () => {
         expect(link.classList.contains("markdown-file-link")).toBe(kind === "file");
         expect(link.dataset.filePath).toBe(kind === "file" ? href : undefined);
         expect(link.getAttribute("href")).toBe(kind === "file" ? null : href);
-        expect(fragment.querySelector("a a")).toBeNull();
-        if (kind === "session") {
-          expect(link.hasAttribute("target")).toBe(false);
-          expect(link.dataset.sessionHref).toBe(href);
-        }
-        if (source) {
-          expect(link.nextSibling?.textContent).toBe("重新解读");
-        }
       });
     });
 
@@ -259,6 +257,7 @@ describe("toSanitizedMarkdownHtml links", () => {
       [`[${itemLabel}](${pullUrl})`, itemLabel, "pull"],
       [`[#3434](${pullUrl} "A pull request")`, itemLabel, "pull"],
       [`[the fix](${pullUrl})`, "the fix"],
+      [`[other/project#3434](${pullUrl})`, "other/project#3434"],
       [`[\`#3434\`](${pullUrl})`, "#3434"],
       [`https://github.com/${longRepository}/issues/3434`, `${longRepository}#3434`, "issue"],
       [
@@ -277,11 +276,16 @@ describe("toSanitizedMarkdownHtml links", () => {
         expect(link?.textContent).toBe(expectedText);
         expect(link?.classList.contains("markdown-github-item")).toBe(Boolean(expectedKind));
         expect(link?.getAttribute("data-github-kind")).toBe(expectedKind ?? null);
+        if (input.startsWith("https://github.com/")) {
+          expect(link?.classList.contains("markdown-bare-url")).toBe(true);
+        }
         if (expectedHref) {
           expect(link?.getAttribute("href")).toBe(expectedHref);
         }
         if (expectedKind) {
           expect(link?.getAttribute("title")).toBe(keepsTitle ? link?.getAttribute("href") : null);
+          expect(link?.getAttribute("rel")).toBe("noreferrer noopener");
+          expect(link?.getAttribute("target")).toBe("_blank");
         }
       },
     );
@@ -296,9 +300,12 @@ describe("toSanitizedMarkdownHtml links", () => {
       for (const source of [href, `<${href}>`, "`" + href + "`"]) {
         for (const fragment of renderBoth(source)) {
           const link = fragment.querySelector<HTMLAnchorElement>("a");
-          expectExternalLink(link, href, label);
           expect(link?.classList.contains("markdown-github-link")).toBe(true);
+          expect(link?.textContent).toBe(label);
+          expect(link?.getAttribute("href")).toBe(href);
           expect(link?.getAttribute("title")).toBe(href);
+          expect(link?.getAttribute("target")).toBe("_blank");
+          expect(link?.getAttribute("rel")).toBe("noreferrer noopener");
         }
       }
     });
@@ -569,10 +576,11 @@ describe("selected human mention rendering", () => {
 });
 
 describe("session navigation", () => {
-  function makeContext(navigate = vi.fn()) {
+  type SessionRow = { key: string; agentId: string; displayName: string };
+  function makeContext(rows?: SessionRow[], navigate = vi.fn()) {
     return {
       basePath: "",
-      sessions: { state: {} },
+      sessions: { state: rows ? { result: { sessions: rows } } : {} },
       agents: { state: {} },
       agentSelection: { state: {} },
       gateway: { snapshot: {} },
@@ -580,9 +588,31 @@ describe("session navigation", () => {
     } as unknown as ApplicationContext;
   }
 
+  it.each(["", "?view=full#latest"])(
+    "refreshes a cleaned session title with suffix %j",
+    async (suffix) => {
+      const sessionKey = "agent:main:dashboard:d0effac9-3211-4641-b993-10f619f124e6";
+      const pathname = "/chat/main/d0effac9";
+      const href = `${location.origin}${pathname}${suffix}`;
+      const host = render(`${href}重新解读`, { sessionLinks: true });
+      const anchor = host.querySelector<HTMLAnchorElement>("a")!;
+      const titler = new SessionLinkTitler();
+      titler.context = makeContext([{ key: sessionKey, agentId: "main", displayName: "Research" }]);
+      titler.register(anchor, document.createElement("span"));
+      await titler.decorate(anchor);
+      titler.refresh();
+      expect(anchor).toMatchObject({
+        textContent: "Research",
+        dataset: { sessionKey, sessionHref: href },
+      });
+      expect(anchor.getAttribute("href")).toBe(`${pathname}${suffix}`);
+      expect(anchor.nextSibling?.textContent).toBe("重新解读");
+    },
+  );
+
   it("navigates through the canonical chat session route", () => {
     const navigate = vi.fn();
-    navigateMarkdownSession(makeContext(navigate), {
+    navigateMarkdownSession(makeContext(undefined, navigate), {
       sessionKey: "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6",
       agentId: "roboclaw",
     });
