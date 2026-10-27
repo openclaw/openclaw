@@ -482,8 +482,12 @@ export function prepareProjectedSessionList(params: {
                   storeKey,
                   entry,
                   Boolean(
-                    identity &&
-                    projection.hasMembership(selected.storeTarget.storePath, storeKey, identity),
+                    presentation.sharing.identity &&
+                    projection.hasMembership(
+                      selected.storeTarget.storePath,
+                      storeKey,
+                      presentation.sharing.identity.id,
+                    ),
                   ),
                 ) ??
                   true);

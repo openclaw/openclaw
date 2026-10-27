@@ -21,86 +21,101 @@ import { listProjectedSessions } from "./session-utils-list.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-it("uses current invited membership for inventory, linked children, and buffered enrichment", async () => {
-  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-    const cfg = rolePolicyConfig();
-    const owner = ensureProfileForEmail("owner@inventory.test");
-    const member = ensureProfileForEmail("member@inventory.test");
-    const unrelated = ensureProfileForEmail("unrelated@inventory.test");
-    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-    const clients = [owner, member, unrelated].map((profile) => {
-      const client = sharingPolicyClient({ user: profile.id });
-      prepareGatewayRecipientProfile(client);
-      return client;
-    });
-    const original = sharingRead.prepareProjectedSessionSharing;
-    // Activation is step 13. Only the prepared cap is supplied here; membership,
-    // selection, linked-row presentation, and final enrichment remain production paths.
-    vi.spyOn(sharingRead, "prepareProjectedSessionSharing").mockImplementation((params) => ({
-      ...original(params),
-      ...sharingRead.prepareSessionSharing(params, {
-        aliases: new Set([params.client?.authenticatedUserProfile?.profileId ?? ""]),
-        sessionCap: "invited",
-        isMember: params.isMember,
-      }),
-    }));
-    const parent = "agent:main:dashboard:inventory-parent";
-    const child = "agent:main:dashboard:inventory-child";
-    const hidden = "agent:main:dashboard:inventory-hidden";
-    for (const key of [parent, child, hidden]) {
-      seedRow(key, {
-        sessionId: key,
-        updatedAt: 1,
-        visibility: "shared",
-        createdActor: { type: "human", source: "profile", id: owner.id },
-        ...(key === parent ? {} : { parentSessionKey: parent }),
+it.each(["profile", "actor"] as const)(
+  "uses current invited membership for %s inventory, linked children, and buffered enrichment",
+  async (principal) => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const cfg = rolePolicyConfig();
+      const owner = ensureProfileForEmail("owner@inventory.test");
+      const member = ensureProfileForEmail("member@inventory.test");
+      const unrelated = ensureProfileForEmail("unrelated@inventory.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      const clients = [owner, member, unrelated].map((profile) => {
+        const client = sharingPolicyClient({ user: profile.id });
+        prepareGatewayRecipientProfile(client);
+        if (principal === "actor") {
+          client.internal = { operatorRoleActor: { kind: "operator", profileId: profile.id } };
+          delete client.authenticatedUserProfile;
+          delete client.authenticatedUserId;
+        }
+        return client;
       });
-    }
-    const scope = (sessionKey: string) => ({ agentId: "main", sessionKey });
-    for (const key of [parent, child]) {
-      addSessionMember(scope(key), { identityId: member.id, addedBy: owner.id });
-    }
-    using projection = await createTestProjection({ cfg, modelCatalog: [] });
-    const list = (client = clients[1]!) => listProjectedSessions({ projection, client, opts: {} });
-    const admitted = await list();
-    expect(admitted.sessions.map((row) => row.key).toSorted()).toEqual([child, parent]);
-    expect(admitted.sessions.find((row) => row.key === parent)?.childSessions).toEqual([child]);
-    expect((await list(clients[2]!)).sessions).toEqual([]);
-    expect((await list(clients[0]!)).sessions.map((row) => row.key).toSorted()).toEqual([
-      child,
-      hidden,
-      parent,
-    ]);
-    removeSessionMember(scope(child), member.id);
-    const revokedChild = await list();
-    expect(revokedChild.sessions.map((row) => row.key)).toEqual([parent]);
-    expect(revokedChild.sessions[0]?.childSessions).toBeUndefined();
-    expect(await withCurrentSessionListRows(admitted.sessions, (visible) => visible, true)).toEqual(
-      admitted.sessions.map((row) => row.key === parent),
-    );
-    const prepare = projection.withPreparedExactRows.bind(projection);
-    let revoke = true;
-    vi.spyOn(projection, "withPreparedExactRows").mockImplementation((queries, consume, options) =>
-      prepare(
-        (config) => {
-          const selected = queries(config);
-          if (revoke) {
-            revoke = false;
-            removeSessionMember(scope(parent), member.id);
-          }
-          return selected;
-        },
-        consume,
-        options,
-      ),
-    );
-    // Revoke after initial selection, before asynchronous row preparation completes.
-    expect((await list()).sessions).toEqual([]);
-    expect(await withCurrentSessionListRows(admitted.sessions, (visible) => visible, true)).toEqual(
-      admitted.sessions.map(() => false),
-    );
-  });
-});
+      const original = sharingRead.prepareProjectedSessionSharing;
+      // Activation is step 13. Only the prepared cap is supplied here; membership,
+      // selection, linked-row presentation, and final enrichment remain production paths.
+      vi.spyOn(sharingRead, "prepareProjectedSessionSharing").mockImplementation((params) => ({
+        ...original(params),
+        ...sharingRead.prepareSessionSharing(params, {
+          aliases: new Set([
+            params.client?.authenticatedUserProfile?.profileId ??
+              (params.client?.internal?.operatorRoleActor?.kind === "operator"
+                ? params.client.internal.operatorRoleActor.profileId
+                : ""),
+          ]),
+          sessionCap: "invited",
+          isMember: params.isMember,
+        }),
+      }));
+      const parent = "agent:main:dashboard:inventory-parent";
+      const child = "agent:main:dashboard:inventory-child";
+      const hidden = "agent:main:dashboard:inventory-hidden";
+      for (const key of [parent, child, hidden]) {
+        seedRow(key, {
+          sessionId: key,
+          updatedAt: 1,
+          visibility: "shared",
+          createdActor: { type: "human", source: "profile", id: owner.id },
+          ...(key === parent ? {} : { parentSessionKey: parent }),
+        });
+      }
+      const scope = (sessionKey: string) => ({ agentId: "main", sessionKey });
+      for (const key of [parent, child]) {
+        addSessionMember(scope(key), { identityId: member.id, addedBy: owner.id });
+      }
+      using projection = await createTestProjection({ cfg, modelCatalog: [] });
+      const list = (client = clients[1]!) =>
+        listProjectedSessions({ projection, client, opts: {} });
+      const admitted = await list();
+      expect(admitted.sessions.map((row) => row.key).toSorted()).toEqual([child, parent]);
+      expect(admitted.sessions.find((row) => row.key === parent)?.childSessions).toEqual([child]);
+      expect((await list(clients[2]!)).sessions).toEqual([]);
+      expect((await list(clients[0]!)).sessions.map((row) => row.key).toSorted()).toEqual([
+        child,
+        hidden,
+        parent,
+      ]);
+      removeSessionMember(scope(child), member.id);
+      const revokedChild = await list();
+      expect(revokedChild.sessions.map((row) => row.key)).toEqual([parent]);
+      expect(revokedChild.sessions[0]?.childSessions).toBeUndefined();
+      expect(
+        await withCurrentSessionListRows(admitted.sessions, (visible) => visible, true),
+      ).toEqual(admitted.sessions.map((row) => row.key === parent));
+      const prepare = projection.withPreparedExactRows.bind(projection);
+      let revoke = true;
+      vi.spyOn(projection, "withPreparedExactRows").mockImplementation(
+        (queries, consume, options) =>
+          prepare(
+            (config) => {
+              const selected = queries(config);
+              if (revoke) {
+                revoke = false;
+                removeSessionMember(scope(parent), member.id);
+              }
+              return selected;
+            },
+            consume,
+            options,
+          ),
+      );
+      // Revoke after initial selection, before asynchronous row preparation completes.
+      expect((await list()).sessions).toEqual([]);
+      expect(
+        await withCurrentSessionListRows(admitted.sessions, (visible) => visible, true),
+      ).toEqual(admitted.sessions.map(() => false));
+    });
+  },
+);
 
 it("authorizes linked children from the physical lineage store, not a duplicate key", async () => {
   await withOpenClawTestState(

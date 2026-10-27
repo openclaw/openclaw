@@ -330,7 +330,7 @@ export function prepareProjectedSessionPresentation(
   const canReadLinkedEntry = prepareLinkedSessionEntryFilter(
     projection,
     sharing.entryFilter,
-    profileId,
+    sharing.identity?.id,
   );
   const listView = (opts: SessionsListParams, selection = false): SessionListView => {
     const { source: _source, ifRowsRevision: _ifRowsRevision, ...query } = opts;
