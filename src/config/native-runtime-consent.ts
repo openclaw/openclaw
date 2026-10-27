@@ -52,8 +52,8 @@ export function rememberNativeRuntimeConsent(
  */
 export function withOwnerNativeConsentModes<
   T extends { permissionMode?: string; sandboxMode?: string },
->(entry: T, ownerTurn: boolean, sandboxed: boolean): T {
-  return ownerTurn && !sandboxed
+>(entry: T, ownerTurn: boolean | undefined, sandboxed: boolean): T {
+  return ownerTurn === true && !sandboxed
     ? {
         ...entry,
         permissionMode: entry.permissionMode ?? "full",

@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   assertAgentHarnessExecutionEnvironment,
+  resolveAgentHarnessSessionExecutionRestriction,
   resolvePluginHarnessPolicyToolsAllow,
   preparePluginHarnessToolPolicies,
 } from "./execution-environment.js";
@@ -166,5 +167,17 @@ it.each([
       return;
     }
     await expect(preflight).resolves.toBe(expected);
+    // Admission (chat.send) classifies the stored chat with the same owner rule.
+    const restriction = resolveAgentHarnessSessionExecutionRestriction({
+      harness,
+      cfg: config,
+      agentId: "main",
+      sessionKey,
+      entry: { sessionId: "chat", ...entry },
+      provider: "fixture",
+      modelId: "fixture-model",
+      callerCanConsent: owner,
+    });
+    expect(restriction).toBeUndefined();
   });
 });

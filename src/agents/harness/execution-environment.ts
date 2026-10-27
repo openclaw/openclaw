@@ -133,6 +133,8 @@ export function resolveAgentHarnessSessionExecutionRestriction(params: {
   preparedSessionCapabilityEntry?: PreparedSessionCapabilityEntry;
   provider: string;
   modelId: string;
+  /** An owner caller, whose unset chat modes remembered agent consent covers. */
+  callerCanConsent?: boolean;
 }): ExecutionRestriction | undefined {
   const { cfg, agentId, sessionKey, entry, harness } = params;
   if (harness.executionEnvironment !== "host-only") {
@@ -145,8 +147,9 @@ export function resolveAgentHarnessSessionExecutionRestriction(params: {
     preparedSessionEntry: entry,
   });
   const exec = resolveExecConfigState({ cfg, agentId, sessionKey, sessionEntry: entry });
+  const modes = withOwnerNativeConsentModes(entry, params.callerCanConsent, sandbox.sandboxed);
   const nativeRuntimeConsent =
-    entry.permissionMode === "full" && entry.sandboxMode === "off"
+    modes.permissionMode === "full" && modes.sandboxMode === "off"
       ? (entry.nativeRuntimeConsent ??
         (hasRememberedNativeRuntimeConsent(cfg, agentId, harness.id) ? harness.id : undefined))
       : undefined;
@@ -288,8 +291,8 @@ function assertPreparedAgentHarnessExecutionEnvironment(
   const remembered = hasRememberedNativeRuntimeConsent(params.config, agentId, harness.id);
   // Per-chat consent belongs to this incarnation; agent consent authorizes the selected harness.
   // Only a live owner sender counts; a stored spawn receipt is not current authority.
-  const owner = params.senderIsOwner === true;
-  const modes = entry && withOwnerNativeConsentModes(entry, owner, runtime.sandboxed);
+  const modes =
+    entry && withOwnerNativeConsentModes(entry, params.senderIsOwner, runtime.sandboxed);
   const nativeRuntimeConsent =
     entry?.sessionId === params.sessionId &&
     (entry.agentRuntimeOverride === harness.id || remembered) &&
