@@ -2,18 +2,36 @@ import { once } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { SandboxPersistentExecRecord } from "./persistent-exec-store.types.js";
 const mocks = vi.hoisted(() => ({
   command: vi.fn<typeof import("./container-engine.js").execContainer>(),
   current: vi.fn(),
+  liveCurrent: vi.fn(),
+  browserLiveCurrent: vi.fn(),
+  imageBacking: vi.fn(),
   read: vi.fn(),
   browsers: vi.fn(),
   browserCurrent: vi.fn(),
+  custody: vi.fn(),
+  custodyCurrent: vi.fn(),
 }));
+// mock-isolation: Registry generations are fixture-owned; do not read the real state database.
 vi.mock("./registry.js", () => ({
+  assertSandboxRegistryEntryCurrent: mocks.liveCurrent,
+  assertSandboxBrowserRegistryEntryCurrent: mocks.browserLiveCurrent,
   readRegistry: mocks.read,
   readBrowserRegistry: mocks.browsers,
-  assertSandboxRegistryEntryCurrent: mocks.current,
-  assertSandboxBrowserRegistryEntryCurrent: mocks.browserCurrent,
+  assertSandboxRegistryRetirementCurrent: (kind: string, entry: unknown) =>
+    kind === "browser" ? mocks.browserCurrent(entry) : mocks.current(entry),
+}));
+// mock-isolation: Custody records and their currentness belong to this synthetic workspace fixture.
+vi.mock("./persistent-exec-store.js", () => ({
+  createSandboxPersistentExecStore: () => ({
+    databasePath: "/synthetic/state.sqlite",
+    environment: {},
+    list: mocks.custody,
+    assertCustodyCurrent: mocks.custodyCurrent,
+  }),
 }));
 vi.mock("./docker.js", () => ({
   DOCKER_SANDBOX_ENGINE: { id: "docker" },
@@ -21,7 +39,12 @@ vi.mock("./docker.js", () => ({
   execContainer: mocks.command,
   validateSandboxContainerEngineTarget: async () => {},
 }));
+// mock-isolation: The fixture chooses runtime visibility; mount-plan tests cover actual backing visibility.
+vi.mock("./mount-plan.js", () => ({
+  sandboxContainerShowsWorkspacePaths: mocks.imageBacking,
+}));
 import {
+  prepareLocalWorkspaceImageRead,
   quiesceLocalWorkspace,
   type LocalWorkspacePausedRuntime,
 } from "./local-workspace-quiescence.js";
@@ -84,6 +107,8 @@ beforeEach(() => {
   persist.mockClear();
   mocks.read.mockResolvedValue({ entries: [entry] });
   mocks.browsers.mockResolvedValue({ entries: [] });
+  mocks.imageBacking.mockResolvedValue(true);
+  mocks.custody.mockResolvedValue([]);
 });
 
 it.each(["true", "false"])("recovers only owned pauses (Running=%s)", async (running) => {
@@ -116,7 +141,21 @@ it("persists exact container and browser custody before pausing and resumes only
   expect(mocks.browserCurrent).toHaveBeenCalledTimes(3);
   await resume();
   expect(commands("unpause")).toEqual([browserId, id].map((runtimeId) => ["unpause", runtimeId]));
+  expect(persist).toHaveBeenCalledTimes(4);
+  expect(retained).toEqual([]);
 });
+
+it.each([false, true])(
+  "clears orphaned custody only when present (retained=%s)",
+  async (orphaned) => {
+    mocks.read.mockResolvedValue({ entries: [] });
+    retained = orphaned ? [{ name: "gone", id }] : [];
+    await (await quiesce()).resume();
+    expect(retained).toEqual([]);
+    expect(persist.mock.calls).toEqual(orphaned ? [[[]]] : []);
+    expect(mocks.command).not.toHaveBeenCalled();
+  },
+);
 
 it("records each released generation before a later resume failure and re-fences running recovery", async () => {
   const otherId = "b".repeat(64);
@@ -231,4 +270,72 @@ it.each([
     }
   }
   expect(commands("unpause")).toHaveLength(0);
+});
+
+it("fences a dedicated stream writer and requires settlement before retiring its workspace", async () => {
+  const childId = "b".repeat(64);
+  const attemptId = "11111111-1111-4111-8111-111111111111";
+  const target = {
+    kind: "docker" as const,
+    endpoint: "unix:///synthetic/docker.sock",
+    daemonId: "daemon",
+  };
+  const record: SandboxPersistentExecRecord = {
+    ownerKey: "stream",
+    sourceIdentity: "source",
+    attemptId,
+    backendId: "docker",
+    containerId: id,
+    containerName: entry.containerName,
+    containerStartedAt: "2026-01-01T00:00:00Z",
+    backendTarget: target,
+    workspaceBinding: {
+      workspaceDir: entry.workspaceDir,
+      workspaceSource: "managed-worktree",
+      registryCreatedAtMs: 1,
+    },
+    owner: { pid: 1, host: "synthetic", startedAt: 1, namespace: "synthetic", token: "synthetic" },
+    revision: 1,
+    phase: "running",
+    error: null,
+    createdAtMs: 1,
+    updatedAtMs: 1,
+    receipt: { version: 1, target, attemptId, parentContainerId: id, containerId: childId },
+  };
+  mocks.custody.mockResolvedValue([record]);
+  mockEngine({ owned: id, [`openclaw-stream-${attemptId}`]: childId }, () => {});
+  const persistCustody = vi.fn();
+  const { resume, retire } = await quiesce({ persist: persistCustody });
+  expect(persistCustody).toHaveBeenLastCalledWith([
+    { name: entry.containerName, id },
+    { name: `openclaw-stream-${attemptId}`, id: childId },
+  ]);
+  expect(commands("pause")).toEqual([id, childId].map((runtimeId) => ["pause", runtimeId]));
+  await expect(retire()).rejects.toThrow("Settle persistent streams");
+  expect(commands("rm")).toEqual([]);
+  await resume();
+  expect(commands("unpause")).toEqual([childId, id].map((runtimeId) => ["unpause", runtimeId]));
+  expect(mocks.custodyCurrent).toHaveBeenCalledWith(record);
+  expect(persistCustody).toHaveBeenLastCalledWith([]);
+
+  const imageRead = {
+    workspaceDir: entry.workspaceDir,
+    containerRoot: "/workspace",
+    targets: ["/workspace/image.png"],
+    assertCurrent: () => {},
+  };
+  const assertImageCurrent = await prepareLocalWorkspaceImageRead(imageRead);
+  expect(mocks.imageBacking).toHaveBeenCalledOnce();
+  expect(mocks.imageBacking).toHaveBeenCalledWith(
+    expect.objectContaining({ containerName: entry.containerName }),
+  );
+  mocks.liveCurrent.mockImplementation(() => {
+    throw new Error("parent retired");
+  });
+  expect(assertImageCurrent).toThrow("parent retired");
+  mocks.read.mockResolvedValue({ entries: [] });
+  await expect(prepareLocalWorkspaceImageRead(imageRead)).rejects.toThrow(
+    "Sandbox image backing is unavailable",
+  );
+  expect(mocks.imageBacking).toHaveBeenCalledOnce();
 });

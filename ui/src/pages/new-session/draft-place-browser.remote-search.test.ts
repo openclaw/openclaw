@@ -47,45 +47,45 @@ describe("remote project search", () => {
 
     browser.changeProjectQuery("previous");
     await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
-    expect(browser.projectSearchLoading).toBe(true);
+    const previousRead = browser.projectSearchRead!;
     browser.changeProjectQuery("current");
-    expect(browser.projectSearchResult).toBeNull();
+    expect(browser.projectSearchRead).toBeNull();
+    // Retirement does not wait for a transport that ignores its AbortSignal.
+    await expect(previousRead.completed).resolves.toBeNull();
     await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
+    const currentRead = browser.projectSearchRead!;
     current.resolve(project);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(browser.projectSearchResult?.projects.map((entry) => entry.fullName)).toEqual([
-      "example/current",
-    ]);
+    await expect(currentRead.completed).resolves.toEqual({ result: project });
     previous.reject(new Error("previous query failed"));
     await vi.advanceTimersByTimeAsync(0);
-    expect(browser.projectSearchLoading).toBe(false);
-    expect(browser.projectSearchError).toBeNull();
-    expect(browser.projectSearchResult?.projects[0]?.fullName).toBe("example/current");
+    expect(browser.projectSearchRead).toBe(currentRead);
+    await expect(currentRead.completed).resolves.toEqual({ result: project });
   });
 
-  it("shows a current failure, recovers on another query, and retires disconnected results", async () => {
+  it("records a current failure, recovers on another query, and retires disconnected reads", async () => {
     const { browser, request } = remoteSearch();
-    request.mockRejectedValueOnce(new Error("remote search unavailable"));
+    const failure = new Error("remote search unavailable");
+    request.mockRejectedValueOnce(failure);
     browser.changeProjectQuery("failed");
     await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
-    expect(browser.projectSearchLoading).toBe(false);
-    expect(browser.projectSearchError).toBe("remote search unavailable");
+    // Closed pickers do not consume the outcome, so failures must not reject here.
+    await expect(browser.projectSearchRead!.completed).resolves.toEqual({ error: failure });
 
     request.mockResolvedValueOnce(project);
     browser.changeProjectQuery("current");
     await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
-    expect(browser.projectSearchError).toBeNull();
-    expect(browser.projectSearchResult?.projects[0]?.fullName).toBe("example/current");
+    await expect(browser.projectSearchRead!.completed).resolves.toEqual({ result: project });
 
     const disconnected = createDeferred<ProjectsSearchRemoteResult>();
     request.mockReturnValueOnce(disconnected.promise);
     browser.changeProjectQuery("disconnected");
     await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
+    const disconnectedRead = browser.projectSearchRead!;
     browser.disconnect();
+    expect(browser.projectSearchRead).toBeNull();
+    await expect(disconnectedRead.completed).resolves.toBeNull();
     disconnected.resolve(project);
     await vi.advanceTimersByTimeAsync(0);
-    expect(browser.projectSearchResult).toBeNull();
-    expect(browser.projectSearchError).toBeNull();
-    expect(browser.projectSearchLoading).toBe(false);
+    expect(browser.projectSearchRead).toBeNull();
   });
 });

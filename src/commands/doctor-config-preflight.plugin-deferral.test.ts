@@ -7,13 +7,17 @@ import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from "v
 import * as terminalNote from "../../packages/terminal-core/src/note.js";
 import { readConfigFileSnapshot } from "../config/io.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
-import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
+import {
+  readDeferredPluginMigrations,
+  recordDeferredPluginMigrations,
+} from "../infra/deferred-plugin-migrations.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 import { closeDefaultRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
+import { withStateMigrationBackupForTest } from "../state/openclaw-state-schema.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
@@ -448,6 +452,31 @@ describe("configured plugin migration deferral", () => {
       expect(checked.sourceConfig.channels).toEqual(installedConfig.channels);
     }));
 
+  it("settles a retained stateless plugin before retiring legacy heartbeat config", () =>
+    withFixture(async (f) => {
+      const config = f.config({ region: "us-en" });
+      await f.stateless();
+      await f.write({
+        ...config,
+        plugins: { ...config.plugins, load: { paths: [f.root] } },
+        agents: {
+          defaults: { heartbeat: { agentId: "main", every: "30m" } },
+          entries: { main: { workspace: path.join(f.home, "workspace") } },
+        },
+      });
+      await recordDeferredPluginMigrations({
+        pending: [
+          { pluginId: f.pluginId, reason: "Retained input", command: "openclaw doctor --fix" },
+        ],
+      });
+
+      const result = await doctor();
+      expect(result.snapshot.valid).toBe(true);
+      expect(readDeferredPluginMigrations()).toEqual([]);
+      expect(await f.read()).not.toHaveProperty("agents.defaults.heartbeat");
+      expect((await readConfigFileSnapshot()).valid).toBe(true);
+    }));
+
   it.each(["public-setup-full-detector", "broken"] as const)(
     "inspects retained obligations through the %s contract",
     (contract) =>
@@ -538,7 +567,13 @@ describe("configured plugin migration deferral", () => {
         const original = await fs.readFile(configPath, "utf8");
         const options = entry === "published-candidate" ? { observe: false, ...prepared } : {};
         await withEnvAsync(entry.endsWith("candidate") ? updating : notUpdating, async () => {
-          const pending = await doctor(options);
+          const pending =
+            entry === "published-candidate"
+              ? await withStateMigrationBackupForTest(
+                  { path: databasePath, env: process.env },
+                  () => doctor(options),
+                )
+              : await doctor(options);
           expect(pending.stateMigrationStepReceipts).toContainEqual(
             expect.objectContaining({
               id: `plugin:${pluginId}`,

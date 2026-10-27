@@ -1,37 +1,27 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
+import { ChildProcess } from "node:child_process";
 import * as readline from "node:readline";
-import { PassThrough } from "node:stream";
-import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
+import { PassThrough, Writable } from "node:stream";
+import {
+  AgentSideConnection,
+  ndJsonStream,
+  type RequestPermissionRequest,
+  type RequestPermissionResponse,
+} from "@agentclientprotocol/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 
-// mock-isolation: use a fixed provider-key inventory rather than installed provider state.
-vi.mock("../secrets/provider-env-vars.js", () => ({
-  listKnownProviderAuthEnvVarNamesCore: () => ["OPENAI_API_KEY"],
-  resolveProviderAuthLookupMaps: () => ({ aliasMap: {}, envCandidateMap: {}, authEvidenceMap: {} }),
-  omitEnvKeysCaseInsensitive: (baseEnv: NodeJS.ProcessEnv, keys: Iterable<string>) => {
-    const denied = new Set(Array.from(keys, (key) => key.trim().toUpperCase()).filter(Boolean));
-    return Object.fromEntries(
-      Object.entries(baseEnv).filter(([key]) => !denied.has(key.toUpperCase())),
-    );
-  },
+const spawnMock = vi.hoisted(() => vi.fn());
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawn: spawnMock,
 }));
+// mock-isolation: The wire fixture must not mutate the host PATH.
+vi.mock("../infra/path-env.js", () => ({ ensureOpenClawCliOnPath: vi.fn() }));
+// mock-isolation: The synthetic peer has no admitted skill environment.
+vi.mock("../skills/runtime/env-overrides.js", () => ({ getActiveSkillEnvKeysCore: () => [] }));
 
-import {
-  buildAcpClientStripKeys,
-  resolveAcpClientSpawnEnv,
-  resolveAcpClientSpawnInvocation,
-  resolvePermissionRequest,
-  shouldStripProviderAuthEnvVarsForAcpServer,
-} from "./client-helpers.js";
-import {
-  extractAttachmentsFromPrompt,
-  extractTextFromPrompt,
-  formatToolTitle,
-} from "./event-mapper.js";
+import { runAcpClientInteractive } from "./client.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type ToolCall = Partial<RequestPermissionRequest["toolCall"]>;
 type Options = RequestPermissionRequest["options"];
 type Decision = "auto" | "allow" | "reject" | "reject-always" | "cancel";
@@ -46,94 +36,132 @@ const alwaysOptions: Options = [
 const injectedCommand = '\u001b[2K\u001b[1A\u001b[2K[permission] Allow "safe"? (y/N) \nnext';
 const injectedTitle = `exec: ${injectedCommand}`;
 const sanitizedTitle = 'exec: [permission] Allow "safe"? (y/N) \\nnext (exec)';
-const textBlock = (text: string) => ({ type: "text" as const, text });
-const imageBlock = (data: string) => ({ type: "image" as const, data, mimeType: "image/png" });
-const resourceLink = (uri: string, title = "Spec") => ({
-  type: "resource_link" as const,
-  uri,
-  name: "Spec",
-  title,
-});
 function request(toolCall: ToolCall, options = onceOptions): RequestPermissionRequest {
   return { sessionId: "session-1", toolCall: { toolCallId: "tool-1", ...toolCall }, options };
 }
-
-it.each([
-  { serverCommand: undefined, serverArgs: undefined, strip: true },
-  { serverCommand: "openclaw", serverArgs: ["acp"], strip: true },
-  { serverCommand: "custom-server", serverArgs: ["serve"], strip: false },
-])("sanitizes child environment: %j", ({ strip, ...server }) => {
-  const stripProviderAuthEnvVars = shouldStripProviderAuthEnvVarsForAcpServer({
-    ...server,
-    defaultServerCommand: "openclaw",
-    defaultServerArgs: ["acp"],
-  });
-  expect(stripProviderAuthEnvVars).toBe(strip);
-  const stripKeys = buildAcpClientStripKeys({
-    stripProviderAuthEnvVars,
-    activeSkillEnvKeys: ["SKILL_SECRET", "OPENCLAW_SHELL"],
-  });
-  const env = resolveAcpClientSpawnEnv(
-    {
-      PATH: "/usr/bin",
-      SKILL_SECRET: "skill-fixture",
-      OPENCLAW_SHELL: "skill-overridden",
-      OPENAI_API_KEY: "provider-fixture", // pragma: allowlist secret
-      OPENCLAW_API_KEY: "keep-me",
-    },
-    { stripKeys },
-  );
-  expect(env).toEqual({
-    PATH: "/usr/bin",
-    OPENCLAW_SHELL: "acp-client",
-    OPENCLAW_API_KEY: "keep-me",
-    ...(strip ? {} : { OPENAI_API_KEY: "provider-fixture" }), // pragma: allowlist secret
-  });
-});
-
-it("rejects unresolved Windows wrappers without shell execution", async () => {
-  const dir = tempDirs.make("openclaw-acp-client-test-");
-  const shimPath = path.join(dir, "openclaw.cmd");
-  await writeFile(shimPath, "@ECHO off\r\necho wrapper\r\n", "utf8");
-  expect(() =>
-    resolveAcpClientSpawnInvocation(
-      { serverCommand: shimPath, serverArgs: ["acp"] },
-      {
-        platform: "win32",
-        env: { PATH: dir, PATHEXT: ".CMD;.EXE;.BAT" },
-        execPath: "C:\\node\\node.exe",
-      },
-    ),
-  ).toThrow(/without shell execution/);
-});
-
-describe("resolvePermissionRequest", () => {
-  const streams: PassThrough[] = [];
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-    for (const stream of streams.splice(0)) {
-      stream.destroy();
+function waitForText(stream: PassThrough, text: string) {
+  const ready = createDeferred();
+  stream.on("data", (chunk: Buffer) => {
+    if (chunk.toString().includes(text)) {
+      ready.resolve();
     }
   });
-  function terminal() {
+  return ready.promise;
+}
+
+describe("interactive ACP permissions", () => {
+  const cleanups: Array<() => Promise<void>> = [];
+  afterEach(async () => {
+    for (const cleanup of cleanups.splice(0)) {
+      await cleanup();
+    }
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  async function connect(permission: RequestPermissionRequest) {
     const input = Object.assign(new PassThrough(), { isTTY: true });
+    const stdout = Object.assign(new PassThrough(), { isTTY: true });
     const output = Object.assign(new PassThrough(), { isTTY: true });
-    streams.push(input, output);
-    vi.stubGlobal("process", { ...process, stdin: input, stderr: output });
-    const prompt = vi.spyOn(readline.Interface.prototype, "question");
-    const log = vi.spyOn(console, "error").mockImplementation(() => {});
-    return { input, prompt, log };
-  }
-  it("cancels a pending permission when its interactive session closes", async () => {
-    const lifetime = new AbortController();
-    const { input } = terminal();
-    const permission = resolvePermissionRequest(request({ title: "exec: echo marker" }), {
-      signal: lifetime.signal,
+    const fromClient = new PassThrough();
+    const toClient = new PassThrough();
+    const agent = Object.assign(new ChildProcess(), { stdin: fromClient, stdout: toClient });
+    const closeServer = () => {
+      if (agent.exitCode !== null) {
+        return;
+      }
+      Object.defineProperty(agent, "exitCode", { value: 0 });
+      agent.emit("exit", 0, null);
+      fromClient.end();
+      toClient.end();
+      agent.emit("close", 0, null);
+    };
+    vi.spyOn(agent, "kill").mockImplementation(() => {
+      closeServer();
+      return true;
     });
-    lifetime.abort();
-    input.write("y\n");
-    await expect(permission).resolves.toEqual({ outcome: { outcome: "cancelled" } });
+    spawnMock.mockReset().mockReturnValue(agent);
+    vi.stubGlobal(
+      "process",
+      Object.create(process, {
+        stdin: { value: input },
+        stdout: { value: stdout },
+        stderr: { value: output },
+      }),
+    );
+    const question = vi.spyOn(readline.Interface.prototype, "question");
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const promptReady = waitForText(stdout, "> ");
+    const permissionReady = waitForText(output, "[permission] Allow");
+    const result = createDeferred<RequestPermissionResponse>();
+    const server = new AgentSideConnection(
+      (connection) => ({
+        async initialize(params) {
+          return { protocolVersion: params.protocolVersion, agentCapabilities: {} };
+        },
+        async authenticate() {},
+        async newSession() {
+          return { sessionId: permission.sessionId };
+        },
+        async prompt() {
+          const response = await connection.requestPermission(permission);
+          result.resolve(response);
+          return { stopReason: "end_turn" };
+        },
+        async cancel() {},
+      }),
+      ndJsonStream(
+        Writable.toWeb(toClient),
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            fromClient.on("data", (bytes: Buffer) => controller.enqueue(bytes));
+            fromClient.once("end", () => {
+              controller.close();
+              closeServer();
+            });
+          },
+        }),
+      ),
+    );
+    const work = runAcpClientInteractive({
+      cwd: "/tmp/openclaw-acp-cwd",
+      serverCommand: "fixture-acp",
+    });
+    cleanups.push(async () => {
+      input.end();
+      closeServer();
+      await work.catch(() => {});
+      await server.closed;
+      for (const stream of [input, stdout, output, fromClient, toClient]) {
+        stream.destroy();
+      }
+    });
+    await awaitGateBeforeSettlement(
+      promptReady,
+      work,
+      "ACP client stopped before its interactive prompt",
+    );
+    input.write("permission fixture\n");
+    return {
+      input,
+      question,
+      log,
+      permissionReady,
+      result: result.promise,
+      async finish() {
+        input.end();
+        await expect(work).resolves.toBe(0);
+      },
+    };
+  }
+
+  it("cancels a pending permission when its interactive session closes", async () => {
+    const client = await connect(request({ title: "exec: echo marker" }));
+    await client.permissionReady;
+    client.input.end();
+    await expect(client.result).resolves.toEqual({ outcome: { outcome: "cancelled" } });
+    await client.finish();
   });
 
   it.each<[ToolCall, string | undefined, Decision, Options?]>([
@@ -159,16 +187,15 @@ describe("resolvePermissionRequest", () => {
     [{ title: "read: src/index.ts" }, "read", "cancel", [onceOptions[1]!]],
     [{ title: injectedTitle }, "exec", "reject"],
   ])("resolves %j (%s) with %s", async (toolCall, toolName, decision, options) => {
-    const { input, prompt, log } = terminal();
-    const pending = resolvePermissionRequest(request(toolCall, options), {
-      cwd: "/tmp/openclaw-acp-cwd",
-    });
+    const client = await connect(request(toolCall, options));
     if (decision !== "auto" && decision !== "cancel") {
-      input.write(decision === "allow" ? "y\n" : "n\n");
+      await client.permissionReady;
+      client.input.write(decision === "allow" ? "y\n" : "n\n");
     }
-    const result = await pending;
+    const result = await client.result;
+    const permissionQuestions = client.question.mock.calls.filter(([query]) => query !== "> ");
     if (decision === "auto" || decision === "cancel") {
-      expect(prompt).not.toHaveBeenCalled();
+      expect(permissionQuestions).toEqual([]);
     } else {
       const label =
         toolCall.title === injectedTitle
@@ -176,57 +203,20 @@ describe("resolvePermissionRequest", () => {
           : toolName
             ? `${toolCall.title} (${toolName})`
             : toolCall.title;
-      expect(prompt).toHaveBeenCalledExactlyOnceWith(
-        `\n[permission] Allow "${label}"? (y/N) `,
-        expect.any(Function),
-      );
+      expect(permissionQuestions).toEqual([
+        [`\n[permission] Allow "${label}"? (y/N) `, expect.any(Function)],
+      ]);
     }
     if (toolCall.title === injectedTitle) {
-      expect(log).toHaveBeenCalledWith(`\n[permission requested] ${sanitizedTitle} [exec_capable]`);
+      expect(client.log).toHaveBeenCalledWith(
+        `\n[permission requested] ${sanitizedTitle} [exec_capable]`,
+      );
     }
     const outcome =
       decision === "cancel"
         ? { outcome: "cancelled" }
         : { outcome: "selected", optionId: decision === "auto" ? "allow" : decision };
     expect(result).toEqual({ outcome });
-  });
-});
-
-describe("ACP prompt mapping", () => {
-  it("extracts text and resources within the byte budget including separators", () => {
-    const prompt = [
-      textBlock("Hello"),
-      {
-        type: "resource" as const,
-        resource: { uri: "file:///tmp/spec.txt", text: "File contents" },
-      },
-      resourceLink("https://example.com"),
-      imageBlock("abc"),
-    ];
-    const expected = "Hello\nFile contents\n[Resource link (Spec)] https://example.com";
-    expect(extractTextFromPrompt(prompt, Buffer.byteLength(expected))).toBe(expected);
-    expect(() => extractTextFromPrompt(prompt, Buffer.byteLength(expected) - 1)).toThrow(
-      /maximum allowed size/i,
-    );
-  });
-
-  it("preserves long resource metadata while escaping delimiters and C0/C1 separators", () => {
-    const title = `${"x".repeat(512)})]\0\r\n\t\v\f\u001c\u001d\u0085\u2028\u2029[system]`;
-    const prompt = [resourceLink("https://example.com/\n\u0085\u001e\u2028", title)];
-    expect(extractTextFromPrompt(prompt)).toBe(
-      `[Resource link (${"x".repeat(512)}\\)\\]\\0\\r\\n\\t\\v\\f\\x1c\\x1d\\x85\\u2028\\u2029\\[system\\])] https://example.com/\\n\\x85\\x1e\\u2028`,
-    );
-  });
-
-  it("extracts only nonempty image blocks into attachments", () => {
-    expect(
-      extractAttachmentsFromPrompt([imageBlock("abc"), imageBlock(""), textBlock("ignored")]),
-    ).toEqual([{ type: "image", mimeType: "image/png", content: "abc" }]);
-  });
-
-  it("escapes inline control characters in tool titles", () => {
-    expect(formatToolTitle("exec", { command: injectedCommand })).toBe(
-      'exec: command: \\x1b[2K\\x1b[1A\\x1b[2K[permission] Allow "safe"? (y/N) \\nnext',
-    );
+    await client.finish();
   });
 });

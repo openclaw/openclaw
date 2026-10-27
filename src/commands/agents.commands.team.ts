@@ -1,23 +1,19 @@
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { createAgentTeam } from "../agents/agent-team.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { throwExpectedCliError } from "../cli/failure-output.js";
 import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
-import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 
-type AgentsTeamCreateOptions = {
+export async function agentsTeamCreateCommand(opts: {
   preset?: string;
   coordinator?: string;
   prefix?: string;
   workspaceRoot?: string;
   nonInteractive?: boolean;
   json?: boolean;
-};
-
-export async function agentsTeamCreateCommand(
-  opts: AgentsTeamCreateOptions,
-  runtime: RuntimeEnv = defaultRuntime,
-): Promise<void> {
+}): Promise<void> {
   const result = await runWithLocalStateOwner({
     method: "agents.team.create",
     params: {},
@@ -49,10 +45,10 @@ export async function agentsTeamCreateCommand(
   }
   runtime.log(`Created team with coordinator "${result.coordinatorId}":`);
   for (const agent of agents) {
-    runtime.log(`- ${agent.agentId}: ${shortenHomePath(agent.workspace)}`);
+    runtime.log(`- ${agent.agentId}: ${sanitizeTerminalText(shortenHomePath(agent.workspace))}`);
   }
   if (note) {
-    runtime.log(note);
+    runtime.log(sanitizeTerminalText(note));
   }
   runtime.log(
     `Talk to the coordinator: ${formatCliCommand(`openclaw agent --agent ${result.coordinatorId} --message "Describe your task"`)}`,

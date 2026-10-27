@@ -1,50 +1,176 @@
+import type { Result } from "@openclaw/normalization-core/result";
 import { registerListener } from "../../../../src/shared/listeners.js";
-import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
+import type { ConfigSnapshot } from "../../api/types.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../format-error.ts";
 import { canCallGatewayMethod } from "../gateway-methods.ts";
-import { showToast } from "../toast.ts";
 import { createAppliedConfigRefreshOwner } from "./applied-refresh.ts";
-import { clearConfigDraftTracking } from "./config-draft-model.ts";
-import {
-  loadConfig,
-  loadConfigSchema,
-  lookupConfigSchemaPath,
-  openConfigFile,
-  type ConfigWriteCoordinator,
-  type ConfigMethod,
-} from "./config-gateway-operations.ts";
+import type { ConfigMethod } from "./config-gateway-operations.ts";
+import { loadConfigSnapshot } from "./config-gateway-read.ts";
 import {
   agentConfigEntry,
   clearConfigRequestVersions,
   createInitialConfigState,
+  currentConfigConnectionEpoch,
+  currentConfigRead,
+  invalidateConfigConnection,
+  setConfigSnapshot,
   type RuntimeConfigGateway,
   type RuntimeConfigState,
 } from "./config-state-model.ts";
-import { createConfigWriteCoordinator } from "./config-write-coordinator.ts";
+import type { RuntimeConfigEditor } from "./runtime-config-editor.ts";
 
+type OptionalRuntimeConfigCapabilityKey = "canSet" | "canApply" | "canPatch" | "canOpenFile";
+export type RuntimeConfigCapability = Omit<
+  RuntimeConfigEditor,
+  OptionalRuntimeConfigCapabilityKey | "snapshotOwner"
+> &
+  Partial<Pick<RuntimeConfigEditor, OptionalRuntimeConfigCapabilityKey>> & {
+    ensureDisplayLoaded: () => Promise<void>;
+    refreshDisplay: (options?: { background?: boolean }) => Promise<void>;
+  };
+
+/** Bootstrap display facts stay eager; editing is activated by the first config operation. */
 export function createRuntimeConfigCapability(
   gateway: RuntimeConfigGateway,
   bootstrap?: {
     current: () => Record<string, unknown> | null;
     subscribe: (listener: () => void) => () => void;
   },
-) {
+): RuntimeConfigCapability {
   const state = createInitialConfigState(gateway.snapshot, bootstrap?.current);
-  // Raw edits never autosave; form edits and outstanding writes also remain
-  // owned by this capability when a worker update or reconnect wants to reload.
-  const stopReloadGuard = registerControlUiReloadGuard(
-    () =>
-      !state.configFormDirty &&
-      !state.configSaving &&
-      !state.configApplying &&
-      !writes.hasUnacknowledgedDraftWrite(),
-    () => showToast({ message: t("configView.reloadBlocked") }),
-  );
   const listeners = new Set<(state: RuntimeConfigState) => void>();
-  const loads = new Map<"config" | "schema", Promise<unknown>>();
+  let editor: RuntimeConfigEditor | null = null;
+  let activation: Promise<RuntimeConfigEditor | null> | null = null;
   let disposed = false;
-
+  let pendingSchema: Promise<Result<void, string>> | null = null;
+  let suspension: Parameters<RuntimeConfigEditor["setWritesSuspended"]> = [false];
+  let stopEditor: (() => void) | undefined;
+  let updateEditorConnection: ((snapshot: RuntimeConfigGateway["snapshot"]) => void) | undefined;
+  let displayRead: Promise<boolean> | null = null;
+  const publish = () => {
+    if (!disposed) {
+      for (const listener of listeners) {
+        listener(state);
+      }
+    }
+  };
+  const displaySnapshotOwner = {
+    hasUnacknowledgedDraftWrite: () => editor?.snapshotOwner.hasUnacknowledgedDraftWrite() ?? false,
+    applySnapshot: (snapshot: ConfigSnapshot) => {
+      if (editor) {
+        editor.snapshotOwner.applySnapshot(snapshot);
+        return;
+      }
+      setConfigSnapshot(state, snapshot);
+      if (snapshot.appliedConfigHash !== undefined) {
+        const revision = snapshot.configRevisionHash ?? snapshot.hash ?? null;
+        state.configNeedsApply = revision !== snapshot.appliedConfigHash;
+      }
+    },
+  };
+  const displayRefresh = createAppliedConfigRefreshOwner({
+    shouldRefresh: () =>
+      !disposed &&
+      !activation &&
+      !editor &&
+      state.connected &&
+      state.configNeedsApply &&
+      state.configSnapshot?.appliedConfigHash !== undefined,
+    refresh: (isCurrent) => displayRead ?? runDisplayRead({ background: true }, isCurrent),
+  });
+  async function runDisplayRead(
+    options: { background?: boolean } = {},
+    isCurrent?: () => boolean,
+  ): Promise<boolean> {
+    const result = loadConfigSnapshot(
+      state,
+      { ...options, snapshotOwner: displaySnapshotOwner },
+      isCurrent,
+    );
+    // Claim the read before observers can ask for the missing snapshot again.
+    displayRead = result;
+    try {
+      publish();
+      return await result;
+    } finally {
+      try {
+        publish();
+      } finally {
+        if (displayRead === result) {
+          displayRead = null;
+        }
+      }
+    }
+  }
+  async function ensureDisplayLoaded(): Promise<void> {
+    if (editor) {
+      return editor.ensureLoaded();
+    }
+    if (!state.configSnapshot) {
+      await (displayRead ?? runDisplayRead());
+    }
+    displayRefresh.reconcile();
+  }
+  async function refreshDisplay(options?: { background?: boolean }): Promise<void> {
+    if (editor) {
+      return editor.refresh(options);
+    }
+    displayRefresh.cancel();
+    try {
+      await runDisplayRead(options);
+    } finally {
+      displayRefresh.reconcile();
+    }
+  }
+  const stopBootstrap = bootstrap?.subscribe(publish);
+  let canRead = hasOperatorReadAccess(gateway.snapshot.hello?.auth ?? null);
+  let pluginGeneration = gateway.snapshot.pluginCapabilities?.generation;
+  // The same state holds display snapshots before the editor takes custody.
+  const stopGateway = gateway.subscribe((snapshot) => {
+    if (updateEditorConnection) {
+      updateEditorConnection(snapshot);
+      return;
+    }
+    const nextCanRead = hasOperatorReadAccess(snapshot.hello?.auth ?? null);
+    const hadDisplaySnapshot = state.configSnapshot !== null;
+    const accessLost = snapshot.phase === "connected" && canRead && !nextCanRead;
+    const connectionChanged =
+      state.client !== snapshot.client ||
+      state.connected !== (snapshot.phase === "connected") ||
+      accessLost;
+    const nextPluginGeneration = snapshot.pluginCapabilities?.generation;
+    const pluginsChanged =
+      nextPluginGeneration !== undefined && nextPluginGeneration !== pluginGeneration;
+    pluginGeneration = nextPluginGeneration;
+    if (connectionChanged) {
+      invalidateConfigConnection(state);
+      // There is no draft yet; do not promote an old connection's display data to an editor base.
+      state.configSnapshot = null;
+      displayRead = null;
+      displayRefresh.cancel();
+      pendingSchema = null;
+      state.configLoading = false;
+      state.configSchemaLoading = false;
+    }
+    if (snapshot.phase === "connected") {
+      canRead = nextCanRead;
+    }
+    state.client = snapshot.client;
+    state.connected = snapshot.phase === "connected";
+    state.applySessionKey = snapshot.sessionKey;
+    if (
+      state.connected &&
+      state.client &&
+      !accessLost &&
+      ((connectionChanged && (hadDisplaySnapshot || !state.bootstrapConfig)) ||
+        (pluginsChanged && state.configSnapshot))
+    ) {
+      void refreshDisplay();
+    }
+    publish();
+  });
   const canCallConfigMethod = (
     method: ConfigMethod,
     options?: { requireAdvertisement?: boolean },
@@ -59,119 +185,165 @@ export function createRuntimeConfigCapability(
       method === "config.schema" ? "operator.read" : "operator.admin",
       options,
     );
-  const publish = () => {
-    if (disposed) {
-      return;
+  const activate = (): Promise<RuntimeConfigEditor | null> => {
+    if (editor || disposed) {
+      return Promise.resolve(editor);
     }
-    for (const listener of listeners) {
-      listener(state);
+    if (!activation) {
+      displayRefresh.cancel();
+      activation = import("./runtime-config-editor.ts")
+        .then(({ createRuntimeConfigEditor }) => {
+          if (disposed) {
+            return null;
+          }
+          stopBootstrap?.();
+          displayRefresh.dispose();
+          editor = createRuntimeConfigEditor(
+            state,
+            {
+              get snapshot() {
+                return gateway.snapshot;
+              },
+              subscribe(listener) {
+                // Keep connection updates ahead of consumers registered after this capability.
+                updateEditorConnection = listener;
+                return () => {
+                  updateEditorConnection = undefined;
+                };
+              },
+            },
+            canCallConfigMethod,
+            bootstrap,
+            displayRead ? currentConfigRead(state)?.settled : undefined,
+          );
+          // Hand schema admission to the editor before a load publication can reenter it.
+          if (pendingSchema) {
+            state.configSchemaLoading = false;
+          }
+          editor.setWritesSuspended(...suspension);
+          stopEditor = editor.subscribe(publish);
+          if (state.configSnapshot) {
+            state.configLoading = false;
+            void editor.ensureLoaded();
+            publish();
+          }
+          return editor;
+        })
+        .catch((error: unknown) => {
+          activation = null;
+          pendingSchema = null;
+          if (!disposed) {
+            state.lastError = formatUiError(error);
+            state.configLoading = false;
+            state.configSchemaLoading = false;
+            publish();
+            displayRefresh.reconcile();
+          }
+          throw error;
+        });
     }
+    return activation;
   };
-  const stopBootstrap = bootstrap?.subscribe(publish);
-  const run = async <T>(task: () => Promise<T>, loadKey?: "config" | "schema"): Promise<T> => {
-    let result: Promise<T> | undefined;
-    try {
-      result = task();
-      // Subscribers can ensure missing config even when a load is offline or background.
-      if (loadKey) {
-        loads.set(loadKey, result);
-      }
-      // Async config owners mutate their busy flag before the first await.
-      // Publish that transition so editors can lock before accepting more input.
-      publish();
-      return await result;
-    } finally {
-      try {
-        publish();
-      } finally {
-        if (loadKey && loads.get(loadKey) === result) {
-          loads.delete(loadKey);
-        }
-      }
+  const invoke = <T>(
+    task: (loaded: RuntimeConfigEditor) => Promise<T>,
+    unavailable: T,
+  ): Promise<T> => {
+    if (editor) {
+      return task(editor);
     }
-  };
-  const mutate = (task: () => void) => {
-    task();
-    publish();
-  };
-  const loadOnce = async (
-    key: "config" | "schema",
-    task: () => Promise<unknown>,
-  ): Promise<void> => {
-    await (loads.get(key) ?? run(task, key));
-  };
-
-  const appliedRefresh = createAppliedConfigRefreshOwner({
-    shouldRefresh: () =>
-      !disposed &&
-      state.connected &&
-      state.configNeedsApply &&
-      state.configSnapshot?.appliedConfigHash !== undefined,
-    refresh: (isCurrent) =>
-      loadOnce("config", () =>
-        loadConfig(state, { background: true, draftWrites: writes }, isCurrent),
-      ),
-  });
-  const refreshConnectionState = (
-    beforeApplySnapshot?: () => void,
-    preservePendingChanges = false,
-  ) => {
-    const config = run(
-      () =>
-        loadConfig(state, {
-          beforeApplySnapshot,
-          preservePendingChanges,
-          draftWrites: writes,
-        }),
-      "config",
+    const client = state.client;
+    const epoch = currentConfigConnectionEpoch(state);
+    return activate().then((loaded) =>
+      loaded && state.client === client && currentConfigConnectionEpoch(state) === epoch
+        ? task(loaded)
+        : unavailable,
     );
-    if (state.configSchemaVersion !== null && canLoadConfigSchema()) {
-      // Config success clears lastError; load the schema afterward to preserve its failures.
-      void config.then(() => run(() => loadConfigSchema(state), "schema"));
-    }
-    return config;
   };
-
-  const writes: ConfigWriteCoordinator = createConfigWriteCoordinator({
-    state,
-    gateway,
-    publish,
-    run,
-    mutate,
-    resetLoads: () => {
-      loads.clear();
-    },
-    resetConfigLoad: () => {
-      loads.delete("config");
-    },
-    refreshConnectionState,
-    canCallConfigMethod,
-    appliedRefresh,
-    isDisposed: () => disposed,
-  });
-
-  const ensureLoaded = async () => {
-    if (!state.configSnapshot) {
-      await loadOnce("config", () => loadConfig(state, { draftWrites: writes }));
+  const invokeWrite = (
+    method: ConfigMethod,
+    task: (loaded: RuntimeConfigEditor) => Promise<boolean>,
+    canDispatch?: () => boolean,
+  ) => {
+    if (editor) {
+      return task(editor);
     }
-    appliedRefresh.reconcile();
-  };
-  // Schema reads use the same read-access policy as the settings pages.
-  const canLoadConfigSchema = () => {
-    const snapshot = gateway.snapshot;
-    if (!snapshot.client || snapshot.phase !== "connected") {
-      return false;
+    if (!canCallConfigMethod(method)) {
+      if (state.connected) {
+        state.lastError = t("configView.adminRequired");
+        publish();
+      }
+      return Promise.resolve(false);
     }
-    return hasOperatorReadAccess(snapshot.hello?.auth ?? null);
+    return canDispatch?.() === false ? Promise.resolve(false) : invoke(task, false);
   };
-  const ensureSchemaLoaded = () =>
-    state.configSchema || !canLoadConfigSchema()
-      ? Promise.resolve()
-      : loadOnce("schema", () => loadConfigSchema(state));
-
+  const read = (task: (loaded: RuntimeConfigEditor) => Promise<void>, background = false) => {
+    if (editor) {
+      return task(editor);
+    }
+    const result = invoke((loaded) => {
+      // Hand the module-loading flag to the read before its coalesced publication.
+      if (!currentConfigRead(state)) {
+        state.configLoading = false;
+      }
+      return task(loaded);
+    }, undefined);
+    if (
+      !background &&
+      state.client &&
+      state.connected &&
+      canRead &&
+      !disposed &&
+      !state.configLoading
+    ) {
+      state.configLoading = true;
+      publish();
+    }
+    return result;
+  };
+  const requireEditor = () => {
+    if (!editor) {
+      throw new Error("Load configuration before editing its draft.");
+    }
+    return editor;
+  };
+  const loadSchema = (refresh: boolean): Promise<Result<void, string>> => {
+    if (editor) {
+      const loaded = editor;
+      if (refresh) {
+        return loaded.refreshSchema();
+      }
+      const loading = loaded.ensureSchemaLoaded();
+      // A reconnect can replace schemaRead before this caller's read settles.
+      const receipt = loaded.schemaRead;
+      return loading.then(() => receipt ?? { ok: true, value: undefined });
+    }
+    if (pendingSchema) {
+      return pendingSchema;
+    }
+    pendingSchema = invoke<Result<void, string>>(
+      async (loaded) => {
+        if (refresh) {
+          return loaded.refreshSchema();
+        }
+        const loading = loaded.ensureSchemaLoaded();
+        const receipt = loaded.schemaRead;
+        await loading;
+        return receipt ?? { ok: true as const, value: undefined };
+      },
+      { ok: true as const, value: undefined },
+    );
+    if (state.client && state.connected && canRead && !disposed) {
+      state.configSchemaLoading = true;
+      publish();
+    }
+    return pendingSchema;
+  };
   return {
     get state() {
       return state;
+    },
+    get schemaRead() {
+      return editor ? editor.schemaRead : pendingSchema;
     },
     get canSet() {
       return canCallConfigMethod("config.set");
@@ -185,59 +357,64 @@ export function createRuntimeConfigCapability(
     get canOpenFile() {
       return canCallConfigMethod("config.openFile", { requireAdvertisement: false });
     },
-    ensureLoaded,
-    ensureSchemaLoaded,
-    refresh: async (options?: { background?: boolean }) => {
-      appliedRefresh.cancel();
-      try {
-        await run(() => loadConfig(state, { ...options, draftWrites: writes }), "config");
-      } finally {
-        appliedRefresh.reconcile();
+    ensureDisplayLoaded,
+    refreshDisplay,
+    ensureLoaded: () => read((loaded) => loaded.ensureLoaded()),
+    ensureSchemaLoaded: () => loadSchema(false).then(() => undefined),
+    refresh: (options) => read((loaded) => loaded.refresh(options), options?.background),
+    refreshSchema: () => loadSchema(true),
+    patchForm: (path, value) => requireEditor().patchForm(path, value),
+    removeFormValue: (path) => requireEditor().removeFormValue(path),
+    setRaw: (value) => requireEditor().setRaw(value),
+    discardDraft: (options) => invoke((loaded) => loaded.discardDraft(options), undefined),
+    discardFormValue: (path) => invoke((loaded) => loaded.discardFormValue(path), false),
+    setWritesSuspended: (...args) => {
+      if (editor) {
+        editor.setWritesSuspended(...args);
+      } else {
+        suspension = args;
       }
     },
-    refreshSchema: () => run(() => loadConfigSchema(state), "schema"),
-    patchForm: writes.patchForm,
-    removeFormValue: writes.removeFormValue,
-    setRaw: writes.setRaw,
-    discardDraft: writes.discardDraft,
-    discardFormValue: writes.discardFormValue,
-    setWritesSuspended: writes.setWritesSuspended,
-    waitForPendingWrites: writes.waitForPendingWrites,
-    flushFormChanges: writes.flushFormChanges,
-    save: writes.save,
-    retry: writes.retry,
-    apply: writes.apply,
+    waitForPendingWrites: () => editor?.waitForPendingWrites() ?? Promise.resolve(),
+    flushFormChanges: () => editor?.flushFormChanges() ?? Promise.resolve(false),
+    save: (options) =>
+      invokeWrite("config.set", (loaded) => loaded.save(options), options?.canDispatch),
+    retry: () => invoke((loaded) => loaded.retry(), false),
+    apply: () => invokeWrite("config.apply", (loaded) => loaded.apply()),
     openFile: () =>
       canCallConfigMethod("config.openFile", { requireAdvertisement: false })
-        ? run(() => openConfigFile(state))
+        ? invoke((loaded) => loaded.openFile(), undefined)
         : Promise.resolve(),
-    agentEntry: (agentId: string, options?: { ensure?: boolean }) =>
-      agentConfigEntry(state, agentId, options),
-    stageDefaultAgent: writes.stageDefaultAgent,
-    patch: writes.patch,
-    patchFromSnapshot: writes.patchFromSnapshot,
-    runExternalMutation: writes.runExternalMutation,
-    lookupSchemaPath: (path: string) => run(() => lookupConfigSchemaPath(state, path)),
-    subscribe(listener: (state: RuntimeConfigState) => void) {
-      return registerListener(listeners, listener);
-    },
+    agentEntry: (agentId, options) => agentConfigEntry(state, agentId, options),
+    stageDefaultAgent: (agentId) => editor?.stageDefaultAgent(agentId) ?? false,
+    patch: (options) =>
+      invokeWrite("config.patch", (loaded) => loaded.patch(options), options.canDispatch),
+    patchFromSnapshot: (build) =>
+      invokeWrite("config.patch", (loaded) => loaded.patchFromSnapshot(build)),
+    runExternalMutation: (task, options) =>
+      invoke((loaded) => loaded.runExternalMutation(task, options), {
+        ok: false,
+        reason: "unavailable",
+        error: "Connection changed before the configuration update started.",
+      }),
+    lookupSchemaPath: (path) => invoke((loaded) => loaded.lookupSchemaPath(path), null),
+    subscribe: (listener) => registerListener(listeners, listener),
     dispose() {
-      stopBootstrap?.();
-      stopReloadGuard();
       disposed = true;
-      writes.dispose();
+      stopGateway();
+      stopBootstrap?.();
+      stopEditor?.();
+      displayRefresh.dispose();
+      if (editor) {
+        editor.dispose();
+      } else {
+        invalidateConfigConnection(state);
+        state.connected = false;
+        state.configLoading = false;
+        state.configSchemaLoading = false;
+        clearConfigRequestVersions(state);
+      }
       listeners.clear();
-      clearConfigRequestVersions(state);
-      clearConfigDraftTracking(state);
     },
   };
 }
-
-type ProducedRuntimeConfigCapability = ReturnType<typeof createRuntimeConfigCapability>;
-type OptionalRuntimeConfigCapabilityKey = "canSet" | "canApply" | "canPatch" | "canOpenFile";
-
-export type RuntimeConfigCapability = Omit<
-  ProducedRuntimeConfigCapability,
-  OptionalRuntimeConfigCapabilityKey
-> &
-  Partial<Pick<ProducedRuntimeConfigCapability, OptionalRuntimeConfigCapabilityKey>>;

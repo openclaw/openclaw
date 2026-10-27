@@ -1,5 +1,4 @@
 import { preserveCompactionReplayWindow } from "@openclaw/ai/transports";
-import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
@@ -9,7 +8,6 @@ import {
   type SessionSourceAssertion,
 } from "../../../config/sessions/session-source-authority.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
-import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
 import { prepareHarnessContextEnginePrompt } from "../../harness/context-engine-lifecycle.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
@@ -101,12 +99,42 @@ export async function prepareEmbeddedAttemptHistory(
             ? [{ sessionId: entry.sessionId, role: entry.subagentRole, lastStatus: entry.status }]
             : [],
         );
-        validated.push(
-          buildHierarchyReinforcementMessage({
-            summary: suspension.summary ?? "No recovery briefing was captured.",
-            activeSubagents: subagents,
-          }),
-        );
+        const hasSubagents = subagents.length > 0;
+        // The user role makes the fallback treat the briefing as input, not its own output.
+        validated.push({
+          role: "user",
+          content: [
+            "[SYSTEM HANDOFF] The previous model is no longer active and a fallback model is now active.",
+            ...(hasSubagents
+              ? [
+                  "You are the new LEADER (Orchestrator). Do not perform tasks already delegated to subordinates.",
+                  "",
+                  "ACTIVE SUBORDINATE UNITS:",
+                  subagents
+                    .map(
+                      (s) =>
+                        `- Subagent ${s.sessionId} (${s.role ?? "leaf"}): ${s.lastStatus ?? "running"}`,
+                    )
+                    .join("\n"),
+                ]
+              : [
+                  "Review the current state below and continue the conversation from where the previous model left off.",
+                ]),
+            "",
+            "CURRENT STATE SUMMARY:",
+            suspension.summary ?? "No recovery briefing was captured.",
+            ...(hasSubagents
+              ? [
+                  "",
+                  "INSTRUCTIONS:",
+                  "1. Review the state and subordinate reports.",
+                  "2. Provide strategic guidance and commands to subordinates.",
+                  "3. Do not repeat work already performed by subordinates.",
+                ]
+              : []),
+          ].join("\n"),
+          timestamp: Date.now(),
+        });
         await patchSessionEntryCore(
           { agentId: sessionAgentId, storePath, sessionKey: attempt.sessionKey },
           (entry) => {
@@ -132,15 +160,7 @@ export async function prepareEmbeddedAttemptHistory(
 
     let limited = validated;
     if (!isSettledTurnFinalization) {
-      const heartbeatSummary =
-        attempt.config && sessionAgentId
-          ? resolveHeartbeatSummaryForAgent(attempt.config, sessionAgentId)
-          : undefined;
-      const heartbeatFiltered = filterHeartbeatTranscriptArtifacts(
-        validated,
-        heartbeatSummary?.ackMaxChars,
-        heartbeatSummary?.prompt,
-      );
+      const heartbeatFiltered = filterHeartbeatTranscriptArtifacts(validated);
       limited = preserveCompactionReplayWindow(
         heartbeatFiltered,
         limitHistoryTurns(

@@ -20,28 +20,21 @@ import {
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { textAssistant } from "../test-helpers/sparse-transcript.test-support.js";
+import { sessionScope } from "./session-manager-fixtures.test-support.js";
 import { SessionManager } from "./session-manager.js";
+import { cleanupTrackedSessionState } from "./session-state-cleanup.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    for (const stateDir of tempDirs.dirs) {
-      await cleanupSessionStateForTest({ stateDir });
-    }
-    cleanup();
+    await cleanupTrackedSessionState(tempDirs.dirs, cleanup);
   }),
 );
 afterEach(() => vi.restoreAllMocks());
 
 function createScope(sessionId: string, sessionKey = `agent:main:${sessionId}`) {
   const dir = tempDirs.make("openclaw-session-manager-");
-  const scope = {
-    agentId: "main",
-    sessionId,
-    sessionKey,
-    storePath: path.join(dir, "sessions.json"),
-  };
+  const scope = { ...sessionScope(path.join(dir, "sessions.json"), sessionId), sessionKey };
   return { dir, scope };
 }
 
@@ -70,17 +63,13 @@ async function branchSource(
     sessionFile: formatSqliteSessionFileMarker(scope),
     ...entry,
   });
-  const user = await appendTranscriptMessage(scope, {
-    cwd: dir,
-    eventId: "user",
-    message: { role: "user", content: "question" },
-  });
-  const assistant = await appendTranscriptMessage(scope, {
-    cwd: dir,
-    eventId: "reply",
-    parentId: user.messageId,
-    message: textAssistant("answer"),
-  });
+  const append = (
+    eventId: string,
+    payload: Parameters<typeof appendTranscriptMessage>[1]["message"],
+    parentId?: string,
+  ) => appendTranscriptMessage(scope, { cwd: dir, eventId, message: payload, parentId });
+  const user = await append("user", { role: "user", content: "question" });
+  const assistant = await append("reply", textAssistant("answer"), user.messageId);
   return {
     scope,
     userId: user.messageId,

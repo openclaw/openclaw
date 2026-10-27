@@ -55,7 +55,6 @@ const REVIEWED_CRITICAL_FINDING_LIMITS = new Map<string, number>([
   ["dist:@openclaw/llama-cpp-provider:dangerous-exec:dist/index.js", 3],
   ["source:@openclaw/llama-cpp-provider:dangerous-exec:src/hardware.ts", 1],
   ["source:@openclaw/llama-cpp-provider:dangerous-exec:src/llama-server-install.ts", 1],
-  ["source:@openclaw/llama-cpp-provider:dangerous-exec:src/llama-server-vc-runtime.ts", 1],
   ["source:@openclaw/matrix:dangerous-exec:src/matrix/deps.ts", 1],
   ["setup:@openclaw/memory-lancedb:dangerous-exec:dist/.setup/dist-<hash>.mjs", 1],
   ["setup:@openclaw/memory-lancedb:dynamic-code-execution:dist/.setup/dist-<hash>.mjs", 1],

@@ -3,6 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   checkAgentCreationGate,
   createAgent,
@@ -43,7 +44,7 @@ import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { stageProviderAuthProfileBatch } from "../plugins/provider-auth-persistence.js";
 import type { ProviderAuthProfile } from "../plugins/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { defaultRuntime as runtime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
@@ -100,7 +101,6 @@ function formatSkippedOAuthProfilesMessage(
 
 export async function agentsAddCommand(
   opts: AgentsAddOptions,
-  runtime: RuntimeEnv = defaultRuntime,
   params?: { hasAutomationFlags?: boolean },
 ) {
   if (opts.role !== undefined) {
@@ -180,9 +180,7 @@ export async function agentsAddCommand(
             throwExpectedCliError(
               result.reason === "reserved-id"
                 ? `"${result.agentId}" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`
-                : result.reason === "already-exists"
-                  ? `Agent "${result.agentId}" already exists.`
-                  : result.message,
+                : result.message,
             );
           }
           return result;
@@ -211,16 +209,18 @@ export async function agentsAddCommand(
       writeRuntimeJson(runtime, payload);
     } else {
       runtime.log(`Agent: ${agentId}`);
-      runtime.log(`Workspace: ${shortenHomePath(created.workspace)}`);
-      runtime.log(`Agent dir: ${shortenHomePath(created.agentDir)}`);
+      runtime.log(`Workspace: ${sanitizeTerminalText(shortenHomePath(created.workspace))}`);
+      runtime.log(`Agent dir: ${sanitizeTerminalText(shortenHomePath(created.agentDir))}`);
       if (created.model) {
-        runtime.log(`Model: ${created.model}`);
+        runtime.log(`Model: ${sanitizeTerminalText(created.model)}`);
       }
       if (conflicts.length > 0) {
         runtime.error(
           [
             "Skipped bindings already claimed by another agent:",
-            ...conflicts.map((conflict) => `- ${describeBindingConflict(conflict)}`),
+            ...payload.bindings.conflicts.map(
+              (description) => `- ${sanitizeTerminalText(description)}`,
+            ),
           ].join("\n"),
         );
       }
@@ -236,15 +236,11 @@ export async function agentsAddCommand(
     params: {},
     target: nameInput ?? "interactive agent setup",
     onForeignOwner: "refuse",
-    runLocal: () => runInteractiveAgentsAdd(opts, runtime, wizardOutput),
+    runLocal: () => runInteractiveAgentsAdd(opts, wizardOutput),
   });
 }
 
-async function runInteractiveAgentsAdd(
-  opts: AgentsAddOptions,
-  runtime: RuntimeEnv,
-  wizardOutput: NodeJS.WriteStream,
-) {
+async function runInteractiveAgentsAdd(opts: AgentsAddOptions, wizardOutput: NodeJS.WriteStream) {
   const writeSnapshot = await requireValidConfigForWrite(runtime);
   if (!writeSnapshot) {
     return;
@@ -510,7 +506,9 @@ async function runInteractiveAgentsAdd(
           await prompter.note(
             [
               "Skipped bindings already claimed by another agent:",
-              ...result.conflicts.map((conflict) => `- ${describeBindingConflict(conflict)}`),
+              ...result.conflicts.map(
+                (conflict) => `- ${sanitizeTerminalText(describeBindingConflict(conflict))}`,
+              ),
             ].join("\n"),
             "Routing bindings",
           );

@@ -5,19 +5,107 @@ import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { isReplaySafeToolCall } from "../../tool-mutation.js";
+import { TOOL_FAILURE_INSTRUCTION } from "../../tool-outcome-instructions.js";
+import { buildAttemptReplayMetadata } from "./attempt-terminal-evidence.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 import {
   createTerminalToolPresentationTracker,
+  resolveEmbeddedRunTerminal,
   resolveSettledTurnFinalizationRequest,
 } from "./terminal-resolution.js";
+import { makeTerminalInput } from "./terminal-resolution.test-support.js";
 
 const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
-  "Your turn ended without a final reply. If the user still needs a reply, write it now. If your completed actions already answered the request, answer exactly NO_REPLY. Continue from the current transcript. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
+  "Your turn ended without a final reply. If the user still needs a reply, write it now. If your completed actions already answered the request, answer exactly NO_REPLY. Continue from the current transcript. Do not repeat completed tool calls or restart from scratch. Do not call tools in this step. Summarize the recorded results in plain text.";
 const REQUIRED_RESULT_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
-  "Your turn ended without a final result. Continue from the current transcript and produce the required result now. NO_REPLY is not allowed. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
+  "Your turn ended without a final result. Continue from the current transcript and produce the required result now. NO_REPLY is not allowed. Do not repeat completed tool calls or restart from scratch. Do not call tools in this step. Summarize the recorded results in plain text.";
 
 describe("resolveSettledTurnFinalizationRequest", () => {
+  it.each([
+    { toolName: "read", missingEvidence: false, keepsTools: true },
+    { toolName: "read", toolError: true, missingEvidence: false, keepsTools: true },
+    { toolName: "write", missingEvidence: false, keepsTools: false },
+    { toolName: "read", missingEvidence: true, keepsTools: false },
+  ])(
+    "routes an empty stop after $toolName (error=$toolError, missing evidence=$missingEvidence, keeps tools=$keepsTools)",
+    async ({ toolName, toolError = false, missingEvidence, keepsTools }) => {
+      const toolAssistant = buildEmbeddedRunnerAssistant({
+        stopReason: "toolUse",
+        content: [
+          { type: "toolCall", id: "file-1", name: toolName, arguments: { path: "index.txt" } },
+        ],
+      });
+      const assistant = buildEmbeddedRunnerAssistant({ content: [] });
+      const toolMetas = [
+        {
+          toolName,
+          toolCallId: "file-1",
+          isError: toolError,
+          replaySafe: isReplaySafeToolCall(toolName, { path: "index.txt" }),
+        },
+      ];
+      const attempt = makeEmbeddedRunnerAttempt({
+        assistantTexts: [],
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        messagesSnapshot: [
+          { role: "user", content: "Read index.txt, then the files it lists.", timestamp: 0 },
+          toolAssistant,
+          makeTextToolResult("file-1", toolName, "remaining.txt", toolError, 1),
+          assistant,
+        ],
+        toolMetas,
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        lastToolError: toolError ? { toolName, error: "File unavailable" } : undefined,
+        // Earlier attempts' effects must not override this attempt's explicit evidence.
+        replayMetadata: { hadPotentialSideEffects: !missingEvidence, replaySafe: missingEvidence },
+        currentAttemptReplayMetadata: missingEvidence
+          ? undefined
+          : buildAttemptReplayMetadata({
+              toolMetas,
+              didSendViaMessagingTool: false,
+              messagingToolSentTexts: [],
+              messagingToolSentMediaUrls: [],
+            }),
+      });
+      const input = makeTerminalInput({
+        attempt,
+        activeErrorContext: { provider: "groq", model: "openai/gpt-oss-120b" },
+        modelApi: "openai-completions",
+        runParams: { terminalReplyExpectation: "result-required" },
+      });
+      const finalization = resolveSettledTurnFinalizationRequest({
+        ...input,
+        payloadsWithToolMedia: [],
+        hasTerminalToolPresentation: false,
+        settledTurnFinalizationAvailable: true,
+      });
+      if (!keepsTools) {
+        expect(finalization).toBe(REQUIRED_RESULT_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+        return;
+      }
+      // No isolated finalizer: the normal attempt retains its transcript and tools.
+      expect(finalization).toBeNull();
+      expect(await resolveEmbeddedRunTerminal(input)).toEqual({ action: "retry" });
+      expect(input.sessionPromptState.activateInternalPrompt).toHaveBeenCalledWith(
+        expect.stringContaining("using tools for any remaining work"),
+      );
+      expect(input.sessionPromptState.activateInternalPrompt).toHaveBeenCalledWith(
+        expect.stringContaining("Do not repeat completed tool calls"),
+      );
+      if (toolError) {
+        expect(input.sessionPromptState.activateInternalPrompt).toHaveBeenCalledWith(
+          expect.stringContaining("If a tool failed, say so; never claim completion or success."),
+        );
+      }
+      expect(input.retryState.emptyResponseAttempts).toBe(1);
+      expect((await resolveEmbeddedRunTerminal(input)).action).toBe("complete");
+      expect(input.sessionPromptState.activateInternalPrompt).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("requests isolated finalization only when empty settled-tool turns owe a result", () => {
     const assistant = buildEmbeddedRunnerAssistant({ content: [{ type: "text", text: "" }] });
     const attempt = makeEmbeddedRunnerAttempt({
@@ -26,7 +114,7 @@ describe("resolveSettledTurnFinalizationRequest", () => {
       currentAttemptAssistant: assistant,
       toolMetas: [{ toolName: "write", meta: "path=note.txt", replaySafe: false }],
       itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
-      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
     });
     const terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
     const request = (terminalReplyExpectation: "required" | "optional" | "result-required") =>
@@ -240,6 +328,9 @@ describe("resolveSettledTurnFinalizationRequest", () => {
       currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
     });
 
+    // #178300: the unrecovered earlier exec failure must reach the summary instruction.
+    const withEarlierFailure = `${SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION} ${TOOL_FAILURE_INSTRUCTION}`;
+
     const request = (
       payloadsWithToolMedia = buildEmbeddedRunPayloads({
         assistantTexts: attempt.assistantTexts,
@@ -273,7 +364,7 @@ describe("resolveSettledTurnFinalizationRequest", () => {
         settledTurnFinalizationAvailable: true,
       });
 
-    expect(request()).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+    expect(request()).toBe(withEarlierFailure);
     expect(
       request([
         setReplyPayloadMetadata(
@@ -285,7 +376,7 @@ describe("resolveSettledTurnFinalizationRequest", () => {
           },
         ),
       ]),
-    ).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+    ).toBe(withEarlierFailure);
     expect(request([{ text: progress, mediaUrls: ["file:///tmp/result.png"] }])).toBeNull();
     expect(request([{ text: progress, channelData: { notice: "Ready" } }])).toBeNull();
     expect(
@@ -316,7 +407,7 @@ describe("resolveSettledTurnFinalizationRequest", () => {
           { terminalProviderError: true },
         ),
       ]),
-    ).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+    ).toBe(withEarlierFailure);
 
     const finalAnswer = "The file contains the requested value.";
     attempt.assistantTexts.push(finalAnswer);

@@ -41,6 +41,9 @@ If a matching load-path reference is added again while the runtime drains, unins
 
 `uninstall` prints a preview of what will be removed. Multi-entry packages name the package owner and every affected child before prompting. Pass `--force` to skip the confirmation prompt (useful for scripts and non-interactive runs); without it, uninstall requires an interactive TTY. `--dry-run` prints the same preview and exits without prompting or changing anything.
 
+Manifest display names in the preview escape line breaks and strip terminal
+control sequences. The stored manifest and plugin selection keep their original values.
+
 When several IDs are supplied, uninstall resolves the whole selection before
 removing anything. Repeated IDs and children of the same package select that
 package once. Packages are processed in first-requested order, with a separate
@@ -99,6 +102,12 @@ Recovery keeps the published package generation when config rollback is not
 confirmed. The command reports the failure without claiming runtime activation.
 
 If update finalization fails, the error reports the original cause first and retains any rollback failures as additional diagnostic context. A failed rollback remains retryable; a successfully committed or rolled-back install is not applied again during cleanup.
+
+If another process holds plugin files during replacement, the updater restores
+any removed files from its backup without overwriting the held files. Stop the
+Gateway and any other process holding those files, then retry. If restoration
+cannot finish, the error names the retained backup recovery path; keep that
+backup until recovery is complete. Uninstalling the plugin is not required.
 
 On source installations, a selected plugin built with the host stays in use. Named updates, `--all`, and stable/beta core updates report why the registry copy was not admitted and leave its dormant install record unchanged. Package ownership checks still apply to plugins being updated; explicit plugin paths retain their selection priority.
 
@@ -171,6 +180,16 @@ after editing its source; reload does not run the build. Multiple IDs use one Ga
 and one applied runtime generation. Repeated IDs are collapsed, and the Gateway
 resolves package siblings together. The request supports up to 64 distinct IDs.
 
+Bundled plugins share the running Gateway's code. Reload refreshes their
+registrations and returns `restartRequired: true`, even if their files have not
+changed. Restart the Gateway to load updated bundled code; rebuild first for
+compiled installations. Updating code embedded in an executable requires a new
+executable. External plugins loaded from disk pick up their captured source changes
+without restarting the Gateway.
+
+AOT hosts admit embedded plugins only. See
+[Runtime execution profiles](/concepts/runtime-profiles#plugins-fetched-after-the-build).
+
 Busy plugins admit replacement and fence new retained work on the old instance.
 Existing agent runs keep their original callbacks while new runs wait for the
 replacement. Before stopping services or channels, replacement waits up to
@@ -207,6 +226,37 @@ a pending handoff; it never force-releases leases or rolls back a committed relo
 The handoff is process-local: if the Gateway exits before delivery, inspect the
 plugin state before retrying. Plain CLI reloads are not intercepted or deferred.
 
+### Inspect retained references
+
+To inspect live holders without requesting a reload, use an administrator Gateway
+connection:
+
+```bash
+openclaw gateway call plugins.inspect --params '{"pluginId":"example-plugin"}' --json
+```
+
+The `runtimeRetention` field describes the selected live instance (or is `null`
+when none is loaded). It includes an opaque instance ID, its current published
+registry generation when available, and up to 64 live reference records. Each
+record has an ID, kind, acquisition reason and time, age, cleanup state, and
+host-attributed agent/session/run/service fields when available. Missing attribution
+is explicitly `unknown`. Derived consumers can name their parent reference.
+Gateway turn preparation attributes its leases to the run ID and the
+`gateway-agent-turn` service, including before embedded execution starts.
+The `omitted` count reports truncation. These are acquisition facts, not proof
+that a holder is currently executing or exclusively owns shared resources.
+
+Explicit work and executable consumers block the retained-work drain; idle
+`custody` does not. Ordinary calls and cleanup are reported separately.
+`pending` means host cleanup has started; `failed` on retained work means
+physical cleanup failed without releasing the hold. Released references disappear;
+this is not a history or payload capture. Read-only operators do not receive the
+cross-session diagnostic field. Queued-drain and timeout logs include bounded
+reference summaries without owner identifiers; correlate their instance/reference
+IDs with administrator inspection. A count alone never identifies a blocking turn
+or proves a plugin leak. Run reload outside a turn whose own references it must
+wait for, including when using `--wait`.
+
 Replacement requires the previous registration's resource cleanup to finish
 before its successor acquires those resources. Failed cleanup can prevent
 replacement and automatic recovery; inspect the reported failure before retrying.
@@ -216,16 +266,8 @@ remain loaded after their registrations are removed.
 Bundled plugins can reload while preserving their enabled or disabled policy.
 Reload follows the selected bundled copy even when a dormant registry install
 record remains after a source update; that record stays unchanged.
-Bundled plugins, including TypeScript source entries, reuse their process-loaded
-code when their registrations reload. If the plugin's files changed while its
-original module remains loaded,
-the result reports `restartRequired: true` with a warning, and CLI and tool
-output explain that a Gateway restart is needed to load edited code. Reload does
-not rebuild bundled code. Rebuild before restarting when the installation loads
-compiled output.
-External captured sources return `restartRequired: false` after replacement.
-Reloading unchanged bundled files also returns `restartRequired: false`; channel
-and service registrations can be replaced without restarting the Gateway.
+Unselected plugins keep their registrations. Changes to host or SDK code also
+require a Gateway restart.
 Reloading a discovered source does not create an
 install record or grant permission to install, replace, or remove its files.
 

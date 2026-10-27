@@ -1,3 +1,4 @@
+import { measuredRequestPressure } from "@openclaw/ai/internal/openai";
 import type { FirstStreamEventInternalOptions } from "@openclaw/ai/internal/runtime";
 import type { CompactionReplayRejection } from "@openclaw/ai/transports";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
@@ -40,7 +41,6 @@ import {
 } from "./attempt-sessions-yield.js";
 import { wrapStreamFnHandleSensitiveStopReason } from "./attempt-stop-reason-recovery.js";
 import {
-  sanitizeOpenAIResponsesReplayForStream,
   sanitizeReplayToolCallIdsForStream,
   shouldApplyReplayToolCallIdSanitizer,
   wrapStreamFnSanitizeMalformedToolCalls,
@@ -58,6 +58,7 @@ import {
   streamWithIdleTimeout,
 } from "./llm-idle-timeout.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
+import { estimateProjectedRequestTokenPressure } from "./preemptive-compaction.js";
 import { wrapStreamObjectSettlement } from "./stream-wrapper.js";
 
 type CompactionReplayStreamOptions = NonNullable<Parameters<StreamFn>[2]> & {
@@ -99,7 +100,7 @@ function wrapStreamFnWithCompactionReplayRepair(
       await joinRepairs();
       throw error;
     }
-    return wrapStreamObjectSettlement(response, joinRepairs);
+    return wrapStreamObjectSettlement(response, joinRepairs, () => repairs.length > 0);
   };
 }
 
@@ -213,6 +214,7 @@ export function installEmbeddedAttemptStreamGuards(
       cacheRetention: effectivePromptCacheRetention,
       streamStrategy,
       transport: effectiveAgentTransport,
+      getSystemPromptSeries: () => input.prepared.sessionRuntime.state.systemPromptSeries,
     },
     (observation, snapshot) => {
       if (observation.broke) {
@@ -225,6 +227,9 @@ export function installEmbeddedAttemptStreamGuards(
             `requestGapMs=${observation.requestGapMs ?? "unknown"} promptTokens=${observation.promptTokens ?? "unknown"} ` +
             `responseId=${observation.responseId ?? "unknown"} sessionId=${attempt.sessionId} ` +
             `${turnFacts} ` +
+            (observation.systemPromptSeries
+              ? `systemPromptSeries=${observation.systemPromptSeries} `
+              : "") +
             `providerPrefix=${observation.providerPrefix ?? "unavailable"} ` +
             `requests=${JSON.stringify(observation.requests)}`,
         );
@@ -303,9 +308,6 @@ export function installEmbeddedAttemptStreamGuards(
     installStreamWrapper(wrapStreamFnWithCompactionReplayRepair, (checkpoint) =>
       repairRejectedReplay("compaction", checkpoint),
     );
-  }
-  if (isOpenAIResponsesApi) {
-    installStreamWrapper(wrapStreamFnWithMessageTransform, sanitizeOpenAIResponsesReplayForStream);
   }
 
   const innerStreamFn = session.agent.streamFn;
@@ -474,6 +476,16 @@ export function installEmbeddedAttemptStreamGuards(
           : undefined;
       if (input.activeContextEngine?.info.ownsCompaction || request.requestIndex > 1) {
         contextGuards.checkMidTurnPrecheck({ context: args[1], previousRequest });
+      }
+      if (args[0].api === "openai-completions") {
+        measuredRequestPressure.set(
+          args[0],
+          args[1],
+          previousRequest && previousRequest.contextTokens > 0
+            ? estimateProjectedRequestTokenPressure({ context: args[1], previousRequest })
+                .estimatedPromptTokens
+            : undefined,
+        );
       }
       return previousRequest;
     },

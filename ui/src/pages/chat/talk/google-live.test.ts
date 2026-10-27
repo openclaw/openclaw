@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
+import { consultRunResult } from "./consult.test-support.ts";
 import {
   audioContexts,
   beginTransport,
@@ -138,11 +139,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     transport.activate();
     transport.activate();
     expect(onStatus).toHaveBeenCalledExactlyOnceWith("listening");
-    expect(onTalkEvent.mock.calls[0]?.[0]).toMatchObject({
-      type: "session.ready",
-      sessionId: "main:google:provider-websocket",
-      transport: "provider-websocket",
-    });
+    expect(onTalkEvent).toHaveBeenCalledExactlyOnceWith({ type: "session.ready" });
   });
 
   it("closes Google audio and its socket when the microphone ends", async () => {
@@ -239,8 +236,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
   });
 
   it("stops queued output when Google Live sends interruption", async () => {
-    const onTalkEvent = vi.fn();
-    const { ws } = await startFixture({ onTalkEvent });
+    const { ws } = await startFixture();
 
     ws.emitContent({
       modelTurn: {
@@ -253,17 +249,11 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     ws.emitContent({ interrupted: true });
 
     await waitForFast(() => expect(source?.stop).toHaveBeenCalledTimes(1));
-    const cancelledEvent = onTalkEvent.mock.calls.find(
-      ([event]) => event.type === "turn.cancelled",
-    )?.[0];
-    expect(cancelledEvent?.final).toBe(true);
-    expect(cancelledEvent?.payload).toStrictEqual({ reason: "provider-interrupted" });
   });
 
   it("closes an overflowing playback response and ignores late provider audio", async () => {
     const onStatus = vi.fn();
-    const onTalkEvent = vi.fn();
-    const { ws } = await startFixture({ onStatus, onTalkEvent });
+    const { ws } = await startFixture({ onStatus });
 
     ws.emitContent({
       modelTurn: {
@@ -282,14 +272,6 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     expect(createdSources).toHaveLength(4_096);
     expect(createdSources.every((source) => source.stop.mock.calls.length === 1)).toBe(true);
     expect(ws.readyState).toBe(3);
-    expect(
-      onTalkEvent.mock.calls.some(
-        ([event]) =>
-          event.type === "turn.cancelled" &&
-          event.final === true &&
-          event.payload?.reason === "playback-overflow",
-      ),
-    ).toBe(true);
 
     ws.emitContent({
       modelTurn: {
@@ -332,11 +314,9 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     expect(ws.readyState).toBe(3);
   });
 
-  it("emits common Talk events for Google Live transcript and audio frames", async () => {
+  it("publishes transcripts and plays Google Live audio frames", async () => {
     const onTranscript = vi.fn();
-    const onTalkEvent = vi.fn();
-    const { ws } = await startFixture({ onTalkEvent, onTranscript });
-    onTalkEvent.mockClear();
+    const { ws } = await startFixture({ onTranscript });
     ws.emitContent({
       inputTranscription: { text: "hello", finished: true },
       outputTranscription: { text: "hi", finished: false },
@@ -350,23 +330,13 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     });
 
     await waitForFast(() =>
-      expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toEqual([
-        "transcript.done",
-        "output.text.delta",
-        "output.audio.delta",
-        "output.text.done",
-        "turn.ended",
-      ]),
+      expect(onTranscript).toHaveBeenLastCalledWith({ role: "assistant", text: "hi", final: true }),
     );
-    expect(onTalkEvent.mock.calls.map(([event]) => event.turnId)).toEqual(Array(5).fill("turn-1"));
     expect(onTranscript).toHaveBeenCalledWith({ role: "user", text: "hello", final: true });
     expect(onTranscript).toHaveBeenCalledWith({ role: "assistant", text: "hi", final: false });
     expect(onTranscript).toHaveBeenLastCalledWith({ role: "assistant", text: "hi", final: true });
     expect(onTranscript).toHaveBeenCalledTimes(3);
-    const audioEvent = onTalkEvent.mock.calls[2]?.[0];
-    expect(audioEvent?.payload).toStrictEqual({ byteLength: 4, mimeType: "audio/pcm;rate=24000" });
-    expect(audioEvent?.sessionId).toBe("main:google:provider-websocket");
-    expect(audioEvent?.transport).toBe("provider-websocket");
+    expect(createdSources).toHaveLength(1);
   });
 
   it("stops processing the current provider message when a transcript callback closes it", async () => {
@@ -463,12 +433,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       addEventListener,
       request: vi.fn(async (method: string) => {
         expect(method).toBe("talk.client.toolCall");
-        return {
-          runId: "run-1",
-          idempotencyKey: "run-1",
-          agentId: "main",
-          agentSessionKey: "agent:main:main",
-        };
+        return consultRunResult();
       }),
     } as unknown as RealtimeTalkTransportContext["client"];
     const transport = await sessionTransport(
@@ -524,8 +489,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
   });
 
   it("answers unsupported browser tools once without retaining them", async () => {
-    const onTalkEvent = vi.fn();
-    const transport = await createTransport({ onTalkEvent });
+    const transport = await createTransport();
     const ws = await startTransport(transport);
 
     ws.emitMessage(
@@ -550,13 +514,6 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       }),
     );
     expect(getGoogleLiveToolOwnerState(transport).pendingCalls.size).toBe(0);
-    expect(onTalkEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "tool.error",
-        callId: "call-unknown",
-        final: true,
-      }),
-    );
     ws.emitMessage(
       encodeJsonFrame({
         toolCall: {
@@ -691,7 +648,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     transport.stop();
   });
 
-  it("aborts browser control requests without emitting a false terminal outcome", async () => {
+  it("aborts browser control requests without submitting their result", async () => {
     const pendingControl = createDeferred<{ ok: boolean; mode: string }>();
     const request = vi.fn((method: string): Promise<unknown> => {
       expect(method).toBe("talk.client.steer");
@@ -701,8 +658,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       addEventListener: vi.fn(() => () => undefined),
       request,
     } as unknown as RealtimeTalkTransportContext["client"];
-    const onTalkEvent = vi.fn();
-    const { transport, ws } = await startFixture({ onTalkEvent }, client);
+    const { transport, ws } = await startFixture({}, client);
 
     ws.emitCalls({
       id: "call-control",
@@ -722,11 +678,6 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       expect(getGoogleLiveToolOwnerState(transport).pendingCalls.has("call-control")).toBe(false),
     );
 
-    expect(
-      onTalkEvent.mock.calls.some(
-        ([event]) => event.type === "tool.progress" || event.type === "tool.error",
-      ),
-    ).toBe(false);
     expect(hasToolResponse(ws, "call-control")).toBe(false);
     transport.stop();
   });

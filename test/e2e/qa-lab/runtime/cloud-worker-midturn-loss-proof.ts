@@ -296,6 +296,7 @@ async function runProof(options: ProducerOptions) {
     const transport = createQaChannelTransport(state);
     gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
+      initializeCurrentRuntimeState: true,
       useRepoCli: true,
       providerBaseUrl: `${provider.baseUrl}/v1`,
       providerMode: "mock-openai",
@@ -317,7 +318,7 @@ async function runProof(options: ProducerOptions) {
     });
     const events: GatewayEvent[] = [];
     const deviceIdentity = loadOrCreateDeviceIdentity({
-      path: path.join(fixtureRoot, "operator-identity.sqlite"),
+      path: path.join(fixtureRoot, "operator", "client", "credentials.sqlite"),
     });
     operator = await connectOperator(gateway, events, deviceIdentity);
     workerNode = await createPairedNodeWorkerHost({

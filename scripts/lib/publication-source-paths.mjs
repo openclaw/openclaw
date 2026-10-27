@@ -56,6 +56,7 @@ export const publicationSourceToolingPaths = new Set([
   "src/infra/retry.ts",
   "src/infra/secure-random.ts",
   "src/logging/secret-redaction-registry.ts",
+  "src/plugins/record-groups.ts",
   "src/shared/global-singleton.ts",
   "src/shared/regexp.ts",
   "scripts/lib/full-release-child-request.mjs",

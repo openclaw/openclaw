@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 // Discord tests cover agent components.wildcard plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildDiscordComponentCustomId, buildDiscordModalCustomId } from "../components.js";
@@ -27,6 +28,7 @@ describe("discord wildcard component registration ids", () => {
     const interactionModalId = buildDiscordModalCustomId("mdl_test");
 
     for (const component of components) {
+      assert(component.customIdParser);
       expect(component.customIdParser(component.customId).key).toBe("*");
       if (component.customId.includes("_modal_")) {
         expect(component.customIdParser(interactionModalId).key).toBe("*");

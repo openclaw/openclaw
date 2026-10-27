@@ -52,7 +52,6 @@ describe("CronService restart catch-up with dynamic cadence", () => {
         cronEnabled: true,
         log: logger,
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob,
       });
     const original = createService();
@@ -146,7 +145,6 @@ function commandService(
     cronEnabled: true,
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     runCommandJob,
   });

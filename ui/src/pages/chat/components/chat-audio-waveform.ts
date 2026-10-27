@@ -5,12 +5,6 @@ const CHAT_AUDIO_WAVEFORM_BUCKET_COUNT = 96;
 const WAVEFORM_MIN_BAR_WIDTH_PX = 2.5;
 const WAVEFORM_MIN_GAP_PX = 2.5;
 
-type ChatAudioBufferLike = {
-  length: number;
-  numberOfChannels: number;
-  getChannelData(channel: number): Float32Array;
-};
-
 export type CachedChatAudioBlob = {
   blobUrl: string;
   sizeBytes: number;
@@ -40,11 +34,12 @@ export function shouldFetchChatAudioWaveform(params: {
   );
 }
 
-export function computeChatAudioWaveformPeaks(
-  buffer: ChatAudioBufferLike,
-  bucketCount = CHAT_AUDIO_WAVEFORM_BUCKET_COUNT,
-): number[] {
-  const count = Math.max(1, Math.floor(bucketCount));
+export function computeChatAudioWaveformPeaks(buffer: {
+  length: number;
+  numberOfChannels: number;
+  getChannelData(channel: number): Float32Array;
+}): number[] {
+  const count = CHAT_AUDIO_WAVEFORM_BUCKET_COUNT;
   if (buffer.length <= 0 || buffer.numberOfChannels <= 0) {
     return Array.from({ length: count }, () => 0);
   }

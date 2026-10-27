@@ -1,14 +1,12 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { registerSandboxBackend } from "./backend.js";
-import { resolveSandboxContext } from "./context.js";
-import { resolvePreparedSandboxRuntimeStatus } from "./runtime-status.js";
+import * as custody from "./context-custody.test-support.js";
 
 const registry = vi.hoisted(() => ({
   readRegisteredSandboxRuntimeIds: vi.fn<() => Promise<string[]>>(),
@@ -20,19 +18,59 @@ vi.mock("../../skills/loading/workspace-skill-sync.runtime.js", () => ({
 }));
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.clearAllMocks());
+
+it("checks physical custody once per runtime assertion and refuses a successor owner", async () => {
+  const root = roots.make("sandbox-owner-assertion-");
+  await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
+    const owner = custody.acquireOwner(root);
+    let assertCurrent: (() => void) | undefined;
+    const restore = registerSandboxBackend("owner-assertion", async (params) => {
+      assertCurrent = params.assertRuntimeCurrent;
+      return {
+        id: "owner-assertion",
+        runtimeId: "synthetic-owner-assertion",
+        runtimeLabel: "Synthetic owner assertion",
+        workdir: "/workspace",
+        buildExecSpec: vi.fn(),
+        runShellCommand: vi.fn(),
+      };
+    });
+    let successor: ReturnType<typeof custody.acquireOwner> | undefined;
+    try {
+      registry.readRegisteredSandboxRuntimeIds.mockResolvedValueOnce([]);
+      await custody.prepareContext(
+        custody.createConfig({ backend: "owner-assertion" }),
+        "agent:main:subagent:owner-assertion",
+        path.join(root, "workspace"),
+      );
+      expect(assertCurrent).toBeDefined();
+      const stat = vi.spyOn(fs, "lstatSync");
+      try {
+        assertCurrent!();
+        // fs-safe brackets one physical custody verification with two leaf observations.
+        expect(stat.mock.calls.filter(([pathname]) => pathname === owner.path)).toHaveLength(2);
+      } finally {
+        stat.mockRestore();
+      }
+      fs.unlinkSync(owner.path);
+      expect(assertCurrent).toThrow();
+      owner.release();
+      successor = custody.acquireOwner(root);
+      expect(assertCurrent).toThrow();
+      expect(() => successor?.assertCurrent()).not.toThrow();
+    } finally {
+      successor?.release();
+      owner.release();
+      restore();
+    }
+  });
+});
 
 it("rejects released hosted custody before ordinary sandbox backend provisioning", async () => {
   const root = roots.make("sandbox-owner-lifetime-");
   await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-    const owner = acquireGatewayStateOwner({
-      databasePath: resolveOpenClawStateSqlitePath(),
-      payload: {
-        pid: process.pid,
-        createdAt: new Date().toISOString(),
-        configPath: path.join(root, "openclaw.json"),
-        role: "gateway",
-      },
-    });
+    const owner = custody.acquireOwner(root);
     const entered = createDeferred();
     const resume = createDeferred();
     registry.readRegisteredSandboxRuntimeIds.mockImplementationOnce(async () => {
@@ -49,30 +87,12 @@ it("rejects released hosted custody before ordinary sandbox backend provisioning
       runShellCommand: vi.fn(),
     }));
     const restore = registerSandboxBackend("owner-lifetime", backend);
-    const config: OpenClawConfig = {
-      agents: {
-        defaults: {
-          skipBootstrap: true,
-          sandbox: {
-            mode: "all",
-            backend: "owner-lifetime",
-            workspaceAccess: "rw",
-            prune: { idleHours: 0, maxAgeDays: 0 },
-          },
-        },
-      },
-    };
+    const config: OpenClawConfig = custody.createConfig(
+      { backend: "owner-lifetime" },
+      { agents: { defaults: { skipBootstrap: true } } },
+    );
     const sessionKey = "agent:main:subagent:owner-lifetime";
-    const preparation = resolveSandboxContext({
-      config,
-      sessionKey,
-      workspaceDir: path.join(root, "workspace"),
-      preparedRuntimeStatus: resolvePreparedSandboxRuntimeStatus({
-        cfg: config,
-        sessionKey,
-        preparedSessionEntry: null,
-      }),
-    });
+    const preparation = custody.prepareContext(config, sessionKey, path.join(root, "workspace"));
     try {
       await awaitGateBeforeSettlement(
         entered.promise,

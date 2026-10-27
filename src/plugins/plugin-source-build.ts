@@ -22,16 +22,8 @@ export type PluginSourceFile = {
   generated?: true;
 };
 
-export type PluginSourceBuild = {
-  directory: string;
-  include: (additions: readonly string[]) => void;
-  resolve: (source: string, mode?: PluginSourceLoadMode, nativeFormat?: string | null) => string;
-  sourceForOutput: (file: string) => PluginSourceFile | undefined;
-  dispose: () => void;
-};
-
 /** Compile captured source into a private namespace; native files stay with their capture owner. */
-export function buildPluginTypeScriptSource(root: string): PluginSourceBuild {
+export function buildPluginTypeScriptSource(root: string) {
   if (!useNodeModuleHooks()) {
     throw new Error("Plugin source builds require Node module hooks");
   }
@@ -41,50 +33,21 @@ export function buildPluginTypeScriptSource(root: string): PluginSourceBuild {
   const failures = new Map<string, unknown>();
   const helpers = new Map<string, PluginSourceFile>();
   const sources = new Map<string, PluginSourceFile>();
-  const included = new Set<string>();
   let disposed = false;
   const jiti = createJiti(root, { fsCache: false, moduleCache: false, tsconfigPaths: false });
   const { jsx, transform } = jiti.options;
   if (!transform) {
     throw new Error("Jiti source transformer is unavailable");
   }
-  const include = (source: string) => {
-    if (!isPathInside(root, source) || included.has(source)) {
-      return;
-    }
-    included.add(source);
-    const parts = path.relative(root, source).split(path.sep);
-    if (parts.includes("node_modules")) {
-      return;
-    }
-    if (fs.lstatSync(source).isDirectory()) {
-      for (const name of fs.readdirSync(source).toSorted()) {
-        include(path.join(source, name));
-      }
-    } else if (
-      (/\.[cm]?tsx?$/.test(source) || (jsx && source.endsWith(".jsx"))) &&
-      !/\.d\.[cm]?ts$/.test(source)
-    ) {
-      // The namespace contains generated files only, including after package promotion.
-      const emitted = path.join(directory, `module-${outputs.size}.js`);
-      outputs.set(source, emitted);
-      sources.set(emitted, { source });
-      fs.writeFileSync(emitted, "", { flag: "wx", mode: 0o600 });
-    }
-  };
   const dispose = () => {
     disposed = true;
     fs.rmSync(directory, { recursive: true, force: true });
   };
   try {
-    for (const name of fs.readdirSync(root).toSorted()) {
-      include(path.join(root, name));
-    }
     const compile = (input: string, destination: string, format: string | null | undefined) => {
       const { parse, parseExpression }: typeof import("@babel/parser") = require("@babel/parser");
       const { default: traverse }: typeof import("@babel/traverse") = require("@babel/traverse");
       const { default: generate }: typeof import("@babel/generator") = require("@babel/generator");
-      const { transformSync }: typeof import("esbuild") = require("esbuild");
       const sourceText = fs.readFileSync(input, "utf8");
       const mode = sources.get(destination)?.mode;
       const transformOptions = {
@@ -98,94 +61,6 @@ export function buildPluginTypeScriptSource(root: string): PluginSourceBuild {
           compilerOptions: { experimentalDecorators: true, useDefineForClassFields: true },
         },
       } satisfies import("esbuild").TransformOptions;
-      // Analyze runtime JavaScript so erased types, legacy syntax and value scopes share one owner.
-      const analysis = transformSync(sourceText, {
-        ...transformOptions,
-        sourcefile: path.relative(root, input),
-      }).code;
-      let parsed: ReturnType<typeof parse>;
-      try {
-        parsed = parse(analysis, {
-          sourceFilename: input,
-          sourceType: "unambiguous",
-          allowAwaitOutsideFunction: true,
-          allowReturnOutsideFunction: true,
-          plugins: input.endsWith("x") ? ["jsx"] : [],
-        });
-      } catch (error) {
-        if (error instanceof SyntaxError) {
-          throw new SyntaxError(`${path.relative(root, input)}: ${error.message}`, {
-            cause: error,
-          });
-        }
-        throw error;
-      }
-      let usesCommonJs = false;
-      let needsHelper = false;
-      let explicitInterop = false;
-      let wildcardExports = false;
-      let loader = "";
-      let factory = "";
-      let namespace = "";
-      const globals: NodePath<Identifier>[] = [];
-      traverse(parsed, {
-        Program(program) {
-          loader = program.scope.generateUidIdentifier("pluginRequire").name;
-          factory = program.scope.generateUidIdentifier("createPluginRequire").name;
-          namespace = program.scope.generateUidIdentifier("pluginNamespace").name;
-        },
-        ReferencedIdentifier(reference) {
-          if (!reference.isIdentifier()) {
-            return;
-          }
-          const name = reference.node.name;
-          if (reference.scope.getBinding(name)) {
-            return;
-          }
-          if (name === "module" || name === "exports") {
-            usesCommonJs = true;
-          }
-          if (["require", "__filename", "__dirname"].includes(name)) {
-            globals.push(reference);
-            needsHelper ||= name === "require";
-          }
-        },
-        ImportDeclaration() {
-          needsHelper = true;
-        },
-        ExportNamedDeclaration(declaration) {
-          needsHelper ||= Boolean(declaration.node.source);
-          explicitInterop ||= declaration.node.specifiers.some((specifier) =>
-            specifier.exported.type === "StringLiteral"
-              ? specifier.exported.value === "module.exports"
-              : specifier.exported.name === "module.exports",
-          );
-        },
-        ExportAllDeclaration() {
-          needsHelper = true;
-          wildcardExports = true;
-        },
-        ImportExpression() {
-          needsHelper = true;
-        },
-        MemberExpression(member) {
-          needsHelper ||=
-            member.node.object.type === "MetaProperty" &&
-            member.node.object.meta.name === "import" &&
-            member.node.property.type === "Identifier" &&
-            member.node.property.name === "resolve";
-        },
-      });
-      const native = mode === "native";
-      const nativeModule = native && (format === "module" || format === "module-typescript");
-      const nativeCommonJs = native && (format === "commonjs" || format === "commonjs-typescript");
-      const esm =
-        nativeModule ||
-        (!nativeCommonJs &&
-          mode !== "sync" &&
-          (/\.mtsx?$/.test(input) ||
-            (!/\.ctsx?$/.test(input) && parsed.program.sourceType === "module" && !usesCommonJs)));
-      formats.set(destination, esm ? "module" : "commonjs");
       const createImportHelper = () => {
         const helper = path.join(path.dirname(destination), `.import-meta-${randomUUID()}.mjs`);
         fs.writeFileSync(
@@ -282,6 +157,12 @@ export const resolve = (specifier, options) => {
         });
         const error: unknown = result.error;
         if (error) {
+          // Keep the existing source-relative syntax diagnostic, only on a failed Jiti transform.
+          const { transformSync }: typeof import("esbuild") = require("esbuild");
+          transformSync(sourceText, {
+            ...transformOptions,
+            sourcefile: path.relative(root, input),
+          });
           throw new SyntaxError(
             (error instanceof Error ? error.message : stringifyNonErrorCause(error)).replaceAll(
               input,
@@ -289,12 +170,31 @@ export const resolve = (specifier, options) => {
             ),
           );
         }
-        const helper = asynchronous || needsHelper ? createImportHelper() : undefined;
         const output = parse(result.code, {
           sourceType: "script",
           allowAwaitOutsideFunction: true,
           allowReturnOutsideFunction: true,
         });
+        let needsHelper = asynchronous;
+        if (!needsHelper) {
+          // Jiti has erased types and lowered runtime bindings; never infer globals from TS syntax.
+          traverse(output, {
+            ReferencedIdentifier(reference) {
+              if (!reference.isIdentifier()) {
+                return;
+              }
+              const name = reference.node.name;
+              if (
+                ["require", "jitiImport", "jitiESMResolve"].includes(name) &&
+                !reference.scope.getBinding(name)
+              ) {
+                needsHelper = true;
+                reference.stop();
+              }
+            },
+          });
+        }
+        const helper = needsHelper ? createImportHelper() : undefined;
         const header =
           parse(`__filename = ${JSON.stringify(input)}; __dirname = ${JSON.stringify(path.dirname(input))};
           ${
@@ -329,12 +229,81 @@ ${code}
 }
 export { value as "openclaw:async-commonjs" };`
           : code;
-        if (asynchronous) {
-          formats.set(destination, "module");
-        }
+        formats.set(destination, asynchronous ? "module" : "commonjs");
         fs.writeFileSync(destination, emitted, { mode: 0o600 });
         return;
       }
+      const { transformSync }: typeof import("esbuild") = require("esbuild");
+      // Analyze runtime JavaScript so erased types, legacy syntax and value scopes share one owner.
+      const analysis = transformSync(sourceText, {
+        ...transformOptions,
+        sourcefile: path.relative(root, input),
+      }).code;
+      let parsed: ReturnType<typeof parse>;
+      try {
+        parsed = parse(analysis, {
+          sourceFilename: input,
+          sourceType: "unambiguous",
+          allowAwaitOutsideFunction: true,
+          allowReturnOutsideFunction: true,
+          plugins: input.endsWith("x") ? ["jsx"] : [],
+        });
+      } catch (error) {
+        if (error instanceof SyntaxError) {
+          throw new SyntaxError(`${path.relative(root, input)}: ${error.message}`, {
+            cause: error,
+          });
+        }
+        throw error;
+      }
+      let usesCommonJs = false;
+      let explicitInterop = false;
+      let wildcardExports = false;
+      let loader = "";
+      let factory = "";
+      let namespace = "";
+      const globals: NodePath<Identifier>[] = [];
+      traverse(parsed, {
+        Program(program) {
+          loader = program.scope.generateUidIdentifier("pluginRequire").name;
+          factory = program.scope.generateUidIdentifier("createPluginRequire").name;
+          namespace = program.scope.generateUidIdentifier("pluginNamespace").name;
+        },
+        ReferencedIdentifier(reference) {
+          if (!reference.isIdentifier()) {
+            return;
+          }
+          const name = reference.node.name;
+          if (reference.scope.getBinding(name)) {
+            return;
+          }
+          if (name === "module" || name === "exports") {
+            usesCommonJs = true;
+          }
+          if (["require", "__filename", "__dirname"].includes(name)) {
+            globals.push(reference);
+          }
+        },
+        ExportNamedDeclaration(declaration) {
+          explicitInterop ||= declaration.node.specifiers.some((specifier) =>
+            specifier.exported.type === "StringLiteral"
+              ? specifier.exported.value === "module.exports"
+              : specifier.exported.name === "module.exports",
+          );
+        },
+        ExportAllDeclaration() {
+          wildcardExports = true;
+        },
+      });
+      const native = mode === "native";
+      const nativeModule = native && (format === "module" || format === "module-typescript");
+      const nativeCommonJs = native && (format === "commonjs" || format === "commonjs-typescript");
+      const esm =
+        nativeModule ||
+        (!nativeCommonJs &&
+          (/\.mtsx?$/.test(input) ||
+            (!/\.ctsx?$/.test(input) && parsed.program.sourceType === "module" && !usesCommonJs)));
+      formats.set(destination, esm ? "module" : "commonjs");
       let needsRequire = false;
       for (const reference of globals) {
         const name = reference.node.name;
@@ -409,17 +378,28 @@ export { value as "openclaw:async-commonjs" };`
     });
     return {
       directory,
-      include: (additions: readonly string[]) => {
+      resolve: (source: string, mode?: PluginSourceLoadMode, nativeFormat?: string | null) => {
         if (disposed) {
           throw new Error("Plugin source view has been disposed");
         }
-        additions.forEach(include);
-      },
-      resolve: (source: string, mode?: PluginSourceLoadMode, nativeFormat?: string | null) => {
-        const filename = outputs.get(source);
-        const entry = filename && sources.get(filename);
+        let filename = outputs.get(source);
+        let entry = filename && sources.get(filename);
+        if (
+          !filename &&
+          isPathInside(root, source) &&
+          !path.relative(root, source).split(path.sep).includes("node_modules") &&
+          (/\.[cm]?tsx?$/.test(source) || (jsx && source.endsWith(".jsx"))) &&
+          !/\.d\.[cm]?ts$/.test(source)
+        ) {
+          // Resolve-only callers need an existing stable path, but no compilation or root walk.
+          filename = path.join(directory, `module-${outputs.size}.js`);
+          fs.writeFileSync(filename, "", { flag: "wx", mode: 0o600 });
+          outputs.set(source, filename);
+          entry = { source };
+          sources.set(filename, entry);
+        }
         // Resolution may inspect a source before executing it. Only compilation fixes its mode.
-        if (entry && !formats.has(filename)) {
+        if (filename && entry && !formats.has(filename)) {
           entry.mode = mode ?? entry.mode ?? "native";
           entry.nativeFormat = nativeFormat ?? entry.nativeFormat;
         }

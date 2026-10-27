@@ -4,26 +4,47 @@ import type {
   SessionReactionsListResult,
   SessionReactionsSetResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { canReactToSession } from "../../app/operator-access.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
+import { showToast } from "../../lib/toast.ts";
+import { projectChatMessageReactions } from "./chat-message-reactions-snapshot.ts";
 import { ChatPaneSharingActions } from "./chat-pane-sharing-actions.ts";
-import { selectedChatSessionRow } from "./chat-state-route.ts";
+import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
+import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
+
+type PendingReaction = {
+  messageId: string;
+  emoji: string;
+  remove: boolean;
+  identity: MessageReactionSummary["identities"][number];
+};
 
 export abstract class ChatPaneReactions extends ChatPaneSharingActions {
   private reactionTarget = "";
+  private reactionOwner: ReturnType<typeof gatewayPresentationScope> | undefined;
+  private reactionReadGeneration = -1;
   private reactionGeneration = 0;
   private reactionReadUpdates: Map<string, MessageReactionSummary[]> | undefined;
+  private reactionServer = new Map<string, MessageReactionSummary[]>();
+  private reactionHydrated = false;
+  private readonly reactionPending = new Map<string, PendingReaction>();
   private readonly reactionRevisions = new Map<string, number>();
   private readonly reactionWrites = new Map<string, symbol>();
 
   protected resetSessionReactions(): void {
     this.reactionGeneration += 1;
     this.reactionTarget = "";
+    this.reactionOwner = undefined;
+    this.reactionReadGeneration = -1;
     this.collaboration.reactions = new Map();
+    this.reactionServer = new Map();
+    this.reactionHydrated = false;
+    this.reactionPending.clear();
     this.reactionReadUpdates = undefined;
     this.reactionRevisions.clear();
     this.reactionWrites.clear();
@@ -42,25 +63,45 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
 
   protected syncSessionReactions(): void {
     const scope = this.captureConnectionScope();
-    const state = scope?.state;
+    const state = this.state;
     const sessionId = state && (selectedChatSessionRow(state)?.sessionId ?? state.currentSessionId);
     const available =
-      scope &&
       state &&
       sessionId &&
       !parseCatalogSessionKey(state.sessionKey) &&
-      isGatewayMethodAdvertised(scope.context.gateway.snapshot, "session.reactions.list");
+      (!scope ||
+        isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.reactions.list"));
     const target = available
-      ? JSON.stringify([scope.generation, state.assistantAgentId, state.sessionKey, sessionId])
+      ? JSON.stringify([state.assistantAgentId, state.sessionKey, sessionId])
       : "";
-    if (this.reactionTarget === target) {
+    const owner = gatewayPresentationScope(this.context.gateway);
+    if (this.reactionTarget !== target || this.reactionOwner !== owner) {
+      this.resetSessionReactions();
+      this.reactionTarget = target;
+      this.reactionOwner = owner;
+    }
+    if (
+      available &&
+      !this.reactionHydrated &&
+      this.ownsChatSnapshot({ sessionKey: state.sessionKey })
+    ) {
+      const snapshot = readChatSessionSnapshot(state.chatMessagesBySession, state, {
+        sessionKey: state.sessionKey,
+      });
+      if (snapshot?.sessionId === sessionId && snapshot.messageReactions) {
+        this.reactionHydrated = true;
+        // Events received while storage opens outrank the saved display facts.
+        this.reactionServer = new Map([
+          ...Object.entries(snapshot.messageReactions),
+          ...this.reactionServer,
+        ]);
+        this.publishReactions();
+      }
+    }
+    if (!available || !scope || this.reactionReadGeneration === scope.generation) {
       return;
     }
-    this.resetSessionReactions();
-    this.reactionTarget = target;
-    if (!available) {
-      return;
-    }
+    this.reactionReadGeneration = scope.generation;
     const generation = this.reactionGeneration;
     const sessionKey = state.sessionKey;
     const updates = new Map<string, MessageReactionSummary[]>();
@@ -80,7 +121,9 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
           return;
         }
         // Events committed after the list began outrank its older snapshot.
-        this.collaboration.reactions = new Map([...Object.entries(result.reactions), ...updates]);
+        this.reactionHydrated = true;
+        this.reactionServer = new Map([...Object.entries(result.reactions), ...updates]);
+        this.publishReactions();
       })
       .catch((error: unknown) => {
         if (isCurrent()) {
@@ -88,7 +131,7 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
         }
       })
       .finally(() => {
-        if (generation === this.reactionGeneration) {
+        if (this.reactionReadUpdates === updates) {
           this.reactionReadUpdates = undefined;
         }
       });
@@ -117,10 +160,71 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
       (this.reactionRevisions.get(event.messageId) ?? 0) + 1,
     );
     this.reactionReadUpdates?.set(event.messageId, event.reactions);
-    this.collaboration.reactions = new Map(this.collaboration.reactions).set(
-      event.messageId,
-      event.reactions,
-    );
+    this.reactionServer.set(event.messageId, event.reactions);
+    this.publishReactions();
+  }
+
+  private publishReactions(): void {
+    const reactions = new Map(this.reactionServer);
+    for (const pending of this.reactionPending.values()) {
+      const summaries = [...(reactions.get(pending.messageId) ?? [])];
+      const index = summaries.findIndex((summary) => summary.emoji === pending.emoji);
+      const previous = summaries[index];
+      const identities = (previous?.identities ?? []).filter(
+        (identity) => identity.id !== pending.identity.id,
+      );
+      if (!pending.remove) {
+        identities.push(pending.identity);
+      }
+      if (identities.length > 0) {
+        const summary = { emoji: pending.emoji, count: identities.length, identities };
+        if (index < 0) {
+          summaries.push(summary);
+        } else {
+          summaries[index] = summary;
+        }
+      } else if (index >= 0) {
+        summaries.splice(index, 1);
+      }
+      reactions.set(pending.messageId, summaries);
+    }
+    this.collaboration.reactions = reactions;
+    this.cacheSessionReactions();
+  }
+
+  protected cacheSessionReactions(): void {
+    const state = this.state;
+    if (
+      !state ||
+      !this.reactionHydrated ||
+      this.reactionOwner !== gatewayPresentationScope(this.context.gateway)
+    ) {
+      return;
+    }
+    const target = { sessionKey: state.sessionKey };
+    if (!this.ownsChatSnapshot(target)) {
+      return;
+    }
+    const snapshot = readChatSessionSnapshot(state.chatMessagesBySession, state, target);
+    if (
+      !snapshot ||
+      snapshot.sessionId !== (selectedChatSessionRow(state)?.sessionId ?? state.currentSessionId)
+    ) {
+      return;
+    }
+    // Pending offline writes remain presentation-only until the Gateway accepts them.
+    const messageReactions = projectChatMessageReactions(snapshot.messages, this.reactionServer);
+    const entries = Object.entries(messageReactions);
+    if (
+      entries.length === Object.keys(snapshot.messageReactions ?? {}).length &&
+      entries.every(([id, summaries]) => snapshot.messageReactions?.[id] === summaries)
+    ) {
+      return;
+    }
+    cacheChatSessionSnapshot(state.chatMessagesBySession, state, target, {
+      ...snapshot,
+      messageReactions,
+    });
   }
 
   protected readonly handleMessageReaction = (
@@ -137,57 +241,113 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
     remove: boolean,
   ): Promise<void> => {
     const scope = this.captureConnectionScope();
-    if (!scope || !this.canReactToCurrentSession()) {
+    const state = this.state;
+    if (!state || !this.canReactToCurrentSession()) {
       return;
     }
     this.syncSessionReactions();
     const generation = this.reactionGeneration;
-    const revision = this.reactionRevisions.get(messageId) ?? 0;
-    const sessionKey = scope.state.sessionKey;
-    const sessionId =
-      selectedChatSessionRow(scope.state)?.sessionId ?? scope.state.currentSessionId;
-    const operation = Symbol("reaction");
-    this.reactionWrites.set(messageId, operation);
-    const isCurrent = () =>
+    const context = this.context;
+    const gateway = context.gateway;
+    const client = gateway.snapshot.client;
+    const deferredOwner =
+      !scope || gateway.snapshot.deferredIntentCount || gateway.snapshot.deferredIntentDraining
+        ? gatewayPresentationScope(gateway)
+        : undefined;
+    const sessionKey = state.sessionKey;
+    const sessionId = selectedChatSessionRow(state)?.sessionId ?? state.currentSessionId;
+    const params = {
+      sessionKey,
+      messageId,
+      emoji,
+      remove,
+      ...scopedAgentParamsForSession(state, sessionKey),
+    };
+    const ownsTarget = () =>
       generation === this.reactionGeneration &&
-      this.reactionWrites.get(messageId) === operation &&
-      this.isConnectionScopeCurrent(scope) &&
-      scope.state.sessionKey === sessionKey &&
-      (selectedChatSessionRow(scope.state)?.sessionId ?? scope.state.currentSessionId) ===
-        sessionId;
-    try {
-      const result = await scope.client.request<SessionReactionsSetResult>(
-        "session.reactions.set",
-        {
-          sessionKey,
-          messageId,
-          emoji,
-          remove,
-          ...scopedAgentParamsForSession(scope.state, sessionKey),
-        },
-      );
-      if (!isCurrent()) {
+      this.context === context &&
+      this.state === state &&
+      (deferredOwner
+        ? gatewayPresentationScope(gateway) === deferredOwner
+        : context.gateway.snapshot.client === client) &&
+      state.sessionKey === sessionKey &&
+      (selectedChatSessionRow(state)?.sessionId ?? state.currentSessionId) === sessionId;
+    const key = `reaction:${sessionKey}:${messageId}:${emoji}`;
+    let pending: PendingReaction | undefined;
+    const run = async (requestClient: NonNullable<typeof client>) => {
+      const publicationScope = deferredOwner ? this.captureConnectionScope() : scope;
+      const revision = this.reactionRevisions.get(messageId) ?? 0;
+      const operation = Symbol("reaction");
+      this.reactionWrites.set(messageId, operation);
+      const isCurrent = () =>
+        ownsTarget() &&
+        this.reactionWrites.get(messageId) === operation &&
+        publicationScope !== null &&
+        this.isConnectionScopeCurrent(publicationScope);
+      try {
+        const result = await requestClient.request<SessionReactionsSetResult>(
+          "session.reactions.set",
+          params,
+        );
+        if (isCurrent() && (this.reactionRevisions.get(messageId) ?? 0) === revision) {
+          this.reactionServer.set(messageId, result.reactions);
+          this.reactionReadUpdates?.set(messageId, result.reactions);
+        }
+      } catch (error) {
+        if (isCurrent()) {
+          state.chatError = formatUiError(error);
+          state.lastError = state.chatError;
+        } else if (
+          pending &&
+          !ownsTarget() &&
+          this.context === context &&
+          context.gateway === gateway &&
+          gateway.snapshot.client === requestClient &&
+          !requestClient.offlineRecoveryRetired &&
+          gatewayPresentationScope(gateway) === deferredOwner
+        ) {
+          showToast({ message: formatUiError(error) });
+        }
+      } finally {
+        if (ownsTarget()) {
+          if (pending && this.reactionPending.get(key) === pending) {
+            this.reactionPending.delete(key);
+          }
+          if (this.reactionWrites.get(messageId) === operation) {
+            this.reactionWrites.delete(messageId);
+          }
+          this.publishReactions();
+        }
+      }
+    };
+    if (!scope || deferredOwner) {
+      const self = deferredOwner?.displayUser;
+      if (self?.identity?.type !== "profile") {
         return;
       }
-      if ((this.reactionRevisions.get(messageId) ?? 0) === revision) {
-        this.collaboration.reactions = new Map(this.collaboration.reactions).set(
-          messageId,
-          result.reactions,
-        );
-        this.reactionReadUpdates?.set(messageId, result.reactions);
-      }
-    } catch (error) {
-      if (isCurrent()) {
-        scope.state.chatError = formatUiError(error);
-        scope.state.lastError = scope.state.chatError;
-      }
-    } finally {
+      pending = { messageId, emoji, remove, identity: { id: self.identity.id, label: self.name } };
+      const discard = () => {
+        if (ownsTarget() && this.reactionPending.get(key) === pending) {
+          this.reactionPending.delete(key);
+          this.publishReactions();
+        }
+      };
+      // Install the replacement before the queue discards its superseded intent.
+      this.reactionPending.set(key, pending);
+      this.publishReactions();
+      const agentId = resolveChatAgentId(state);
       if (
-        generation === this.reactionGeneration &&
-        this.reactionWrites.get(messageId) === operation
+        !context.gateway.defer({
+          key,
+          group: `sessions.lifecycle:${agentId}:${sessionKey}`,
+          run,
+          discard,
+        })
       ) {
-        this.reactionWrites.delete(messageId);
+        discard();
       }
+      return;
     }
+    await run(scope.client);
   };
 }

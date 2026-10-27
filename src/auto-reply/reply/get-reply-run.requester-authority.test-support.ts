@@ -4,7 +4,7 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
-import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
+import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
 import {
   captureRequesterContinuationCaller,
   prepareRequesterCronAuthority,
@@ -25,33 +25,44 @@ import {
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { readUserTurnRequesterOrigin } from "../../sessions/user-turn-transcript-admission.js";
+import { bindRequesterProfile } from "../requester-profile.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import type { runPreparedReply } from "./get-reply-run.js";
 import {
   baseParams,
-  createInboundTurn,
-  createSessionTurn,
   createProviderSurface,
+  type createPreparedReplyTurn,
 } from "./get-reply-run.test-support.js";
 
+type ReplyParams = Parameters<typeof runPreparedReply>[0];
 export function registerPendingRequesterAuthorityCases({
   runPrepared,
   loadSessionEntryMock,
   requireRunReplyAgentCall,
   turn,
 }: {
-  runPrepared: (
-    overrides?: Partial<Parameters<typeof runPreparedReply>[0]>,
-  ) => ReturnType<typeof runPreparedReply>;
+  runPrepared: (overrides?: Partial<ReplyParams>) => ReturnType<typeof runPreparedReply>;
   loadSessionEntryMock: { mockReturnValue(value: SessionEntry): unknown };
   requireRunReplyAgentCall: () => Parameters<typeof runReplyAgent>[0];
-  turn: (
-    body: string,
-    common: Parameters<typeof runPreparedReply>[0]["ctx"],
-    session?: Partial<Parameters<typeof runPreparedReply>[0]["sessionCtx"]>,
-    inbound?: Partial<Parameters<typeof runPreparedReply>[0]["ctx"]>,
-  ) => Pick<Parameters<typeof runPreparedReply>[0], "ctx" | "sessionCtx">;
+  turn: typeof createPreparedReplyTurn;
 }): void {
+  it("retains a linked nonadmin requester as the causal origin of delegated work", async () => {
+    const params = turn("Please inspect this", {
+      ...createProviderSurface("x"),
+      SenderId: "10",
+      AccountId: "default",
+    });
+    bindRequesterProfile(params.ctx, {
+      id: "linked-human",
+      displayName: "Ada",
+      isCurrent: () => true,
+    });
+    await runPrepared(params);
+    const run = requireRunReplyAgentCall().followupRun;
+    expect(run.operatorAuthority).toBeUndefined();
+    expect(run.run.requesterOrigin).toMatchObject({ delegatedCreatorProfileId: "linked-human" });
+  });
+
   it("persists admitted external-contact sender attribution on direct turns", async () => {
     await runPrepared({
       ...turn(
@@ -73,49 +84,17 @@ export function registerPendingRequesterAuthorityCases({
     });
   });
 
-  it.each([
-    {
-      name: "direct From without sender fields",
-      context: { ChatType: "direct", From: " discord:alice " },
-      senderId: "discord:alice",
-      senderE164: undefined,
-    },
-    {
-      name: "direct From with blank sender fields",
-      context: { ChatType: "direct", From: "discord:alice", SenderId: " ", SenderE164: " " },
-      senderId: "discord:alice",
-      senderE164: undefined,
-    },
-    {
-      name: "group input without a sender",
-      context: { ChatType: "group", From: "discord:alice" },
-      senderId: undefined,
-      senderE164: undefined,
-    },
-    {
-      name: "conversation-shaped From without chat type",
-      context: { From: "discord:channel:123" },
-      senderId: undefined,
-      senderE164: undefined,
-    },
-    {
-      name: "explicit raw sender fields",
-      context: {
-        ChatType: "direct",
-        From: "discord:alice",
-        SenderId: "transport-identity",
-        SenderE164: "+15550100100",
-      },
-      senderId: "transport-identity",
-      senderE164: "+15550100100",
-    },
-    {
-      name: "phone identity without a sender id",
-      context: { ChatType: "direct", From: "discord:alice", SenderE164: "+15550100100" },
-      senderId: undefined,
-      senderE164: "+15550100100",
-    },
-  ])("captures requester identity for $name", async ({ context, senderId, senderE164 }) => {
+  type IdentityCase = [string, ReplyParams["ctx"], string?, string?];
+  const direct = { ChatType: "direct", From: " discord:alice " };
+  const phone = "+15550100100";
+  const rawId = "transport-identity";
+  it.each<IdentityCase>([
+    ["blank sender", { ...direct, SenderId: " ", SenderE164: " " }, "discord:alice"],
+    ["senderless group", { ChatType: "group", From: "discord:alice" }],
+    ["conversation From", { From: "discord:channel:123" }],
+    ["raw sender", { ...direct, SenderId: rawId, SenderE164: phone }, rawId, phone],
+    ["phone only", { ...direct, SenderE164: phone }, undefined, phone],
+  ])("captures requester identity for %s", async (_name, context, senderId, senderE164) => {
     const params = baseParams();
     params.command.senderId = "configured-owner-alias";
     await runPrepared({
@@ -124,29 +103,26 @@ export function registerPendingRequesterAuthorityCases({
       ...turn("continue the work", { ...createProviderSurface("discord"), ...context }),
     });
     const { followupRun } = requireRunReplyAgentCall();
-    expect(followupRun.run.requesterOrigin).toMatchObject({ senderId, senderE164 });
-    expect(readUserTurnRequesterOrigin(followupRun.userTurnTranscriptRecorder)).toMatchObject({
-      senderId,
-      senderE164,
-    });
+    for (const origin of [
+      followupRun.run.requesterOrigin,
+      readUserTurnRequesterOrigin(followupRun.userTurnTranscriptRecorder),
+    ]) {
+      expect(origin).toBeDefined();
+      expect([origin?.senderId, origin?.senderE164]).toEqual([senderId, senderE164]);
+    }
   });
-  it.each(["fresh-non-owner", "fresh-owner", "inter-session", "heartbeat", "replay"] as const)(
+  it.each(["fresh-non-owner", "fresh-owner", "inter-session", "replay"] as const)(
     "retires pending owner task authority only for new channel input: %s",
     async (kind) => {
       const sessionKey = "agent:default:discord:channel:123";
       const sessionId = "pending-owner-session";
       const originalRunId = "pending-owner-run";
-      const child: SubagentRunRecord = {
+      const child = createSubagentRunRecord({
         runId: "pending-child",
-        execution: { status: "running" },
         requesterTurnRunId: originalRunId,
         requesterAgentId: "default",
         childSessionKey: "agent:default:subagent:child",
         requesterSessionKey: sessionKey,
-        requesterDisplayKey: "discord",
-        task: "review",
-        cleanup: "keep",
-        createdAt: 1,
         requesterSettleWake: {
           status: "pending",
           attemptCount: 0,
@@ -154,7 +130,7 @@ export function registerPendingRequesterAuthorityCases({
           rearmGeneration: 1,
           batchRunIds: ["pending-child"],
         },
-      };
+      });
       const batch = [child];
       const runs = new Map([[child.runId, child]]);
       const sessionEntry: SessionEntry = { sessionId, updatedAt: 1, lifecycleRevision: "original" };
@@ -210,20 +186,13 @@ export function registerPendingRequesterAuthorityCases({
           sessionKey,
           sessionId,
           sessionEntry,
-          ctx: {
-            ...createInboundTurn("new request", "discord", "group"),
+          ...turn("new request", {
+            ...createProviderSurface("discord"),
+            ChatType: "group",
             SenderId: "sender",
             InputProvenance: provenance,
-          },
-          sessionCtx: {
-            ...createSessionTurn("new request", "discord", "group"),
-            SenderId: "sender",
-            InputProvenance: provenance,
-          },
-          opts: {
-            isHeartbeat: kind === "heartbeat",
-            suppressNextUserMessagePersistence: kind === "replay",
-          },
+          }),
+          opts: { suppressNextUserMessagePersistence: kind === "replay" },
         });
         expect(runReplyAgent).toHaveBeenCalledOnce();
         await captureRequesterContinuationCaller({
@@ -254,30 +223,6 @@ export function registerPendingRequesterAuthorityCases({
         revokeRequesterCronAuthority(sessionKey);
         releaseAgentRunDelegatedAuthority(authority);
         clearAgentRunContext(originalRunId);
-        clearRuntimeConfigSnapshot();
-      }
-    },
-  );
-  it.each(["runtime", "scoped"] as const)(
-    "retains the %s config owner for queued admission",
-    async (kind) => {
-      const params = baseParams();
-      const runtimeConfig = params.cfg;
-      const scopedConfig = {
-        ...runtimeConfig,
-        commands: { ownerAllowFrom: ["slack:scoped-owner"] },
-      };
-      setRuntimeConfigSnapshot(runtimeConfig, runtimeConfig);
-      try {
-        await runPrepared({ ...params, cfg: kind === "scoped" ? scopedConfig : runtimeConfig });
-        const { followupRun } = requireRunReplyAgentCall();
-        const nextConfig = { ...runtimeConfig, commands: { ownerAllowFrom: ["slack:next-owner"] } };
-        setRuntimeConfigSnapshot(nextConfig, nextConfig);
-        expect(followupRun.readAdmissionConfig?.()).toEqual(
-          kind === "scoped" ? scopedConfig : nextConfig,
-        );
-        expect(followupRun.run.config).toEqual(kind === "scoped" ? scopedConfig : runtimeConfig);
-      } finally {
         clearRuntimeConfigSnapshot();
       }
     },

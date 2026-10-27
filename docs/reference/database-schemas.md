@@ -9,7 +9,7 @@ read_when:
 title: "Database schemas"
 ---
 
-OpenClaw stores control-plane state in the shared state database and agent data in one database per agent. SQLite is the default; agent stores also support the [experimental PostgreSQL engine](/reference/database-engines). SQLite schema migrations run forward when a database opens. Doctor supports owner-supplied forward migrations for PostgreSQL state and agent schemas, including agent schema 27 to 28, with exact predecessor backups. Older OpenClaw builds refuse databases written by a newer schema.
+OpenClaw stores control-plane state in the shared state database and agent data in one database per agent. SQLite is the default; agent stores also support the [PostgreSQL engine](/reference/database-engines). SQLite schema migrations run forward when a database opens. Doctor supports owner-supplied consecutive forward migrations for PostgreSQL state and agent schemas, with exact predecessor backups. Older OpenClaw builds refuse databases written by a newer schema.
 
 For runtime contributors, start with
 [database access in workers](/reference/database-schemas/worker-access): execution
@@ -23,7 +23,12 @@ fragments, and keeps engine schema versions in lockstep. See
 [shared-state schema generation](/reference/database-schemas/storage-changes#shared-state-postgresql-schema-generation)
 for catalog equivalence and the portable v22 identity columns.
 
-The Gateway process is the single owner of every OpenClaw database and its state.
+The Gateway process owns shared and agent databases and their state. Local client
+private identities, token caches, and native socket secrets have a separate owner
+at `<resolved-client-root>/client/credentials.sqlite`, even with a PostgreSQL or
+remote Gateway. The active native app routes authenticated requests to bounded local operations;
+app-absent clients acquire exclusive local custody for each operation. See
+[local client credentials](/reference/database-schemas/versioning#local-client-credentials).
 Its workers and native handles share that ownership. Committed write receipts
 invalidate in-process row caches before their next use; a cache without complete
 writer coverage must use a direct read instead. Runtime reads do not probe foreign
@@ -99,10 +104,11 @@ outside the transaction can refresh those facts through the existing owner.
 Native SQLite initialization reads the loaded library's version and extension
 capability in one query before admitting real state databases. Auth-profile
 readers install their lock-wait timeout at connection open.
-On first Gateway startup, a version-zero database containing only recognized
-native bootstrap tables is completed before runtime history is read. This uses
-the existing schema owner and preserves the native rows; it does not repair
-historical installations during ordinary startup.
+Before Gateway runtime history is read, the schema owner migrates a captured
+canonical database containing only recognized native bootstrap tables. It copies
+the credentials into the local store before retiring their shared tables.
+Independent native sources remain unchanged; ordinary startup does not repair
+historical installations without migration custody.
 Quarantine decision readers and writers set their existing lock-wait timeout at connection
 open. The quarantine store's format and each target's decision are loaded once
 per physical store. Record and clear operations publish the committed decision
@@ -162,7 +168,9 @@ the file. A clean-close seal carries validated facts across process restarts.
 File identity uses volume, inode, and stable
 birthtime captured once with `fstat` on the retained admission descriptor, not SQL.
 Admission lookups and established borrowers reuse those shared facts without
-checking the pathname again. Native open and reopen still identify replacement
+checking the pathname again. Shared-state handle lookups, including lease storage
+preparation, do not enter a schema read scope. Actual cached reads retain their
+schema and row-revision admission. Native open and reopen still identify replacement
 files, and creation witnesses retain their physical file check. A replaced or
 restored file needs fresh admission. Migration and repair owners validate their
 changes and publish new facts after successful DDL settlement. Ordinary Doctor
@@ -195,7 +203,9 @@ finishes before synchronous database execution; writer admission and receipts
 stay with their existing owners.
 
 The shared-state reader pool keeps its first worker warm for the normal handle
-idle timeout. Surplus readers retire after 30 seconds idle and restart on demand.
+idle timeout. Surplus readers initially retire after 30 seconds idle and restart on demand.
+When demand returns within five minutes of that retirement, one replacement
+reader stays warm for up to 90 idle seconds to avoid repeated startup work.
 Retirement uses the pool's existing task and native-resource settlement so an
 active read or retained lease is not interrupted.
 
@@ -213,9 +223,10 @@ flushes the remaining batch. Fresh checkpoints remain untouched, and a failed or
 canceled scan leaves uncommitted derived totals for the next refresh. Persisted
 rollups, partitions, schemas, and report totals keep their existing format.
 
-Transcript history and search lanes likewise retire surplus workers after 30
-seconds idle. Each lane keeps one worker until its existing five-minute idle
-retirement, which waits for logical reader leases to be released. Surplus
+Transcript history and search lanes use the same 30-second surplus timeout and
+90-second warm timeout for one recurring burst worker. Each lane keeps one worker
+until its existing five-minute idle retirement, which waits for logical reader
+leases to be released. Surplus
 retirement preserves those leases and waits for active tasks; a later concurrent
 read starts another worker on demand.
 
@@ -471,7 +482,7 @@ reader job. Open the page that matches your task and stay there.
 
 | Page                                                                                           | Read it when                                                                                             |
 | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| [Database engines (experimental)](/reference/database-engines)                                 | Selecting PostgreSQL, understanding SQLite anchors, or observing statements and worker requests.         |
+| [Database engines](/reference/database-engines)                                                | Selecting PostgreSQL, understanding SQLite anchors, or observing statements and worker requests.         |
 | [Database layout](/reference/database-schemas/layout)                                          | The two database roles, their on-disk paths, and the tables behind individual features.                  |
 | [Versioning contract](/reference/database-schemas/versioning)                                  | How schema versions are recorded, when a bump is required, and how updaters cross one.                   |
 | [Per-person and companion storage](/reference/database-schemas/personal-data)                  | Personal GitHub connections, personal model accounts, and Apple companion delivery journals.             |

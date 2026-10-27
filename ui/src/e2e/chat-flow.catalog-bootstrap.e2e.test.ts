@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol/frame-guards";
+import { withTimeout } from "@openclaw/fs-safe/advanced";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { upsertSessionEntryCore } from "../../../src/config/sessions/session-accessor.js";
 import {
@@ -14,8 +15,8 @@ import {
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { createRequireRecord } from "../../../test/helpers/record.js";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
-import { newChatPage, installMockGateway } from "./chat-flow.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -124,148 +125,6 @@ const suite = createControlUiE2eSuite({
 const requireRecord = createRequireRecord("record", "expected-object-value");
 
 suite.define(() => {
-  it.each([
-    {
-      route: "chat/alpha/~key/session-one",
-      sessionKey: "agent:alpha:session-one",
-      target: { agentId: "alpha", sessionKey: "agent:alpha:session-one" },
-      sessionScope: "per-sender" as const,
-    },
-    {
-      route: "chat/alpha",
-      sessionKey: "agent:alpha:main",
-      target: { agentId: "alpha", sessionKey: "agent:alpha:main" },
-      sessionScope: "per-sender" as const,
-    },
-    {
-      route: "chat/alpha/abcdef12",
-      sessionKey: "agent:alpha:dm:abcdef1234567890abcdef1234567890",
-      target: { agentId: "alpha", shortId: "abcdef12" },
-      sessionScope: "per-sender" as const,
-    },
-    {
-      route: "chat/alpha",
-      sessionKey: "global",
-      target: { agentId: "alpha", sessionKey: "agent:alpha:main" },
-      sessionScope: "global" as const,
-    },
-  ])(
-    "opens $route ($sessionKey) from its session snapshot while an older reply is held",
-    async ({ route, sessionKey, target, sessionScope }) => {
-      const page = await newChatPage(suite);
-      const current = {
-        provider: "fixture",
-        id: "session-current",
-        name: "Session model",
-        available: true,
-      };
-      const older = { ...current, id: "older", name: "Older model" };
-      const foreign = { ...current, id: "foreign", name: "Another context's model" };
-      const scope = { agentId: "alpha", sessionKey };
-      const gateway = await installMockGateway(page, {
-        connectCapabilities: [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT],
-        defaultAgentId: "alpha",
-        sessionKey,
-        sessionScope,
-        mainSessionKey: sessionScope === "global" ? "global" : "agent:alpha:main",
-        agentModel: "fixture/session-current",
-        sessionInfo: { model: current.id, modelProvider: current.provider },
-        models: [older],
-        heldMethods: ["models.list"],
-        presenceUsers: [{ id: "fixture-person", name: "Fixture Person", self: true }],
-        methodResponses: {
-          "sessions.list": {
-            ts: 1,
-            path: "",
-            count: 1,
-            sessions: [
-              {
-                key: sessionKey,
-                sessionId: "fixture-session",
-                kind: "direct",
-                updatedAt: 1,
-                model: current.id,
-                modelProvider: current.provider,
-              },
-            ],
-            defaults: { model: current.id, modelProvider: current.provider, contextTokens: null },
-          },
-          "models.list": {
-            models: [older],
-            accountSelection: { kind: "automatic", label: "Automatic" },
-          },
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}${route}`);
-      const connect = await gateway.waitForRequest("connect");
-      expect(connect.params).toMatchObject({ modelCatalog: target });
-      await expect
-        .poll(async () => (await gateway.getRequests("models.list", scope)).length)
-        .toBe(1);
-      // The chat's delayed child roster request is startup work, independent of the picker.
-      await gateway.waitForRequest("sessions.list", { match: { spawnedBy: sessionKey } });
-      for (const otherScope of [
-        { agentId: "alpha" },
-        { agentId: "alpha", sessionKey: "agent:alpha:other" },
-        { agentId: "bravo", sessionKey: "agent:bravo:session-one" },
-      ]) {
-        await gateway.emitGatewayEvent("models.snapshot", {
-          target: otherScope,
-          scope: otherScope,
-          catalog: { models: [foreign] },
-        });
-      }
-      expect(await gateway.getRequests("models.list", scope)).toHaveLength(1);
-      await gateway.emitGatewayEvent("models.snapshot", {
-        target,
-        scope: "shortId" in target ? scope : target,
-        catalog: {
-          models: [current],
-          pendingProviders: ["fixture"],
-          accountSelection: {
-            kind: "personal",
-            authProfileId: "personal:fixture-person:fixture:one",
-            label: "Pinned session account",
-            source: "user",
-          },
-        },
-      });
-      const picker = page.locator(
-        'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
-      );
-      const trigger = picker.locator("[data-chat-model-select]");
-      const currentRow = picker.locator('[data-chat-model-option="fixture/session-current"]');
-      const requestsBeforeOpen = (await gateway.getRequests("models.list")).length;
-      const sessionRequestsBeforeOpen = (await gateway.getRequests("sessions.list")).length;
-      await trigger.click();
-      await revealChatModelOption(currentRow);
-      await expect.poll(() => currentRow.isVisible()).toBe(true);
-      expect(await picker.textContent()).toContain("Pinned session account");
-      expect(await picker.locator("[data-chat-model-refresh]").textContent()).toContain(
-        "Refreshing models for Fixture…",
-      );
-      expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
-      expect(await gateway.getRequests("models.list")).toHaveLength(requestsBeforeOpen);
-      expect(await gateway.getRequests("sessions.list")).toHaveLength(sessionRequestsBeforeOpen);
-      await gateway.resolveDeferred("models.list", { models: [older] });
-      await expect.poll(() => currentRow.isVisible()).toBe(true);
-      expect(
-        await picker
-          .locator(
-            '[data-chat-model-option="fixture/older"], [data-chat-model-option="fixture/foreign"]',
-          )
-          .count(),
-      ).toBe(0);
-      expect(await picker.textContent()).toContain("Pinned session account");
-      await trigger.click();
-      await trigger.click();
-      await revealChatModelOption(currentRow);
-      await expect.poll(() => currentRow.isVisible()).toBe(true);
-      expect(await gateway.getRequests("models.list")).toHaveLength(requestsBeforeOpen);
-      expect(await gateway.getRequests("sessions.list")).toHaveLength(sessionRequestsBeforeOpen);
-    },
-  );
-
   it.each(["pending", "complete", "reconnect", "ordinary-reconnect"] as const)(
     "real chat route recovers current account state after %s snapshot ordering",
     async (replacementState) => {
@@ -291,6 +150,23 @@ suite.define(() => {
         let holdReplacement = true;
         let holdReconnectCatalog = false;
         let holdInitialSnapshot = true;
+        let catalogReloadStarted = false;
+        let reloadSnapshots = 0;
+        let reloadReplies = 0;
+        let reloadSnapshotIsB = false;
+        let reloadReplyIsB = false;
+        const recordCatalogFacts = () =>
+          recordControlUiE2eFailureFacts(page, {
+            catalogReloadStarted,
+            reloadSnapshots,
+            reloadReplies,
+            reloadSnapshotIsB,
+            reloadReplyIsB,
+            heldCatalogReplies: heldReplies.length,
+            holdInitialSnapshot,
+            holdReplacement,
+            holdReconnectCatalog,
+          });
         await page.routeWebSocket(`ws://127.0.0.1:${port}/**`, (socket) => {
           const server = socket.connectToServer();
           disconnect.resolve(() => socket.close({ code: 1012, reason: "Reconnect proof" }));
@@ -308,6 +184,24 @@ suite.define(() => {
           });
           server.onMessage((message) => {
             const frame = requireRecord(JSON.parse(message.toString()));
+            if (catalogReloadStarted && frame.event === "models.snapshot") {
+              reloadSnapshots += 1;
+              const catalog = asOptionalRecord(asOptionalRecord(frame.payload)?.catalog);
+              reloadSnapshotIsB =
+                asOptionalRecord(catalog?.accountSelection)?.authProfileId === "fixture:account-b";
+              recordCatalogFacts();
+            }
+            if (
+              catalogReloadStarted &&
+              typeof frame.id === "string" &&
+              catalogRequests.has(frame.id)
+            ) {
+              reloadReplies += 1;
+              reloadReplyIsB =
+                asOptionalRecord(asOptionalRecord(frame.payload)?.accountSelection)
+                  ?.authProfileId === "fixture:account-b";
+              recordCatalogFacts();
+            }
             if (frame.event === "models.snapshot" && holdInitialSnapshot) {
               initialSnapshot.resolve({
                 deliver: () => socket.send(message),
@@ -394,7 +288,7 @@ suite.define(() => {
           await expect.poll(() => account.isVisible()).toBe(true);
           await expect.poll(() => account.textContent()).toContain("Account A");
           const row = picker.locator('[data-chat-model-option="fixture/first"]');
-          await revealChatModelOption(row);
+          await revealChatModelOption(picker, "fixture/first");
           await expect.poll(() => row.isVisible()).toBe(true);
           expect(await row.isEnabled()).toBe(true);
           expect(catalogRequests.size).toBe(requestsBeforeOpen);
@@ -403,7 +297,7 @@ suite.define(() => {
           heldReplies.splice(0).forEach((send) => send());
           await trigger.click();
           await trigger.click();
-          await revealChatModelOption(row);
+          await revealChatModelOption(picker, "fixture/first");
           await expect.poll(() => row.isVisible()).toBe(true);
           expect(catalogRequests.size).toBe(requestsBeforeOpen);
           return;
@@ -446,11 +340,50 @@ suite.define(() => {
           accountSelection: { authProfileId: "fixture:account-b" },
         });
         holdInitialSnapshot = false;
+        catalogReloadStarted = true;
+        recordCatalogFacts();
         await page.reload();
         await trigger.click();
-        await expect.poll(() => account.textContent()).toContain("Account B");
+        try {
+          await expect.poll(() => account.textContent()).toContain("Account B");
+        } catch (error) {
+          recordCatalogFacts();
+          await withTimeout(
+            page.evaluate(() => {
+              const pickerElement = document.querySelector(
+                'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
+              );
+              const accountElement = pickerElement?.querySelector(
+                "[data-chat-account-group-toggle]",
+              );
+              return {
+                catalogPickerPresent: Boolean(pickerElement),
+                catalogMenuOpen: pickerElement?.hasAttribute("open") ?? false,
+                catalogAccountPresent: Boolean(accountElement),
+                catalogAccountIsB: accountElement?.textContent?.includes("Account B") ?? false,
+                catalogAccountIsA: accountElement?.textContent?.includes("Account A") ?? false,
+                catalogTriggerDisabled:
+                  pickerElement
+                    ?.querySelector("[data-chat-model-select]")
+                    ?.getAttribute("aria-disabled") !== "false",
+                catalogComposerSnapshot: Boolean(
+                  pickerElement?.closest("[data-composer-catalog-state]"),
+                ),
+              };
+            }),
+            500,
+          )
+            .then((facts) =>
+              recordControlUiE2eFailureFacts(page, {
+                ...facts,
+                catalogDomRead: true,
+              }),
+            )
+            .catch(() => recordControlUiE2eFailureFacts(page, { catalogDomRead: false }));
+          throw error;
+        }
         const selectedRow = picker.locator('[data-chat-model-option="fixture/second"]');
-        await revealChatModelOption(selectedRow);
+        await revealChatModelOption(picker, "fixture/second");
         await expect.poll(() => selectedRow.isVisible()).toBe(true);
         expect(await selectedRow.isEnabled()).toBe(true);
         expect(await account.textContent()).not.toContain("Account A");

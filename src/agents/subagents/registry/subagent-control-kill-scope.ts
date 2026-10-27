@@ -32,13 +32,12 @@ import {
   prepareSubagentKillSessionReads,
   type SubagentKillSession,
 } from "./subagent-control-session.js";
-import type {
-  ResolvedSubagentController,
-  KillScope,
-  KillPublicationPreparation,
-} from "./subagent-control.types.js";
+import type { ResolvedSubagentController, KillScope } from "./subagent-control.types.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
-import { captureSubagentExecution } from "./subagent-registry-execution-cleanup.js";
+import {
+  captureSubagentExecution,
+  captureSubagentRetainedWork,
+} from "./subagent-registry-execution-cleanup.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
@@ -83,7 +82,7 @@ export async function withSubagentKillScope<T>(
   params: KillSelection,
   run: (scope: KillScope, trees: KillTree[]) => Promise<T>,
   captureResult?: (result: T, trees: KillTree[]) => T,
-  preparePublication?: KillPublicationPreparation<T>,
+  onSnapshot?: (result: T) => void,
   finishResult?: (result: T) => T,
 ): Promise<T> {
   // Discovery retains the cancellation scope, not a child's temporary write admission.
@@ -297,6 +296,7 @@ export async function withSubagentKillScope<T>(
     // Resident reservations can dispatch on the first await. Capture all known roots and
     // descendants first; persisted-only discovery below remains worker-owned.
     const resident = new Map(subagentRuns);
+    const hasRetainedWork = captureSubagentRetainedWork();
     for (const { tree } of pending) {
       const controller = controllerFor(tree);
       capture(
@@ -305,7 +305,7 @@ export async function withSubagentKillScope<T>(
           resident,
           controller.controllerSessionKey,
           controller.controllerAgentId,
-        ),
+        ).filter(hasRetainedWork),
         tree.children,
         controller,
         tree,
@@ -391,7 +391,12 @@ export async function withSubagentKillScope<T>(
           await pending;
           assertCurrent();
         }
-        await select(candidates, tree.children, controller, tree);
+        await select(
+          candidates.filter(captureSubagentRetainedWork()),
+          tree.children,
+          controller,
+          tree,
+        );
       }
       for (const child of tree.children) {
         await refreshTree(child);
@@ -463,44 +468,11 @@ export async function withSubagentKillScope<T>(
     return batch.promise;
   };
   const withPublication = async (publish: () => void) => {
-    let publicationActive = true;
-    let publicationConsumed = false;
-    const publishResult = () => {
-      if (!publicationActive) {
-        throw new Error("Subagent cancellation publication scope is no longer active");
-      }
-      if (publicationConsumed) {
-        throw new Error("Subagent cancellation result was already published");
-      }
-      publicationConsumed = true;
-      publish();
-    };
     const publicationSession = captureResult ? trees[0]?.session : undefined;
-    const publishPrepared = async (prepareRows?: (publishResult: () => void) => Promise<void>) => {
-      const prepareResult = async () => {
-        if (prepareRows) {
-          await prepareRows(publishResult);
-        } else {
-          publishResult();
-        }
-      };
-      if (publicationSession) {
-        await publicationSession.withPublication(prepareResult);
-      } else {
-        await prepareResult();
-      }
-    };
-    try {
-      if (preparePublication) {
-        await preparePublication.prepare(publishPrepared);
-      } else {
-        await publishPrepared();
-      }
-      if (!publicationConsumed) {
-        throw new Error("Subagent cancellation publication did not consume its prepared scope");
-      }
-    } finally {
-      publicationActive = false;
+    if (publicationSession) {
+      await publicationSession.withPublication(async () => publish());
+    } else {
+      publish();
     }
   };
   let outcome: { ok: true; rawResult: T; value: T } | { ok: false; error: unknown };
@@ -550,7 +522,7 @@ export async function withSubagentKillScope<T>(
         assertCurrent();
       }
       snapshot = captureResult ? captureResult(result, trees) : result;
-      if (preparePublication?.publishSnapshot?.(snapshot) !== undefined) {
+      if (onSnapshot?.(snapshot) !== undefined) {
         throw new TypeError("Subagent cancellation snapshot publication must be synchronous.");
       }
     });

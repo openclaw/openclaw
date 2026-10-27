@@ -22,28 +22,20 @@ export function emitCommitted(
   });
 }
 
-export function emitDelta(socket: EventSocket, itemId: string, delta: string): void {
-  emitJson(socket, {
-    type: "conversation.item.input_audio_transcription.delta",
-    item_id: itemId,
-    delta,
-  });
+function emitTranscription(socket: EventSocket, kind: string, fields: Record<string, unknown>) {
+  emitJson(socket, { type: `conversation.item.input_audio_transcription.${kind}`, ...fields });
 }
 
-export function emitCompleted(socket: EventSocket, itemId: string, transcript: string): void {
-  emitJson(socket, {
-    type: "conversation.item.input_audio_transcription.completed",
-    item_id: itemId,
-    transcript,
-  });
+export function emitDelta(socket: EventSocket, item_id: string, delta: string): void {
+  emitTranscription(socket, "delta", { item_id, delta });
 }
 
-export function emitFailed(socket: EventSocket, itemId: string, message: string): void {
-  emitJson(socket, {
-    type: "conversation.item.input_audio_transcription.failed",
-    item_id: itemId,
-    error: { message },
-  });
+export function emitCompleted(socket: EventSocket, item_id: string, transcript: string): void {
+  emitTranscription(socket, "completed", { item_id, transcript });
+}
+
+export function emitFailed(socket: EventSocket, item_id: string, message: string): void {
+  emitTranscription(socket, "failed", { item_id, error: { message } });
 }
 
 export function createTranscriptionSession(
@@ -97,12 +89,8 @@ export function createTranscriptionSocketHarness(
     },
     close() {
       // Close session ownership before its fake peers so cleanup cannot start a reconnect.
-      for (const session of sessions) {
-        session.close();
-      }
-      for (const socket of FakeWebSocket.instances) {
-        socket.close();
-      }
+      sessions.forEach((session) => session.close());
+      FakeWebSocket.instances.forEach((socket) => socket.close());
       sessions.clear();
     },
   };

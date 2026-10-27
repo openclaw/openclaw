@@ -1,62 +1,18 @@
 import { createMemo, For, Show } from "solid-js";
-import type { QuestionDraft } from "../../../app/question-prompt.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerChatQuestionsEnglish } from "../../../i18n/locales/en-chat-questions.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { isChatSendReconnecting } from "../chat-send-presentation.ts";
+import { parseGeneratedAsyncAnswer } from "./chat-async-question-content.ts";
 import type { AsyncQuestionPresentation, AsyncQuestions } from "./chat-async-question.types.ts";
 import { questionDraftValues } from "./chat-question-answer-controls.ts";
 
-export function parseGeneratedAsyncAnswer(
-  question: AsyncQuestions,
-  message: string,
-): Map<string, QuestionDraft> | null {
-  if (!message.startsWith("> ")) {
-    return null;
-  }
-  let offset = 0;
-  const answers = new Map<string, QuestionDraft>();
-  for (const [index, current] of question.questions.entries()) {
-    const prefix = `${quoteQuestion(current.title)}\n\n`;
-    if (!message.startsWith(prefix, offset)) {
-      return null;
-    }
-    offset += prefix.length;
-    const next = question.questions[index + 1];
-    const separator = next ? `\n\n${quoteQuestion(next.title)}\n\n` : undefined;
-    const answerEnd = separator ? message.indexOf(separator, offset) : message.length;
-    // Free text can contain quoted headings. Do not guess a section boundary.
-    if (
-      answerEnd < offset ||
-      (separator && message.includes(separator, answerEnd + separator.length))
-    ) {
-      return null;
-    }
-    const answer = message.slice(offset, answerEnd);
-    if (!answer.trim()) {
-      return null;
-    }
-    const values = answer.split(", ");
-    const selected = values.every((value) => current.options?.includes(value))
-      ? new Set(values)
-      : new Set<string>();
-    answers.set(String(index), { selected, freeText: selected.size > 0 ? "" : answer });
-    offset = answerEnd + (separator ? 2 : 0);
-  }
-  return offset === message.length ? answers : null;
-}
+registerEnglishCatalog(registerChatQuestionsEnglish);
 
-export function quoteQuestion(title: string): string {
-  const encoder = new TextEncoder();
-  let quote = "";
-  let bytes = 0;
-  for (const character of title) {
-    bytes += encoder.encode(character).length;
-    if (bytes > 512) {
-      break;
-    }
-    quote += character;
-  }
-  return `> ${quote.replace(/[\r\n]/g, " ")}`;
-}
+registerEnglishCatalog(registerChatSessionEnglish);
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 export function AsyncQuestionSummary(props: {
   questions: AsyncQuestions;
@@ -86,13 +42,11 @@ export function AsyncQuestionSummary(props: {
           ? t(
               queued.sendState === "failed"
                 ? "chat.asyncQuestions.failed"
-                : queued.sendState === "unconfirmed"
-                  ? "chat.queue.deliveryUnconfirmed"
-                  : isChatSendReconnecting(queued.sendState, presentation.connected)
-                    ? "chat.queue.states.waitingForReconnect"
-                    : queued.sendState === "sending"
-                      ? "chat.asyncQuestions.sending"
-                      : "chat.asyncQuestions.queued",
+                : isChatSendReconnecting(queued.sendState, presentation.connected)
+                  ? "chat.queue.states.waitingForReconnect"
+                  : queued.sendState === "sending"
+                    ? "chat.asyncQuestions.sending"
+                    : "chat.asyncQuestions.queued",
             )
           : draft?.status === "submitted"
             ? t("chat.asyncQuestions.awaitingConfirmation")
@@ -132,13 +86,7 @@ export function AsyncQuestionSummary(props: {
         {(label) => (
           <div class="chat-question-summary__delivery">
             <span>{label()}</span>
-            <Show
-              when={
-                (state().queued?.sendState === "failed" ||
-                  state().queued?.sendState === "unconfirmed") &&
-                props.presentation.retry
-              }
-            >
+            <Show when={state().queued?.sendState === "failed" && props.presentation.retry}>
               <button
                 type="button"
                 class="btn btn--sm"
@@ -171,7 +119,9 @@ export function AsyncQuestionSummary(props: {
           type="button"
           class="btn btn--sm"
           disabled={state().reopening}
-          onClick={() => props.presentation.reopen(props.questions.itemId)}
+          onClick={() => {
+            void props.presentation.reopen(props.questions.itemId);
+          }}
         >
           {t("chat.questions.answer")}
         </button>

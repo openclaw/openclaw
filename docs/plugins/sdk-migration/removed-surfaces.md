@@ -46,6 +46,75 @@ subpaths, including older published `@openclaw/discord` packages. Upgrade affect
 plugins before upgrading the host. Not every export has a path-only replacement;
 see the [per-surface mappings](/plugins/sdk-migration/import-paths#removed-command-and-channel-facades).
 
+### Codex app-server extension factories
+
+The unused bundled-only `api.registerCodexAppServerExtensionFactory(...)` method
+and `contracts.embeddedExtensionFactories` manifest family have been removed.
+Register tool-result transforms with `api.registerAgentToolResultMiddleware(...)`
+and declare `contracts.agentToolResultMiddleware: ["codex"]` for Codex-only
+middleware. The supported middleware also covers `openclaw` and `agentsapi`.
+
+The standalone `createCodexAppServerToolResultExtensionRunner` export remains
+available from `agent-harness` and `agent-harness-runtime`, together with its
+`CodexAppServer*` types. Published `@openclaw/codex@2026.10.4` still imports and
+calls this helper. Explicit factory arrays retain their ordered initialization;
+omitting factories returns tool output unchanged. No removal date is set for
+these exports; their published consumers must migrate first.
+
+### Heartbeat executor and wake helpers
+
+Periodic heartbeat monitoring now runs as ordinary Automations jobs. The
+Gateway no longer schedules the legacy executor. Its SDK surfaces were removed
+with maintainer approval on October 3 and 12, 2026, without another compatibility
+window. Upgrade plugins
+that use these surfaces before upgrading the host.
+
+| Removed surface                                                                                                                                                                    | Replacement                                                                                                                                                                                               |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.runtime.system.requestHeartbeat`, `requestHeartbeatNow`, and `runHeartbeatOnce`                                                                                               | For immediate work, use `captureSessionEventTarget` and `enqueueSessionEvent` on the same runtime namespace. For periodic work, create an ordinary automation job.                                        |
+| `openclaw/plugin-sdk/heartbeat-runtime`                                                                                                                                            | No replacement subpath. Use the runtime session-event methods for waking work; use `system-event-runtime` for passive event inspection and consumption. This subpath was private-local after July 2026.   |
+| `reply-runtime`: `HEARTBEAT_PROMPT`, `DEFAULT_HEARTBEAT_ACK_MAX_CHARS`, `resolveHeartbeatPromptCore`, `stripHeartbeatToken`, `resolveHeartbeatReplyPayload`, and `HEARTBEAT_TOKEN` | Remove executor-specific prompt and acknowledgment handling. Ordinary jobs use their own prompt, delivery policy, and terminal reply. `SILENT_REPLY_TOKEN` and ordinary silence parsing remain supported. |
+| `agent-harness-runtime`: `HeartbeatToolResponse`, `HEARTBEAT_RESPONSE_TOOL_NAME`, and `normalizeHeartbeatToolResponse`                                                             | Remove the `heartbeat_respond` tool and fallback. Publish the ordinary terminal reply through the harness completion contract.                                                                            |
+| Private `provider-model-shared`: `GPT5_HEARTBEAT_PROMPT_OVERLAY` and `GPT5_FRIENDLY_PROMPT_OVERLAY`                                                                                | Remove heartbeat overlays. `GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY` remains available to its existing consumers.                                                                                               |
+
+Reply options `isHeartbeat`, `useHeartbeatFailureCopy`, `heartbeatModelOverride`,
+`enableHeartbeatTool`, `forceHeartbeatTool`, and `continuesConversation`, heartbeat
+typing policy, and context-engine `isHeartbeat` callback parameters are also
+removed. Use ordinary admitted turns and automation configuration instead.
+
+For asynchronous plugin work, capture the original destination before awaiting
+that work, then pass the opaque target to `enqueueSessionEvent`. Check the
+receipt's `accepted` result before committing producer bookkeeping and its
+`settled` result before reporting completion. See
+[runtime session events](/plugins/sdk-runtime/state-and-system#api-runtime-system).
+Passive `enqueueSystemEvent` remains available when no immediate turn is wanted.
+
+Doctor retains legacy configuration and task migration, including its once-only
+delivery notice. Historical transcript recognition, public hook trigger values,
+and v4 compatibility RPCs/events also remain. See
+[Heartbeat migration](/gateway/heartbeat).
+
+### Hosted media, global transforms, and executor controllers
+
+The following registration methods were removed with explicit maintainer approval
+on October 19, 2026, without a new deprecation window. Public ClawHub and bundled
+source inventories found no direct consumers; incomplete inventories and private
+plugins mean this is not proof of universal absence.
+
+| Removed method                             | Migration                                                                                                                                  |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `api.registerHostedMediaResolver(...)`     | No generic replacement. Pass a directly loadable media URL or an allowed local path. Built-in Canvas document URLs still resolve normally. |
+| `api.registerTextTransforms(...)`          | Declare `textTransforms` on your own provider or CLI backend. This does not replace an overlay across other plugins' backends.             |
+| `api.registerAgentExecutorController(...)` | No replacement registrar. Use AgentsAPI `openai_hosted` or an externally managed `self_hosted` environment.                                |
+
+The named `resolveAgentExecutorController` export and its types remain importable
+for published plugins, but lookup throws `PLUGIN_CAPABILITY_REMOVED`. Existing
+controller-owned AgentsAPI bindings and `executorController` configuration are
+rejected rather than silently reassigned or deleted. Before upgrading a host
+that uses this capability, retire or migrate those sessions with the previous
+host and controller. See [AgentsAPI](/plugins/agentsapi) for the supported
+externally managed setup.
+
 ### Retroactively recorded shipped exports
 
 The following exports shipped in `v2026.9.8` and were removed without a

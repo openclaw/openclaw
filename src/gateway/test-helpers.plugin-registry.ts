@@ -50,3 +50,16 @@ export function resetTestPluginRegistry(): void {
 export function getTestPluginRegistry(): PluginRegistry {
   return pluginRegistryState.registry;
 }
+
+export function createClaudeCliRegistrationFixture(): PluginRegistry["cliBackends"][number] {
+  return {
+    pluginId: "anthropic",
+    source: "test",
+    backend: {
+      id: "claude-cli",
+      modelProvider: "anthropic",
+      config: { command: "claude" },
+      bundleMcp: false,
+    },
+  };
+}

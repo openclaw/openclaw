@@ -116,10 +116,10 @@ describe("OpenAI Responses provider", () => {
   it("routes the SDK fetch through the host guard without changing the request or response", async () => {
     const { hostResponse, hostFetch } = guardedResponse("synthetic rejection");
     const result = await runRequest({ apiKey: "sentinel-key" });
-    // Fail before a terminal usage event: zeros are unmeasured, not free.
+    // The provider rejected the request with an error body, so it did no billable work.
     expect(result).toMatchObject({
       stopReason: "error",
-      usage: { input: 0, output: 0, totalTokens: 0, usageReport: { state: "unavailable" } },
+      usage: { input: 0, output: 0, totalTokens: 0, usageReport: { state: "available" } },
     });
     expect(openAiMockState.configs).toHaveLength(1);
     expect(openAiMockState.configs[0]).toMatchObject({ maxRetries: 0 });
@@ -208,6 +208,35 @@ describe("OpenAI Responses provider", () => {
       }
     },
   );
+
+  it.each<[Options, Partial<ResponsesModel>, "30m" | "12h" | undefined]>([
+    [{ cacheRetention: "long" }, { id: "gpt-5.6-sol" }, "12h"],
+    [{ promptCacheTtl: "30m" }, {}, "30m"],
+    [{ cacheRetention: "none" }, {}, undefined],
+    [{}, { id: "gpt-5.5" }, undefined],
+    [{}, { compat: { supportsLongCacheRetention: false } }, undefined],
+    [{}, { baseUrl: "https://proxy.example/v1" }, undefined],
+  ])(
+    "honors the explicit Responses cache lifetime only on eligible routes: %j",
+    async (options, modelOverrides, ttl) => {
+      const requests = await bothRequests(
+        { sessionId: "cache-session", promptCacheTtl: "12h", ...options },
+        { id: "gpt-6.1-sol", ...modelOverrides },
+      );
+      for (const params of requests) {
+        expect(params.prompt_cache_options).toEqual(ttl ? { ttl } : undefined);
+        expect(params.prompt_cache_retention).toBeUndefined();
+      }
+    },
+  );
+
+  it("preserves the cache lifetime through simple Responses completions", async () => {
+    await streamSimpleOpenAIResponses(model({ id: "gpt-6.1-sol" }), context, {
+      apiKey: "test",
+      promptCacheTtl: "12h",
+    }).result();
+    expect(openAiMockState.params[0]).toMatchObject({ prompt_cache_options: { ttl: "12h" } });
+  });
 
   it("omits cache fields for custom endpoints without cache-key opt-in", async () => {
     const requests = await bothRequests(

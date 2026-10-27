@@ -18,7 +18,7 @@ describe.runIf("__vitest_browser__" in globalThis)("identity menu keyboard navig
     const { createGatewayHarness, createSessions, mountSidebar } =
       await import("../test-helpers/app-sidebar.ts");
     const { page, userEvent } = await import("vitest/browser");
-    const { sidebar } = await mountSidebar(
+    const { sidebar, context } = await mountSidebar(
       createGatewayHarness({ instanceId: "self-instance" } as GatewayBrowserClient).gateway,
       createSessions("main", ["agent:main:main"]),
     );
@@ -87,17 +87,8 @@ describe.runIf("__vitest_browser__" in globalThis)("identity menu keyboard navig
     }
     await userEvent.keyboard("{ArrowDown}");
     expect(document.activeElement).toBe(theme);
-    const onThemeChange = new Promise<CustomEvent<{ mode: string }>>((resolve) => {
-      menu?.addEventListener(
-        "theme-change",
-        (event) => resolve(event as CustomEvent<{ mode: string }>),
-        {
-          once: true,
-        },
-      );
-    });
     await userEvent.keyboard("{Enter}");
-    expect((await onThemeChange).detail.mode).toBe("light");
+    expect(context.theme.mode).toBe("light");
     await userEvent.keyboard("{Tab}");
     await expect.poll(() => sidebar.querySelector(".sidebar-identity-menu")).toBeNull();
   });

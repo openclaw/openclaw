@@ -1,7 +1,7 @@
 import { Dynamic, type JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-js";
 import { isSessionRouteId } from "../app-route-paths.ts";
-import type { SolidRouteProps } from "../app-route-types.ts";
+import type { SolidRouteProps } from "../app-route-types.tsx";
 import type { ApplicationRouter } from "../app-routes.ts";
 import { createMcpAppUnmountGate } from "../components/mcp-app-unmount.ts";
 import { AgentStartupState, LazyViewError } from "../components/solid/lazy-view-error.tsx";
@@ -188,7 +188,7 @@ function RoutePresentation(props: {
         <AgentStartupState />
       </Show>
       <Show when={state() === "loading"}>
-        <LoadingState />
+        <LoadingState route />
       </Show>
     </>
   );
@@ -459,7 +459,7 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
     }
   };
 
-  onCleanup(() => {
+  onSettled(() => () => {
     disposed = true;
     notify();
   });
@@ -507,7 +507,7 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
       </Show>
       <Show when={presentation().waiting}>
         <openclaw-route-fragment style={{ display: "contents" }}>
-          <LoadingState />
+          <LoadingState route />
         </openclaw-route-fragment>
       </Show>
     </openclaw-router-outlet>

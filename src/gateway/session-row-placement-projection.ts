@@ -6,6 +6,7 @@ import {
 } from "../config/sessions/session-actor-storage-binding.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getMainThreadTaskName, runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
   DEFAULT_WORKER_PENDING_TASKS,
@@ -35,14 +36,10 @@ const MAX_CONCURRENT_PLACEMENT_READS = 2;
 const MAX_COALESCED_PLACEMENT_IDS = 256;
 const MAX_COALESCED_PLACEMENT_BYTES = 64 * 1024;
 type PlacementReadKind = "resident" | "exact";
-type PrivatePlacementTarget = Pick<Row, "storeTarget"> & { sessionId: string };
 type PlacementReadBatch = {
   kind: PlacementReadKind;
   ids: Set<string>;
-  privateSessions: Map<string, PrivatePlacementTarget>;
   inputBytes: number;
-  stale: Set<string>;
-  staleAll: boolean;
   started: boolean;
   settled: boolean;
   readers: number;
@@ -70,19 +67,6 @@ export function createSessionRowPlacementProjection(
   const queuedReads: PlacementReadBatch[] = [];
   const reads = new Set<PlacementReadBatch>();
   let retainedInputBytes = 0;
-  const invalidateReads = (id?: string) => {
-    for (const read of reads) {
-      // Queued reads capture state when dispatched, after these publications.
-      if (!read.started) {
-        continue;
-      }
-      if (id === undefined) {
-        read.staleAll = true;
-      } else if (read.ids.has(id)) {
-        read.stale.add(id);
-      }
-    }
-  };
   const releaseRead = (read: PlacementReadBatch) => {
     if (read.settled && read.readers === 0 && reads.delete(read)) {
       retainedInputBytes -= read.inputBytes;
@@ -109,30 +93,16 @@ export function createSessionRowPlacementProjection(
       batch.settled = true;
       activeReads.delete(batch);
       releaseRead(batch);
-      // Physical settlement frees capacity before consumers release their freshness leases.
+      // Physical settlement frees capacity before consumers release their input reservations.
       dispatchQueuedReads();
     }
   }
-  const acquireRead = (
-    ids: readonly string[],
-    kind: PlacementReadKind,
-    privateSessions: ReadonlyMap<string, PrivatePlacementTarget> = new Map(),
-  ) => {
+  const acquireRead = (ids: readonly string[], kind: PlacementReadKind) => {
     if (disposed) {
       throw new Error("Session row projection is no longer active");
     }
     const covers = (batch: PlacementReadBatch) =>
-      batch.kind === kind &&
-      !batch.staleAll &&
-      ids.every((id) => batch.ids.has(id) && !batch.stale.has(id)) &&
-      [...privateSessions].every(([key, target]) => {
-        const previous = batch.privateSessions.get(key);
-        return (
-          previous?.sessionId === target.sessionId &&
-          previous.storeTarget.agentId === target.storeTarget.agentId &&
-          previous.storeTarget.storePath === target.storeTarget.storePath
-        );
-      });
+      batch.kind === kind && ids.every((id) => batch.ids.has(id));
     // Exact requests must not join broader resident preparation and wait for unrelated work.
     let read = [...activeReads].find(covers) ?? queuedReads.find(covers);
     let addedBytes = 0;
@@ -175,10 +145,7 @@ export function createSessionRowPlacementProjection(
       const batch: PlacementReadBatch = {
         kind,
         ids: new Set(),
-        privateSessions: new Map(),
         inputBytes: 0,
-        stale: new Set(),
-        staleAll: false,
         started: false,
         settled: false,
         readers: 0,
@@ -193,16 +160,12 @@ export function createSessionRowPlacementProjection(
       for (const id of ids) {
         read.ids.add(id);
       }
-      for (const [key, id] of privateSessions) {
-        read.privateSessions.set(key, id);
-      }
       read.inputBytes += addedBytes;
       retainedInputBytes += addedBytes;
     }
     read.readers++;
     return {
       result: read.completion.promise,
-      isCurrent: (id: string) => read.ids.has(id) && !read.staleAll && !read.stale.has(id),
       release() {
         read.readers--;
         releaseRead(read);
@@ -227,21 +190,24 @@ export function createSessionRowPlacementProjection(
   const missing = (ids: readonly string[]) =>
     reader ? [...new Set(ids)].filter((id) => !resident.has(id)) : [];
   const owner = {
-    getProjectionFacts: (id: string) => exact?.get(id) ?? resident.get(id),
+    getProjectionFacts: (id: string) => resident.get(id) ?? exact?.get(id),
     isPrepared: (id: string) => !reader || exact?.has(id) === true || resident.has(id),
     get needsPreparation() {
-      return !disposed && dirty.size > 0;
+      return (
+        !disposed &&
+        (dirty.size > 0 || [...reads].some((read) => read.kind === "resident" && !read.settled))
+      );
     },
     register(id: string) {
       if (!reader || registered.has(id)) {
         return;
       }
       registered.add(id);
-      let prepared = exact?.get(id);
+      let prepared = resident.get(id) ?? exact?.get(id);
       if (!prepared) {
         // Row preparation can yield after its exact placement read has settled.
         for (const read of reads) {
-          if (read.snapshot && !read.staleAll && read.ids.has(id) && !read.stale.has(id)) {
+          if (read.snapshot && read.ids.has(id)) {
             prepared = select(read.snapshot, id);
             break;
           }
@@ -254,7 +220,6 @@ export function createSessionRowPlacementProjection(
       }
     },
     forget(id: string) {
-      invalidateReads(id);
       registered.delete(id);
       dirty.delete(id);
       resident.delete(id);
@@ -264,13 +229,11 @@ export function createSessionRowPlacementProjection(
       if (!published?.placements.has(id) || !registered.has(id)) {
         return false;
       }
-      invalidateReads(id);
       resident.set(id, select(published, id));
       dirty.delete(id);
       return true;
     },
     invalidate(id?: string) {
-      invalidateReads(id);
       if (id) {
         resident.delete(id);
         if (registered.has(id)) {
@@ -284,21 +247,6 @@ export function createSessionRowPlacementProjection(
       }
     },
     invalidateChange(change: SessionRowChange) {
-      if ("sessionKey" in change && change.scope === "acp") {
-        return;
-      }
-      if ("sessionKey" in change) {
-        for (const read of reads) {
-          const target = read.privateSessions.get(change.sessionKey);
-          if (
-            target &&
-            (!change.agentId || change.agentId === target.storeTarget.agentId) &&
-            (!change.storePath || change.storePath === target.storeTarget.storePath)
-          ) {
-            invalidateReads(target.sessionId);
-          }
-        }
-      }
       if (
         "all" in change &&
         (change.scope === "worker-placements" ||
@@ -340,6 +288,7 @@ export function createSessionRowPlacementProjection(
       consume: (read: SessionRowReadView, queries: readonly Lookup[]) => T,
       prepareSelection?: () => Promise<void> | undefined,
     ): Promise<T> {
+      const task = getMainThreadTaskName() ?? "gateway";
       const signal = getAsyncWorkSignal();
       const memory = getSessionActorStorageBinding({});
       const assertActive = () => {
@@ -352,7 +301,6 @@ export function createSessionRowPlacementProjection(
       let preparedQueries: readonly Lookup[] = [];
       let hasPrivateQueries = false;
       let selectedIds: readonly string[] = [];
-      const privateTargets = new Map<string, PrivatePlacementTarget>();
       const privateRepositories = new Map<string, PreparedPrivateSessionRepository>();
       let privateSelections: Array<{ key: string; row: Row; workspaceId: string }> = [];
       let selectedConfig: OpenClawConfig | undefined;
@@ -363,12 +311,11 @@ export function createSessionRowPlacementProjection(
           selectedConfig = cfg;
         }
         privateSelections = [];
-        privateTargets.clear();
         preparedQueries = queries(cfg);
         hasPrivateQueries = false;
         const ids: string[] = [];
         for (const query of preparedQueries) {
-          const key = privateSessionRowReadKey(cfg, query);
+          const key = prepareSelection ? undefined : privateSessionRowReadKey(cfg, query);
           hasPrivateQueries ||= key !== undefined;
           const privateMemory = key
             ? captureSessionActorStorageOwner(
@@ -402,12 +349,6 @@ export function createSessionRowPlacementProjection(
           }
           if (row?.entry) {
             ids.push(row.entry.sessionId);
-            if (key) {
-              privateTargets.set(row.key, {
-                sessionId: row.entry.sessionId,
-                storeTarget: row.storeTarget,
-              });
-            }
           }
         }
         selectedIds = ids;
@@ -443,42 +384,45 @@ export function createSessionRowPlacementProjection(
         return pending;
       };
       const stalePrivatePreparation = Symbol("stale-private-row-preparation");
-      const consumeRows = (
-        placement?: ReadonlyMap<string, SessionRowPlacementFacts>,
-        placementCurrent: () => boolean = () => true,
-      ) => {
+      const consumeRows = (placement?: ReadonlyMap<string, SessionRowPlacementFacts>) => {
         const cfg = projection.state.cfg;
         const consumePrepared = (
           privateRows?: ReadonlyMap<string, Row | undefined>,
-        ): ReturnType<typeof readPreparedSessionRows<T>> | typeof stalePrivatePreparation => {
-          assertActive();
-          const privateIds = privateRows
-            ? [...privateRows.values()].flatMap((row) => (row?.entry ? [row.entry.sessionId] : []))
-            : [];
-          if (
-            !placementCurrent() ||
-            projection.state.cfg !== cfg ||
-            missing(privateIds).some((id) => !placement?.has(id))
-          ) {
-            return stalePrivatePreparation;
-          }
-          const previous = exact;
-          if (placement) {
-            exact = placement;
-          }
-          try {
-            return readPreparedSessionRows(
-              projection,
-              isActive,
-              () => preparedQueries,
-              (read) => consume(read, preparedQueries),
-              privateRepositories,
-              privateRows,
-            );
-          } finally {
-            exact = previous;
-          }
-        };
+        ): ReturnType<typeof readPreparedSessionRows<T>> | typeof stalePrivatePreparation =>
+          runWithMainThreadTask(
+            task,
+            () => {
+              assertActive();
+              const privateIds = privateRows
+                ? [...privateRows.values()].flatMap((row) =>
+                    row?.entry ? [row.entry.sessionId] : [],
+                  )
+                : [];
+              if (
+                projection.state.cfg !== cfg ||
+                missing(privateIds).some((id) => !placement?.has(id))
+              ) {
+                return stalePrivatePreparation;
+              }
+              const previous = exact;
+              if (placement) {
+                exact = placement;
+              }
+              try {
+                return readPreparedSessionRows(
+                  projection,
+                  isActive,
+                  () => (hasPrivateQueries ? preparedQueries : []),
+                  (read) => consume(read, preparedQueries),
+                  privateRepositories,
+                  privateRows,
+                );
+              } finally {
+                exact = previous;
+              }
+            },
+            "session-rows:consume",
+          );
         return hasPrivateQueries
           ? withBoundIncognitoSessionRows(cfg, preparedQueries, consumePrepared, env)
           : consumePrepared();
@@ -488,16 +432,16 @@ export function createSessionRowPlacementProjection(
         if (pending) {
           return pending;
         }
-        selectRows();
-        return prepareSelectedRows();
+        runWithMainThreadTask(task, selectRows, "session-rows:select");
+        return runWithMainThreadTask(task, prepareSelectedRows, "session-rows:prepare");
       };
-      const assertPublicationCurrent = (placementCurrent = true) => {
+      const assertPublicationCurrent = () => {
         // Only actor-backed preparation retains resources past the synchronous consumer.
         if (!hasPrivateQueries) {
           return;
         }
         assertActive();
-        if (!placementCurrent || projection.state.cfg !== selectedConfig) {
+        if (projection.state.cfg !== selectedConfig) {
           throw new Error("Session row facts changed during cleanup");
         }
       };
@@ -507,10 +451,10 @@ export function createSessionRowPlacementProjection(
           await pending;
           assertActive();
         }
-        selectRows();
+        runWithMainThreadTask(task, selectRows, "session-rows:select");
         const requested = missing(selectedIds);
         if (!reader || requested.length === 0) {
-          const pending = prepareSelectedRows();
+          const pending = runWithMainThreadTask(task, prepareSelectedRows, "session-rows:prepare");
           if (pending) {
             await pending;
             continue;
@@ -522,7 +466,7 @@ export function createSessionRowPlacementProjection(
           assertPublicationCurrent();
           return result;
         }
-        const read = acquireRead(requested, "exact", privateTargets);
+        const read = acquireRead(requested, "exact");
         try {
           const snapshot = await read.result;
           assertActive();
@@ -531,11 +475,10 @@ export function createSessionRowPlacementProjection(
             await pending;
             assertActive();
           }
-          const prepared = new Map(requested.map((id) => [id, select(snapshot, id)]));
-          if (
-            requested.some((id) => !read.isCurrent(id)) ||
-            selectedIds.some((id) => !resident.has(id) && !prepared.has(id))
-          ) {
+          const prepared = new Map(
+            requested.map((id) => [id, resident.get(id) ?? select(snapshot, id)]),
+          );
+          if (selectedIds.some((id) => !resident.has(id) && !prepared.has(id))) {
             continue;
           }
           for (const [id, facts] of prepared) {
@@ -544,13 +487,11 @@ export function createSessionRowPlacementProjection(
               dirty.delete(id);
             }
           }
-          const result = await consumeRows(prepared, () =>
-            requested.every((id) => read.isCurrent(id)),
-          );
+          const result = await consumeRows(prepared);
           if (result === stalePrivatePreparation) {
             continue;
           }
-          assertPublicationCurrent(requested.every((id) => read.isCurrent(id)));
+          assertPublicationCurrent();
           return result;
         } finally {
           read.release();
@@ -564,23 +505,32 @@ export function createSessionRowPlacementProjection(
       }
       const read = acquireRead(requested, "resident");
       try {
+        // Dequeue this batch; invalidations during its read remain queued for the next pass.
+        for (const id of requested) {
+          dirty.delete(id);
+        }
         const snapshot = await read.result;
         if (disposed) {
           return;
         }
         for (const id of requested) {
-          if (registered.has(id) && read.isCurrent(id)) {
-            resident.set(id, select(snapshot, id));
-            dirty.delete(id);
+          if (registered.has(id) && !dirty.has(id)) {
+            resident.set(id, resident.get(id) ?? select(snapshot, id));
           }
         }
+      } catch (error) {
+        for (const id of requested) {
+          if (registered.has(id)) {
+            dirty.add(id);
+          }
+        }
+        throw error;
       } finally {
         read.release();
       }
     },
     dispose() {
       disposed = true;
-      invalidateReads();
       for (const read of queuedReads) {
         read.settled = true;
         read.completion.reject(new Error("Session row projection is no longer active"));

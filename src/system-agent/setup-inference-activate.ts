@@ -264,9 +264,7 @@ export async function activateSetupInference(
 async function activateCandidate(
   params: ActivateSetupInferenceParams,
 ): Promise<ActivateSetupInferenceResult> {
-  const deps = params.deps ?? {};
-  const readSnapshot =
-    deps.readConfigFileSnapshot ?? (await import("../config/config.js")).readConfigFileSnapshot;
+  const { readConfigFileSnapshot: readSnapshot } = await import("../config/config.js");
   const snapshot = await readSnapshot();
   if (snapshot.exists && !snapshot.valid) {
     throw new Error(invalidSetupConfigError(snapshot));
@@ -275,7 +273,6 @@ async function activateCandidate(
   const routeAgentId = resolveAmbientOwnerAgentId(cfg, params.agentId);
   const ctx: StageContext = {
     params,
-    deps,
     snapshot,
     cfg,
     routeAgentId,
@@ -331,10 +328,9 @@ async function verifyAndActivateCandidate(
   preparedGeneration: SetupInferencePluginGeneration | undefined,
   runtimeCredential?: SetupRuntimeCredential,
 ): Promise<ActivateSetupInferenceResult> {
-  const { params, deps, snapshot, cfg, routeAgentId } = ctx;
+  const { params, snapshot, cfg, routeAgentId } = ctx;
   const source = snapshot.sourceConfig;
-  const readSnapshot =
-    deps.readConfigFileSnapshot ?? (await import("../config/config.js")).readConfigFileSnapshot;
+  const { readConfigFileSnapshot: readSnapshot } = await import("../config/config.js");
   const catalogPreference = params.automaticSetup
     ? false
     : resolveSetupNativeSessionCatalogPreference({
@@ -599,6 +595,16 @@ async function verifyAndActivateCandidate(
       write: async (_candidate, { writeOptions, captureUndo }) => {
         const { transformConfigWithPendingPluginInstalls: transform } =
           await import("../plugins/install-record-commit.js");
+        const captureFileUndo = (base: ConfigFileSnapshot, written: OpenClawConfig) =>
+          captureUndo(
+            captureSetupInferenceFileUndo(
+              {
+                ...base,
+                sourceConfig: stripPendingPluginInstallRecords(base.sourceConfig),
+              },
+              stripPendingPluginInstallRecords(written),
+            ),
+          );
         const committed = await transform({
           base: "source",
           writeOptions,
@@ -608,18 +614,16 @@ async function verifyAndActivateCandidate(
             throwIfSetupInferenceCancelled(params);
             params.onCommitStarted?.(current);
             const nextConfig = buildCandidate(current);
-            captureUndo(
-              captureSetupInferenceFileUndo(
-                {
-                  ...context.snapshot,
-                  sourceConfig: stripPendingPluginInstallRecords(context.snapshot.sourceConfig),
-                },
-                stripPendingPluginInstallRecords(nextConfig),
-              ),
-            );
+            // Covers a write that fails after persisting; success replaces it below.
+            captureFileUndo(context.snapshot, nextConfig);
             return { nextConfig };
           },
         });
+        // Undo what reached disk: the write pipeline adds metadata the candidate lacks.
+        captureFileUndo(
+          committed.snapshot,
+          committed.persistedSourceConfig ?? committed.nextConfig,
+        );
         return committed.nextConfig;
       },
     };

@@ -1,12 +1,15 @@
 import fs from "node:fs/promises";
 import http from "node:http";
-import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "../../agents/embedded-agent-runner/run/attempt-transcript-lifecycle.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
@@ -58,8 +61,6 @@ const PNG_BYTES = Buffer.from(
   "base64",
 );
 const MEDIA_URL = "https://media.example.test/11111111-1111-4111-8111-111111111111";
-const remoteFixtures = new Map<string, string>();
-const fetchedUrls: string[] = [];
 const textBlock = (text: string) => ({ type: "text" as const, text });
 const outgoingImage = (extra: Record<string, unknown> = {}) =>
   expect.objectContaining({
@@ -74,27 +75,7 @@ const signedText = (text: string, id: string, phase: string) => ({
   textSignature: JSON.stringify({ v: 1, id, phase }),
 });
 
-let restoreRemoteMedia: (() => void) | undefined;
-beforeAll(() => {
-  const saveRemoteMedia = mediaFetch.saveRemoteMedia;
-  const wrapped = wrapStoreSaveRemoteMedia(saveRemoteMedia);
-  const spy = vi.spyOn(mediaFetch, "saveRemoteMedia").mockImplementation((options) => {
-    fetchedUrls.push(options.url);
-    const fixtureUrl = remoteFixtures.get(options.url);
-    if (!fixtureUrl) {
-      throw new Error("Unexpected remote attachment in commentary fixture");
-    }
-    return wrapped({
-      ...options,
-      url: fixtureUrl,
-    });
-  });
-  restoreRemoteMedia = () => spy.mockRestore();
-});
-afterAll(() => {
-  disposeStoreRemoteFixtures();
-  restoreRemoteMedia?.();
-});
+afterAll(disposeStoreRemoteFixtures);
 
 it.for([
   "image",
@@ -102,7 +83,6 @@ it.for([
   "worktree",
   "sender-denied",
   "document",
-  "hook",
   "revoked",
   "aborted",
   "completion",
@@ -120,7 +100,7 @@ it.for([
   test.onTestFinished(() => fixture.cleanup());
   const body = withOpenClawTestState({ label: "commentary-media" }, async (state) => {
     test.signal.throwIfAborted();
-    fetchedUrls.length = 0;
+    const fetchedUrls: string[] = [];
     let requestCount = 0;
     const requestsStarted = createDeferred();
     const abortedResponseClosed = createDeferred<boolean>();
@@ -154,11 +134,7 @@ it.for([
         void imageResponse.promise.then(send);
       }
     });
-    await new Promise<void>((resolve) => {
-      upstream.listen(0, "127.0.0.1", resolve);
-    });
-    const address = upstream.address() as AddressInfo;
-    const fixtureUrl = `http://127.0.0.1:${address.port}/11111111-1111-4111-8111-111111111111`;
+    const fixtureUrl = `${await listenLoopback(upstream)}/11111111-1111-4111-8111-111111111111`;
     const mediaUrl = MEDIA_URL;
     const worktree = state.statePath("worktrees", "project");
     const relativeImage = "./proof/relative.png";
@@ -180,9 +156,15 @@ it.for([
     const finalMediaUrl = scenario === "mixed-media" ? `${mediaUrl}/final` : undefined;
     const authoredUrls = [...mediaUrls, ...(finalMediaUrl ? [finalMediaUrl] : [])];
     const finalText = "Final result";
-    for (const url of authoredUrls) {
-      remoteFixtures.set(url, fixtureUrl);
-    }
+    const saveRemoteMedia = wrapStoreSaveRemoteMedia(mediaFetch.saveRemoteMedia);
+    using remoteMedia = vi.spyOn(mediaFetch, "saveRemoteMedia");
+    remoteMedia.mockImplementation((options) => {
+      fetchedUrls.push(options.url);
+      if (!authoredUrls.includes(options.url)) {
+        throw new Error("Unexpected remote attachment in commentary fixture");
+      }
+      return saveRemoteMedia({ ...options, url: fixtureUrl });
+    });
     const cfg = {
       agents: { entries: { main: { workspace: state.workspaceDir } } },
       ...(localMedia
@@ -278,7 +260,7 @@ it.for([
         : []),
     ];
     const hookSpy =
-      scenario === "hook"
+      scenario === "image"
         ? vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner").mockReturnValue(
             createHookRunnerWithRegistry([
               {
@@ -404,12 +386,16 @@ it.for([
         if (gcDuringPreparation) {
           // The second download holds the rewrite while the first original is on disk.
           expect(readMessage()).not.toHaveProperty("openclawDisplayContent");
-          expect(await readManaged()).toHaveLength(1);
-          expect(await cleanupManagedOutgoingMediaRecords()).toEqual({
-            deletedRecordCount: 0,
-            deletedFileCount: 0,
-            retainedCount: 1,
-          });
+          const preparedEntries = await readManaged();
+          expect(preparedEntries).toHaveLength(1);
+          await cleanupManagedOutgoingMediaRecords();
+          expect(await readManaged()).toEqual(preparedEntries);
+          for (const { record } of preparedEntries) {
+            const { mediaRoot, mediaSubdir, mediaId } = record.original;
+            expect(await fs.readFile(path.join(mediaRoot, mediaSubdir, mediaId))).toEqual(
+              PNG_BYTES,
+            );
+          }
         }
         if (aborted) {
           current = false;
@@ -492,9 +478,11 @@ it.for([
                 textBlock("Before"),
                 outgoingImage({ mimeType: "image/png" }),
                 textBlock("After"),
+                textBlock("MEDIA:https://media.example.test/hook-added"),
               ],
             }),
           );
+          expect(fetchedUrls).toEqual([mediaUrl]);
         }
         if (scenario === "document") {
           expect(displayedMedia).toContainEqual(
@@ -506,10 +494,6 @@ it.for([
               }),
             }),
           );
-        }
-        if (scenario === "hook") {
-          expect(JSON.stringify(displayed)).toContain('"type":"image"');
-          expect(fetchedUrls).toEqual([mediaUrl]);
         }
         if (mixed) {
           const replies = createReplyDispatcher(dispatch.dispatcherOptions);
@@ -556,11 +540,9 @@ it.for([
       await run;
       if (gcDuringPreparation) {
         // Committed originals must outlive transient retention even after the run ends.
-        expect(
-          await cleanupManagedOutgoingMediaRecords({
-            nowMs: Date.now() + 7 * 24 * 60 * 60 * 1000,
-          }),
-        ).toEqual({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 2 });
+        await cleanupManagedOutgoingMediaRecords({
+          nowMs: Date.now() + 7 * 24 * 60 * 60 * 1000,
+        });
         const entries = await readManaged();
         expect(entries).toHaveLength(2);
         for (const { record } of entries) {
@@ -625,10 +607,7 @@ it.for([
       }
       await run?.catch(() => {});
       stopUpdates();
-      await new Promise<void>((resolve) => {
-        upstream.close(() => resolve());
-      });
-      remoteFixtures.clear();
+      await closeHttpServer(upstream);
       hookSpy?.mockRestore();
       publicationSpy?.mockRestore();
       rewriteSpy?.mockRestore();

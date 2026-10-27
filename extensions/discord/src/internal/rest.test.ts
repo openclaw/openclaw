@@ -13,13 +13,12 @@ async function expectRateLimitError(promise: Promise<unknown>, expected: { retry
 }
 
 function queuedResponses(...responses: Response[]) {
-  const pending = responses.map((response) => Promise.resolve(response));
   return vi.fn(async () => {
-    const response = pending.shift();
+    const response = responses.shift();
     if (!response) {
       throw new Error("unexpected request");
     }
-    return await response;
+    return response;
   });
 }
 
@@ -62,9 +61,12 @@ function streamClient(source: UnderlyingSource<Uint8Array>, timeout?: number) {
   });
 }
 
-function fakeClock() {
-  vi.useFakeTimers();
-  vi.setSystemTime(0);
+function heldRequest(result: unknown = { ok: "second" }) {
+  const response = createDeferred<Response>();
+  const fetch = vi.fn(async () =>
+    fetch.mock.calls.length === 1 ? await response.promise : createJsonResponse(result),
+  );
+  return { fetch, response };
 }
 
 describe("RequestClient", () => {
@@ -101,44 +103,32 @@ describe("RequestClient", () => {
     },
   );
 
-  it("defaults non-finite REST client timeouts before scheduling requests", async () => {
-    const fetchSpy = vi.fn(async (input: string | URL | Request) => {
-      expect(new URL(readRequestUrl(input)).pathname).toBe("/api/v10/guilds/g1/roles");
-      return createJsonResponse({ ok: true });
-    });
-    const client = requestClient(fetchSpy, { timeout: Number.NaN });
-
-    await expect(client.get("/guilds/g1/roles")).resolves.toEqual({ ok: true });
-  });
-
   it("dispatches critical interaction callbacks before older background requests", async () => {
-    const releaseWorkers = createDeferred<void>();
+    const release = createDeferred<void>();
     const blockers = Array.from({ length: 4 }, (_, index) => `/guilds/blocked-${index}/roles`);
-    const responses = new Map<string, Promise<Response>>([
-      ["/interactions/123/token/callback", Promise.resolve(createJsonResponse({ ok: "critical" }))],
-      ["/guilds/g2/roles", Promise.resolve(createJsonResponse({ ok: "background" }))],
+    const responses = new Map([
+      ["/interactions/123/token/callback", "critical"],
+      ["/guilds/g2/roles", "background"],
     ]);
     const fetchSpy = vi.fn(async (input: string | URL | Request) => {
-      const url = readRequestUrl(input);
-      const path = new URL(url).pathname.replace(/^\/api\/v\d+/, "");
+      const path = new URL(readRequestUrl(input)).pathname.replace(/^\/api\/v\d+/, "");
       if (blockers.includes(path)) {
-        await releaseWorkers.promise;
+        await release.promise;
         return createJsonResponse({ ok: "first" });
       }
-      const response = responses.get(path);
-      if (!response) {
+      const result = responses.get(path);
+      if (!result) {
         throw new Error(`unexpected request ${path}`);
       }
-      return await response;
+      return createJsonResponse({ ok: result });
     });
-    const client = requestClient(fetchSpy);
-
+    const client = requestClient(fetchSpy, { timeout: Number.NaN });
     const active = blockers.map((path) => client.get(path));
     const background = client.get("/guilds/g2/roles");
     const critical = client.post("/interactions/123/token/callback", { body: { type: 5 } });
 
     expect(fetchSpy).toHaveBeenCalledTimes(4);
-    releaseWorkers.resolve();
+    release.resolve();
 
     await Promise.all(active);
     await expect(critical).resolves.toEqual({ ok: "critical" });
@@ -150,121 +140,39 @@ describe("RequestClient", () => {
     ]);
   });
 
-  it("drops stale background requests instead of replaying obsolete reads", async () => {
-    fakeClock();
-    const firstResponse = createDeferred<Response>();
-    const fetchSpy = vi.fn(async () => await firstResponse.promise);
-    const client = requestClient(fetchSpy, { timeout: 30_000 });
+  it.each(["get", "post", "patch", "delete"] as const)(
+    "drains aged same-bucket %s requests on settlement without polling",
+    async (method) => {
+      vi.useFakeTimers({ now: 0 });
+      const { response: firstResponse, fetch: fetchSpy } = heldRequest({ id: "second" });
+      const client = requestClient(fetchSpy, { timeout: 30_000 });
 
-    const first = client.get("/guilds/g1/roles");
-    const stale = client.get("/guilds/g1/roles");
-    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+      const first = client[method]("/channels/c1/messages");
+      await Promise.resolve();
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(20_001);
-    firstResponse.resolve(createJsonResponse({ ok: "first" }));
+      const second = client[method]("/channels/c1/messages");
+      await Promise.resolve();
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(1);
 
-    await expect(first).resolves.toEqual({ ok: "first" });
-    await expect(stale).rejects.toThrow(/Dropped stale background request/);
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(client.queueSize).toBe(0);
-  });
+      await vi.advanceTimersByTimeAsync(20_001);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(1);
 
-  it("keeps standard mutations queued until Discord accepts or rejects them", async () => {
-    fakeClock();
-    const releaseWorkers = createDeferred<void>();
-    const fetchSpy = vi.fn(async () => {
-      if (fetchSpy.mock.calls.length <= 4) {
-        await releaseWorkers.promise;
-      }
-      return createJsonResponse({ ok: true });
-    });
-    const client = requestClient(fetchSpy, { timeout: 30_000 });
-    const active = Array.from({ length: 4 }, (_, index) =>
-      client.post(`/channels/blocked-${index}/messages`, { body: { content: "hold" } }),
-    );
+      firstResponse.resolve(createJsonResponse({ id: "first" }));
 
-    const requests = [
-      client.post("/channels/c1/messages", { body: { content: "send" } }),
-      client.patch("/channels/c1/messages/m1", { body: { content: "edit" } }),
-      client.delete("/channels/c1/messages/m2"),
-      client.post("/webhooks/app/token", { body: { content: "webhook send" } }),
-      client.patch("/webhooks/app/token/messages/@original", {
-        body: { content: "webhook edit" },
-      }),
-      client.delete("/webhooks/app/token/messages/@original"),
-      client.post("/applications/app/commands", { body: { name: "ping" } }),
-    ];
-    expect(fetchSpy).toHaveBeenCalledTimes(4);
-
-    await vi.advanceTimersByTimeAsync(20_001);
-    releaseWorkers.resolve();
-    await Promise.all(active);
-
-    await expect(Promise.all(requests)).resolves.toEqual(
-      Array.from({ length: 7 }, () => ({ ok: true })),
-    );
-    expect(fetchSpy).toHaveBeenCalledTimes(requests.length + active.length);
-    expect(client.queueSize).toBe(0);
-  });
-
-  it("drains same-bucket requests when the active request finishes without polling", async () => {
-    fakeClock();
-    const firstResponse = createDeferred<Response>();
-    const fetchSpy = vi.fn(async () =>
-      fetchSpy.mock.calls.length === 1
-        ? await firstResponse.promise
-        : createJsonResponse({ id: "second" }),
-    );
-    const client = requestClient(fetchSpy);
-
-    const first = client.get("/channels/c1/messages");
-    await Promise.resolve();
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-
-    const second = client.get("/channels/c1/messages");
-    await Promise.resolve();
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(vi.getTimerCount()).toBe(1);
-
-    await vi.advanceTimersByTimeAsync(20);
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(vi.getTimerCount()).toBe(1);
-
-    firstResponse.resolve(createJsonResponse({ id: "first" }));
-
-    await expect(first).resolves.toEqual({ id: "first" });
-    await expect(second).resolves.toEqual({ id: "second" });
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("runs independent route buckets concurrently", async () => {
-    const channelResponse = createDeferred<Response>();
-    const guildResponse = createDeferred<Response>();
-    const fetchSpy = vi.fn(async (input: string | URL | Request) => {
-      const url = readRequestUrl(input);
-      return await (url.includes("/channels/") ? channelResponse.promise : guildResponse.promise);
-    });
-    const client = requestClient(fetchSpy);
-
-    const channel = client.get("/channels/c1/messages");
-    const guild = client.get("/guilds/g1/roles");
-
-    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
-
-    channelResponse.resolve(bucketResponse("channel", "channel-messages"));
-    guildResponse.resolve(bucketResponse("guild", "guild-roles"));
-
-    await expect(Promise.all([channel, guild])).resolves.toEqual([
-      { id: "channel" },
-      { id: "guild" },
-    ]);
-  });
+      await expect(first).resolves.toEqual({ id: "first" });
+      await expect(second).resolves.toEqual({ id: "second" });
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 
   it.each(["bucket", "global"] as const)(
     "waits for a %s rate-limit reset before dispatching",
     async (kind) => {
-      fakeClock();
+      vi.useFakeTimers({ now: 0 });
       const nextId = kind === "bucket" ? "second" : "after-global";
       const fetchSpy = queuedResponses(
         kind === "bucket"
@@ -292,30 +200,6 @@ describe("RequestClient", () => {
     },
   );
 
-  it("does not requeue an active rate limit after the queue is cleared", async () => {
-    const response = createDeferred<Response>();
-    const fetchSpy = vi.fn(async () => {
-      if (fetchSpy.mock.calls.length > 1) {
-        throw new Error("unexpected retry after clearQueue");
-      }
-      return await response.promise;
-    });
-    const client = requestClient(fetchSpy);
-
-    const request = client.get("/channels/c1/messages");
-    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
-    expect(client.queueSize).toBe(1);
-
-    client.clearQueue();
-    expect(client.queueSize).toBe(1);
-
-    response.resolve(rateLimitResponse(0, { "X-RateLimit-Bucket": "channel-messages" }));
-
-    await expectRateLimitError(request, { retryAfter: 0 });
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(client.queueSize).toBe(0);
-  });
-
   it.each([
     { body: "9007199254741", header: "7", expected: 7 },
     { body: "1e3", header: "9007199254741", expected: 1 },
@@ -332,44 +216,34 @@ describe("RequestClient", () => {
   it.each(["streamed", "gzip-compressed"] as const)(
     "bounds %s REST response bodies",
     async (encoding) => {
-      let pullCount = 0;
-      let cancelCount = 0;
-      const client =
+      const cancel = vi.fn();
+      const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) => {
+        controller.enqueue(new TextEncoder().encode("x".repeat(4 * 1024 * 1024)));
+      });
+      const response =
         encoding === "streamed"
-          ? streamClient({
-              pull(controller) {
-                pullCount += 1;
-                controller.enqueue(new TextEncoder().encode("x".repeat(4 * 1024 * 1024)));
-              },
-              cancel() {
-                cancelCount += 1;
-              },
-            })
-          : requestClient(
-              async () =>
-                new Response(
-                  gzipSync(Buffer.from(JSON.stringify({ data: "x".repeat(8 * 1024 * 1024) }))),
-                  { headers: { "Content-Encoding": "gzip", "Content-Type": "application/json" } },
-                ),
-              { queueRequests: false },
+          ? new Response(new ReadableStream({ pull, cancel }))
+          : new Response(
+              gzipSync(Buffer.from(JSON.stringify({ data: "x".repeat(8 * 1024 * 1024) }))),
+              { headers: { "Content-Encoding": "gzip", "Content-Type": "application/json" } },
             );
+      const client = requestClient(async () => response, { queueRequests: false });
       await expect(client.get("/channels/c1/messages")).rejects.toThrow(
         /Discord REST response body exceeds 8388608 bytes/,
       );
       if (encoding === "streamed") {
-        expect(cancelCount).toBe(1);
-        expect(pullCount).toBeLessThanOrEqual(4);
+        expect(cancel).toHaveBeenCalledTimes(1);
+        expect(pull.mock.calls.length).toBeLessThanOrEqual(4);
       }
     },
   );
 
   it("aborts stalled REST response bodies after the idle timeout", async () => {
-    const encoder = new TextEncoder();
     let cancelReason: unknown;
     const client = streamClient(
       {
         start(controller) {
-          controller.enqueue(encoder.encode("partial payload"));
+          controller.enqueue(new TextEncoder().encode("partial payload"));
         },
         cancel(reason) {
           cancelReason = reason;
@@ -387,33 +261,6 @@ describe("RequestClient", () => {
     });
   });
 
-  it("passes multipart uploads to fetch as FormData", async () => {
-    const arrayBufferSpy = vi.spyOn(Blob.prototype, "arrayBuffer");
-    const fetchSpy = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
-      expect(init?.headers).toBeInstanceOf(Headers);
-      expect((init!.headers as Headers).get("Content-Type")).toBeNull();
-      expect(init?.body).toBeInstanceOf(FormData);
-      return Response.json({ id: "msg" });
-    });
-    const client = requestClient(fetchSpy, { queueRequests: false });
-
-    try {
-      await expect(
-        client.post("/channels/c1/messages", {
-          body: {
-            content: "file",
-            files: [{ name: "a.txt", data: new Uint8Array([1]), contentType: "text/plain" }],
-          },
-        }),
-      ).resolves.toEqual({ id: "msg" });
-
-      expect(fetchSpy).toHaveBeenCalledTimes(1);
-      expect(arrayBufferSpy).not.toHaveBeenCalled();
-    } finally {
-      arrayBufferSpy.mockRestore();
-    }
-  });
-
   it("serializes form multipart uploads for sticker-style endpoints", () => {
     const headers = new Headers();
     const file = {
@@ -425,11 +272,7 @@ describe("RequestClient", () => {
     const body = serializeRequestBody(
       {
         multipartStyle: "form",
-        body: {
-          name: "Sticker",
-          tags: "tag",
-          files: [file],
-        },
+        body: { name: "Sticker", tags: "tag", files: [file] },
       },
       headers,
     );

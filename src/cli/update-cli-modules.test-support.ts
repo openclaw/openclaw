@@ -3,7 +3,7 @@ import { commandTransport } from "./update-cli-mocks.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
-const { createUpdateStateProfileInitializer } =
+const { initializeExistingUpdateProfile } =
   await import("./update-cli-state-snapshot.test-support.js");
 const { updateGitCheckout } = await import("../infra/update-runner-git.js");
 const { createUpdateRun, getUpdateRun, listUpdateRuns } =
@@ -86,7 +86,7 @@ export {
   continuePostCoreUpdateInFreshProcess,
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
   createUpdateRun,
-  createUpdateStateProfileInitializer,
+  initializeExistingUpdateProfile,
   defaultRuntime,
   devTargetRefusalCases,
   doctorChild,

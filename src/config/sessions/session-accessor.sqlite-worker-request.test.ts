@@ -1,51 +1,48 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { Worker } from "node:worker_threads";
-import { expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runSqliteMutationWorkerRequest } from "./session-accessor.sqlite-worker-request.js";
 
+const createWorker = (script: string) => {
+  const worker = new Worker(script, { eval: true, execArgv: [] });
+  onTestFinished(async () => {
+    await worker.terminate();
+  });
+  return worker;
+};
+
 test("runs reused Worker request callbacks in the requesting operation context", async () => {
-  const worker = new Worker(
+  const worker = createWorker(
     `const { parentPort } = require("node:worker_threads");
      parentPort.postMessage({ type: "commit-request", operationId: 7 });
      parentPort.postMessage({ type: "reclaimed", operationId: 7, result: "done", settled: true });`,
-    { eval: true, execArgv: [] },
   );
   const owner = new AsyncLocalStorage<string>();
   const observed: Array<{ event: string; owner: string | undefined }> = [];
-  try {
-    await expect(
-      owner.run("request-7", () =>
-        runSqliteMutationWorkerRequest({
-          transport: { kind: "dedicated", channel: worker },
-          operationId: 7,
-          completion: "exit",
-          onCommitRequest: () => {
-            observed.push({ event: "message", owner: owner.getStore() });
-          },
-          onExit: () => {
-            observed.push({ event: "exit", owner: owner.getStore() });
-          },
-          withWriteAdmission: async () => {
-            throw new Error("Synthetic Worker must not request write admission");
-          },
-        }),
-      ),
-    ).resolves.toBe("done");
-    expect(observed).toEqual([
-      { event: "message", owner: "request-7" },
-      { event: "exit", owner: "request-7" },
-    ]);
-  } finally {
-    await worker.terminate();
-  }
+  const result = await owner.run("request-7", () =>
+    runSqliteMutationWorkerRequest({
+      transport: { kind: "dedicated", channel: worker },
+      operationId: 7,
+      completion: "exit",
+      onCommitRequest: () => observed.push({ event: "message", owner: owner.getStore() }),
+      onExit: () => observed.push({ event: "exit", owner: owner.getStore() }),
+      withWriteAdmission: async () => {
+        throw new Error("Synthetic Worker must not request write admission");
+      },
+    }),
+  );
+  expect(result).toBe("done");
+  expect(observed).toEqual([
+    { event: "message", owner: "request-7" },
+    { event: "exit", owner: "request-7" },
+  ]);
 });
 
 test("joins native exit before rejecting a Worker initialization error", async () => {
-  const worker = new Worker(
+  const worker = createWorker(
     `void import('data:text/javascript,throw new Error("worker module initialization failed")');`,
-    { eval: true, execArgv: [] },
   );
   const events: string[] = [];
   let observedError: unknown;
@@ -64,35 +61,24 @@ test("joins native exit before rejecting a Worker initialization error", async (
     completion: "exit",
     onCommitRequest,
     withWriteAdmission,
-  }).then(
-    () => {
-      events.push("resolved");
-    },
-    (error: unknown) => {
-      events.push("rejected");
-      return error;
-    },
-  );
-  try {
-    const failure = await outcome;
-    expect(observedError).toMatchObject({ message: "worker module initialization failed" });
-    expect(failure).toBe(observedError);
-    expect(events).toEqual(["error", "exit", "rejected"]);
-    expect(worker.threadId).toBe(-1);
-    expect(onCommitRequest).not.toHaveBeenCalled();
-    expect(withWriteAdmission).not.toHaveBeenCalled();
-  } finally {
-    await worker.terminate();
-    await outcome;
-  }
+  }).catch((error: unknown) => {
+    events.push("rejected");
+    return error;
+  });
+  const failure = await outcome;
+  expect(observedError).toMatchObject({ message: "worker module initialization failed" });
+  expect(failure).toBe(observedError);
+  expect(events).toEqual(["error", "exit", "rejected"]);
+  expect(worker.threadId).toBe(-1);
+  expect(onCommitRequest).not.toHaveBeenCalled();
+  expect(withWriteAdmission).not.toHaveBeenCalled();
 });
 
 test("joins queued admission after Worker exit without granting the dead Worker", async () => {
-  const worker = new Worker(
+  const worker = createWorker(
     `const { parentPort } = require("node:worker_threads");
      parentPort.on("message", () => {});
      parentPort.postMessage({ type: "admission-request", operationId: 8 });`,
-    { eval: true, execArgv: [] },
   );
   const queued = createDeferred();
   const releaseAdmission = createDeferred();

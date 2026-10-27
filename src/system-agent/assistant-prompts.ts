@@ -1,5 +1,4 @@
 import { extractBalancedJsonPrefix, safeParseJsonRecord } from "@openclaw/normalization-core";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SystemAgentGreetingFacts } from "./greeting.js";
 import type { SystemAgentOverview } from "./overview.js";
 
@@ -152,7 +151,7 @@ const SYSTEM_AGENT_SYSTEM_PROMPT = [
   "You are OpenClaw, the system agent: a small, tidy hermit crab that lives in the config shell.",
   "Personality: warm, competent, concise. Dry humor in small doses. Never corporate. You configure things so the user does not have to.",
   SYSTEM_AGENT_SETUP_GOALS,
-  "You act ONLY through the `openclaw` tool. Read actions run freely: status, models, agents, channels, config_get, config_schema, gateway_status, plugin_list, plugin_search, validate_config, doctor, audit.",
+  "You act ONLY through the `openclaw` tool. Read actions run freely: status, models, agents, channels, config_get, config_schema, gateway_status, overview, plugin_list, plugin_search, validate_config, doctor, health, audit.",
   formatSystemAgentSurfaceBoundary("call open_agent"),
   "Mutating actions (setup, set_default_model, config_set, config_unset, config_set_ref, create_agent, create_team, gateway_start/stop/restart, plugin_install, plugin_activate_artifact, plugin_uninstall) change the user's machine. Protocol: when you decide a mutation is needed, call the tool with the exact action right away (without approved) — it prepares a reviewable proposal without activating it — then describe the change and follow the instructions in the tool result. For delegated requests, the host applies the requesting session's permission policy and returns the final outcome; never ask for a chat yes or direct the user to an approval UI before the host requires it. For direct conversational approval, once the user clearly agrees in their own words, retry the identical call with approved=true. The host independently verifies their consent; never set approved=true without it.",
   "For task-authored plugins, plugin_activate_artifact accepts the absolute archive path and SHA256 receipt from openclaw plugins pack. It retains and inspects the exact artifact before proposing. Approval authorizes its trusted backend code, declared capabilities, and native Control UI. Dependencies must already be bundled; activation does not fetch packages. Native UI separately requires enabling Settings > Labs > Custom plugin UI, then Gateway restart and browser reload; artifact approval does not enable Labs. Report backend installation and runtime application separately from observed browser activation. plugin_install remains limited to curated sources.",
@@ -180,32 +179,9 @@ export type SystemAgentAssistantPlan = {
   modelLabel?: string;
 };
 
-const HISTORY_TURN_LIMIT = 12;
-const HISTORY_TURN_MAX_CHARS = 500;
-
-function formatHistory(history: SystemAgentAssistantTurn[] | undefined): string[] {
-  if (!history || history.length === 0) {
-    return [];
-  }
-  const recent = history.slice(-HISTORY_TURN_LIMIT);
-  return [
-    "Conversation so far:",
-    ...recent.map((turn) => {
-      const text =
-        turn.text.length > HISTORY_TURN_MAX_CHARS
-          ? `${truncateUtf16Safe(turn.text, HISTORY_TURN_MAX_CHARS)}…`
-          : turn.text;
-      return `${turn.role === "user" ? "User" : "OpenClaw"}: ${text}`;
-    }),
-    "",
-  ];
-}
-
 export function buildSystemAgentAssistantUserPrompt(params: {
   input: string;
   overview: SystemAgentOverview;
-  history?: SystemAgentAssistantTurn[];
-  pendingOperation?: string;
 }): string {
   const agents = params.overview.agents
     .map((agent) => {
@@ -220,12 +196,8 @@ export function buildSystemAgentAssistantUserPrompt(params: {
     })
     .join("\n");
   return [
-    ...formatHistory(params.history),
     `User request: ${params.input}`,
     "",
-    ...(params.pendingOperation
-      ? [`Pending proposal awaiting the user's yes: ${params.pendingOperation}`, ""]
-      : []),
     `Default agent: ${params.overview.defaultAgentId}`,
     `Default model: ${params.overview.defaultModel ?? "not configured"}`,
     ...(params.overview.setupModel ? [`Setup model: ${params.overview.setupModel}`] : []),

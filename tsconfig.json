@@ -35,8 +35,12 @@
       "@openclaw/ai/types": ["./packages/ai/src/types.ts"],
       "@openclaw/ai/validation": ["./packages/ai/src/validation.ts"],
       "@openclaw/ai/internal/anthropic": ["./packages/ai/src/internal/anthropic.ts"],
+      "@openclaw/ai/internal/google": ["./packages/ai/src/internal/google.ts"],
       "@openclaw/ai/internal/google-model-family": [
         "./packages/ai/src/internal/google-model-family.ts"
+      ],
+      "@openclaw/ai/internal/model-request-body": [
+        "./packages/ai/src/transports/model-request-body.ts"
       ],
       "@openclaw/ai/internal/openai": ["./packages/ai/src/internal/openai.ts"],
       "@openclaw/ai/internal/openai-completions-compat": [
@@ -194,6 +198,9 @@
       ],
       "@openclaw/normalization-core/json-schema": [
         "./packages/normalization-core/src/json-schema.ts"
+      ],
+      "@openclaw/normalization-core/json-schema-validator": [
+        "./packages/normalization-core/src/json-schema-validator.ts"
       ],
       "@openclaw/normalization-core/markdown-plain-text": [
         "./packages/normalization-core/src/markdown-plain-text.ts"

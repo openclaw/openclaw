@@ -1,5 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { createMemo, createSignal, onCleanup, onSettled } from "solid-js";
+import { createMemo, createSignal, onSettled } from "solid-js";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { compactApprovalCommand } from "../app/approval-presentation.ts";
@@ -88,6 +88,7 @@ export function createSessionAttention(
         );
       }
     };
+    // Retire the old question client before replacement-connection events arrive.
     const stopGateway = context.gateway.subscribe(synchronize);
     const stopEvents = context.gateway.subscribeEvents((event) => {
       if (host.isConnected) {
@@ -99,11 +100,9 @@ export function createSessionAttention(
       stopGateway();
       stopEvents();
       disposeQuestionPromptState(questions);
+      globalThis.clearTimeout(agentStatusExpiryTimer);
+      globalThis.clearTimeout(snoozeWakeTimer);
     };
-  });
-  onCleanup(() => {
-    globalThis.clearTimeout(agentStatusExpiryTimer);
-    globalThis.clearTimeout(snoozeWakeTimer);
   });
 
   function resolveSessionAgentStatus(

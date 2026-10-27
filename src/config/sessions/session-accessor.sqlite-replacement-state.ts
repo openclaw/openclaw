@@ -6,6 +6,7 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import { hasPendingSessionTranscriptArchives } from "./session-accessor.sqlite-archive-store-kernel.js";
+import { readStagedConversationPublications } from "./session-accessor.sqlite-conversation-publication.js";
 import { assertSessionCreationLabelAvailable } from "./session-accessor.sqlite-creation-read.js";
 import {
   sessionSharingEntriesEqual,
@@ -143,9 +144,16 @@ export function prepareSessionEntryReplacementPublication(
     : undefined;
   const changedKeys = [
     ...new Set([...result.previous.keys(), ...result.current.keys(), ...archived]),
-  ];
+  ].filter(
+    (key) =>
+      invalidated.has(key) ||
+      options?.postimages?.get(key)?.changed !== false ||
+      // A final no-op must not hide an earlier replacement of the same key.
+      !sqliteSessionEntriesEqual(result.previous.get(key), result.current.get(key)),
+  );
   const publication: SessionEntryReplacementPublication = {
     kind: "session-entry-replacements",
+    conversationPublication: readStagedConversationPublications(database),
     transcriptPublication: readStagedSessionTranscriptAuthority(database),
     pendingArchiveRecovery: result.pendingArchiveRecovery,
     membershipInvalidatedKeys: result.membershipInvalidatedKeys,
@@ -298,6 +306,7 @@ export function commitSessionEntryReplacementsInDatabase(
             : canonicalFacts?.window,
         canonicalPreviousSideTables: canonicalFacts?.sideTables,
         postimages: writtenPostimages,
+        publishConversationBinding: (replacement.previousSessionKeys?.length ?? 0) > 0,
       },
     );
     deleteLegacySessionEntryRows(
@@ -315,6 +324,8 @@ export function commitSessionEntryReplacementsInDatabase(
     // Each later replacement starts from the preceding write, including shared physical windows.
     const postimage = writtenPostimages.get(replacement.sessionKey);
     if (postimage) {
+      // Repeated keys are a mutation batch even when the final write returns to its start.
+      postimage.changed ||= current.has(replacement.sessionKey);
       transactionRows.set(replacement.sessionKey, {
         entry: postimage.entry,
         row: {

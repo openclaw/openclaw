@@ -1,6 +1,10 @@
 import type { ensureMemoryIndexSchema } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import type { MemoryDatabaseAdmission } from "./manager-database-admission.js";
-import type { loadMemoryEmbeddingCache } from "./manager-embedding-cache.js";
+import type {
+  loadMemoryEmbeddingCache,
+  MemoryEmbeddingCacheEvictionPreference,
+} from "./manager-embedding-cache.js";
+import type { MemoryRebuildEmbeddingQuery } from "./manager-rebuild-embeddings.js";
 import type { MemoryIndexMeta, MemoryIndexProviderIdentity } from "./manager-reindex-state.js";
 import type { MemoryDatabaseFacts } from "./manager-retrieval-read.js";
 import type { MemoryShadowConnection, MemoryShadowFailure } from "./manager-shadow-task.js";
@@ -41,6 +45,7 @@ export type MemoryEmbeddingCacheHeader = {
   provider: { id: string; model: string };
   providerKey: string;
   maxEntries?: number;
+  unreferencedFirst?: MemoryEmbeddingCacheEvictionPreference;
 };
 export type MemoryEmbeddingCacheMutation =
   | { kind: "upsert"; header: MemoryEmbeddingCacheHeader; entries: MemoryEmbeddingCacheEntry[] }
@@ -95,7 +100,9 @@ export type MemoryPublicationOperations = {
     output: ReturnType<typeof loadMemorySourceFileState>;
   };
   "cache.read": {
-    input: Omit<Parameters<typeof loadMemoryEmbeddingCache>[0], "db">;
+    input: Omit<Parameters<typeof loadMemoryEmbeddingCache>[0], "db"> & {
+      rebuild?: MemoryRebuildEmbeddingQuery;
+    };
     output: ReturnType<typeof loadMemoryEmbeddingCache>;
   };
   "source.hash": {
@@ -106,12 +113,12 @@ export type MemoryPublicationOperations = {
     input: { source: "memory" | "sessions"; path: string };
     output: ReturnType<typeof readMemorySourceChunks>;
   };
-  "session.current": {
-    input: { agentId: string; sessionId: string };
-    output: "current" | "forgotten";
-  };
   "cache.prune": {
-    input: { maxEntries: number };
+    input: {
+      maxEntries: number;
+      unreferencedFirst?: MemoryEmbeddingCacheEvictionPreference;
+      recount?: boolean;
+    };
     output: MemoryPublicationResult<boolean>;
   };
   "cache.stage.start": {

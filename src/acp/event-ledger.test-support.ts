@@ -6,7 +6,6 @@ import { afterEach, expect } from "vitest";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { createSqliteAcpEventLedger, type AcpEventLedger } from "./event-ledger.js";
-import type { AcpLedgerOptions } from "./event-ledger.types.js";
 
 type TestAcpLedgerHandle = {
   tempDir: string;
@@ -15,11 +14,11 @@ type TestAcpLedgerHandle = {
 const testLedgerHandles: TestAcpLedgerHandle[] = [];
 
 /** Creates a test-owned SQLite ACP ledger and registers its DB/tempdir cleanup. */
-export function createTestAcpEventLedger(options: AcpLedgerOptions = {}): AcpEventLedger {
+export function createTestAcpEventLedger(): AcpEventLedger {
   const tempDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-acp-ledger-")));
   const databasePath = path.join(tempDir, "openclaw.sqlite");
   testLedgerHandles.push({ tempDir });
-  return createSqliteAcpEventLedger({ ...options, path: databasePath });
+  return createSqliteAcpEventLedger({ path: databasePath });
 }
 
 export async function withTestAcpEventLedgerDatabase<T>(

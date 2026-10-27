@@ -14,6 +14,7 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
+import { operatorRecoverySnapshotFixture } from "../../../gateway/server/client-fixtures.test-support.js";
 import {
   getActiveGatewayRootWorkCount,
   getActiveGatewayRootWorkHolders,
@@ -71,23 +72,11 @@ export async function prepareSubagentRecoveryFixture(
     sessionId,
     lifecycleRevision,
     sourceRunId: run.requesterTurnRunId ?? "recovery-requester-turn",
-    snapshot: {
-      profileId: "registry-bookkeeping-operator",
-      scopes: ["operator.write"],
-      assignedRole: null,
-      githubLogin: null,
-      grant: null,
-      aliasBindingIds: [],
-      authPolicy: {
-        generation: "",
-        grantGeneration: "registry-bookkeeping-policy",
-        role: "operator",
-        authMethod: "token",
-      },
-      controlUiAdmin: false,
-      localOperator: false,
-      sourceIngress: "internal",
-    },
+    snapshot: operatorRecoverySnapshotFixture(
+      "registry-bookkeeping-operator",
+      "registry-bookkeeping-policy",
+      { scopes: ["operator.write"] },
+    ),
   };
   Object.assign(run, {
     requesterAgentId: agentId,
@@ -129,6 +118,7 @@ export async function prepareSubagentRecoveryFixture(
       };
       return {
         controlUiAdmin: false,
+        assertPolicyCurrent: assertCurrent,
         authenticatedUserProfile: {
           profileId: params.snapshot.profileId,
           displayName: null,
@@ -599,35 +589,22 @@ export function registerSubagentRegistrationPersistenceTests({
   });
 }
 
-export function createRestoredRequesterWakeRuns(params: {
-  activationSettlement: boolean;
-  requesterYielded?: true;
-  endedAt: number;
-}): SubagentRunRecord[] {
-  const { activationSettlement, requesterYielded, endedAt } = params;
+export function createRestoredRequesterWakeRuns(endedAt: number): SubagentRunRecord[] {
   return Array.from({ length: 3 }, (_, index): SubagentRunRecord => {
     const runId = `run-restored-wake-${index}`;
-    return createDeliveredWake(
-      runId,
-      requesterYielded ? undefined : { status: "pending", attemptCount: 0 },
-      {
-        childSessionKey: `agent:main:subagent:restored-wake-${index}`,
-        childSessionIdentity: { sessionId: `sess-restored-wake-${index}` },
-        requesterSessionKey: `agent:main:requester-${index}`,
-        requesterDisplayKey: `requester-${index}`,
-        task: "resume a durable requester wake",
-        createdAt: endedAt - 1_000,
-        endedReason: "subagent-complete",
-        startedAt: endedAt - 500,
-        endedAt,
-        ...(activationSettlement
-          ? {
-              requesterTurnRunId: `requester-turn-${index}`,
-              requesterTurnYielded: requesterYielded ?? undefined,
-              taskRunId: runId,
-            }
-          : {}),
-      },
-    );
+    return createDeliveredWake(runId, undefined, {
+      childSessionKey: `agent:main:subagent:restored-wake-${index}`,
+      childSessionIdentity: { sessionId: `sess-restored-wake-${index}` },
+      requesterSessionKey: `agent:main:requester-${index}`,
+      requesterDisplayKey: `requester-${index}`,
+      task: "resume a durable requester wake",
+      createdAt: endedAt - 1_000,
+      endedReason: "subagent-complete",
+      startedAt: endedAt - 500,
+      endedAt,
+      requesterTurnRunId: `requester-turn-${index}`,
+      requesterTurnYielded: true,
+      taskRunId: runId,
+    });
   });
 }

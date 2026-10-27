@@ -10,24 +10,9 @@ export type MatrixQaRoomEvent = {
   type?: string;
 };
 
-type MatrixQaObservedEventKind =
-  | "membership"
-  | "message"
-  | "notice"
-  | "redaction"
-  | "reaction"
-  | "room-event";
-
-type MatrixQaObservedEventAttachment = {
-  caption?: string;
-  filename?: string;
-  kind: "audio" | "file" | "image" | "sticker" | "video";
-};
-
 type MatrixQaObservedApproval = {
   agentId?: string;
   allowedDecisions?: string[];
-  commandTextPreview?: string;
   hasCommandText?: boolean;
   id: string;
   kind: ChannelApprovalKind;
@@ -40,7 +25,7 @@ type MatrixQaObservedApproval = {
 };
 
 export type MatrixQaObservedEvent = {
-  kind: MatrixQaObservedEventKind;
+  kind: ReturnType<typeof resolveMatrixQaObservedEventKind>;
   roomId: string;
   eventId: string;
   sender?: string;
@@ -68,28 +53,16 @@ export type MatrixQaObservedEvent = {
   };
   replacesEventId?: string;
   redactsEventId?: string;
-  attachment?: MatrixQaObservedEventAttachment;
+  attachment?: NonNullable<ReturnType<typeof resolveMatrixQaAttachmentSummary>>;
   approval?: MatrixQaObservedApproval;
 };
 
 const MATRIX_QA_APPROVAL_METADATA_KEY = "com.openclaw.approval";
-const MATRIX_QA_APPROVAL_COMMAND_PREVIEW_CHARS = 160;
 
 function readNonEmptyStringEntries(value: unknown) {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
     : undefined;
-}
-
-function resolveMatrixQaMessageContent(
-  content: Record<string, unknown>,
-  relatesTo: Record<string, unknown> | null,
-) {
-  const newContent = asNullableObjectRecord(content["m.new_content"]);
-  if (relatesTo?.rel_type === "m.replace" && newContent) {
-    return newContent;
-  }
-  return content;
 }
 
 function normalizeMatrixQaRelation(relation: Record<string, unknown> | null) {
@@ -122,12 +95,6 @@ function resolveMatrixQaObservedEventKind(params: { msgtype?: string; type: stri
   return "room-event" as const;
 }
 
-function resolveMatrixQaAttachmentKind(msgtype: string | undefined) {
-  return (["audio", "file", "image", "sticker", "video"] as const).find(
-    (kind) => msgtype === `m.${kind}`,
-  );
-}
-
 function isLikelyMatrixQaFilenameBody(value: string) {
   return !value.includes("\n") && /\.[a-z0-9][a-z0-9._-]{0,24}$/i.test(value);
 }
@@ -136,8 +103,11 @@ function resolveMatrixQaAttachmentSummary(params: {
   body?: string;
   filename?: string;
   msgtype?: string;
-}): MatrixQaObservedEventAttachment | undefined {
-  const kind = resolveMatrixQaAttachmentKind(params.msgtype);
+}) {
+  const msgtype = params.msgtype;
+  const kind = (["audio", "file", "image", "sticker", "video"] as const).find(
+    (candidate) => msgtype === `m.${candidate}`,
+  );
   if (!kind) {
     return undefined;
   }
@@ -165,8 +135,6 @@ function normalizeMatrixQaApprovalMetadata(value: unknown): MatrixQaObservedAppr
     return undefined;
   }
   const commandText = readStringField(metadata, "commandText")?.trim();
-  const commandPreview = readStringField(metadata, "commandPreview")?.trim();
-  const commandTextPreview = commandPreview?.slice(0, MATRIX_QA_APPROVAL_COMMAND_PREVIEW_CHARS);
   return {
     id,
     kind,
@@ -178,7 +146,6 @@ function normalizeMatrixQaApprovalMetadata(value: unknown): MatrixQaObservedAppr
       ? { allowedDecisions: readNonEmptyStringEntries(metadata.allowedDecisions) }
       : {}),
     ...(commandText ? { hasCommandText: true } : {}),
-    ...(commandTextPreview ? { commandTextPreview } : {}),
     ...(kind === "plugin" && typeof metadata.pluginId === "string"
       ? { pluginId: metadata.pluginId }
       : {}),
@@ -204,7 +171,8 @@ export function normalizeMatrixQaObservedEvent(
   const msgtype = readStringField(content, "msgtype");
   const relatesToRaw = content["m.relates_to"];
   const relatesTo = asNullableObjectRecord(relatesToRaw);
-  const messageContent = resolveMatrixQaMessageContent(content, relatesTo);
+  const newContent = asNullableObjectRecord(content["m.new_content"]);
+  const messageContent = relatesTo?.rel_type === "m.replace" && newContent ? newContent : content;
   const replacesEventId =
     relatesTo?.rel_type === "m.replace" && typeof relatesTo.event_id === "string"
       ? relatesTo.event_id

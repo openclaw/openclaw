@@ -9,7 +9,6 @@ import { resolveOsSummary } from "../infra/os-summary.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
 import { applyLoggingConfig } from "../logging/logger.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { PreparedStatusSessionStores } from "../status/session-stores.js";
 import type { StatusSummary } from "../status/summary.js";
 import type { buildChannelsTable as buildChannelsTableFn } from "./status-all/channels.js";
@@ -27,66 +26,9 @@ import {
 } from "./status.scan.bootstrap-shared.js";
 import type { GatewayProbeSnapshot } from "./status.scan.shared.js";
 
-const statusScanDepsRuntimeModuleLoader = createLazyImportLoader(
-  () => import("./status.scan.deps.runtime.js"),
-);
-const statusAgentLocalModuleLoader = createLazyImportLoader(
-  () => import("./status.agent-local.js"),
-);
-const statusUpdateModuleLoader = createLazyImportLoader(() => import("./status.update.js"));
-const statusScanRuntimeModuleLoader = createLazyImportLoader(
-  () => import("./status.scan.runtime.js"),
-);
-const gatewayCallModuleLoader = createLazyImportLoader(() => import("../gateway/call.js"));
-const statusSummaryModuleLoader = createLazyImportLoader(() => import("../status/summary.js"));
-const channelPluginIdsModuleLoader = createLazyImportLoader(
-  () => import("../plugins/channel-plugin-ids.js"),
-);
-const configModuleLoader = createLazyImportLoader(() => import("../config/config.js"));
-const controlUiLinksModuleLoader = createLazyImportLoader(
-  () => import("../gateway/control-ui-links.js"),
-);
-const commandConfigResolutionModuleLoader = createLazyImportLoader(
-  () => import("../cli/command-config-resolution.js"),
-);
-const commandSecretTargetsModuleLoader = createLazyImportLoader(
-  () => import("../cli/command-secret-targets.js"),
-);
-
-async function resolveStatusChannelsStatus(params: {
-  cfg: OpenClawConfig;
-  configPath: string;
-  gatewayReachable: boolean;
-  opts: StatusGatewayProbeBudget & { all?: boolean };
-  gatewayCallOverrides?: GatewayProbeSnapshot["gatewayCallOverrides"];
-  useGatewayCallOverrides?: boolean;
-}) {
-  if (!params.gatewayReachable) {
-    // Avoid a second gateway call after probe failure; channel tables can still summarize local config.
-    return null;
-  }
-  const { callGateway } = await gatewayCallModuleLoader.load();
-  const timeoutMs = resolveStatusGatewayProbeTimeoutMs(params.opts);
-  if (timeoutMs === 0) {
-    return null;
-  }
-  return await callGateway({
-    config: params.cfg,
-    configPath: params.configPath,
-    method: "channels.status",
-    params: {
-      probe: false,
-      timeoutMs: Math.min(8000, timeoutMs),
-    },
-    timeoutMs,
-    ...(params.useGatewayCallOverrides === true ? (params.gatewayCallOverrides ?? {}) : {}),
-  }).catch(() => null);
-}
-
 export type StatusScanOverviewResult = {
+  recoveryCopies?: import("./recovery-disk-usage.js").RecoveryDiskUsage;
   env?: NodeJS.ProcessEnv;
-  coldStart: boolean;
-  hasConfiguredChannels: boolean;
   skipColdStartNetworkChecks: boolean;
   cfg: OpenClawConfig;
   sourceConfig: OpenClawConfig;
@@ -105,7 +47,9 @@ export type StatusScanOverviewResult = {
         | "degradedSecretOwners"
         | "degradedPlugins"
         | "startupMigrationWarning"
+        | "modelReasoningWarning"
         | "installationReplacementWarning"
+        | "utilityModelWarnings"
         | "childRuntime"
         | "secretEgressProxy"
         | "pluginReload"
@@ -187,20 +131,19 @@ export async function collectStatusScanOverview(params: {
     : await measureCliCommandStartup(
         "status.secrets",
         () =>
-          commandConfigResolutionModuleLoader
-            .load()
-            .then(async ({ resolveCommandConfigWithSecrets }) =>
+          import("../cli/command-config-resolution.js").then(
+            async ({ resolveCommandConfigWithSecrets }) =>
               resolveCommandConfigWithSecrets({
                 config: loadedConfig,
                 commandName: params.commandName,
                 targetIds: (
-                  await commandSecretTargetsModuleLoader.load()
+                  await import("../cli/command-secret-targets.js")
                 ).getStatusCommandSecretTargetIds(loadedConfig, env),
                 mode: "read_only_status",
                 gatewaySecretResolveTimeoutMs: resolveStatusGatewayProbeTimeoutMs(params.opts),
                 ...(params.runtime ? { runtime: params.runtime } : {}),
               }),
-            ),
+          ),
         { env },
       );
   const tokenConflict = resolveGatewayAuthTokenSourceConflict({ cfg: sourceConfig, env });
@@ -211,12 +154,14 @@ export async function collectStatusScanOverview(params: {
   params.progress?.tick();
   const hasConfiguredChannels = params.resolveHasConfiguredChannels
     ? await params.resolveHasConfiguredChannels(cfg, sourceConfig)
-    : await channelPluginIdsModuleLoader.load().then(({ hasConfiguredChannelsForReadOnlyScope }) =>
-        hasConfiguredChannelsForReadOnlyScope({
+    : await (async () => {
+        const { hasConfiguredChannelsForReadOnlyScope } =
+          await import("../plugins/channel-plugin-ids.js");
+        return hasConfiguredChannelsForReadOnlyScope({
           config: cfg,
           activationSourceConfig: sourceConfig,
-        }),
-      );
+        });
+      })();
   const osSummary = resolveOsSummary();
   let sessionStores: PreparedStatusSessionStores | undefined;
   const bootstrap = await createStatusScanCoreBootstrap<
@@ -241,20 +186,11 @@ export async function collectStatusScanOverview(params: {
           }
         }
       : undefined,
-    getTailnetHostname: async (runner) => {
-      return await statusScanDepsRuntimeModuleLoader
-        .load()
-        .then(({ getTailnetHostname }) => getTailnetHostname(runner));
-    },
-    getUpdateCheckResult: async (updateParams) =>
-      await statusUpdateModuleLoader
-        .load()
-        .then(({ getUpdateCheckResult }) => getUpdateCheckResult(updateParams)),
     getAgentLocalStatuses: async (bootstrapCfg) =>
       await measureCliCommandStartup(
         "status.local-agents",
         () =>
-          statusAgentLocalModuleLoader.load().then(async ({ collectStatusLocalSnapshot }) => {
+          import("./status.agent-local.js").then(async ({ collectStatusLocalSnapshot }) => {
             const local = await collectStatusLocalSnapshot(bootstrapCfg);
             sessionStores = local.sessionStores;
             return local;
@@ -286,7 +222,7 @@ export async function collectStatusScanOverview(params: {
         ? await measureCliCommandStartup(
             "status.gateway-degradation",
             () =>
-              gatewayCallModuleLoader.load().then(({ callGateway }) =>
+              import("../gateway/call.js").then(({ callGateway }) =>
                 callGateway<StatusSummary>({
                   config: cfg,
                   configPath: snapshot.path,
@@ -304,7 +240,9 @@ export async function collectStatusScanOverview(params: {
           degradedSecretOwners: status.degradedSecretOwners ?? [],
           degradedPlugins: status.degradedPlugins ?? [],
           startupMigrationWarning: status.startupMigrationWarning,
+          modelReasoningWarning: status.modelReasoningWarning,
           installationReplacementWarning: status.installationReplacementWarning,
+          utilityModelWarnings: status.utilityModelWarnings,
           ...(params.opts.deep && status.childRuntime ? { childRuntime: status.childRuntime } : {}),
           secretEgressProxy: status.secretEgressProxy,
           pluginReload: status.pluginReload,
@@ -319,38 +257,52 @@ export async function collectStatusScanOverview(params: {
   const tailscaleHttpsUrl = await bootstrap.resolveTailscaleHttpsUrl();
   const advertisedControlUiLinks =
     params.includeAdvertisedControlUiLinks === true && cfg.gateway?.controlUi?.enabled !== false
-      ? await controlUiLinksModuleLoader.load().then(async ({ resolveAdvertisedControlUiLinks }) =>
-          resolveAdvertisedControlUiLinks({
-            port: (await configModuleLoader.load()).resolveGatewayPort(cfg),
-            bind: cfg.gateway?.bind,
-            customBindHost: cfg.gateway?.customBindHost,
-            basePath: cfg.gateway?.controlUi?.basePath,
-            tlsEnabled: cfg.gateway?.tls?.enabled === true,
-          }),
+      ? await import("../gateway/control-ui-links.js").then(
+          async ({ resolveAdvertisedControlUiLinks }) =>
+            resolveAdvertisedControlUiLinks({
+              port: (await import("../config/config.js")).resolveGatewayPort(cfg),
+              bind: cfg.gateway?.bind,
+              customBindHost: cfg.gateway?.customBindHost,
+              basePath: cfg.gateway?.controlUi?.basePath,
+              tlsEnabled: cfg.gateway?.tls?.enabled === true,
+            }),
         )
       : undefined;
   // Some JSON/fast scans only need gateway/config fields; keep channel output structurally empty.
-  let channelsStatus: Awaited<ReturnType<typeof resolveStatusChannelsStatus>> = null;
+  let channelsStatus: Record<string, unknown> | null = null;
   let channelIssues: StatusScanOverviewResult["channelIssues"] = [];
   let channels: StatusScanOverviewResult["channels"] = { rows: [], details: [] };
   if (params.includeChannelsData !== false) {
     setProgressLabel("queryingChannelStatus");
-    channelsStatus =
-      params.includeLiveChannelStatus !== false
-        ? await resolveStatusChannelsStatus({
-            cfg,
-            configPath: snapshot.path,
-            gatewayReachable: gatewaySnapshot.gatewayReachable,
-            opts: params.opts,
-            gatewayCallOverrides: gatewaySnapshot.gatewayCallOverrides,
-            useGatewayCallOverrides: params.useGatewayCallOverridesForChannelsStatus,
-          })
-        : null;
+    if (params.includeLiveChannelStatus !== false) {
+      const configPath = snapshot.path;
+      const gatewayReachable = gatewaySnapshot.gatewayReachable;
+      const opts = params.opts;
+      const gatewayCallOverrides = gatewaySnapshot.gatewayCallOverrides;
+      const useGatewayCallOverrides = params.useGatewayCallOverridesForChannelsStatus;
+      // Avoid a second gateway call after probe failure; channel tables can still summarize local config.
+      if (gatewayReachable) {
+        const { callGateway } = await import("../gateway/call.js");
+        const timeoutMs = resolveStatusGatewayProbeTimeoutMs(opts);
+        if (timeoutMs !== 0) {
+          channelsStatus = await callGateway({
+            config: cfg,
+            configPath,
+            method: "channels.status",
+            params: {
+              probe: false,
+              timeoutMs: Math.min(8000, timeoutMs),
+            },
+            timeoutMs,
+            ...(useGatewayCallOverrides === true ? (gatewayCallOverrides ?? {}) : {}),
+          }).catch(() => null);
+        }
+      }
+    }
     params.progress?.tick();
     // Runtime channel helpers stay lazy because JSON fast paths can skip channel data entirely.
-    const {
-      statusScanRuntime: { collectChannelStatusIssues, buildChannelsTable },
-    } = await statusScanRuntimeModuleLoader.load();
+    const { collectChannelStatusIssues, buildChannelsTable } =
+      await import("./status.scan.runtime.js");
     channelIssues = channelsStatus ? collectChannelStatusIssues(channelsStatus) : [];
     setProgressLabel("summarizingChannels");
     channels = await buildChannelsTable(cfg, {
@@ -363,9 +315,11 @@ export async function collectStatusScanOverview(params: {
   }
 
   return {
+    recoveryCopies: (await import("./recovery-disk-usage.js")).collectRecoveryDiskUsage({
+      cfg,
+      env,
+    }),
     env,
-    coldStart,
-    hasConfiguredChannels,
     skipColdStartNetworkChecks: bootstrap.skipColdStartNetworkChecks,
     cfg,
     sourceConfig,
@@ -403,7 +357,7 @@ export async function prepareStatusSummaryFromOverview(params: {
   const prepared = await measureCliCommandStartup(
     "status.summary",
     () =>
-      statusSummaryModuleLoader.load().then(({ prepareStatusSummary }) =>
+      import("../status/summary.js").then(({ prepareStatusSummary }) =>
         prepareStatusSummary({
           config: params.overview.cfg,
           sourceConfig: params.overview.sourceConfig,

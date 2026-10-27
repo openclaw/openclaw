@@ -50,11 +50,12 @@ async function prepareClaudeCliAuth({
   }
   const result = await capture.pending;
   signal?.throwIfAborted();
-  return result.status !== "missing"
+  return result.status !== "missing" && result.status !== "not-installed"
     ? {
         apiKey: CLAUDE_CLI_NATIVE_AUTH_MARKER,
         source: "Claude CLI native auth",
         mode: "oauth" as const,
+        nativeAuth: { runtime: CLAUDE_CLI_BACKEND_ID, mode: "oauth" as const },
       }
     : undefined;
 }
@@ -90,38 +91,26 @@ const anthropicProviderDiscovery: ProviderPlugin = {
       const owner = ctx.signal ?? ctx.config;
       const pending = captures.get(owner) ?? discoverClaudeCliModels(ctx);
       captures.set(owner, pending);
-      try {
-        const models = await pending;
-        ctx.signal?.throwIfAborted();
-        return {
-          providers: {
-            [CLAUDE_CLI_BACKEND_ID]: {
-              baseUrl: "https://api.anthropic.com",
-              api: "anthropic-messages",
-              models,
-            },
+      const models = await pending.catch(() => undefined);
+      ctx.signal?.throwIfAborted();
+      return {
+        providers: {
+          [CLAUDE_CLI_BACKEND_ID]: {
+            baseUrl: "https://api.anthropic.com",
+            api: "anthropic-messages",
+            models: models ?? [],
           },
-          outcomes: [
-            {
-              provider: CLAUDE_CLI_BACKEND_ID,
-              status: "ready",
-              listedModelIds: models.map((model) => model.id),
-            },
-          ],
-        };
-      } catch {
-        ctx.signal?.throwIfAborted();
-        return {
-          providers: {
-            [CLAUDE_CLI_BACKEND_ID]: {
-              baseUrl: "https://api.anthropic.com",
-              api: "anthropic-messages",
-              models: [],
-            },
-          },
-          outcomes: [{ provider: CLAUDE_CLI_BACKEND_ID, status: "unavailable" }],
-        };
-      }
+        },
+        outcomes: [
+          models
+            ? {
+                provider: CLAUDE_CLI_BACKEND_ID,
+                status: "ready",
+                listedModelIds: models.map((model) => model.id),
+              }
+            : { provider: CLAUDE_CLI_BACKEND_ID, status: "unavailable" },
+        ],
+      };
     },
   },
   prepareSyntheticAuth: prepareClaudeCliAuth,

@@ -51,7 +51,6 @@ export function createMatrixDraftStream(params: {
     const preparedText = prepareMatrixSingleText(trimmed, {
       cfg,
       accountId,
-      preserveWhitespace: true,
     });
     if (!preparedText.fitsInSingleEvent) {
       finalizeInPlaceBlocked = true;
@@ -75,17 +74,15 @@ export function createMatrixDraftStream(params: {
           live: useLive,
         });
         currentEventId = result.messageId;
-        lastSentText = preparedText.trimmedText;
-        lastSentContent = preparedText.convertedText;
         log?.(`draft-stream: created message ${currentEventId}${useLive ? " (MSC4357 live)" : ""}`);
       } else {
         await editMessageMatrix(roomId, currentEventId, preparedText.trimmedText, {
           ...previewOptions,
           live: useLive,
         });
-        lastSentText = preparedText.trimmedText;
-        lastSentContent = preparedText.convertedText;
       }
+      lastSentText = preparedText.trimmedText;
+      lastSentContent = preparedText.convertedText;
       return true;
     } catch (err) {
       log?.(`draft-stream: send/edit failed: ${String(err)}`);
@@ -114,6 +111,7 @@ export function createMatrixDraftStream(params: {
     resetMessage,
   } = createFinalizableDraftLifecycle({
     throttleMs: DEFAULT_THROTTLE_MS,
+    coalesceInFlight: true,
     state: streamState,
     sendOrEditStreamMessage: sendOrEdit,
     readMessageId: () => currentEventId,
@@ -203,7 +201,6 @@ export function createMatrixDraftStream(params: {
       prepareMatrixSingleText(text.trimEnd(), {
         cfg,
         accountId,
-        preserveWhitespace: true,
       }).trimmedText === lastSentText,
     mustDeliverFinalNormally: () => sendFailed || finalizeInPlaceBlocked,
   };

@@ -13,6 +13,7 @@ import {
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 import { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
+import { createCoordinatorTestService } from "./worker-environments/placement-dispatch-coordinator.test-support.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-store.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
@@ -83,15 +84,8 @@ test.for(["delete", "archive", "recover"] as const)(
       revokeSessionAuthority: () => {},
     });
     const service = coordinateWorkerPlacementDispatch(
-      {
-        dispatch: unexpectedPlacementOperation,
-        forceDestroyEnvironment: unexpectedPlacementOperation,
-        getEnvironmentAttachedSessionIds: () => [],
+      createCoordinatorTestService({
         readEnvironmentSessionIds: unexpectedPlacementOperation,
-        reconcile: unexpectedPlacementOperation,
-        reconcileActive: unexpectedPlacementOperation,
-        isInterruptedTurn: () => false,
-        resumeProvisioning: unexpectedPlacementOperation,
         move: async () => {
           await moveBarrier({
             ...identity,
@@ -118,7 +112,7 @@ test.for(["delete", "archive", "recover"] as const)(
           serializedReclaim = reclaim;
           return await Promise.race([reclaim, cleanupBlockedReclaim.promise]);
         },
-      },
+      }),
       (_request, run) => run(),
     );
     const moving = service

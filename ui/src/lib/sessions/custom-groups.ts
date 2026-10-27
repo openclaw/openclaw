@@ -9,59 +9,21 @@ const BUILT_IN_SESSION_SECTION_IDS = new Set(["ungrouped", "groups", "work"]);
 
 export type SessionGroupSettings = SessionGroup & SessionGroupDefaults;
 
-export function readSessionCustomGroups(payload: unknown): SessionGroupSettings[] {
-  const groups = (payload as { groups?: unknown } | null)?.groups;
-  if (!Array.isArray(groups)) {
-    return [];
-  }
-  return groups.flatMap((entry, index) => {
-    const group = entry as Record<string, unknown> | null;
-    const name = typeof group?.name === "string" ? group.name.trim() : "";
-    if (!name) {
-      return [];
-    }
-    return [
-      {
-        name,
-        position:
-          typeof group?.position === "number" && Number.isSafeInteger(group.position)
-            ? group.position
-            : index,
-      },
-    ];
-  });
-}
-
 /** Replace defaults from a complete snapshot, retaining only catalog names and positions. */
 export function mergeSessionGroupDefaults(
   groups: readonly SessionGroupSettings[],
-  payload: unknown,
+  values: readonly SessionGroupDefaults[],
 ): SessionGroupSettings[] {
-  const values = (payload as { defaults?: unknown } | null)?.defaults;
-  const defaults = new Map<string, { cwd?: string; worktree?: boolean }>();
-  if (Array.isArray(values)) {
-    for (const value of values) {
-      const record = value as Record<string, unknown> | null;
-      const name = typeof record?.name === "string" ? record.name.trim() : "";
-      if (!name) {
-        continue;
-      }
-      const cwd = typeof record?.cwd === "string" ? record.cwd.trim() : "";
-      defaults.set(name, {
-        ...(cwd ? { cwd } : {}),
-        ...(typeof record?.worktree === "boolean" ? { worktree: record.worktree } : {}),
-      });
-    }
-  }
-  return groups.map(({ name, position }) => ({ name, position, ...defaults.get(name) }));
-}
-
-export function readSidebarSectionOrder(payload: unknown): string[] {
-  return (
-    normalizeSessionSectionOrderTokens(
-      (payload as { sectionOrder?: unknown } | null)?.sectionOrder,
-    ) ?? []
+  const defaults = new Map(
+    values.map(({ name, cwd, worktree }) => [
+      name,
+      {
+        ...(cwd === undefined ? {} : { cwd }),
+        ...(worktree === undefined ? {} : { worktree }),
+      },
+    ]),
   );
+  return groups.map(({ name, position }) => ({ name, position, ...defaults.get(name) }));
 }
 
 /** Validate and deduplicate a persisted partial section order. */

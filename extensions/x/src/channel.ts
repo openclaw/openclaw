@@ -172,6 +172,9 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
   message,
   outbound: {
     deliveryMode: "direct",
+    // Keep a reply's images on one post; `payload` is declared only to enable that grouping.
+    sendPayloadGroupsMedia: true,
+    deliveryCapabilities: { durableFinal: { payload: true } },
     sendText: send,
     sendMedia: send,
     // The native sender chunks the complete payload once, preserving its reply chain and signature.

@@ -1,22 +1,14 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import nodePath from "node:path";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
-import { resolveExecutablePath } from "../infra/executable-path.js";
+import { unavailableDiffRevision, type DiffReadTiming } from "../infra/diff-read-timing.js";
+import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import { GitCommandTimeoutError, requireGitCommandOutput } from "../infra/git-exec.js";
 import type { GitReadOperations } from "../infra/git-read-operations.js";
-import {
-  readGitHead,
-  readGitMetadataDirectories,
-  readGitMetadataPrefix,
-  readGitRefs,
-} from "../infra/git-root.js";
-import {
-  canReadGitFilesystemRefs,
-  gitFilesystemEnvironmentRevision,
-} from "../infra/git-worker-context.js";
+import { readGitHead, readGitMetadataPrefix, readGitRefs } from "../infra/git-root.js";
+import { canReadGitFilesystemRefs } from "../infra/git-worker-context.js";
 import type { GitWorkerOperations } from "../infra/git-worker-contract.js";
+import { readCheckoutDiffRevision } from "./control-ui-session-diff-revision.js";
 import {
   gitOutput,
   isAncestor,
@@ -28,21 +20,26 @@ import {
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 
 /** Observe only this checkout's refs; snapshot publication does not change PR facts. */
-export async function readCheckoutGitRevision({
-  root,
-  scope,
-  branch,
-  defaultBranch,
-}: GitReadOperations["checkout.revision"]["input"]): Promise<string | null> {
+export async function readCheckoutGitRevision(
+  {
+    root,
+    scope,
+    branch,
+    defaultBranch,
+    summaryOnly = false,
+    paths: diffPaths,
+  }: GitReadOperations["checkout.revision"]["input"],
+  timing?: DiffReadTiming,
+): Promise<GitReadOperations["checkout.revision"]["output"]> {
   if (!canReadGitFilesystemRefs()) {
-    return null;
+    return unavailableDiffRevision(timing, "no-revision-environment");
   }
   try {
     if (scope === "diff") {
-      return await readCheckoutDiffRevision(root);
+      return await readCheckoutDiffRevision(root, diffPaths, summaryOnly, timing);
     }
     const head = readGitHead(root, { maxDepth: 1 });
-    const checkout = readCheckoutHead(root);
+    const checkout = readCheckoutHead(root, head);
     const defaultRef = readDefaultRef(checkout);
     if (
       !head ||
@@ -70,9 +67,9 @@ export async function readCheckoutGitRevision({
       );
       if (fs.existsSync(replacements)) {
         paths.push(
-          ...fs
-            .readdirSync(replacements, { recursive: true, encoding: "utf8" })
-            .map((name) => nodePath.join(replacements, name)),
+          ...listDirectoryTreeStrictSync(replacements).map(({ relativePath }) =>
+            nodePath.join(replacements, relativePath),
+          ),
         );
       }
       const packed = nodePath.join(checkout.refsBase, "packed-refs");
@@ -97,240 +94,32 @@ export async function readCheckoutGitRevision({
             checkout,
           )
         : [];
-    return JSON.stringify([
-      // Context exposes branch names and remote configuration, not commit IDs.
-      scope !== "context" ? checkout : { branch: checkout.branch, refsBase: checkout.refsBase },
-      defaultRef,
-      [...tips],
-      packedReplacements,
-      paths.toSorted().map((file) => {
-        const stat = fs.lstatSync(file, { throwIfNoEntry: false });
-        if (
-          stat?.isSymbolicLink() ||
-          (stat?.isFile() &&
-            file.startsWith(`${replacements}${nodePath.sep}`) &&
-            readGitMetadataPrefix(file).startsWith("ref:"))
-        ) {
-          throw new Error("Symbolic Git metadata requires Git discovery");
-        }
-        return stat?.isDirectory()
-          ? [file, stat.dev, stat.ino]
-          : [file, stat?.ino, stat?.size, stat?.mtimeMs, stat?.ctimeMs];
-      }),
-    ]);
-  } catch {
-    return null;
-  }
-}
-
-type GitInstallationFiles = { revision: string; config: string[]; attributes: string[] };
-// One installation per worker; environment or executable replacement retires its discovery.
-let gitInstallationFiles:
-  | { key: string; promise: Promise<GitInstallationFiles | null> }
-  | undefined;
-
-async function readGitInstallationFiles(
-  root: string,
-  environment: string,
-): Promise<GitInstallationFiles | null> {
-  const executable = resolveExecutablePath("git", { cwd: root, useCache: false });
-  if (!executable) {
-    return null;
-  }
-  const binary = fs.realpathSync(executable);
-  const stat = fs.statSync(binary, { bigint: true });
-  const key = JSON.stringify([
-    environment,
-    binary,
-    ...[stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String),
-  ]);
-  if (gitInstallationFiles?.key !== key) {
-    const promise = Promise.allSettled(
-      ["GIT_CONFIG_SYSTEM", "GIT_ATTR_SYSTEM"].map(async (variable) => {
-        const result = await runPullRequestGit(root, ["var", variable], {
-          maxOutputBytes: 64 * 1024,
-          terminateOnOutputLimit: true,
-        });
-        // Known disabled paths have no diagnostics; older Git reports unknown variables.
-        if (
-          result.termination === "exit" &&
-          result.code === 1 &&
-          !result.stdout.trim() &&
-          !result.stderr.trim()
-        ) {
-          return [];
-        }
-        const paths = result.stdout.replace(/\n$/, "").split("\n").filter(Boolean);
-        return result.termination === "exit" &&
-          result.code === 0 &&
-          !result.stdoutTruncatedBytes &&
-          paths.every((file) => nodePath.isAbsolute(file))
-          ? paths
-          : null;
-      }),
-    )
-      .then((probes) => {
-        const [config, attributes] = probes.map((probe) => {
-          if (probe.status === "rejected") {
-            throw probe.reason;
+    return {
+      key: JSON.stringify([
+        // Context exposes branch names and remote configuration, not commit IDs.
+        scope !== "context" ? checkout : { branch: checkout.branch, refsBase: checkout.refsBase },
+        defaultRef,
+        [...tips],
+        packedReplacements,
+        paths.toSorted().map((file) => {
+          const stat = fs.lstatSync(file, { throwIfNoEntry: false });
+          if (
+            stat?.isSymbolicLink() ||
+            (stat?.isFile() &&
+              file.startsWith(`${replacements}${nodePath.sep}`) &&
+              readGitMetadataPrefix(file).startsWith("ref:"))
+          ) {
+            throw new Error("Symbolic Git metadata requires Git discovery");
           }
-          return probe.value;
-        });
-        return config && attributes ? { revision: key, config, attributes } : null;
-      })
-      .catch((error: unknown) => {
-        if (gitInstallationFiles?.key === key) {
-          gitInstallationFiles = undefined;
-        }
-        throw error;
-      });
-    gitInstallationFiles = { key, promise };
-  }
-  return await gitInstallationFiles.promise;
-}
-
-/** External editors own these files; bounded metadata scans avoid Git on unchanged polls. */
-async function readCheckoutDiffRevision(root: string): Promise<string | null> {
-  const environment = createHash("sha256")
-    .update(
-      JSON.stringify(
-        Object.entries(process.env)
-          .filter(([key]) => /^(GIT_|HOME$|XDG_CONFIG_HOME$|PATH$|SUDO_UID$)/i.test(key))
-          .toSorted(([left], [right]) => left.localeCompare(right)),
-      ),
-    )
-    .digest("hex");
-  // Reused workers may have an older environment; Windows path translation retains native reads.
-  if (
-    environment !== gitFilesystemEnvironmentRevision() ||
-    process.platform === "win32" ||
-    fs.realpathSync(root) !== root
-  ) {
-    return null;
-  }
-  const directories = readGitMetadataDirectories(root);
-  if (!directories) {
-    return null;
-  }
-  const { gitDir, commonDir } = directories;
-  const hash = createHash("sha256").update(environment);
-  let remaining = 10_000;
-  const observe = (file: string, allowSymlink = false) => {
-    if (--remaining < 0) {
-      throw new Error("Checkout diff revision exceeds its metadata budget");
-    }
-    const stat = fs.lstatSync(file, { bigint: true, throwIfNoEntry: false });
-    if (stat?.isSymbolicLink() && !allowSymlink) {
-      throw new Error("Indirect Git metadata requires a fresh diff");
-    }
-    hash.update(
-      JSON.stringify([
-        file,
-        ...(stat
-          ? [stat.dev, stat.ino, stat.mode, stat.nlink, stat.size, stat.mtimeNs, stat.ctimeNs].map(
-              String,
-            )
-          : []),
+          return stat?.isDirectory()
+            ? [file, stat.dev, stat.ino]
+            : [file, stat?.ino, stat?.size, stat?.mtimeMs, stat?.ctimeMs];
+        }),
       ]),
-    );
-    return stat;
-  };
-  const names = (directory: string) => {
-    const handle = fs.opendirSync(directory);
-    const entries: string[] = [];
-    try {
-      for (let entry; (entry = handle.readSync());) {
-        if (entries.length >= remaining) {
-          throw new Error("Checkout diff revision exceeds its metadata budget");
-        }
-        entries.push(entry.name);
-      }
-    } finally {
-      handle.closeSync();
-    }
-    return entries.toSorted();
-  };
-  const walk = (directory: string, tree = false) => {
-    if (!observe(directory, tree)?.isDirectory()) {
-      return;
-    }
-    for (const name of names(directory)) {
-      const file = nodePath.join(directory, name);
-      if (tree && name === ".git") {
-        if (directory !== root) {
-          throw new Error("Nested repositories require a fresh diff");
-        }
-      } else {
-        walk(file, tree);
-      }
-    }
-  };
-  walk(root, true);
-  for (const file of directories.paths) {
-    observe(file);
+    };
+  } catch (error) {
+    return unavailableDiffRevision(timing, undefined, error);
   }
-  const home = process.env.HOME ?? os.homedir();
-  const xdg = process.env.XDG_CONFIG_HOME ?? nodePath.join(home, ".config");
-  const installation = await readGitInstallationFiles(root, environment);
-  if (!installation) {
-    return null;
-  }
-  hash.update(installation.revision);
-  const configFiles = [
-    nodePath.join(commonDir, "config"),
-    nodePath.join(gitDir, "config.worktree"),
-    ...(process.env.GIT_CONFIG_GLOBAL
-      ? [process.env.GIT_CONFIG_GLOBAL]
-      : [nodePath.join(home, ".gitconfig"), nodePath.join(xdg, "git/config")]),
-    ...installation.config,
-  ];
-  for (const file of configFiles) {
-    if (!nodePath.isAbsolute(file)) {
-      return null;
-    }
-    if (file === os.devNull) {
-      continue;
-    }
-    const stat = observe(file);
-    if (
-      stat &&
-      (!stat.isFile() ||
-        stat.size > 65_536n ||
-        /\[\s*(?:include|filter)|(?:attributesfile|excludesfile|worktree|orderfile)\s*=/i.test(
-          readGitMetadataPrefix(file, 65_536),
-        ))
-    ) {
-      return null;
-    }
-  }
-  for (const file of ["attributes", "ignore"]) {
-    observe(nodePath.join(xdg, "git", file));
-  }
-  for (const file of installation.attributes) {
-    observe(file);
-  }
-  for (const directory of new Set([gitDir, commonDir])) {
-    if (observe(nodePath.join(directory, "reftable"))) {
-      return null;
-    }
-    for (const file of ["HEAD", "index", "commondir", "packed-refs", "shallow"]) {
-      observe(nodePath.join(directory, file));
-    }
-    for (const child of ["refs", "info"]) {
-      walk(nodePath.join(directory, child));
-    }
-  }
-  // Object IDs are immutable; directory stamps capture newly hydrated loose objects/packs.
-  const objects = nodePath.join(commonDir, "objects");
-  if (observe(nodePath.join(objects, "info/alternates"))) {
-    return null;
-  }
-  if (observe(objects)?.isDirectory()) {
-    for (const child of names(objects)) {
-      observe(nodePath.join(objects, child));
-    }
-  }
-  return hash.digest("hex");
 }
 
 function readDefaultRef(head: ReturnType<typeof readCheckoutHead>): string | null | undefined {
@@ -433,10 +222,8 @@ async function untrackedFileAdditions(root: string, filePath: string): Promise<n
       return 0;
     }
     let lines = 0;
-    for (const byte of body) {
-      if (byte === 10) {
-        lines += 1;
-      }
+    for (let index = body.indexOf(10); index !== -1; index = body.indexOf(10, index + 1)) {
+      lines += 1;
     }
     // A trailing fragment without a newline is still a line git would add.
     return body[body.length - 1] === 10 ? lines : lines + 1;
@@ -454,12 +241,18 @@ async function untrackedStats(root: string): Promise<{ additions: number; files:
     "-z",
   ]);
   // NUL-delimited filenames retain leading whitespace, unlike scalar Git output.
-  const paths = listing?.code === 0 ? listing.stdout.split("\0").filter(Boolean) : [];
+  const output = listing?.code === 0 ? listing.stdout : "";
   let additions = 0;
-  for (const filePath of paths.slice(0, MAX_UNTRACKED_STAT_FILES)) {
-    additions += await untrackedFileAdditions(root, filePath);
+  let files = 0;
+  for (let start = 0; start < output.length;) {
+    const separator = output.indexOf("\0", start);
+    const end = separator < 0 ? output.length : separator;
+    if (end > start && ++files <= MAX_UNTRACKED_STAT_FILES) {
+      additions += await untrackedFileAdditions(root, output.slice(start, end));
+    }
+    start = end + 1;
   }
-  return { additions, files: paths.length };
+  return { additions, files };
 }
 
 /**

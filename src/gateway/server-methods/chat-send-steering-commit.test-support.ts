@@ -1,6 +1,8 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../../agents/embedded-agent-runner/run/attempt-queue-message.js";
 import { guardSessionManager } from "../../agents/session-tool-result-guard-wrapper.js";
 import {
@@ -26,15 +28,27 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { dispatchInboundMessageMock } from "../test-helpers.js";
 import { bindSteeringTools } from "./chat-send-authority.test-support.js";
-import type { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
+import {
+  setClientProfile,
+  setNativeIosClient,
+  type useBrowserFollowupFixture,
+} from "./chat-send-pending-inputs.test-support.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { identifiedClient } from "./sessions-sharing.test-support.js";
 import type { RespondFn } from "./types.js";
 
+async function collectFailure(failures: Set<unknown>, work: () => Promise<unknown>) {
+  try {
+    await work();
+  } catch (error) {
+    failures.add(error);
+  }
+}
+
 export function registerChatSteeringCommitCases(
   createBrowserFollowupFixture: ReturnType<typeof useBrowserFollowupFixture>,
 ) {
-  it.each([
+  it.for([
     "internal fresh",
     "native custody",
     "native committed",
@@ -44,11 +58,15 @@ export function registerChatSteeringCommitCases(
     "browser custody lifecycle",
   ] as const)(
     "owns the real backing-run outcome when authority changes at steering commit (%s)",
-    async (inputState) => {
-      const sharedProfileCustody =
-        inputState === "browser custody" ||
-        inputState === "browser custody workspace" ||
-        inputState === "browser custody session ACL";
+    async (inputState, { signal }) => {
+      const internal = inputState === "internal fresh";
+      const committed = inputState === "native committed";
+      const lifecycleRevoked = inputState === "browser custody lifecycle";
+      const sessionRevoked = inputState === "browser custody session ACL";
+      const browserCustody = inputState.startsWith("browser custody");
+      const sharedProfileCustody = browserCustody && !lifecycleRevoked;
+      const revoked = lifecycleRevoked || sessionRevoked;
+      const failed = revoked || internal;
       const creator = sharedProfileCustody
         ? ensureProfileForEmail("steering-session-creator@example.test")
         : undefined;
@@ -58,66 +76,43 @@ export function registerChatSteeringCommitCases(
           ? { createdActor: { type: "human", source: "profile", id: creator.id } as const }
           : {}),
       });
+      const { scope, params, context, client, beforeApprove } = fixture;
+      const runId = params.idempotencyKey;
       const failures = new Set<unknown>();
       let releaseProviders = () => {};
       let backingRun: Promise<void> | undefined;
       try {
         if (inputState === "browser custody workspace") {
-          await patchSessionEntryCore(fixture.scope, () => ({
+          await patchSessionEntryCore(scope, () => ({
             pendingProjectGitUrl: "file:///synthetic/missing-project.git",
           }));
         }
-        const browserCustody = sharedProfileCustody || inputState === "browser custody lifecycle";
-        fixture.params.queueMode = "steer";
-        const operation = fixture.activeRun;
-        if (!operation) {
-          throw new Error("Expected a captured backing run");
-        }
+        params.queueMode = "steer";
+        const operation = expectDefined(fixture.activeRun, "captured backing run");
         const email = "steering-commit@example.test";
         const profile = ensureProfileForEmail(email);
         const target = ensureProfileForEmail("steering-commit-target@example.test");
         if (creator) {
-          expect(profile.id).not.toBe(creator.id);
-          expect(target.id).not.toBe(creator.id);
-          fixture.client.connect.scopes = ["operator.read", "operator.write"];
-          await patchSessionEntryCore(fixture.scope, () => ({
-            visibility: "shared",
-          }));
-          expect(loadExactSessionEntryReadOnly(fixture.scope)?.entry).toMatchObject({
-            visibility: "shared",
-            createdActor: { type: "human", source: "profile", id: creator.id },
-          });
+          client.connect.scopes = ["operator.read", "operator.write"];
+          await patchSessionEntryCore(scope, () => ({ visibility: "shared" }));
         }
         if (!browserCustody) {
-          fixture.client.connect.client = {
-            id: "openclaw-ios",
-            version: "test",
-            platform: "ios",
-            mode: "ui",
-          };
+          setNativeIosClient(client);
         }
-        if (inputState === "internal fresh") {
-          fixture.params.systemInputProvenance = {
+        if (internal) {
+          params.systemInputProvenance = {
             kind: "internal_system",
             sourceTool: "internal-steering-fixture",
           };
         }
-        fixture.client.authenticatedUserProfile = {
-          profileId: profile.id,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: profile.updatedAt,
-        };
-        const sessionManager = SessionManager.open(
-          fixture.scope,
-          path.dirname(fixture.scope.storePath),
-        );
-        const inputKey = `${fixture.params.idempotencyKey}:user`;
+        setClientProfile(client, profile);
+        const sessionManager = SessionManager.open(scope, path.dirname(scope.storePath));
+        const inputKey = `${runId}:user`;
         let recorder: UserTurnTranscriptRecorder | undefined;
         let initialRuntimeReceipt: ReturnType<UserTurnTranscriptRecorder["getAdmissionReceipt"]>;
         guardSessionManager(sessionManager, {
-          agentId: fixture.scope.agentId,
-          sessionKey: fixture.scope.sessionKey,
+          agentId: scope.agentId,
+          sessionKey: scope.sessionKey,
           runId: "native-backing-run",
           onUserMessagePersisted: (message) => {
             if ("idempotencyKey" in message && message.idempotencyKey === inputKey) {
@@ -137,7 +132,7 @@ export function registerChatSteeringCommitCases(
         streamMocks.streamSimple
           .mockImplementationOnce(() => backingProvider.response)
           .mockImplementation((model) =>
-            inputState === "native committed"
+            committed
               ? steeringProvider.response
               : createAssistantResultStream(
                   createAssistant(model, [{ type: "text", text: "accepted steering completed" }]),
@@ -149,6 +144,7 @@ export function registerChatSteeringCommitCases(
         };
         backingRun = session.prompt("Continue the original backing work.");
         const cancel = vi.fn();
+        const steeringAccepted = createDeferred();
         const fingerprint = "steering-commit-tools";
         bindSteeringTools(operation, fingerprint);
         operation.setPhase("running");
@@ -165,8 +161,16 @@ export function registerChatSteeringCommitCases(
               return await steerActiveSessionWithOptionalDeliveryWait(
                 session,
                 text,
-                options,
-                fixture.scope.sessionKey,
+                {
+                  ...options,
+                  onQueueAccepted: (accepted) => {
+                    options?.onQueueAccepted?.(accepted);
+                    if (accepted) {
+                      steeringAccepted.resolve();
+                    }
+                  },
+                },
+                scope.sessionKey,
                 () => {
                   assertCurrent();
                   return true;
@@ -180,41 +184,30 @@ export function registerChatSteeringCommitCases(
         expect(ack.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
         expect(ack).toHaveBeenCalledOnce();
         const originalAck = structuredClone(ack.mock.calls);
-        expect(recorder).toBeDefined();
-        if (!recorder) {
-          throw new Error("The backing runtime did not capture its input recorder");
+        await withinTest(steeringAccepted.promise, signal);
+        recorder = expectDefined(recorder, "backing runtime input recorder");
+        if (internal) {
+          expect((await recorder.resolveMessage())?.["__openclaw"]?.transport).toBeUndefined();
         }
         expect(recorder.getAdmissionReceipt()).toBeUndefined();
-        const persistFallback = vi.spyOn(recorder, "persistFallback");
-        const pending = await listSessionPendingInputs(fixture.scope);
-        expect(pending.total).toBe(inputState === "internal fresh" ? 0 : 1);
-        expect(
-          fixture.beforeApprove.mock.calls.filter(
-            ([message]) => "idempotencyKey" in message && message.idempotencyKey === inputKey,
-          ),
-        ).toHaveLength(inputState === "internal fresh" ? 0 : 1);
-        fixture.beforeApprove.mockClear();
-        if (
-          sharedProfileCustody ||
-          inputState === "native custody" ||
-          inputState === "browser custody lifecycle"
-        ) {
-          expect(session.getSteeringMessages()).toEqual([fixture.params.message]);
+        const pending = await listSessionPendingInputs(scope);
+        expect(pending.total).toBe(internal ? 0 : 1);
+        if (browserCustody || inputState === "native custody") {
+          expect(session.getSteeringMessages()).toEqual([params.message]);
           expect(session.isStreaming).toBe(true);
-          expect(backingProvider.isReleased()).toBe(false);
           expect(pending.items[0]).toMatchObject({
-            runId: fixture.params.idempotencyKey,
+            runId,
             state: "queued",
-            message: { idempotencyKey: inputKey, content: fixture.params.message },
+            message: { idempotencyKey: inputKey, content: params.message },
           });
         }
         if (sharedProfileCustody || inputState === "native custody") {
           linkEmail(email, target.id);
-          if (inputState === "browser custody session ACL") {
-            await initializeSessionReadContext(fixture.context);
+          if (sessionRevoked) {
+            await initializeSessionReadContext(context);
             const visibility = {
-              agentId: fixture.scope.agentId,
-              sessionKey: fixture.scope.sessionKey,
+              agentId: scope.agentId,
+              sessionKey: scope.sessionKey,
               visibility: "draft",
             };
             const respond = vi.fn<RespondFn>();
@@ -226,67 +219,72 @@ export function registerChatSteeringCommitCases(
                 params: visibility,
               },
               client: identifiedClient(creator!.id),
-              context: fixture.context,
+              context,
               isWebchatConnect: () => true,
               respond,
             });
             expect(respond).toHaveBeenCalledExactlyOnceWith(
               true,
-              { ok: true, sessionKey: fixture.scope.sessionKey, visibility: "draft" },
+              { ok: true, sessionKey: scope.sessionKey, visibility: "draft" },
               undefined,
             );
-            expect(loadExactSessionEntryReadOnly(fixture.scope)?.entry).toMatchObject({
+            expect(loadExactSessionEntryReadOnly(scope)?.entry).toMatchObject({
               visibility: "draft",
               createdActor: { type: "human", source: "profile", id: creator!.id },
             });
             expect(operation.result).toBeNull();
-            expect(backingProvider.isReleased()).toBe(false);
           }
-        } else if (inputState === "browser custody lifecycle") {
-          expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+        } else if (lifecycleRevoked) {
           rotateAgentEventLifecycleGeneration();
           expect(cancel).toHaveBeenCalledExactlyOnceWith("restart");
           expect(operation.result).toMatchObject({
             kind: "aborted",
             code: "aborted_for_restart",
           });
-        } else if (inputState === "internal fresh") {
-          fixture.beforeApprove.mockImplementation(() => linkEmail(email, target.id));
+        } else if (internal) {
+          beforeApprove.mockImplementation(() => linkEmail(email, target.id));
         }
         backingProvider.release();
-        if (inputState === "native committed") {
+        if (committed) {
           await vi.waitFor(() => expect(initialRuntimeReceipt).toBeDefined());
           // Source finalization confirms steering metadata after the runtime commit.
           // Keep the backing provider held until that final receipt is observable.
           await vi.waitFor(() =>
-            expect(
-              fixture.context.dedupe.get(`chat:${fixture.params.idempotencyKey}`),
-            ).toMatchObject({
+            expect(context.dedupe.get(`chat:${runId}`)).toMatchObject({
               ok: true,
-              payload: { runId: fixture.params.idempotencyKey, status: "ok" },
+              payload: { runId, status: "ok" },
             }),
           );
           const finalReceipt = structuredClone(recorder.getAdmissionReceipt());
-          const committedTranscript = loadTranscriptEventsSync(fixture.scope);
+          const committedTranscript = loadTranscriptEventsSync(scope);
           expect(finalReceipt).toBeDefined();
           expect(operation.result).toBeNull();
           expect(session.isStreaming).toBe(true);
-          expect(fixture.beforeApprove).not.toHaveBeenCalled();
           linkEmail(email, target.id);
           expect(await recorder.persistApproved()).toBeUndefined();
           expect(recorder.getAdmissionReceipt()).toEqual(finalReceipt);
-          expect(loadTranscriptEventsSync(fixture.scope)).toEqual(committedTranscript);
-          expect(fixture.beforeApprove).not.toHaveBeenCalled();
+          expect(loadTranscriptEventsSync(scope)).toEqual(committedTranscript);
           steeringProvider.release();
         }
         await backingRun;
         await fixture.finishDispatch();
-        const revoked =
-          inputState === "browser custody lifecycle" ||
-          inputState === "browser custody session ACL";
-        const refused = inputState === "internal fresh";
-        const failed = revoked || refused;
-        const transcript = loadTranscriptEventsSync(fixture.scope);
+        const sourceError = expect.stringContaining(
+          sessionRevoked ? "session is draft for this connection" : "Pending input ownership ended",
+        );
+        expect(session.messages.at(-1)).toMatchObject({
+          role: "assistant",
+          stopReason: failed ? "error" : "stop",
+          ...(failed
+            ? {
+                errorMessage: sessionRevoked
+                  ? expect.stringContaining("Message injection authority is no longer current")
+                  : revoked
+                    ? sourceError
+                    : expect.any(String),
+              }
+            : {}),
+        });
+        const transcript = loadTranscriptEventsSync(scope);
         const originalInputs = transcript.filter(
           (entry) =>
             isRecord(entry) &&
@@ -294,26 +292,16 @@ export function registerChatSteeringCommitCases(
             isRecord(entry.message) &&
             entry.message.idempotencyKey === inputKey,
         );
-        const cached = structuredClone(
-          fixture.context.dedupe.get(`chat:${fixture.params.idempotencyKey}`),
-        );
+        const cached = structuredClone(context.dedupe.get(`chat:${runId}`));
         expect(ack.mock.calls).toEqual(originalAck);
         expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-        expect(cancel.mock.calls).toEqual(
-          inputState === "browser custody lifecycle" ? [["restart"]] : [],
-        );
+        expect(cancel.mock.calls).toEqual(lifecycleRevoked ? [["restart"]] : []);
         expect(session.isStreaming).toBe(false);
         expect(session.getSteeringMessages()).toEqual([]);
-        expect(streamMocks.streamSimple).toHaveBeenCalledTimes(failed ? 1 : 2);
-        expect(
-          fixture.beforeApprove.mock.calls.map(([message]) =>
-            "idempotencyKey" in message ? message.idempotencyKey : undefined,
-          ),
-        ).toEqual(refused ? [inputKey, inputKey] : []);
         expect(originalInputs).toHaveLength(failed ? 0 : 1);
         expect(cached).toMatchObject({
           ok: !failed,
-          payload: { runId: fixture.params.idempotencyKey, status: failed ? "error" : "ok" },
+          payload: { runId, status: failed ? "error" : "ok" },
         });
         expect(rpcSourceTesting.size).toBe(0);
         if (failed) {
@@ -330,80 +318,51 @@ export function registerChatSteeringCommitCases(
           );
         }
         if (revoked) {
-          const sessionRevoked = inputState === "browser custody session ACL";
-          const sourceError = expect.stringContaining(
-            sessionRevoked
-              ? "session is draft for this connection"
-              : "Pending input ownership ended",
-          );
           expect(terminals.map((event) => event.type)).toEqual(["agent_end", "agent_settled"]);
-          expect(session.messages.at(-1)).toMatchObject({
-            role: "assistant",
-            stopReason: "error",
-            errorMessage: sessionRevoked
-              ? expect.stringContaining("Message injection authority is no longer current")
-              : sourceError,
-          });
           expect(cached).toMatchObject({ error: { message: sourceError } });
           expect(
             vi
-              .mocked(fixture.context.broadcast)
+              .mocked(context.broadcast)
               .mock.calls.filter(
                 ([event, payload]) =>
                   event === "chat" &&
                   isRecord(payload) &&
-                  payload.runId === fixture.params.idempotencyKey &&
+                  payload.runId === runId &&
                   payload.state === "error",
               )
               .map(([, payload]) => payload),
-          ).toMatchObject([
-            {
-              runId: fixture.params.idempotencyKey,
-              state: "error",
-              errorMessage: sourceError,
-            },
-          ]);
-          expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
+          ).toMatchObject([{ runId, state: "error", errorMessage: sourceError }]);
+          expect(await listSessionPendingInputs(scope)).toMatchObject({
             total: 1,
             items: [{ ...pending.items[0], state: "interrupted" }],
           });
         } else {
           expect(terminals.filter((event) => event.type === "agent_end")).toHaveLength(1);
           expect(terminals.filter((event) => event.type === "agent_settled")).toHaveLength(1);
-          if (refused) {
-            expect(persistFallback).toHaveBeenCalledOnce();
+          if (internal) {
             // Memory consumption precedes persistence; refusal terminates the backing run.
             expect(session.messages).toContainEqual(
               expect.objectContaining({
                 role: "user",
                 content: expect.arrayContaining([
-                  expect.objectContaining({ type: "text", text: fixture.params.message }),
+                  expect.objectContaining({ type: "text", text: params.message }),
                 ]),
               }),
             );
-            expect(session.messages.at(-1)).toMatchObject({
-              role: "assistant",
-              stopReason: "error",
-              errorMessage: expect.any(String),
-            });
-            expect(fixture.context.broadcast).toHaveBeenCalledWith(
+            expect(context.broadcast).toHaveBeenCalledWith(
               "chat",
               expect.objectContaining({
-                runId: fixture.params.idempotencyKey,
+                runId,
                 state: "error",
                 errorMessage: expect.stringContaining("Selected account changed"),
               }),
               expect.anything(),
             );
           } else {
-            expect(session.messages.at(-1)).toMatchObject({
-              role: "assistant",
-              stopReason: "stop",
-            });
             expect(recorder.getAdmissionReceipt()).toBeDefined();
           }
           if (inputState === "browser custody workspace") {
-            expect(loadExactSessionEntryReadOnly(fixture.scope)?.entry).toMatchObject({
+            expect(loadExactSessionEntryReadOnly(scope)?.entry).toMatchObject({
               pendingProjectGitUrl: "file:///synthetic/missing-project.git",
             });
           }
@@ -415,28 +374,17 @@ export function registerChatSteeringCommitCases(
               details: { reason: "EXPECTED_PROFILE_MISMATCH", execution: "not_started" },
             }),
           );
-          expect(fixture.context.dedupe.get(`chat:${fixture.params.idempotencyKey}`)).toEqual(
-            cached,
-          );
-          expect(loadTranscriptEventsSync(fixture.scope)).toEqual(transcript);
+          expect(context.dedupe.get(`chat:${runId}`)).toEqual(cached);
+          expect(loadTranscriptEventsSync(scope)).toEqual(transcript);
           expect(rpcSourceTesting.size).toBe(0);
-          expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+          expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
         }
       } catch (error) {
         failures.add(error);
       } finally {
         releaseProviders();
-        try {
-          await backingRun;
-        } catch (error) {
-          failures.add(error);
-        } finally {
-          try {
-            await fixture.cleanup();
-          } catch (error) {
-            failures.add(error);
-          }
-        }
+        await collectFailure(failures, async () => backingRun);
+        await collectFailure(failures, () => fixture.cleanup());
       }
       if (failures.size === 1) {
         throw failures.values().next().value;

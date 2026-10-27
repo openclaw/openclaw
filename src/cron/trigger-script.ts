@@ -63,7 +63,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
-import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
+import {
+  capturePluginLifecycleAuthority,
+  isPluginRegistryRecordSetAdmitting,
+} from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
@@ -134,6 +137,7 @@ type PreparedTriggerRuntime = {
   ) => Promise<CronScriptMcpTools | undefined>;
   context: HookContext & { config: OpenClawConfig; agentId: string; sessionKey: string };
   pluginRegistry?: PluginRegistry;
+  scheduledToolPolicy: ScheduledToolPolicyContext | undefined;
 };
 
 type CronScriptInvocation = Parameters<NonNullable<CronServiceDeps["evaluateCronTrigger"]>>[0];
@@ -339,6 +343,7 @@ async function prepareTriggerRuntime(
         acquireMcpTools,
         context,
         ...(pluginRegistry ? { pluginRegistry } : {}),
+        scheduledToolPolicy,
         [Symbol.dispose]: () => sandbox?.[Symbol.dispose]?.(),
       };
     } catch (error) {
@@ -426,13 +431,16 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     }
     const promise = prepareRuntime({ ...request, signal: scope.signal }).then((runtime) => {
       entry.lifetime.publish(runtime);
+      const registry = runtime.pluginRegistry;
+      const registryCurrent =
+        registry && capturePluginLifecycleAuthority(registry, undefined, { scopedRuntime: true });
       return {
         ...runtime,
-        isCurrent: runtime.pluginRegistry
-          ? (capturePluginLifecycleAuthority(runtime.pluginRegistry, undefined, {
-              scopedRuntime: true,
-            }) ?? (() => false))
-          : () => true,
+        // Per-plugin replacement disposes one instance without retiring this
+        // retained registry; its stale hooks would fail every later tool call.
+        isCurrent: () =>
+          !registry ||
+          (registryCurrent?.() === true && isPluginRegistryRecordSetAdmitting(registry)),
       };
     });
     const entry: TriggerRuntimeCacheEntry = {
@@ -497,6 +505,13 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       const runtime = retained.runtime;
       releaseRuntime = retained.release;
       admission = prepareCronRunAdmission({
+        scheduledExecution: params.occurrence.mint({
+          cfg: runtime.context.config,
+          agentId: runtime.context.agentId,
+          runId,
+          runSessionKey: runtime.context.sessionKey,
+          toolsAllow: request.toolsAllow,
+        }),
         cfg: runtime.context.config,
         runId,
         agentId: runtime.context.agentId,
@@ -504,7 +519,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         jobId: params.job.id,
         deliveryAttemptFence: params.deliveryAttemptFence,
         toolsAllow: request.toolsAllow,
-        scheduledToolPolicy: request.scheduledToolPolicy,
+        scheduledToolPolicy: runtime.scheduledToolPolicy,
         channelRequester: resolveCronAuthenticatedChannelRequester(params.job),
         executionIdentity: params.executionIdentity,
         ingressBoundary: "cron.script",

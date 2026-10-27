@@ -1,3 +1,4 @@
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
@@ -31,6 +32,7 @@ import { resolveNodeWorkerNativeInferenceWorkspace } from "./node-worker-native-
 import {
   createNodeWorkerCredentialScrubber,
   sanitizeNodeWorkerDiagnostic,
+  warnNodeWorkerIdleCleanupFailure,
 } from "./node-worker-output.js";
 import {
   inspectNodeWorkerProcessIdentity,
@@ -63,22 +65,7 @@ export class NodeWorkerChildLifecycle {
   private readonly processObservations = new NodeWorkerProcessObservations();
 
   observeProcesses(input: NodeWorkerProcessInput, signal?: AbortSignal) {
-    const owner = [...this.owners.values()].find(
-      (entry) =>
-        entry.binding.environmentId === input.environmentId &&
-        entry.binding.gatewayNamespace === input.gatewayNamespace,
-    );
-    if (!owner || owner.state !== "running" || this.options.isClosed()) {
-      throw new Error(
-        "Retained worker process observation unavailable; start a new turn and retry.",
-      );
-    }
-    return this.processObservations.request(
-      owner,
-      input,
-      () => !this.options.isClosed() && this.owners.get(owner.launchId) === owner,
-      signal,
-    );
+    return this.processObservations.observe(input, signal, this.owners, this.options);
   }
 
   constructor(private readonly options: NodeWorkerChildLifecycleOptions) {
@@ -128,12 +115,7 @@ export class NodeWorkerChildLifecycle {
           : [],
       ),
     );
-    const errors = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (errors.length) {
-      throw new AggregateError(errors, "node worker idle cleanup failed");
-    }
+    throwSettledAggregate(results, "node worker idle cleanup failed");
   }
 
   /** Starts one physical owner behind the durable journal gate, independent of turn reuse. */
@@ -565,7 +547,7 @@ export class NodeWorkerChildLifecycle {
         throw new Error("node worker returned a result outside its active turn");
       }
       // Publish this operation before finish can invoke a reentrant cancellation.
-      const settling = Promise.resolve()
+      await (turn.settling = Promise.resolve()
         .then(async () => {
           const receipt = await this.options.turns.finish({
             expected: turn.claim,
@@ -587,12 +569,8 @@ export class NodeWorkerChildLifecycle {
           turn.settle();
         })
         .finally(() => {
-          if (turn.settling === settling) {
-            turn.settling = undefined;
-          }
-        });
-      turn.settling = settling;
-      await settling;
+          turn.settling = undefined;
+        }));
     } else if (active.turn || active.retention?.turnId !== frame.turnId) {
       return;
     }
@@ -617,7 +595,7 @@ export class NodeWorkerChildLifecycle {
     } else {
       const timer = setTimeout(() => {
         if (active.retention?.reason === "idle" && active.retention.timer === timer) {
-          void this.stopChild(active, "interrupted").catch(() => undefined);
+          void this.stopChild(active, "interrupted").catch(warnNodeWorkerIdleCleanupFailure);
         }
       }, 120_000);
       timer.unref();
@@ -625,7 +603,7 @@ export class NodeWorkerChildLifecycle {
       if (this.options.isClosed()) {
         void this.stopChild(active, "interrupted").catch(() => undefined);
       } else if (this.idleChildren().length > 2) {
-        void this.reclaimIdle().catch(() => undefined);
+        void this.reclaimIdle().catch(warnNodeWorkerIdleCleanupFailure);
       }
     }
     this.publishIdle();
@@ -723,7 +701,7 @@ export class NodeWorkerChildLifecycle {
       if (active.retention?.reason === "idle" && !this.options.isClosed()) {
         clearTimeout(active.retention.timer);
         active.retention.timer = setTimeout(() => {
-          void this.stopChild(active, state).catch(() => undefined);
+          void this.stopChild(active, state).catch(warnNodeWorkerIdleCleanupFailure);
         }, 120_000).unref();
       }
       throw error;

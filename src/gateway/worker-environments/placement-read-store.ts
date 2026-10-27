@@ -1,5 +1,9 @@
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import {
+  placementAuthorityOwnerFor,
+  withLocalPlacementTurns,
+} from "./placement-authority-owner.js";
 import { required, type WorkerSessionPlacementRecord } from "./placement-record.js";
 import { capturePlacementReplicaRead, readPlacementReplica } from "./placement-turn-authority.js";
 
@@ -10,18 +14,23 @@ export function createPlacementReadStore(params: {
   ) => WorkerSessionPlacementRecord | undefined;
 }) {
   const context = captureOpenClawStateWorkerContext({ path: params.path });
-  const decorate = (records: WorkerSessionPlacementRecord[]) => {
+  const owner = placementAuthorityOwnerFor(context.admission.identity);
+  const decorate = (
+    records: WorkerSessionPlacementRecord[],
+    sessionIds: readonly string[] | undefined,
+  ) => {
     context.admission.assertCurrent();
-    return records.map((record) => params.withWorkspaceResultConflict(record)!);
+    return [...withLocalPlacementTurns(owner, records, sessionIds).values()].map((record) =>
+      params.withWorkspaceResultConflict(record)!,
+    );
   };
   const read = async (sessionIds?: readonly string[]) => {
     const publish = capturePlacementReplicaRead(context.admission.identity);
     const records = await runOpenClawStateWorkerOperation(context, (scope) =>
       scope.execute({ type: "workerPlacements.read", input: { sessionIds } }),
     );
-    const decorated = decorate(records);
     publish(records, sessionIds);
-    return decorated;
+    return decorate(records, sessionIds);
   };
   const getManyAsync = async (
     sessionIds: readonly string[],
@@ -33,7 +42,7 @@ export function createPlacementReadStore(params: {
       const records = cached.flatMap((entry) =>
         entry.placement ? [structuredClone(entry.placement)] : [],
       );
-      return new Map(decorate(records).map((record) => [record.sessionId, record]));
+      return new Map(decorate(records, ids).map((record) => [record.sessionId, record]));
     }
     const records = ids.length ? await read(ids) : [];
     return new Map(records.map((record) => [record.sessionId, structuredClone(record)]));
@@ -50,7 +59,7 @@ export function createPlacementReadStore(params: {
         scope.execute({ type: "workerPlacements.readWithMove", input: { sessionId: id } }),
       );
       publish(result.placement ? [result.placement] : [], [id]);
-      const [placement] = decorate(result.placement ? [result.placement] : []);
+      const [placement] = decorate(result.placement ? [result.placement] : [], [id]);
       return { ...result, placement };
     },
     listAsync: () => read(),
@@ -67,13 +76,14 @@ export function createPlacementReadStore(params: {
     },
     async listForReconcileAsync(sessionKey?: string) {
       const publish = capturePlacementReplicaRead(context.admission.identity);
-      const records = decorate(
-        await runOpenClawStateWorkerOperation(context, (scope) =>
-          scope.execute({ type: "workerPlacements.readReconcile", input: { sessionKey } }),
-        ),
+      const records = await runOpenClawStateWorkerOperation(context, (scope) =>
+        scope.execute({ type: "workerPlacements.readReconcile", input: { sessionKey } }),
       );
       publish(records);
-      return records;
+      return decorate(
+        records,
+        records.map((record) => record.sessionId),
+      );
     },
   };
 }

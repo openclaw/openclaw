@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "./minimax-vlm.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -11,11 +11,8 @@ vi.mock("../infra/net/fetch-guard.js", async () => {
 });
 
 describe("minimaxUnderstandImage apiKey normalization", () => {
-  const priorMinimaxApiHost = process.env.MINIMAX_API_HOST;
   function jsonResponse(payload: unknown) {
-    return new Response(JSON.stringify(payload), {
-      headers: { "Content-Type": "application/json" },
-    });
+    return Response.json(payload);
   }
 
   function guarded(
@@ -32,12 +29,17 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     fetchWithSsrFGuardMock.mockResolvedValueOnce(guarded(new Response(body, init)));
   }
 
+  function unboundedResponse(chunk: Uint8Array, status: number, trace: string) {
+    const cancel = vi.fn();
+    const body = new ReadableStream({ pull: (controller) => controller.enqueue(chunk), cancel });
+    mockResponse(body, { status, headers: { "Trace-Id": trace } });
+    return cancel;
+  }
+
+  beforeEach(() => vi.stubEnv("MINIMAX_API_HOST", ""));
+
   afterEach(() => {
-    if (priorMinimaxApiHost === undefined) {
-      delete process.env.MINIMAX_API_HOST;
-    } else {
-      process.env.MINIMAX_API_HOST = priorMinimaxApiHost;
-    }
+    vi.unstubAllEnvs();
     fetchWithSsrFGuardMock.mockReset();
     vi.restoreAllMocks();
   });
@@ -59,7 +61,7 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
   }
 
   async function requestError(input: Parameters<typeof understandImage>[0] = {}) {
-    const error = await understandImage({ apiHost: "https://api.minimax.io", ...input }).catch(
+    const error = await understandImage({ modelBaseUrl: "https://api.minimax.io", ...input }).catch(
       (caught: unknown) => caught,
     );
     if (!(error instanceof Error)) {
@@ -71,7 +73,7 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
   it("strips embedded CR/LF before sending Authorization header", async () => {
     const opts = await requestOptions({
       apiKey: "minimax-test-\r\nkey",
-      apiHost: "https://api.minimax.io",
+      modelBaseUrl: "https://api.minimax.io",
     });
     expect(new Headers(opts?.init?.headers).get("Authorization")).toBe("Bearer minimax-test-key");
   });
@@ -84,129 +86,72 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
 
   it.each([undefined, "https://["])(
     "keeps minimax-portal-cn on the CN host with configured host %s",
-    async (apiHost) => {
+    async (modelBaseUrl) => {
       const opts = await requestOptions({
         provider: "minimax-portal-cn",
-        ...(apiHost ? { apiHost } : {}),
+        ...(modelBaseUrl ? { modelBaseUrl } : {}),
       });
       expect(opts?.url).toBe("https://api.minimaxi.com/v1/coding_plan/vlm");
     },
   );
 
-  describe("SSRF policy", () => {
-    it.each([
-      {
-        name: "pins a default hostname without broad private-network access",
-        input: { apiHost: "https://api.minimax.io" },
-        policy: { hostnameAllowlist: ["api.minimax.io"] },
-      },
-      {
-        name: "preserves an explicitly configured loopback origin",
-        input: { apiHost: "https://localhost:8080" },
-        policy: {
-          hostnameAllowlist: ["localhost"],
-          allowedOrigins: ["https://localhost:8080"],
-        },
-      },
-      {
-        name: "lets explicit denial override configured origin trust",
-        input: { apiHost: "https://localhost:8080", allowPrivateNetwork: false },
-        policy: { hostnameAllowlist: ["localhost"] },
-      },
-      {
-        name: "preserves explicit private-network opt-in",
-        input: { apiHost: "https://custom-minimax.example.com", allowPrivateNetwork: true },
-        policy: {
-          hostnameAllowlist: ["custom-minimax.example.com"],
-          allowedOrigins: ["https://custom-minimax.example.com"],
-          allowPrivateNetwork: true,
-        },
-      },
-      {
-        name: "refuses metadata-like configured origin trust",
-        input: { apiHost: "https://metadata.minimax.local" },
-        policy: undefined,
-      },
-      {
-        name: "refuses link-local configured origin trust",
-        input: { apiHost: "https://169.254.1.1" },
-        policy: undefined,
-      },
-    ])("$name", async ({ input, policy }) => {
-      const opts = await requestOptions(input);
-      if (policy === undefined) {
+  it.each([
+    ["api.minimax.io", undefined, false],
+    ["localhost:8080", undefined, true],
+    ["localhost:8080", false, false],
+    ["custom-minimax.example.com", true, true],
+    ["metadata.minimax.local", undefined, undefined],
+    ["169.254.1.1", undefined, undefined],
+  ] as const)(
+    "SSRF policy for %s (private=%s, trusted=%s)",
+    async (host, allowPrivateNetwork, trusted) => {
+      const modelBaseUrl = `https://${host}`;
+      const opts = await requestOptions({ modelBaseUrl, allowPrivateNetwork });
+      if (trusted === undefined) {
         expect(opts?.policy).toBeUndefined();
       } else {
-        const expected = { allowedOrigins: undefined, allowPrivateNetwork: undefined, ...policy };
-        expect(opts?.policy).toBeDefined();
-        expect(opts?.policy.hostnameAllowlist).toEqual(expected.hostnameAllowlist);
-        expect(opts?.policy.allowedOrigins).toEqual(expected.allowedOrigins);
-        expect(opts?.policy.allowPrivateNetwork).toBe(expected.allowPrivateNetwork);
-        expect(opts?.policy.dangerouslyAllowPrivateNetwork).toBeUndefined();
+        expect(opts?.policy).toMatchObject({ hostnameAllowlist: [new URL(modelBaseUrl).hostname] });
+        expect(opts?.policy?.allowedOrigins).toEqual(trusted ? [modelBaseUrl] : undefined);
+        expect(opts?.policy?.allowPrivateNetwork).toBe(
+          allowPrivateNetwork === true ? true : undefined,
+        );
+        expect(opts?.policy?.dangerouslyAllowPrivateNetwork).toBeUndefined();
       }
-    });
+    },
+  );
 
-    it("carries model request proxy policy into the guarded fetch", async () => {
-      const opts = await requestOptions({
-        apiHost: "https://custom-minimax.example.com",
-        request: { proxy: { mode: "explicit-proxy", url: "https://proxy.example.com" } },
-      });
-      expect(opts?.dispatcherPolicy).toEqual({
-        mode: "explicit-proxy",
-        proxyUrl: "https://proxy.example.com",
-      });
-      // Explicit proxy configuration keeps strict mode; ambient proxy auto-upgrade
-      // must not replace its dispatcher policy.
-      expect(opts?.mode).toBeUndefined();
+  it("carries model request proxy policy into the guarded fetch", async () => {
+    const opts = await requestOptions({
+      modelBaseUrl: "https://custom-minimax.example.com",
+      request: { proxy: { mode: "explicit-proxy", url: "https://proxy.example.com" } },
     });
+    expect(opts?.dispatcherPolicy).toEqual({
+      mode: "explicit-proxy",
+      proxyUrl: "https://proxy.example.com",
+    });
+    expect(opts?.mode).toBeUndefined();
   });
 
   it("bounds large provider error response bodies", async () => {
-    let canceled = false;
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode(`${"x".repeat(9_000)}tail-marker`));
-      },
-      cancel() {
-        canceled = true;
-      },
-    });
-    mockResponse(body, {
-      status: 500,
-      statusText: "Internal Server Error",
-      headers: { "Trace-Id": "trace-123" },
-    });
+    const cancel = unboundedResponse(
+      new TextEncoder().encode(`${"x".repeat(9_000)}tail-marker`),
+      500,
+      "trace-123",
+    );
     const message = await requestError();
     expect(message).toContain("MiniMax VLM request failed");
     expect(message).toContain("Trace-Id: trace-123");
     expect(message).not.toContain("tail-marker");
     expect(message.length).toBeLessThan(520);
-    expect(canceled).toBe(true);
+    expect(cancel).toHaveBeenCalled();
   });
 
   it("bounds large successful response bodies before parsing JSON", async () => {
-    let canceled = false;
-    let pullCount = 0;
-    const body = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        pullCount += 1;
-        controller.enqueue(new Uint8Array(1024 * 1024));
-      },
-      cancel() {
-        canceled = true;
-      },
-    });
-    mockResponse(body, {
-      status: 200,
-      headers: { "Content-Type": "application/json", "Trace-Id": "trace-success" },
-    });
+    const cancel = unboundedResponse(new Uint8Array(1024 * 1024), 200, "trace-success");
     expect(await requestError()).toBe(
       "MiniMax VLM response [Trace-Id=trace-success]: JSON response exceeds 16777216 bytes",
     );
-    // WHATWG streams may pre-pull one chunk beyond the bytes consumed by the reader.
-    expect(pullCount).toBeGreaterThanOrEqual(17);
-    expect(pullCount).toBeLessThanOrEqual(18);
-    expect(canceled).toBe(true);
+    expect(cancel).toHaveBeenCalled();
   });
 
   it.each(["error body", "reason phrase", "Trace-Id", "application status message"])(

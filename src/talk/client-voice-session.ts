@@ -645,7 +645,6 @@ export async function closeRelayVoiceSessionRecord(
     sessionKey: string;
     voiceSessionId: string;
     config: OpenClawConfig;
-    now?: number;
   },
   retainedWriter?: ClientVoiceSessionWriter,
 ): Promise<void> {
@@ -711,7 +710,6 @@ export async function closeStaleClientVoiceSessions(params: {
 const clientVoiceSessionTesting = {
   readRecord,
   digestDeliveryPolicy: CLIENT_VOICE_MUTATION_DIGEST_POLICY,
-  digestDeliverySnapshot: () => mutationDigestDeliveryOwner.snapshot(),
   reset(): void {
     for (const [runId, owner] of voiceSessionByRunId) {
       retireClientVoiceRun(runId, owner, false);

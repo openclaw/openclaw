@@ -8,13 +8,14 @@ import vm from "node:vm";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { parse } from "acorn";
 import { transformSync } from "esbuild";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { isEmbeddedStandaloneModule } from "../../cli-invocation.mjs";
 import { parseFrontmatterBlockResult } from "../../packages/markdown-core/src/frontmatter.js";
 import { rewriteStandaloneImports } from "../../scripts/lib/bun-standalone-imports.mjs";
 import { createStandaloneMetadataAdapter } from "../../scripts/lib/bun-standalone-metadata.mjs";
 import { createStandaloneNativeAdapter } from "../../scripts/lib/bun-standalone-native.mjs";
+import { createStandaloneSourceParser } from "../../scripts/lib/bun-standalone-source-parser.mjs";
 import { resolveHookManifestMetadata } from "../../src/hooks/frontmatter.js";
 import {
   describeRootFileOpenFailure,
@@ -22,6 +23,17 @@ import {
   readFileDescriptorBoundedSync,
 } from "../../src/infra/boundary-file-read.js";
 import { readRootJsonObjectSync } from "../../src/infra/json-files.js";
+import {
+  createRuntimeProcessEntrypoints,
+  pluginRuntimeProcessManifest,
+} from "../../src/infra/runtime-process-manifest.ts";
+import { resolveRuntimeWorkerArgv } from "../../src/infra/runtime-worker-url.ts";
+import { tryProcessCwd } from "../../src/infra/safe-cwd.js";
+import {
+  resolveImmutableInstallIdentity,
+  resolvePluginCandidateInstallOwner,
+} from "../../src/plugins/candidate-install-owner.js";
+import { PluginDashboardDeclarationError } from "../../src/plugins/dashboard-capabilities.js";
 import { shouldRejectHardlinkedPluginFiles } from "../../src/plugins/hardlink-policy.js";
 import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "../../src/plugins/package-entrypoints.js";
 import {
@@ -33,27 +45,41 @@ import { createPluginCacheSdk, getPluginSdkHostFacts } from "../../src/plugins/p
 
 const temporaryRoots: string[] = [];
 afterEach(() => {
+  vi.unstubAllGlobals();
   temporaryRoots.splice(0).forEach((root) => fs.rmSync(root, { recursive: true, force: true }));
 });
 
-function ownerSource(relative: string, functionName?: string): string {
-  const source = stripTypeScriptTypes(
-    fs.readFileSync(new URL(`../../${relative}`, import.meta.url), "utf8"),
-  );
-  const ast = parse(source, { ecmaVersion: "latest", sourceType: "module" });
+const parse = createStandaloneSourceParser();
+
+function ownerSource(relative: string, functionName?: string, typed = false): string {
+  const original = fs.readFileSync(new URL(`../../${relative}`, import.meta.url), "utf8");
+  const source = typed ? original : stripTypeScriptTypes(original);
+  const ast = parse(source, {
+    ecmaVersion: "latest",
+    sourceType: "module",
+  });
   return ast.body
     .flatMap((statement) => {
       const declaration =
         statement.type === "ExportNamedDeclaration" ? statement.declaration : statement;
-      return (declaration?.type === "FunctionDeclaration" &&
-        (!functionName || declaration.id?.name === functionName)) ||
+      if (
+        ((declaration?.type === "FunctionDeclaration" ||
+          declaration?.type === "ClassDeclaration" ||
+          declaration?.type === "TSTypeAliasDeclaration") &&
+          (!functionName || declaration.id?.name === functionName)) ||
         (functionName &&
-          declaration?.type === "VariableDeclaration" &&
-          declaration.declarations.some(
-            (entry) => entry.id.type === "Identifier" && entry.id.name === functionName,
-          ))
-        ? [source.slice(declaration.start, declaration.end)]
-        : [];
+          ((declaration?.type === "ClassDeclaration" && declaration.id?.name === functionName) ||
+            (declaration?.type === "VariableDeclaration" &&
+              declaration.declarations.some(
+                (entry) => entry.id.type === "Identifier" && entry.id.name === functionName,
+              ))))
+      ) {
+        if (declaration.start == null || declaration.end == null) {
+          throw new Error("Parsed owner declaration has no source offsets");
+        }
+        return [source.slice(declaration.start, declaration.end)];
+      }
+      return [];
     })
     .join("\n");
 }
@@ -64,7 +90,8 @@ function fixture({
   minifiedMetadata = false,
   retainSourceFiles = false,
   retainImageFiles = false,
-  boundaryReaderModule = "",
+  secretEntrypointOnDisk = false,
+  typedMetadata = false,
 } = {}) {
   const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-image-metadata-"));
   temporaryRoots.push(runtime);
@@ -120,8 +147,7 @@ function fixture({
     launcher,
     bridge,
     hookHandler,
-    secretEntrypoint,
-    undeclaredEntrypoint,
+    ...(secretEntrypointOnDisk ? [] : [secretEntrypoint]),
     mxcLauncher,
     vaultResolver,
     sqliteWorker,
@@ -154,6 +180,9 @@ function fixture({
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, "export default () => {};\n");
   }
+  if (secretEntrypointOnDisk) {
+    fs.writeFileSync(secretEntrypoint, "export default () => {};\n");
+  }
   fs.mkdirSync(path.dirname(bridge), { recursive: true });
   fs.writeFileSync(launcher, "export {};\n");
   fs.writeFileSync(bridge, "export {};\n");
@@ -163,7 +192,11 @@ function fixture({
       `image:${file}`,
     ]),
   );
-  const adapter = createStandaloneMetadataAdapter({ runtimeRoot: runtime, embeddedPaths, parse });
+  const adapter = createStandaloneMetadataAdapter({
+    runtimeRoot: runtime,
+    embeddedPaths,
+    parse,
+  });
   if (!retainImageFiles) {
     imageEntries.forEach((file) => fs.unlinkSync(file));
   }
@@ -242,12 +275,18 @@ function fixture({
     materializeErrorStack: () => {},
     FsSafeError: class extends Error {},
     safeFileSignature: (name: string) => observedFs.statSync(name),
-    safeHashFile: ({ filePath }: { filePath: string }) =>
+    safeHashFile: (filePath: string) =>
       crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex"),
     normalizeLowercaseStringOrEmpty,
+    pluginRuntimeProcessManifest,
+    runtimeProcessEntrypoints: createRuntimeProcessEntrypoints(import.meta.url),
+    resolveRuntimeWorkerArgv,
   });
   vm.runInContext(adapter.bootstrap.replace("import.meta.require(", "require("), context);
   for (const [file, name] of [
+    ["cli-invocation.mjs", "isEmbeddedStandaloneModule"],
+    ["src/infra/runtime-process-package-url.ts", "resolvePackageRuntimeProcessEntrypointUrl"],
+    ["src/infra/runtime-process-dependency-url.ts", "resolvePluginRuntimeProcessAssetUrl"],
     ["src/plugins/plugin-cache-files.ts", undefined],
     ["src/plugins/plugin-registry-snapshot.ts", "fileContentMatches"],
     ["src/infra/openclaw-root.ts", "candidateDirsFromArgv1"],
@@ -262,14 +301,7 @@ function fixture({
     ["extensions/mxc/src/plugin-root.ts", undefined],
     ["extensions/vault/src/cli.ts", "resolveResolverScriptPath"],
   ] as const) {
-    let source = ownerSource(file, name);
-    const boundaryImport =
-      boundaryReaderModule && name === "resolveNodeEntrypointArg"
-        ? `import { openRootFileSync as bundledRootFileOpen } from ${JSON.stringify(boundaryReaderModule)};\n`
-        : "";
-    if (boundaryImport) {
-      source = boundaryImport + source.replaceAll("openRootFileSync(", "bundledRootFileOpen(");
-    }
+    const source = ownerSource(file, name, typedMetadata);
     const transformed = adapter.transform({
       filename: path.join(runtime, "dist/owner.js"),
       contents:
@@ -281,12 +313,11 @@ function fixture({
             }).code
           : source,
     });
-    vm.runInContext(
-      transformed.contents
-        .replace(boundaryImport, "")
-        .replaceAll("import.meta.url", JSON.stringify(pathToFileURL(entry).href)),
-      context,
+    const executable = transformed.contents.replaceAll(
+      "import.meta.url",
+      JSON.stringify(pathToFileURL(entry).href),
     );
+    vm.runInContext(typedMetadata ? stripTypeScriptTypes(executable) : executable, context);
   }
   return {
     runtime,
@@ -313,10 +344,81 @@ function fixture({
     rootOpen,
     context,
     adapter,
+    embeddedPaths,
   };
 }
 
 describe("standalone image metadata", () => {
+  it("distinguishes embedded modules from directories and later disk additions", () => {
+    const { runtime, entry, context } = fixture();
+    vi.stubGlobal(
+      "__openclawStandaloneIsEmbeddedModule",
+      // eslint-disable-next-line no-underscore-dangle -- Compiler bootstrap contract.
+      context.__openclawStandaloneIsEmbeddedModule,
+    );
+    expect(isEmbeddedStandaloneModule(pathToFileURL(entry).href)).toBe(true);
+    expect(isEmbeddedStandaloneModule(path.dirname(entry))).toBe(false);
+    const fetched = path.join(runtime, "later.js");
+    fs.writeFileSync(fetched, "export const value = 42;");
+    expect(isEmbeddedStandaloneModule(fetched)).toBe(false);
+  });
+  it("retains legacy metadata without admitting chunks and resolves typed image aliases", () => {
+    const { runtime, plugin, doctor, doctorBytes, sdkEntry, embeddedPaths, context } = fixture({
+      retainImageFiles: true,
+    });
+    const legacy = "dist/legacy-only.js";
+    const dependency = "dist/plugin-sdk/transitive.js";
+    const source = ".typed-source/context/src/typed.ts";
+    const alias = ".typed-source/context/src/typed.js";
+    const typedBytes = "export const value: number = 7;\n";
+    const legacyEntry = "dist/extensions/example/index.js";
+    const legacySize = fs.statSync(path.join(runtime, legacyEntry)).size;
+    fs.writeFileSync(path.join(runtime, legacy), "export const legacy = true;\n");
+    fs.writeFileSync(path.join(runtime, dependency), "export const dependency = true;\n");
+    fs.writeFileSync(sdkEntry, 'import "./transitive.js"; import "./schema.json";\n');
+    fs.mkdirSync(path.dirname(path.join(runtime, source)), { recursive: true });
+    fs.writeFileSync(path.join(runtime, source), typedBytes);
+    const image = {
+      ...embeddedPaths,
+      [source]: "image:typed",
+      [alias]: "image:typed",
+      [legacyEntry]: "image:typed",
+    };
+    const adapter = createStandaloneMetadataAdapter({
+      runtimeRoot: runtime,
+      embeddedPaths: image,
+      metadataEntries: [...Object.keys(embeddedPaths), legacy, dependency],
+      parse,
+    });
+    vm.runInContext(adapter.bootstrap.replace("import.meta.require(", "require("), context);
+    expect(
+      context["__openclawStandaloneImageRead"]({
+        rootDir: plugin,
+        relativePath: "doctor-contract-api.js",
+      }).contents,
+    ).toEqual(doctorBytes);
+    expect(context["__openclawStandaloneDoctorHash"](doctor)).toBe(
+      crypto.createHash("sha256").update(doctorBytes).digest("hex"),
+    );
+    for (const entry of [source, alias]) {
+      expect(context["__openclawStandaloneImageStat"](path.join(runtime, entry)).size).toBe(
+        Buffer.byteLength(typedBytes),
+      );
+    }
+    expect(context["__openclawStandaloneImageStat"](path.join(runtime, legacyEntry)).size).toBe(
+      legacySize,
+    );
+    for (const entry of [legacy, dependency]) {
+      expect(context["__openclawStandaloneImageStat"](path.join(runtime, entry))).toBeUndefined();
+      expect(
+        context["__openclawStandaloneModuleOpen"]({
+          rootPath: runtime,
+          absolutePath: path.join(runtime, entry),
+        }),
+      ).toBeUndefined();
+    }
+  });
+
   it.each(
     [false, true].flatMap((physical) => [false, true].map((minified) => ({ physical, minified }))),
   )(
@@ -668,7 +770,7 @@ describe("standalone image metadata", () => {
       ["src/plugins/native-module-require.ts", "PLUGIN_SOURCE_MODULE_EXTENSIONS"],
       ["src/channels/plugins/module-loader.ts", "loadModule"],
       ["src/plugins/module-export.ts", "unwrapDefaultModuleExport"],
-      ["src/channels/plugins/merge-plugin-section.ts", "mergeChannelPluginSection"],
+      ["src/channels/plugins/merge-plugin-section.ts", undefined],
       ["src/plugins/loader-channel-setup.ts", undefined],
     ] as const) {
       vm.runInContext(
@@ -775,11 +877,12 @@ describe("standalone image metadata", () => {
   });
 
   it.each(
-    ([false, true] as const).flatMap((minified) =>
-      (["cli", "containment"] as const).map((owner) => ({ owner, minified })),
+    (["source", "minified", "typed"] as const).flatMap((shape) =>
+      (["cli", "containment"] as const).map((owner) => ({ owner, shape })),
     ),
-  )("resolves $owner paths from image facts (minified=$minified)", ({ owner, minified }) => {
-    const { runtime, plugin, entry, context, adapter } = fixture();
+  )("resolves $owner paths from image facts ($shape)", ({ owner, shape }) => {
+    const typed = shape === "typed";
+    const { runtime, plugin, entry, context, adapter } = fixture({ typedMetadata: typed });
     const realpath = vi.fn((filename: string) => fs.realpathSync(filename));
     const lstat = vi.fn((filename: string) => fs.lstatSync(filename));
     Object.assign(context, {
@@ -789,28 +892,32 @@ describe("standalone image metadata", () => {
     });
     const source =
       owner === "cli"
-        ? ownerSource("src/infra/openclaw-cli-invocation.ts", "resolveOpenClawCliEntryPath")
-        : ownerSource("src/plugins/plugin-registry-comparison.ts", "isContainedPluginPath");
+        ? ownerSource("src/infra/openclaw-cli-invocation.ts", "resolveOpenClawCliEntryPath", typed)
+        : ownerSource("src/plugins/plugin-registry-comparison.ts", "isContainedPluginPath", typed);
     const invoke = (target: string) =>
       owner === "cli"
         ? context.resolveOpenClawCliEntryPath(target)
         : context.isContainedPluginPath(plugin, target, new Map());
-    vm.runInContext(source, context);
+    vm.runInContext(typed ? stripTypeScriptTypes(source) : source, context);
     expect(invoke(entry)).toBe(owner === "cli" ? entry : true);
     expect((owner === "cli" ? realpath : lstat).mock.calls).toContainEqual([entry]);
     realpath.mockClear();
     lstat.mockClear();
     const transformed = adapter.transform({
       filename: path.join(runtime, "dist/path-owner.js"),
-      contents: minified
-        ? transformSync(source, {
-            minifyIdentifiers: true,
-            minifySyntax: true,
-            minifyWhitespace: true,
-          }).code
-        : source,
+      contents:
+        shape === "minified"
+          ? transformSync(source, {
+              minifyIdentifiers: true,
+              minifySyntax: true,
+              minifyWhitespace: true,
+            }).code
+          : source,
     });
-    vm.runInContext(transformed.contents, context);
+    vm.runInContext(
+      typed ? stripTypeScriptTypes(transformed.contents) : transformed.contents,
+      context,
+    );
     expect(invoke(entry)).toBe(owner === "cli" ? entry : true);
     expect(realpath).not.toHaveBeenCalled();
     expect(lstat).not.toHaveBeenCalled();
@@ -837,13 +944,13 @@ describe("standalone image metadata", () => {
       const { runtime, launcher, mainEntry, context, adapter } = fixture();
       const native = vi.fn((filename: string) => fs.realpathSync.native(filename));
       context.fs = { realpathSync: { native } };
+      context.tryProcessCwd = tryProcessCwd;
       const source = ownerSource("src/infra/is-main.ts");
       vm.runInContext(source, context);
       const launch = {
         currentFile: mainEntry,
         argv: [process.execPath, launcher],
         env: {},
-        cwd: runtime,
         wrapperEntryPairs: [{ wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" }],
       };
       expect(context.isMainModule(launch)).toBe(true);
@@ -898,6 +1005,9 @@ describe("standalone image metadata", () => {
     const resolveArtifact = (params: { source: string; rootDir: string }) => params;
     Object.assign(context, {
       performance,
+      PluginDashboardDeclarationError,
+      resolveImmutableInstallIdentity,
+      resolvePluginCandidateInstallOwner,
       openRootFileSync: open,
       openPluginRootFileSync: vi.fn(openPluginRootFileSync),
       describeRootFileOpenFailure,
@@ -950,7 +1060,10 @@ describe("standalone image metadata", () => {
           ? "loadLegacySessionSurface"
           : "resolveBundledEntryModulePath";
     if (owner === "runtime") {
-      vm.runInContext(ownerSource(ownerFile, "prepareRuntimePluginConfig"), context);
+      vm.runInContext(
+        ownerSource("src/plugins/loader-shared.ts", "prepareRuntimePluginConfig"),
+        context,
+      );
     }
     const source = ownerSource(ownerFile, ownerName).replaceAll(
       "import.meta.url",
@@ -963,7 +1076,12 @@ describe("standalone image metadata", () => {
         const steps = context.loadRuntimePluginCandidate({
           candidate: { source: sourcePath, rootDir, origin },
           manifestRecord: { channels: [], configSchema: {} },
-          context: { normalized: { slots: {} }, shouldLoadModules: true, env: {} },
+          context: {
+            normalized: { slots: {} },
+            shouldLoadModules: true,
+            installRecords: {},
+            env: {},
+          },
           options: {},
           state: { seenIds: new Map(), pluginLoadAttemptCount: 0 },
           preparedConfig: { validation: { ok: true } },
@@ -1161,76 +1279,87 @@ describe("standalone image metadata", () => {
     ).toBe(false);
   });
 
-  it.each(["source", "compiled"])("admits embedded SQLite worker identity (%s)", async (shape) => {
-    const { runtime, sqliteWorker, context, adapter } = fixture();
-    const realpath = vi.fn((filename: string) => fs.promises.realpath(filename));
-    const stat = vi.fn((filename: string) => fs.promises.stat(filename));
-    Object.assign(context, {
-      realpath,
-      stat,
-      qe: realpath,
-      We: fileURLToPath,
-      Ge: pathToFileURL,
-      Je: stat,
-    });
-    // Captured worker output retains the owner name and shortens imported filesystem helpers.
-    const contents =
-      shape === "source"
-        ? ownerSource("src/infra/sqlite-worker-broker-admission.ts", "resolveSqliteWorkerModuleUrl")
-        : String.raw`async function resolveSqliteWorkerModuleUrl(e){let t=await qe(We(e)),n=Ge(t).href;if(!/\.[cm]?[jt]s$/.test(t)||!(await Je(t)).isFile())throw Error("SQLite worker backend must identify a JavaScript or TypeScript file");return{modulePath:t,moduleUrl:n}}`;
-    vm.runInContext(contents, context);
-    await expect(
-      context.resolveSqliteWorkerModuleUrl(pathToFileURL(sqliteWorker)),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    realpath.mockClear();
-    stat.mockClear();
-    const transformed = adapter.transform({
-      filename: path.join(runtime, "dist/owner.js"),
-      contents,
-    });
-    vm.runInContext(transformed.contents, context);
-    fs.rmdirSync(path.dirname(sqliteWorker));
-    const realpathSync = vi.spyOn(fs, "realpathSync");
-    const lstatSync = vi.spyOn(fs, "lstatSync");
-    try {
+  it.each(["source", "compiled", "typed"])(
+    "admits embedded SQLite worker identity (%s)",
+    async (shape) => {
+      const typed = shape === "typed";
+      const { runtime, sqliteWorker, context, adapter } = fixture({ typedMetadata: typed });
+      const realpath = vi.fn((filename: string) => fs.promises.realpath(filename));
+      const stat = vi.fn((filename: string) => fs.promises.stat(filename));
+      Object.assign(context, {
+        realpath,
+        stat,
+        qe: realpath,
+        We: fileURLToPath,
+        Ge: pathToFileURL,
+        Je: stat,
+      });
+      // Captured worker output retains the owner name and shortens imported filesystem helpers.
+      const contents =
+        shape !== "compiled"
+          ? ownerSource(
+              "src/infra/sqlite-worker-broker-admission.ts",
+              "resolveSqliteWorkerModuleUrl",
+              typed,
+            )
+          : String.raw`async function resolveSqliteWorkerModuleUrl(e){let t=await qe(We(e)),n=Ge(t).href;if(!/\.[cm]?[jt]s$/.test(t)||!(await Je(t)).isFile())throw Error("SQLite worker backend must identify a JavaScript or TypeScript file");return{modulePath:t,moduleUrl:n}}`;
+      vm.runInContext(typed ? stripTypeScriptTypes(contents) : contents, context);
+      await expect(
+        context.resolveSqliteWorkerModuleUrl(pathToFileURL(sqliteWorker)),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      realpath.mockClear();
+      stat.mockClear();
+      const transformed = adapter.transform({
+        filename: path.join(runtime, "dist/owner.js"),
+        contents,
+      });
+      vm.runInContext(
+        typed ? stripTypeScriptTypes(transformed.contents) : transformed.contents,
+        context,
+      );
+      fs.rmdirSync(path.dirname(sqliteWorker));
+      const realpathSync = vi.spyOn(fs, "realpathSync");
+      const lstatSync = vi.spyOn(fs, "lstatSync");
+      try {
+        expect(await context.resolveSqliteWorkerModuleUrl(pathToFileURL(sqliteWorker))).toEqual({
+          modulePath: sqliteWorker,
+          moduleUrl: pathToFileURL(sqliteWorker).href,
+        });
+        expect(realpath).not.toHaveBeenCalled();
+        expect(stat).not.toHaveBeenCalled();
+        expect(realpathSync).not.toHaveBeenCalled();
+        expect(lstatSync).not.toHaveBeenCalled();
+      } finally {
+        realpathSync.mockRestore();
+        lstatSync.mockRestore();
+      }
+      const external = path.join(runtime, "external-worker.mjs");
+      fs.writeFileSync(external, "export {};\n");
+      const alias = path.join(runtime, "external-alias.mjs");
+      fs.symlinkSync(external, alias);
+      expect(await context.resolveSqliteWorkerModuleUrl(pathToFileURL(alias))).toEqual({
+        modulePath: external,
+        moduleUrl: pathToFileURL(external).href,
+      });
+      expect(realpath).toHaveBeenCalledWith(alias);
+      expect(stat).toHaveBeenCalledWith(external);
+      fs.mkdirSync(path.dirname(sqliteWorker));
+      fs.symlinkSync(external, sqliteWorker);
+      realpath.mockClear();
+      stat.mockClear();
       expect(await context.resolveSqliteWorkerModuleUrl(pathToFileURL(sqliteWorker))).toEqual({
         modulePath: sqliteWorker,
         moduleUrl: pathToFileURL(sqliteWorker).href,
       });
       expect(realpath).not.toHaveBeenCalled();
       expect(stat).not.toHaveBeenCalled();
-      expect(realpathSync).not.toHaveBeenCalled();
-      expect(lstatSync).not.toHaveBeenCalled();
-    } finally {
-      realpathSync.mockRestore();
-      lstatSync.mockRestore();
-    }
-    const external = path.join(runtime, "external-worker.mjs");
-    fs.writeFileSync(external, "export {};\n");
-    const alias = path.join(runtime, "external-alias.mjs");
-    fs.symlinkSync(external, alias);
-    expect(await context.resolveSqliteWorkerModuleUrl(pathToFileURL(alias))).toEqual({
-      modulePath: external,
-      moduleUrl: pathToFileURL(external).href,
-    });
-    expect(realpath).toHaveBeenCalledWith(alias);
-    expect(stat).toHaveBeenCalledWith(external);
-    fs.mkdirSync(path.dirname(sqliteWorker));
-    fs.symlinkSync(external, sqliteWorker);
-    realpath.mockClear();
-    stat.mockClear();
-    expect(await context.resolveSqliteWorkerModuleUrl(pathToFileURL(sqliteWorker))).toEqual({
-      modulePath: sqliteWorker,
-      moduleUrl: pathToFileURL(sqliteWorker).href,
-    });
-    expect(realpath).not.toHaveBeenCalled();
-    expect(stat).not.toHaveBeenCalled();
-    const directory = path.join(runtime, "directory.js");
-    fs.mkdirSync(directory);
-    await expect(context.resolveSqliteWorkerModuleUrl(pathToFileURL(directory))).rejects.toThrow(
-      "SQLite worker backend must identify a JavaScript or TypeScript file",
-    );
-  });
+      const directory = path.join(runtime, "directory.js");
+      fs.mkdirSync(directory);
+      await expect(context.resolveSqliteWorkerModuleUrl(pathToFileURL(directory))).rejects.toThrow(
+        "SQLite worker backend must identify a JavaScript or TypeScript file",
+      );
+    },
+  );
 
   it("leaves prototype-named functions unchanged in minified metadata modules", () => {
     const { runtime, entry, context, adapter } = fixture();
@@ -1249,11 +1378,16 @@ describe("standalone image metadata", () => {
     expect(context.pluginCacheExistsSync(entry)).toBe(true);
   });
 
-  it.each([false, true])(
-    "admits embedded plugin sources and caches Doctor bytes (minified=%s)",
-    (minifiedMetadata) => {
+  it.each([
+    { minifiedMetadata: false, typedMetadata: false },
+    { minifiedMetadata: true, typedMetadata: false },
+    { minifiedMetadata: false, typedMetadata: true },
+  ])(
+    "admits embedded plugin sources and caches Doctor bytes (minified=$minifiedMetadata, typed=$typedMetadata)",
+    ({ minifiedMetadata, typedMetadata }) => {
       const { plugin, entry, doctor, doctorBytes, context, safeOpen } = fixture({
         minifiedMetadata,
+        typedMetadata,
       });
       expect(context.pluginCacheExistsSync(entry)).toBe(true);
       expect(context.pluginCacheStatSync(entry).isFile()).toBe(true);
@@ -1464,6 +1598,48 @@ describe("standalone image metadata", () => {
     ]);
   });
 
+  it("resolves metadata helper imports through the TypeScript source owner", () => {
+    const { runtime, embeddedPaths, plugin, context } = fixture({ retainImageFiles: true });
+    const sourceRoot = path.join(runtime, ".typed-source/context/src");
+    const helper = path.join(sourceRoot, "boundary.ts");
+    const filename = path.join(sourceRoot, "entry.ts");
+    fs.mkdirSync(sourceRoot, { recursive: true });
+    fs.writeFileSync(
+      helper,
+      "declare function openRootFileSync(value: unknown): unknown; export { openRootFileSync as open };\n",
+    );
+    const source = `import { open } from "./boundary.js";
+function loadLegacySessionSurface(rootPath: string) {
+  return open({ rootPath, absolutePath: rootPath + "/index.js" });
+}`;
+    const adapter = createStandaloneMetadataAdapter({
+      runtimeRoot: runtime,
+      embeddedPaths,
+      parse,
+      resolveImport(specifier: string, importer: string) {
+        expect(specifier).toBe("./boundary.js");
+        expect(importer).toBe(filename);
+        return helper;
+      },
+    });
+    const transformed = adapter.transform({ filename, contents: source });
+    const open = vi.fn(() => "disk fallback");
+    context.open = open;
+    vm.runInContext(
+      stripTypeScriptTypes(
+        transformed.contents.replace('import { open } from "./boundary.js";', ""),
+      ),
+      context,
+    );
+    expect(context.loadLegacySessionSurface(plugin)).toMatchObject({
+      ok: true,
+      path: path.join(plugin, "index.js"),
+    });
+    expect(open).not.toHaveBeenCalled();
+    expect(context.loadLegacySessionSurface(path.join(runtime, "external"))).toBe("disk fallback");
+    expect(open).toHaveBeenCalledOnce();
+  });
+
   it("preserves physical directory permissions and symlink types in image metadata", () => {
     const { plugin, sdk, runtime, context } = fixture();
     fs.chmodSync(plugin, 0o777);
@@ -1545,43 +1721,100 @@ describe("standalone image metadata", () => {
     ).toBeUndefined();
   });
 
-  it("rejects matching boundary reader exports from unrelated packages", () => {
-    expect(() => fixture({ boundaryReaderModule: "unrelated-package" })).toThrow(
-      "Unsupported standalone metadata owner: resolveNodeEntrypointArg",
-    );
+  it("uses immutable embedded secret entrypoints and keeps external descriptor admission", () => {
+    const { runtime, plugin, secretEntrypoint, undeclaredEntrypoint, rootOpen, context } =
+      fixture();
+    const close = vi.fn(fs.closeSync);
+    context.fs = { ...context.fs, closeSync: close };
+    const resolve = (pluginRoot: string, entrypoint = "./handlers/resolver.js") =>
+      context.resolveNodeEntrypointArg({
+        args: [entrypoint],
+        pluginRoot,
+        rejectHardlinks: true,
+      });
+    expect(resolve(plugin)).toBe(secretEntrypoint);
+    expect(rootOpen).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+    expect(resolve(plugin, "./handlers/other.js")).toBeUndefined();
+    expect(rootOpen.mock.calls.at(-1)?.[0].absolutePath).toBe(undeclaredEntrypoint);
+    fs.chmodSync(path.dirname(secretEntrypoint), 0o777);
+    expect(resolve(plugin)).toBe(secretEntrypoint);
+    fs.chmodSync(path.dirname(secretEntrypoint), 0o755);
+    fs.chmodSync(plugin, 0o777);
+    expect(resolve(plugin)).toBe(secretEntrypoint);
+    fs.chmodSync(plugin, 0o755);
+    expect(resolve(plugin, "../example/handlers/resolver.js")).toBeUndefined();
+    const external = path.join(runtime, "external");
+    fs.mkdirSync(external);
+    const externalEntry = path.join(external, "resolver.js");
+    fs.writeFileSync(externalEntry, "export {};\n");
+    expect(resolve(external, "./resolver.js")).toBe(externalEntry);
+    expect(close).toHaveBeenCalledOnce();
+    const opened = rootOpen.mock.results.at(-1)?.value;
+    if (!opened?.ok) {
+      throw new Error("Expected the physical resolver to own a descriptor");
+    }
+    expect(close).toHaveBeenLastCalledWith(opened.fd);
+    expect(() => fs.fstatSync(opened.fd)).toThrow(/EBADF/);
+    close.mockClear();
+    fs.chmodSync(external, 0o777);
+    expect(resolve(external, "./resolver.js")).toBeUndefined();
+    expect(close).toHaveBeenCalledOnce();
+    fs.chmodSync(external, 0o755);
+    close.mockClear();
+    close.mockImplementationOnce((fd) => {
+      fs.closeSync(fd);
+      throw new Error("synthetic close failure");
+    });
+    expect(resolve(external, "./resolver.js")).toBeUndefined();
+    expect(close).toHaveBeenCalledOnce();
+    const alias = path.join(runtime, "plugin-alias");
+    fs.symlinkSync(plugin, alias);
+    expect(resolve(alias)).toBeUndefined();
   });
 
-  it.each(["", "@openclaw/fs-safe/advanced"])(
-    "admits embedded secret resolvers with physical parent trust (%s)",
-    (boundaryReaderModule) => {
-      const { runtime, plugin, secretEntrypoint, undeclaredEntrypoint, rootOpen, context } =
-        fixture({ boundaryReaderModule });
-      const resolve = (pluginRoot: string, entrypoint = "./handlers/resolver.js") =>
-        context.resolveNodeEntrypointArg({
-          integration: { command: "${node}", args: [entrypoint] },
-          pluginRoot,
-          rejectHardlinks: true,
-        });
-      expect(resolve(plugin)).toBe(secretEntrypoint);
-      expect(rootOpen).not.toHaveBeenCalled();
-      expect(resolve(plugin, "./handlers/other.js")).toBeUndefined();
-      expect(rootOpen.mock.calls.at(-1)?.[0].absolutePath).toBe(undeclaredEntrypoint);
-      fs.chmodSync(path.dirname(secretEntrypoint), 0o777);
-      expect(resolve(plugin)).toBeUndefined();
-      fs.chmodSync(path.dirname(secretEntrypoint), 0o755);
-      fs.chmodSync(plugin, 0o777);
-      expect(resolve(plugin)).toBeUndefined();
-      fs.chmodSync(plugin, 0o755);
-      expect(resolve(plugin, "../example/handlers/resolver.js")).toBeUndefined();
-      const external = path.join(runtime, "external");
-      fs.mkdirSync(external);
-      fs.writeFileSync(path.join(external, "resolver.js"), "export {};\n");
-      expect(resolve(external, "./resolver.js")).toBe(path.join(external, "resolver.js"));
-      const alias = path.join(runtime, "plugin-alias");
-      fs.symlinkSync(plugin, alias);
-      expect(resolve(alias)).toBeUndefined();
-    },
-  );
+  it("keeps physical parent trust and symlink checks for disk secret resolvers", () => {
+    const embedded = fixture();
+    const resolveEmbedded = (pluginRoot: string, entrypoint = "./handlers/resolver.js") =>
+      embedded.context.resolveNodeEntrypointArg({
+        args: [entrypoint],
+        pluginRoot,
+        rejectHardlinks: true,
+      });
+    expect(resolveEmbedded(embedded.plugin)).toBe(embedded.secretEntrypoint);
+    expect(embedded.rootOpen).not.toHaveBeenCalled();
+    const embeddedAlias = path.join(embedded.runtime, "plugin-alias");
+    fs.symlinkSync(embedded.plugin, embeddedAlias);
+    expect(resolveEmbedded(embeddedAlias)).toBeUndefined();
+
+    const { runtime, plugin, secretEntrypoint, undeclaredEntrypoint, rootOpen, context } = fixture({
+      secretEntrypointOnDisk: true,
+    });
+    const resolve = (pluginRoot: string, entrypoint = "./handlers/resolver.js") =>
+      context.resolveNodeEntrypointArg({
+        args: [entrypoint],
+        pluginRoot,
+        rejectHardlinks: true,
+      });
+    expect(resolve(plugin, "./handlers/other.js")).toBeUndefined();
+    expect(rootOpen.mock.calls.at(-1)?.[0].absolutePath).toBe(undeclaredEntrypoint);
+    fs.chmodSync(path.dirname(secretEntrypoint), 0o777);
+    expect(resolve(plugin)).toBeUndefined();
+    fs.chmodSync(path.dirname(secretEntrypoint), 0o755);
+    fs.chmodSync(plugin, 0o777);
+    expect(resolve(plugin)).toBeUndefined();
+    fs.chmodSync(plugin, 0o755);
+    expect(resolve(plugin, "../example/handlers/resolver.js")).toBeUndefined();
+    const external = path.join(runtime, "external");
+    fs.mkdirSync(external);
+    fs.writeFileSync(path.join(external, "resolver.js"), "export {};\n");
+    expect(resolve(external, "./resolver.js")).toBe(path.join(external, "resolver.js"));
+    const outsideEntrypoint = path.join(runtime, "outside-resolver.js");
+    fs.writeFileSync(outsideEntrypoint, "export {};\n");
+    fs.rmSync(secretEntrypoint);
+    fs.symlinkSync(outsideEntrypoint, secretEntrypoint);
+    expect(resolve(plugin)).toBeUndefined();
+  });
 
   it("resolves embedded MXC and Vault child entrypoints without probing JavaScript", async () => {
     const { runtime, mxc, mxcLauncher, vault, vaultResolver, context, adapter } = fixture();
@@ -1616,24 +1849,32 @@ describe("standalone image metadata", () => {
     expect(context.candidateDirsFromArgv1(launcher)).toEqual([runtime]);
     expect(
       context.resolveManagedToolsMcpServerConfig(
-        "plugin-tools-serve",
+        "pluginToolsServe",
         pathToFileURL(path.join(acpx, "index.js")).href,
       ),
-    ).toEqual({ command: process.execPath, args: [bridge] });
+    ).toEqual({
+      command: process.execPath,
+      args: process.versions.bun ? ["--no-install", bridge] : [bridge],
+    });
 
     const external = path.join(runtime, "external");
     const externalPlugin = path.join(external, "extensions/acpx");
     fs.mkdirSync(externalPlugin, { recursive: true });
     fs.writeFileSync(path.join(externalPlugin, "package.json"), "{}");
     fs.writeFileSync(path.join(externalPlugin, "openclaw.plugin.json"), "{}");
+    const externalBridge = path.join(external, "src/mcp/plugin-tools-serve.ts");
+    fs.mkdirSync(path.dirname(externalBridge), { recursive: true });
+    fs.writeFileSync(externalBridge, "export {};\n");
     expect(
       context.resolveManagedToolsMcpServerConfig(
-        "plugin-tools-serve",
+        "pluginToolsServe",
         pathToFileURL(path.join(externalPlugin, "index.js")).href,
       ),
     ).toEqual({
       command: process.execPath,
-      args: ["--import", "tsx", path.join(external, "src/mcp/plugin-tools-serve.ts")],
+      args: process.versions.bun
+        ? ["--no-install", externalBridge]
+        : ["--import", import.meta.resolve("tsx"), externalBridge],
     });
     const externalLauncher = path.join(external, "openclaw.mjs");
     fs.writeFileSync(externalLauncher, "external");

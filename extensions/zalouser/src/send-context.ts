@@ -56,7 +56,6 @@ export const fetchWithZaloSendContext: typeof fetch = async (input, init) => {
       // zca-js shares this hook with uploads, voice HEAD requests, and lookups.
       if (method === "POST" && MESSAGE_REQUEST_PATH.test(url.pathname)) {
         await context.onPlatformSendDispatch();
-        assertCurrent(context);
       }
     }
   }

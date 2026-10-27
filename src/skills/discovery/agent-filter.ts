@@ -31,12 +31,7 @@ export function resolveEffectiveAgentSkillsLimits(
   if (!cfg || !agentId) {
     return undefined;
   }
-  const agentEntry = resolveAgentEntry(cfg, agentId);
-  if (!agentEntry || !Object.hasOwn(agentEntry, "skillsLimits")) {
-    return undefined;
-  }
-  const { maxSkillsPromptChars } = agentEntry.skillsLimits ?? {};
-  return typeof maxSkillsPromptChars === "number" ? { maxSkillsPromptChars } : undefined;
+  return resolveAgentEntry(cfg, agentId)?.skillsLimits;
 }
 
 /** Applies a session's sparse skill overlay after agent/default allowlist resolution. */

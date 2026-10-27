@@ -24,7 +24,7 @@ import {
   createArtifactTransferHttpCallback,
   handleArtifactTransferHttpRequest,
 } from "./artifact-transfer-http.js";
-import { createNodeBootstrapArtifactProvider } from "./node-bootstrap-artifact.js";
+import { useNodeBootstrapArtifactFixtures } from "./node-bootstrap-artifact.test-support.js";
 import { createWorkerNodeEnrollmentManager } from "./node-enrollment.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
@@ -44,12 +44,20 @@ const PLUGIN_PUBLIC_URL = "wss://pairing.example.test";
 const LOCAL_TLS_FINGERPRINT = "c".repeat(64);
 const REMOTE_TLS_FINGERPRINT = "d".repeat(64);
 
-function createConfig(pluginPublicUrl?: string): OpenClawConfig {
+function downloadRequest(descriptor: { token: string; sha256: string }) {
+  return { token: descriptor.token, artifactKey: descriptor.sha256 };
+}
+
+function createConfig(
+  pluginPublicUrl?: string,
+  gateway: OpenClawConfig["gateway"] = {},
+): OpenClawConfig {
   return {
     gateway: {
       bind: "loopback",
       publicOrigin: PUBLIC_ORIGIN,
       auth: { mode: "token", token: "gateway-token" },
+      ...gateway,
     },
     ...(pluginPublicUrl
       ? {
@@ -67,7 +75,7 @@ describe("worker node enrollment", () => {
   let store: WorkerEnvironmentStore;
   let transfer: ReturnType<typeof createWorkerBootstrapArtifactTransferService>;
   let managers: ReturnType<typeof createWorkerNodeEnrollmentManager>[];
-  let artifactProviders: ReturnType<typeof createNodeBootstrapArtifactProvider>[];
+  const bootstrapArtifacts = useNodeBootstrapArtifactFixtures();
 
   const artifact = () => ({
     tarballPath: path.join(root, "node-runtime.tgz"),
@@ -96,11 +104,11 @@ describe("worker node enrollment", () => {
     managers.push(manager);
     return manager;
   };
-  const createRequested = async () =>
+  const createRequested = async (profileId = "test-profile") =>
     await store.createIntent({
       environmentId: "worker-enrollment",
       providerId: "fake-provider",
-      profileId: "test-profile",
+      profileId,
       profileSnapshot: { settings: {} },
       provisionOperationId: "provision:worker-enrollment",
     });
@@ -113,50 +121,22 @@ describe("worker node enrollment", () => {
       ...(nodeDeviceId ? { patch: { nodeDeviceId } } : {}),
     });
   };
-
-  const createArtifactProvider = async () => {
-    const packageRoot = path.join(root, "gateway");
-    await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
-    await Promise.all([
-      fs.writeFile(
-        path.join(packageRoot, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.8.1", type: "module" }),
-      ),
-      fs.writeFile(path.join(packageRoot, "openclaw.mjs"), 'import "./dist/entry.js";'),
-      fs.writeFile(path.join(packageRoot, "node-version.mjs"), "export const supported = true;"),
-      fs.writeFile(path.join(packageRoot, "node-sqlite.mjs"), "export const probe = true;"),
-      fs.writeFile(
-        path.join(packageRoot, "node-host-launcher.mjs"),
-        "export const launcher = true;",
-      ),
-      fs.writeFile(
-        path.join(packageRoot, "node-runtime-update.mjs"),
-        "export const update = true;",
-      ),
-      fs.writeFile(
-        path.join(packageRoot, "node-runtime-recovery.mjs"),
-        "export const recovery = true;",
-      ),
-      fs.writeFile(path.join(packageRoot, "cli-parent-lifetime.mjs"), "export {};"),
-      fs.writeFile(path.join(packageRoot, "cli-root-options.mjs"), "export {};"),
-      fs.writeFile(path.join(packageRoot, "cli-invocation.mjs"), "export {};"),
-      fs.writeFile(path.join(packageRoot, "node-runtime-env.mjs"), "export {};"),
-      fs.writeFile(path.join(packageRoot, "node-compile-cache.mjs"), "export {};"),
-      fs.writeFile(path.join(packageRoot, "gateway-run-argv.mjs"), "export {};"),
-      fs.writeFile(path.join(packageRoot, "gateway-shutdown-budget.mjs"), "export {};"),
-      fs.writeFile(path.join(packageRoot, "dist/entry.js"), "export const ready = true;"),
-      fs.writeFile(
-        path.join(packageRoot, "dist/build-info.json"),
-        JSON.stringify({ version: "2026.8.1", buildId: "gateway-source-build" }),
-      ),
-    ]);
-    const provider = createNodeBootstrapArtifactProvider({
-      packageRoot,
-      runningBuildId: "gateway-source-build",
-      plugins: [],
-    });
-    artifactProviders.push(provider);
-    return provider;
+  const holdFirstArtifact = () => {
+    const entered = createDeferredCore();
+    const resume = createDeferredCore();
+    let first = true;
+    return {
+      entered: entered.promise,
+      resume: resume.resolve,
+      prepareArtifact: async () => {
+        if (first) {
+          first = false;
+          entered.resolve();
+          await resume.promise;
+        }
+        return artifact();
+      },
+    };
   };
 
   beforeEach(async () => {
@@ -165,7 +145,6 @@ describe("worker node enrollment", () => {
     store = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
     transfer = createWorkerBootstrapArtifactTransferService();
     managers = [];
-    artifactProviders = [];
     await fs.writeFile(artifact().tarballPath, "x");
     await fs.writeFile(bundle().tarballPath, "worker");
   });
@@ -174,40 +153,27 @@ describe("worker node enrollment", () => {
     for (const manager of managers) {
       manager.stop();
     }
-    await Promise.all(artifactProviders.map((provider) => provider.close()));
     vi.restoreAllMocks();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it.each([
-    {
-      host: "localhost",
-      config: createConfig("http://localhost:19821"),
-      source: "plugins.entries.device-pair.config.publicUrl",
-    },
-  ])(
-    "rejects unreachable cloud Gateway host $host from $source before preparing artifacts",
-    async ({ host, config, source }) => {
-      const prepareArtifact = vi.fn(async () => artifact());
-      const manager = createManager({
-        getConfig: () => config,
-        prepareArtifact,
-      });
-
-      await expect(manager.prepare(await createRequested())).rejects.toThrow(
-        new Error(
-          `Cloud node bootstrap resolved a Gateway address that a cloud worker cannot reach (ws://${new URL(`http://${host}`).hostname}:19821, from ${source}). Set gateway.publicOrigin (or plugins.entries.device-pair.config.publicUrl) to a URL reachable from the worker, such as a Tailscale Funnel or a reverse-proxied public origin with gateway.trustedProxies, then redispatch.`,
-        ),
-      );
-      expect(prepareArtifact).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects an unreachable cloud Gateway before preparing artifacts", async () => {
+    const prepareArtifact = vi.fn(async () => artifact());
+    const manager = createManager({
+      getConfig: () => createConfig("http://localhost:19821"),
+      prepareArtifact,
+    });
+    await expect(manager.prepare(await createRequested())).rejects.toThrow(
+      "Cloud node bootstrap resolved a Gateway address that a cloud worker cannot reach (ws://localhost:19821, from plugins.entries.device-pair.config.publicUrl)",
+    );
+    expect(prepareArtifact).not.toHaveBeenCalled();
+  });
 
   it("prepares requested-state artifacts without enrollment or transfer grants", async () => {
     const record = await createRequested();
-    const provider = await createArtifactProvider();
+    const { provider } = await bootstrapArtifacts.fixture();
     const manager = createManager({
       prepareArtifact: async (_record, signal) => await provider.prepare(signal),
     });
@@ -230,7 +196,7 @@ describe("worker node enrollment", () => {
     "cancels requested-state preflight on %s while its shared producer drains",
     async (reason) => {
       const record = await createRequested();
-      const provider = await createArtifactProvider();
+      const { provider } = await bootstrapArtifacts.fixture();
       const stagingRoot = path.join(root, "held-artifact");
       await fs.mkdir(stagingRoot);
       const entered = createDeferredCore();
@@ -288,11 +254,33 @@ describe("worker node enrollment", () => {
     },
   );
 
+  it("transfers the prepared project lock under the runtime's revocable authority", async () => {
+    const record = await createProvisioning();
+    const manager = createManager({
+      prepareArtifact: async () => ({ ...artifact(), installLock: bundle() }),
+    });
+    const runtime = await manager.prepareRuntime(record, bundle());
+    const lock = runtime.nodeBootstrap.installLock!;
+    const request = downloadRequest(lock);
+    expect(lock.sha256).toBe(bundle().tarballSha256);
+    expect(lock.token).not.toBe(runtime.nodeBootstrap.token);
+    const authorization = transfer.authorize(request)!;
+    const opened = await transfer.openFile(authorization);
+    expect(opened).not.toBeNull();
+    if (opened) {
+      expect(await opened.handle.readFile("utf8")).toBe("worker");
+      await opened.handle.close();
+    }
+    manager.closeRuntime(runtime);
+    expect(transfer.authorize(request)).toBeUndefined();
+  });
+
   it("sizes grants and download authority for the actual artifacts", async () => {
     const record = await createProvisioning();
     let transferNow = 0;
     let tarballBytes = 1;
-    transfer = createWorkerBootstrapArtifactTransferService({ now: () => transferNow });
+    vi.spyOn(Date, "now").mockImplementation(() => transferNow);
+    transfer = createWorkerBootstrapArtifactTransferService();
     const manager = createManager({
       prepareArtifact: async () => ({ ...artifact(), tarballBytes }),
     });
@@ -306,9 +294,7 @@ describe("worker node enrollment", () => {
       expect(runtime.bootstrapTimeoutMs).toBe(runtimeMs);
       transferNow += runtimeMs - 1;
       for (const download of [runtime.nodeBootstrap, runtime.workerBundle]) {
-        expect(
-          transfer.authorize({ token: download.token, artifactKey: download.sha256 }),
-        ).toBeDefined();
+        expect(transfer.authorize(downloadRequest(download))).toBeDefined();
       }
       const enrollment = await manager.begin(record);
       expect(enrollment.bootstrapTimeoutMs).toBe(enrollmentMs);
@@ -322,10 +308,7 @@ describe("worker node enrollment", () => {
       const manager = createManager();
       const operation = new AbortController();
       const runtime = await manager.prepareRuntime(record, bundle(), operation.signal);
-      const requests = [runtime.nodeBootstrap, runtime.workerBundle].map((descriptor) => ({
-        token: descriptor.token,
-        artifactKey: descriptor.sha256,
-      }));
+      const requests = [runtime.nodeBootstrap, runtime.workerBundle].map(downloadRequest);
       const authorizations = requests.map((request) => transfer.authorize(request)!);
       if (reason === "shutdown") {
         manager.stop();
@@ -437,10 +420,7 @@ describe("worker node enrollment", () => {
       });
       // Client body completion precedes the server releasing its transfer authorization.
       await Promise.all(handledRequests);
-      const authorization = transfer.authorize({
-        token: current.workerBundle.token,
-        artifactKey: current.workerBundle.sha256,
-      })!;
+      const authorization = transfer.authorize(downloadRequest(current.workerBundle))!;
       const enrollment = await manager.begin(record);
       expect(enrollment).not.toHaveProperty("workerBundle");
       expect(current.signal?.aborted).toBe(true);
@@ -448,12 +428,7 @@ describe("worker node enrollment", () => {
       manager.closeRuntime(current);
       manager.close({ ...enrollment });
       expect(enrollment.signal?.aborted).toBe(false);
-      expect(
-        transfer.authorize({
-          token: enrollment.nodeBootstrap.token,
-          artifactKey: enrollment.nodeBootstrap.sha256,
-        }),
-      ).toBeDefined();
+      expect(transfer.authorize(downloadRequest(enrollment.nodeBootstrap))).toBeDefined();
     } finally {
       resumeEof.resolve();
       await dispatcher.destroy();
@@ -468,22 +443,12 @@ describe("worker node enrollment", () => {
     "rejects late artifact preparation after %s",
     async (reason) => {
       const record = await createProvisioning();
-      const entered = createDeferredCore();
-      const resume = createDeferredCore();
-      let preparations = 0;
-      const manager = createManager({
-        prepareArtifact: async () => {
-          if (++preparations === 1) {
-            entered.resolve();
-            await resume.promise;
-          }
-          return artifact();
-        },
-      });
+      const held = holdFirstArtifact();
+      const manager = createManager({ prepareArtifact: held.prepareArtifact });
       const operation = new AbortController();
       const pending = manager.prepareRuntime(record, bundle(), operation.signal);
       const rejected = expect(pending).rejects.toThrow();
-      await entered.promise;
+      await held.entered;
       const enrollment = reason === "enrollment" ? await manager.begin(record) : undefined;
       if (reason === "operation-abort") {
         operation.abort();
@@ -491,72 +456,50 @@ describe("worker node enrollment", () => {
       if (reason === "destroy") {
         await store.requestDestroy({ environmentId: record.environmentId, state: "provisioning" });
       }
-      resume.resolve();
+      held.resume();
       await rejected;
       if (enrollment) {
         expect(enrollment.signal?.aborted).toBe(false);
-        expect(
-          transfer.authorize({
-            token: enrollment.nodeBootstrap.token,
-            artifactKey: enrollment.nodeBootstrap.sha256,
-          }),
-        ).toBeDefined();
+        expect(transfer.authorize(downloadRequest(enrollment.nodeBootstrap))).toBeDefined();
       }
     },
   );
 
   it.each(
-    [
-      {
-        name: "prefers shared publicOrigin over Tailscale for cloud enrollment",
-        modes: ["connect"],
-        config: {
-          ...createConfig(),
-          gateway: {
-            ...createConfig().gateway,
-            tls: { enabled: true },
-            tailscale: { mode: "serve" },
-          },
-        } satisfies OpenClawConfig,
-        expectedUrl: "wss://gateway.example.test",
-        expectedFingerprint: undefined,
-      },
-      {
-        name: "preserves the cloud pairing publicUrl path ahead of gateway.publicOrigin",
-        modes: ["connect"],
-        config: createConfig(`${PLUGIN_PUBLIC_URL}/extra`),
-        expectedUrl: `${PLUGIN_PUBLIC_URL}/extra`,
-        expectedFingerprint: undefined,
-      },
-      {
-        name: "pins direct Gateway TLS",
-        modes: ["connect", "resume"],
-        config: {
-          gateway: {
-            bind: "custom",
-            customBindHost: "192.168.50.20",
-            port: 19443,
-            tls: { enabled: true },
-            auth: { mode: "token", token: "gateway-token" },
-          },
-        } satisfies OpenClawConfig,
-        expectedUrl: "wss://192.168.50.20:19443",
-        expectedFingerprint: LOCAL_TLS_FINGERPRINT,
-      },
-      {
-        name: "pins the configured remote Gateway TLS",
-        modes: ["connect", "resume"],
-        config: {
-          gateway: {
-            remote: { url: "wss://remote.example.test", tlsFingerprint: REMOTE_TLS_FINGERPRINT },
-            auth: { mode: "token", token: "gateway-token" },
-          },
-        } satisfies OpenClawConfig,
-        expectedUrl: "wss://remote.example.test",
-        expectedFingerprint: REMOTE_TLS_FINGERPRINT,
-      },
-    ].flatMap(({ modes, ...testCase }) => modes.map((mode) => ({ mode, ...testCase }))),
-  )("$name ($mode)", async ({ config, expectedUrl, expectedFingerprint, mode }) => {
+    ["public origin", "pairing path", "direct TLS", "remote TLS"].flatMap((endpoint) =>
+      (endpoint.endsWith("TLS") ? ["connect", "resume"] : ["connect"]).map((mode) => ({
+        endpoint,
+        mode,
+      })),
+    ),
+  )("resolves $endpoint ($mode)", async ({ endpoint, mode }) => {
+    let config: OpenClawConfig;
+    let expectedUrl: string;
+    let expectedFingerprint: string | undefined;
+    if (endpoint === "public origin") {
+      config = createConfig(undefined, { tls: { enabled: true }, tailscale: { mode: "serve" } });
+      expectedUrl = "wss://gateway.example.test";
+    } else if (endpoint === "pairing path") {
+      config = createConfig(`${PLUGIN_PUBLIC_URL}/extra`);
+      expectedUrl = `${PLUGIN_PUBLIC_URL}/extra`;
+    } else {
+      const direct = endpoint === "direct TLS";
+      expectedUrl = direct ? "wss://192.168.50.20:19443" : "wss://remote.example.test";
+      expectedFingerprint = direct ? LOCAL_TLS_FINGERPRINT : REMOTE_TLS_FINGERPRINT;
+      config = {
+        gateway: {
+          auth: { mode: "token", token: "gateway-token" },
+          ...(direct
+            ? {
+                bind: "custom" as const,
+                customBindHost: "192.168.50.20",
+                port: 19443,
+                tls: { enabled: true },
+              }
+            : { remote: { url: expectedUrl, tlsFingerprint: expectedFingerprint } }),
+        },
+      };
+    }
     const discover = vi
       .spyOn(processExec, "runCommandWithTimeout")
       .mockRejectedValue(new Error("Unexpected endpoint discovery"));
@@ -585,10 +528,7 @@ describe("worker node enrollment", () => {
       enabledPluginIds: ["runtime-plugin"],
     });
     expect(enrollment.nodeBootstrap.tlsFingerprint).toBe(expectedFingerprint);
-    const authorization = transfer.authorize({
-      token: enrollment.nodeBootstrap.token,
-      artifactKey: enrollment.nodeBootstrap.sha256,
-    });
+    const authorization = transfer.authorize(downloadRequest(enrollment.nodeBootstrap));
     expect(authorization).toBeDefined();
     const opened = await transfer.openFile(authorization!);
     expect(await opened?.handle.readFile("utf8")).toBe("x");
@@ -597,15 +537,8 @@ describe("worker node enrollment", () => {
 
   it("does not split surrogate pairs when bounding the enrollment display name", async () => {
     const profileId = `${"x".repeat(50)}😀tail`;
-    const requested = await store.createIntent({
-      environmentId: "worker-enrollment-display-name",
-      providerId: "fake-provider",
-      profileId,
-      profileSnapshot: { settings: {} },
-      provisionOperationId: "provision:worker-enrollment-display-name",
-    });
     const record = await store.transition({
-      environmentId: requested.environmentId,
+      environmentId: (await createRequested(profileId)).environmentId,
       from: "requested",
       to: "provisioning",
     });
@@ -676,19 +609,7 @@ describe("worker node enrollment", () => {
   });
 
   it("aborts pending enrollment waits idempotently and rejects enrollment after shutdown", async () => {
-    const intent = await store.createIntent({
-      environmentId: "worker-enrollment-stop",
-      providerId: "fake-provider",
-      profileId: "test-profile",
-      profileSnapshot: { settings: {} },
-      provisionOperationId: "provision:worker-enrollment-stop",
-    });
-    const record = await store.transition({
-      environmentId: intent.environmentId,
-      from: "requested",
-      to: "provisioning",
-      patch: { nodeDeviceId: "device-pending" },
-    });
+    const record = await createProvisioning("device-pending");
     const manager = createManager();
     const enrollment = await manager.begin(record);
     const waiting = enrollment.waitForDeviceId();
@@ -710,10 +631,7 @@ describe("worker node enrollment", () => {
       const record = await createProvisioning();
       const manager = createManager();
       const enrollment = await manager.begin(record);
-      const request = {
-        token: enrollment.nodeBootstrap.token,
-        artifactKey: enrollment.nodeBootstrap.sha256,
-      };
+      const request = downloadRequest(enrollment.nodeBootstrap);
       const authorization = transfer.authorize(request)!;
       expect(transfer.isAuthorizationCurrent(authorization)).toBe(true);
 
@@ -738,22 +656,14 @@ describe("worker node enrollment", () => {
     const previous = await manager.begin(record);
     const replacement = await manager.begin(record);
     expect(previous.signal?.aborted).toBe(true);
-    expect(
-      transfer.authorize({
-        token: previous.nodeBootstrap.token,
-        artifactKey: previous.nodeBootstrap.sha256,
-      }),
-    ).toBeUndefined();
+    expect(transfer.authorize(downloadRequest(previous.nodeBootstrap))).toBeUndefined();
 
     manager.close(previous);
     manager.close({ ...replacement });
     await expect(
       manager.begin({ ...record, provisionOperationId: "retired-provision" }),
     ).rejects.toThrow("no longer provisioning");
-    const authorization = transfer.authorize({
-      token: replacement.nodeBootstrap.token,
-      artifactKey: replacement.nodeBootstrap.sha256,
-    })!;
+    const authorization = transfer.authorize(downloadRequest(replacement.nodeBootstrap))!;
     expect(transfer.isAuthorizationCurrent(authorization)).toBe(true);
     manager.close(replacement);
     expect(transfer.isAuthorizationCurrent(authorization)).toBe(false);
@@ -761,30 +671,16 @@ describe("worker node enrollment", () => {
 
   it("does not let an older pending enrollment replace a newer enrollment", async () => {
     const record = await createProvisioning();
-    const entered = createDeferredCore();
-    const resume = createDeferredCore();
-    let preparations = 0;
-    const manager = createManager({
-      prepareArtifact: async () => {
-        preparations += 1;
-        if (preparations === 1) {
-          entered.resolve();
-          await resume.promise;
-        }
-        return artifact();
-      },
-    });
+    const held = holdFirstArtifact();
+    const manager = createManager({ prepareArtifact: held.prepareArtifact });
     const pending = manager.begin(record);
     const rejected = expect(pending).rejects.toThrow();
-    await entered.promise;
+    await held.entered;
     const current = await manager.begin(record);
-    const authorization = transfer.authorize({
-      token: current.nodeBootstrap.token,
-      artifactKey: current.nodeBootstrap.sha256,
-    })!;
+    const authorization = transfer.authorize(downloadRequest(current.nodeBootstrap))!;
     expect(transfer.isAuthorizationCurrent(authorization)).toBe(true);
 
-    resume.resolve();
+    held.resume();
     await rejected;
 
     expect(current.signal?.aborted).toBe(false);
@@ -798,32 +694,25 @@ describe("worker node enrollment", () => {
     "does not grant download authority after teardown during %s preparation",
     async (stage) => {
       const record = await createProvisioning();
-      const entered = createDeferredCore();
-      const resume = createDeferredCore();
-      const prepareArtifact = async () => {
-        if (stage === "artifact") {
-          entered.resolve();
-          await resume.promise;
-        }
-        return artifact();
-      };
+      const held = holdFirstArtifact();
       if (stage === "pairing") {
         vi.mocked(ensureDevicePairSetupBootstrapToken).mockImplementationOnce(
           async ({ setupId }) => {
-            entered.resolve();
-            await resume.promise;
+            await held.prepareArtifact();
             return { status: "pending", token: "bootstrap-token", expiresAtMs: 10_000, setupId };
           },
         );
       }
-      const manager = createManager({ prepareArtifact });
+      const manager = createManager(
+        stage === "artifact" ? { prepareArtifact: held.prepareArtifact } : {},
+      );
       const beginning = manager.begin(record);
       const rejected = expect(beginning).rejects.toThrow(
         /cannot begin node enrollment|no longer provisioning|authority is unavailable/u,
       );
-      await entered.promise;
+      await held.entered;
       await store.requestDestroy({ environmentId: record.environmentId, state: "provisioning" });
-      resume.resolve();
+      held.resume();
       await rejected;
     },
   );

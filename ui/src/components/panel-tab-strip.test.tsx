@@ -4,6 +4,7 @@ import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTabFocus } from "../lib/tabs.ts";
+import { createFrameClock } from "../test-helpers/animation-frame-clock.ts";
 import { createDataTransferStub } from "../test-helpers/drag-data.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
@@ -92,9 +93,26 @@ function widths(label: HTMLElement, clientWidth: number, scrollWidth: number | (
   });
 }
 
+function recordMeasurement(
+  label: HTMLElement,
+  name: string | number,
+  operations: string[],
+  width = () => 200,
+) {
+  widths(label, 100, () => {
+    operations.push(`read ${name}`);
+    return width();
+  });
+  const toggle = label.classList.toggle.bind(label.classList);
+  vi.spyOn(label.classList, "toggle").mockImplementation((token, force) => {
+    operations.push(`write ${name}`);
+    return toggle(token, force);
+  });
+}
+
 function tabMeasurementClock() {
-  let nextFrame = 0;
-  const frames = new Map<number, FrameRequestCallback>();
+  const framesClock = createFrameClock();
+
   const observers = new Set<ControlledResizeObserver>();
   class ControlledResizeObserver implements ResizeObserver {
     readonly targets = new Set<Element>();
@@ -106,11 +124,8 @@ function tabMeasurementClock() {
     disconnect = () => this.targets.clear();
   }
   vi.stubGlobal("ResizeObserver", ControlledResizeObserver);
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-    frames.set(++nextFrame, callback);
-    return nextFrame;
-  });
-  vi.stubGlobal("cancelAnimationFrame", (frame: number) => frames.delete(frame));
+  vi.stubGlobal("requestAnimationFrame", framesClock.request);
+  vi.stubGlobal("cancelAnimationFrame", framesClock.cancel);
   return {
     async settle(container: ParentNode, measure = true) {
       flush();
@@ -121,14 +136,13 @@ function tabMeasurementClock() {
       }
     },
     flush() {
-      const pending = [...frames.values()];
-      frames.clear();
-      pending.forEach((callback) => callback(0));
+      framesClock.flush(0);
     },
     resize(target: Element) {
       for (const observer of observers) {
         if (observer.targets.has(target)) {
-          observer.callback([], observer);
+          // SAFETY: The pooled delivery router reads only target.
+          observer.callback([{ target } as ResizeObserverEntry], observer);
         }
       }
     },
@@ -204,15 +218,33 @@ it.each([
   expect(separatorTargets()).toEqual(before.map((index) => `test-tab-${index}`));
 });
 
-it("closes the requested tab from its labeled close button", async () => {
+it("keeps a fixed tab selectable without a close action", async () => {
   const onClose = vi.fn();
-  const container = await renderStrip({ tabs: [TAB], onClose });
-  const closeButton = tabStrip(container, "-tab__close");
+  const onSelect = vi.fn();
+  const container = await renderStrip({
+    tabs: [
+      { ...TAB, closable: false },
+      { ...TAB, id: "tab-2", domId: "test-tab-2", label: "Second tab" },
+    ],
+    activeId: "tab-2",
+    onClose,
+    onSelect,
+  });
+  const tab = renderedTabs(container)[0]!;
+  expect(tab.getAttribute("aria-selected")).toBe("false");
+  expect(container.querySelector(`#${TAB.domId}-close`)).toBeNull();
+  expect(container.querySelector('[role="group"]')?.getAttribute("aria-owns")).not.toContain(
+    `${TAB.domId}-close`,
+  );
+  tab.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
+  expect(onClose).not.toHaveBeenCalled();
+  tab.click();
+  expect(onSelect).toHaveBeenCalledWith(TAB.id);
 
-  expect(closeButton?.hasAttribute("title")).toBe(false);
-  expect(closeButton?.getAttribute("aria-label")).toBe(TAB.closeLabel);
-  closeButton?.click();
-  expect(onClose).toHaveBeenCalledWith(TAB.id);
+  await renderStrip({ tabs: [TAB], container, onClose });
+  expect(container.querySelector(".tabstrip-tab__close")).not.toBeNull();
+  tab.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
+  expect(onClose).toHaveBeenCalledExactlyOnceWith(TAB.id);
 });
 
 it.each([false, true])(
@@ -228,7 +260,8 @@ it.each([false, true])(
       container,
       tabs: [TAB, remaining],
       focusOwner,
-      onClose: () => {
+      onClose: (id) => {
+        expect(id).toBe(TAB.id);
         closing = close.promise.then(async () => {
           const previous = container;
           container = await renderStrip({ tabs: [remaining], focusOwner });
@@ -243,6 +276,8 @@ it.each([false, true])(
       },
     });
     const closeButton = tabStrip(container, "-tab__close");
+    expect(closeButton.hasAttribute("title")).toBe(false);
+    expect(closeButton.getAttribute("aria-label")).toBe(TAB.closeLabel);
     closeButton.focus();
     closeButton.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     closeButton.click();
@@ -255,26 +290,24 @@ it.each([false, true])(
 
 it("batches overflow reads after content commits and skips unchanged renders", async () => {
   const clock = tabMeasurementClock();
+  const added = vi.spyOn(HTMLElement.prototype, "addEventListener");
+  const removed = vi.spyOn(HTMLElement.prototype, "removeEventListener");
   const tabs = [TAB, makeTab(2)];
   const container = await renderStrip({ tabs });
   const group = tabStrip(container)!;
   const labels = [...group.querySelectorAll<HTMLElement>(".tabstrip-tab__label")];
   const operations: string[] = [];
   for (const [index, label] of labels.entries()) {
-    widths(label, 100, () => {
-      operations.push(`read ${index}`);
-      return label.textContent!.startsWith("Long") ? 200 : 80;
-    });
-    const toggle = label.classList.toggle.bind(label.classList);
-    vi.spyOn(label.classList, "toggle").mockImplementation((name, force) => {
-      operations.push(`write ${index}`);
-      return toggle(name, force);
-    });
+    recordMeasurement(label, index, operations, () =>
+      label.textContent!.startsWith("Long") ? 200 : 80,
+    );
   }
   await clock.settle(container);
   operations.length = 0;
 
-  await renderStrip({ tabs, container });
+  for (let index = 0; index < 4; index += 1) {
+    await renderStrip({ tabs, container });
+  }
   await clock.settle(container);
   expect(operations).toEqual([]);
 
@@ -305,6 +338,12 @@ it("batches overflow reads after content commits and skips unchanged renders", a
     "read 1",
   ]);
   expect(labels[0]!.hasAttribute("data-tooltip-overflow")).toBe(false);
+  const scrollListeners = (spy: typeof added) =>
+    spy.mock.calls.filter(
+      ([type], index) => type === "scroll" && spy.mock.contexts[index] === group,
+    ).length;
+  expect(scrollListeners(added) - scrollListeners(removed)).toBe(1);
+  expect(clock.observed(group)).toBe(true);
 });
 
 it("shares a read-before-write frame without sharing strip cancellation", async () => {
@@ -316,16 +355,7 @@ it("shares a read-before-write frame without sharing strip cancellation", async 
     ["first", first],
     ["second", second],
   ] as const) {
-    const label = tabStrip(container, "-tab__label");
-    widths(label, 100, () => {
-      operations.push(`read ${name}`);
-      return 200;
-    });
-    const toggle = label.classList.toggle.bind(label.classList);
-    vi.spyOn(label.classList, "toggle").mockImplementation((token, force) => {
-      operations.push(`write ${name}`);
-      return toggle(token, force);
-    });
+    recordMeasurement(tabStrip(container, "-tab__label"), name, operations);
   }
   clock.flush();
   expect(operations).toEqual(["read first", "read second", "write first", "write second"]);
@@ -395,28 +425,6 @@ it.each(["ltr", "rtl"])("refreshes scroll edges across disconnect/reconnect (%s)
   clock.flush();
   expect(clock.observed(group)).toBe(true);
   expect(group.classList.contains("has-scroll-left")).toBe(false);
-});
-
-it("keeps one live scroll-edge listener no matter how many renders race", async () => {
-  const clock = tabMeasurementClock();
-  const added = vi.spyOn(HTMLElement.prototype, "addEventListener");
-  const removed = vi.spyOn(HTMLElement.prototype, "removeEventListener");
-
-  const container = host();
-  const tabs = [TAB, makeTab(2)];
-  for (let index = 0; index < 4; index += 1) {
-    await renderStrip({ tabs, container });
-  }
-
-  const scroller = tabStrip(container)!;
-  await clock.settle(container);
-
-  const scrollListeners = (spy: typeof added) =>
-    spy.mock.calls.filter(
-      ([type], index) => type === "scroll" && spy.mock.contexts[index] === scroller,
-    ).length;
-  expect(scrollListeners(added) - scrollListeners(removed)).toBe(1);
-  expect(clock.observed(scroller)).toBe(true);
 });
 
 it("reorders draggable tabs at the requested edge", async () => {

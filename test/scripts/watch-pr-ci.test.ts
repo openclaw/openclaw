@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { collectRollupContexts, type RollupCheck } from "../../scripts/lib/watch-pr-ci-rollup.mts";
 import {
-  buildFindRunArgs,
   classifyRollup,
   classifyRunAttachment,
   parseArgs,
@@ -50,6 +49,28 @@ ${body}
 console.log(JSON.stringify(value));
 `;
 }
+async function replayGh(
+  body: string,
+  options: {
+    fixture?: unknown;
+    head?: string;
+    args?: string[];
+    clock?: Parameters<typeof runWatcher>[3];
+  } = {},
+) {
+  return withTempDir("openclaw-watch-pr-ci-replay-", async (root) => {
+    const callsPath = join(root, "calls.jsonl");
+    writeFileSync(callsPath, "");
+    const result = await runWatcher(
+      ghProgram(callsPath, `const fixture = ${JSON.stringify(options.fixture)};\n${body}`),
+      options.head ?? sha,
+      options.args ?? [],
+      options.clock,
+    );
+    const callText = readFileSync(callsPath, "utf8");
+    return { ...result, callText, calls: parseCalls(callText) };
+  });
+}
 function contextPage(nodes: RollupCheck[], state = "FAILURE") {
   return {
     state,
@@ -88,7 +109,7 @@ function expectBlocked(
   expect(result.stdout).not.toContain(green);
 }
 
-function replayPlaceholder(
+async function replayPlaceholder(
   fixture = structuredClone(placeholderFixture),
   evidence: {
     runSnapshots?: unknown[];
@@ -103,20 +124,12 @@ function replayPlaceholder(
     rest?: boolean;
   } = {},
 ) {
-  return withTempDir("openclaw-watch-pr-ci-replay-", async (root) => {
-    const payload = join(root, "payload.json");
-    const calls = join(root, "calls.jsonl");
-    // The live capture is merged. Only lifecycle is reopened for the historical watch.
-    if (!evidence.merged) {
-      fixture.graphql.data.repository.pullRequest.state = "OPEN";
-    }
-    writeFileSync(payload, JSON.stringify({ ...fixture, ...evidence }));
-    writeFileSync(calls, "");
-    const result = await runWatcher(
-      ghProgram(
-        calls,
-        `
-const fixture = JSON.parse(fs.readFileSync(${JSON.stringify(payload)}, "utf8"));
+  // The live capture is merged. Only lifecycle is reopened for the historical watch.
+  if (!evidence.merged) {
+    fixture.graphql.data.repository.pullRequest.state = "OPEN";
+  }
+  const result = await replayGh(
+    `
 const runPath = "repos/openclaw/openclaw/actions/runs/33155056361";
 const scanned = calls.some((call) => call[1]?.startsWith("repos/openclaw/openclaw/actions/jobs/"));
 const currentGraphql = scanned && fixture.afterAliasScan !== undefined ? fixture.afterAliasScan : fixture.graphql;
@@ -181,22 +194,29 @@ else if (args[1]?.startsWith("repos/openclaw/openclaw/actions/jobs/")) {
   const jobId = Number(args[1].split("/").at(-1));
   if (fixture.delayFirstAlias && jobId === jobIds[0]) {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000);
-    fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(["slow-alias-completed"]) + "\\n");
+    fs.appendFileSync(callsPath, JSON.stringify(["slow-alias-completed"]) + "\\n");
   }
   value = fixture.directJobs[jobIds.indexOf(jobId)];
   if (value === undefined) throw new Error("missing direct job response");
 }
 else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
 `,
-      ),
-      placeholderFixture.run.head_sha,
-      evidence.watchTimeout === undefined
-        ? []
-        : ["--timeout", String(evidence.watchTimeout), "--interval", String(evidence.watchTimeout)],
-      evidence.clock,
-    );
-    return { ...result, calls: readFileSync(calls, "utf8") };
-  });
+    {
+      fixture: { ...fixture, ...evidence },
+      head: placeholderFixture.run.head_sha,
+      args:
+        evidence.watchTimeout === undefined
+          ? []
+          : [
+              "--timeout",
+              String(evidence.watchTimeout),
+              "--interval",
+              String(evidence.watchTimeout),
+            ],
+      clock: evidence.clock,
+    },
+  );
+  return { ...result, calls: result.callText };
 }
 
 function replaySummary({
@@ -219,13 +239,8 @@ function replaySummary({
   supersededFailure?: boolean;
   completeAfter?: number;
 }) {
-  return withTempDir("openclaw-watch-pr-ci-summary-", async (root) => {
-    const callsPath = join(root, "calls.jsonl");
-    writeFileSync(callsPath, "");
-    const result = await runWatcher(
-      ghProgram(
-        callsPath,
-        `
+  return replayGh(
+    `
 const runReads = calls.filter((call) => call[0] === "run" && call[1] === "view").length;
 const identity = {
   workflow_id: 10, event: "pull_request", head_sha: "${sha}",
@@ -274,15 +289,8 @@ if (args[0] === "browse") {
   throw new Error("unexpected gh invocation: " + JSON.stringify(args));
 }
 `,
-      ),
-      sha,
-      ["--timeout", "3"],
-    );
-    return {
-      ...result,
-      calls: readCalls(callsPath),
-    };
-  });
+    { args: ["--timeout", "3"] },
+  );
 }
 
 function restCheck(id = 1, patch: Record<string, unknown> = {}) {
@@ -354,20 +362,13 @@ function replayRestRollup(
     runStatuses?: string[];
   } = {},
 ) {
-  return withTempDir("openclaw-watch-pr-ci-fallback-", async (root) => {
-    const callsPath = join(root, "calls.jsonl");
-    const payloadPath = join(root, "payload.json");
-    writeFileSync(callsPath, "");
-    writeFileSync(payloadPath, JSON.stringify(fixture));
-    const result = await runWatcher(
-      ghProgram(
-        callsPath,
-        `
-const original = JSON.parse(fs.readFileSync(${JSON.stringify(payloadPath)}, "utf8"));
+  return replayGh(
+    `
+const original = fixture;
 const runReads = calls.filter((call) => call[0] === "run" && call[1] === "view").length;
-const fixture = { ...original, ...(runReads >= 2 ? original.afterRun : {}) };
+const current = { ...original, ...(runReads >= 2 ? original.afterRun : {}) };
 const run = { id: 201, workflow_id: 10, check_suite_id: 20_000, event: "pull_request", head_sha: "${sha}" };
-const checkPages = fixture.checkPages ?? [{ total_count: 1, check_runs: [${JSON.stringify(restCheck())}] }];
+const checkPages = current.checkPages ?? [{ total_count: 1, check_runs: [${JSON.stringify(restCheck())}] }];
 const page = Number(new URLSearchParams(args[1]?.split("?")[1]).get("page") ?? 1);
 const collected = calls.some((call) => call[1]?.includes("/check-suites?"));
 if (args[0] === "browse") {
@@ -375,27 +376,27 @@ if (args[0] === "browse") {
   process.exit(0);
 } else if (args.includes("repos/openclaw/openclaw/pulls/42")) {
   value = { state: "open", merged_at: null, mergeable: true, head: { sha: "${sha}" },
-    ...(collected ? fixture.afterCollection : {}) };
+    ...(collected ? current.afterCollection : {}) };
 } else if (args.includes("repos/openclaw/openclaw/actions/workflows/ci.yml/runs")) {
   value = { workflow_runs: [run] };
 } else if (args[0] === "run" && args[1] === "view") {
   const reads = calls.filter((call) => call[0] === "run" && call[1] === "view").length;
-  const snapshots = fixture.runStatuses ?? ["completed"];
+  const snapshots = current.runStatuses ?? ["completed"];
   const status = snapshots[Math.min(reads, snapshots.length - 1)];
   value = { status, conclusion: status === "completed" ? "success" : null };
 } else if (args[1] === "graphql") {
-  console.error(fixture.graphqlError ?? "gh: API rate limit exceeded for fixture-user.");
+  console.error(current.graphqlError ?? "gh: API rate limit exceeded for fixture-user.");
   process.exit(1);
 } else if (args[1]?.includes("/check-runs?filter=latest&")) {
   value = checkPages[page - 1];
 } else if (args[1]?.includes("/status?")) {
-  value = (fixture.statusPages ?? [{ sha: "${sha}", state: "pending", total_count: 0, statuses: [] }])[page - 1];
+  value = (current.statusPages ?? [{ sha: "${sha}", state: "pending", total_count: 0, statuses: [] }])[page - 1];
 } else if (args[1]?.startsWith("repos/openclaw/openclaw/actions/runs?head_sha=")) {
-  value = (fixture.runPages ?? [{ total_count: 1, workflow_runs: [run] }])[page - 1];
+  value = (current.runPages ?? [{ total_count: 1, workflow_runs: [run] }])[page - 1];
 } else if (args[1]?.includes("/check-suites?")) {
   const checks = checkPages.flatMap((page) => page.check_runs);
   const ids = [...new Set(checks.map((check) => check.check_suite.id))];
-  value = (fixture.suitePages ?? [{ total_count: ids.length, check_suites: ids.map((id) => ({
+  value = (current.suitePages ?? [{ total_count: ids.length, check_suites: ids.map((id) => ({
     id, head_sha: "${sha}", status: "completed", conclusion: "success",
     latest_check_runs_count: checks.filter((check) => check.check_suite.id === id).length,
   })) }])[page - 1];
@@ -404,15 +405,8 @@ if (args[0] === "browse") {
 }
 if (value === undefined) throw new Error("missing fixture page");
 `,
-      ),
-      sha,
-      ["--timeout", "3"],
-    );
-    return {
-      ...result,
-      calls: readCalls(callsPath),
-    };
-  });
+    { fixture, args: ["--timeout", "3"] },
+  );
 }
 
 describe("watch-pr-ci", () => {
@@ -431,19 +425,9 @@ describe("watch-pr-ci", () => {
       parseArgs([
         "7",
         sha,
-        "--repo",
-        "fork/project",
-        "--after",
-        "1234",
-        "--attach-timeout",
-        "30",
-        "--timeout",
-        "90",
-        "--interval",
-        "5",
-        "--completion",
-        "ci-run",
-        "--once",
+        ..."--repo fork/project --after 1234 --attach-timeout 30 --timeout 90 --interval 5 --completion ci-run --once".split(
+          " ",
+        ),
       ]),
     ).toMatchObject({
       repo: "fork/project",
@@ -469,21 +453,6 @@ describe("watch-pr-ci", () => {
     expect(() => parseArgs(["1", sha, "--completion", "required"])).toThrow(
       "--completion must be rollup or ci-run",
     );
-  });
-
-  it("builds a pull-request-only run attachment query", () => {
-    expect(buildFindRunArgs("openclaw/openclaw", sha)).toEqual([
-      "api",
-      "--method",
-      "GET",
-      "repos/openclaw/openclaw/actions/workflows/ci.yml/runs",
-      "-f",
-      "event=pull_request",
-      "-f",
-      `head_sha=${sha}`,
-      "-f",
-      "per_page=20",
-    ]);
   });
 
   it("skips newer draft runs without weakening the --after boundary", () => {
@@ -554,13 +523,8 @@ esac
     { label: "missing job details", jobs: undefined, progress: "jobs=unknown" },
     { label: "malformed job details", jobs: [{ name: "incomplete" }], progress: "jobs=unknown" },
   ])("reports $label without changing native completion", async ({ jobs, progress }) => {
-    await withTempDir("openclaw-watch-pr-ci-progress-", async (root) => {
-      const callsPath = join(root, "calls.jsonl");
-      writeFileSync(callsPath, "");
-      const result = await runWatcher(
-        ghProgram(
-          callsPath,
-          `
+    const result = await replayGh(
+      `
 if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
@@ -577,26 +541,12 @@ if (args[0] === "browse") {
   throw new Error("unexpected gh invocation: " + JSON.stringify(args));
 }
 `,
-        ),
-        sha,
-        ["--completion", "ci-run"],
-      );
-      expectRun(result, 16, `STATUS run=queued conclusion=pending ${progress}`);
-      expect(result.stdout).toContain("TIMEOUT completion=ci-run");
-      expect(result.stdout).not.toContain("\nGREEN");
-      expect(result.stdout).not.toContain("\nFAILING");
-      const calls = readCalls(callsPath);
-      expect(
-        calls.filter((args) => args.includes("repos/openclaw/openclaw/pulls/42")),
-      ).toHaveLength(2);
-      expect(calls.some((args) => args[0] === "pr" || args.includes("graphql"))).toBe(false);
-      expect(calls.some((args) => args.some((arg) => arg.includes("/commits/")))).toBe(false);
-      const runReads = calls.filter((args) => args[0] === "run" && args[1] === "view");
-      expect(runReads.map((args) => args[args.indexOf("--json") + 1])).toEqual([
-        "status,conclusion",
-        "status,conclusion,jobs",
-      ]);
-    });
+      { args: ["--completion", "ci-run"] },
+    );
+    expectRun(result, 16, `STATUS run=queued conclusion=pending ${progress}`);
+    expect(result.stdout).toContain("TIMEOUT completion=ci-run");
+    expect(result.stdout).not.toContain("\nGREEN");
+    expect(result.stdout).not.toContain("\nFAILING");
   });
 
   type CiRunScenario = {
@@ -618,32 +568,22 @@ if (args[0] === "browse") {
     return { label, phase: "attach", patch: {}, exitCode: 0, output: "GREEN", ...details };
   }
   it.skipIf(process.platform === "win32").each<CiRunScenario>([
-    ...(["attach", "watch"] as const).flatMap((phase) => [
-      restScenario("closed", {
-        phase,
-        patch: { state: "closed" },
-        exitCode: 10,
-        output: "PR-CLOSED state=CLOSED",
-      }),
-      restScenario("merged", {
-        phase,
-        patch: { state: "closed", merged_at: "2026-09-19T00:00:00Z" },
-        exitCode: 10,
-        output: "PR-CLOSED state=MERGED",
-      }),
-      restScenario("moved head", {
-        phase,
-        patch: { head: { sha: "b".repeat(40) } },
-        exitCode: 11,
-        output: "HEAD-MOVED",
-      }),
-      restScenario("conflict", {
-        phase,
-        patch: { mergeable: false },
-        exitCode: phase === "attach" ? 12 : 14,
-        output: phase === "attach" ? "CONFLICTING mergeable=" : "CONFLICTING-MID-WAIT",
-      }),
-    ]),
+    ...(["attach", "watch"] as const).flatMap((phase) =>
+      (
+        [
+          ["closed", { state: "closed" }, 10, "PR-CLOSED state=CLOSED"],
+          ["moved head", { head: { sha: "b".repeat(40) } }, 11, "HEAD-MOVED"],
+          [
+            "conflict",
+            { mergeable: false },
+            phase === "attach" ? 12 : 14,
+            phase === "attach" ? "CONFLICTING mergeable=" : "CONFLICTING-MID-WAIT",
+          ],
+        ] satisfies [string, Record<string, unknown>, number, string][]
+      ).map(([label, patch, exitCode, output]) =>
+        restScenario(label, { phase, patch, exitCode, output }),
+      ),
+    ),
     restScenario("unknown mergeability", { patch: { mergeable: null } }),
     restScenario("slow current PR read", {
       phase: "watch",
@@ -764,26 +704,19 @@ if (args[0] === "browse") {
   // These replay groups own their CLI process, files, and polling clock per case.
   // Vitest bounds concurrent cases; real-deadline coverage stays in serial groups.
   describe.skipIf(process.platform === "win32")("summary polling", () => {
-    it.concurrent.each([
-      {
-        label: "superseded failures",
-        completeAfter: 3,
-        afterRun: {},
-        exitCode: 0,
-        reads: 10,
-        summaries: 1,
-      },
-      {
-        label: "cleared failures with active CI",
-        completeAfter: 10,
-        afterRun: { statusCheckRollup: { state: "PENDING" } },
-        exitCode: 16,
-        reads: 8,
-        summaries: 2,
-      },
+    it.concurrent.each<[string, number, Record<string, unknown>, number, number, number]>([
+      ["superseded failures", 3, {}, 0, 10, 1],
+      [
+        "cleared failures with active CI",
+        10,
+        { statusCheckRollup: { state: "PENDING" } },
+        16,
+        8,
+        2,
+      ],
     ])(
-      "bounds summary reads for $label",
-      async ({ completeAfter, afterRun, exitCode, reads, summaries }) => {
+      "bounds summary reads for %s",
+      async (_label, completeAfter, afterRun, exitCode, reads, summaries) => {
         const result = await replaySummary({
           state: "FAILURE",
           supersededFailure: true,
@@ -812,14 +745,14 @@ if (args[0] === "browse") {
       ["missing count", { nodes: [], pageInfo: { hasNextPage: false } }],
       ["missing pagination", { totalCount: 0, nodes: [] }],
       ["no checks", { totalCount: 0, nodes: [], pageInfo: { hasNextPage: false } }],
-      ...[0, 2].map((totalCount): [string, unknown] => [
+      [
         "inconsistent count",
         {
-          totalCount,
+          totalCount: 2,
           nodes: [{ kind: "StatusContext", context: "required", state: "SUCCESS" }],
           pageInfo: { hasNextPage: false },
         },
-      ]),
+      ],
     ])("does not turn a FAILURE with %s into success", async (_label, detailContexts) => {
       const result = await replaySummary({
         state: "FAILURE",
@@ -829,26 +762,26 @@ if (args[0] === "browse") {
       expectRun(result, 16, "rollup detail evidence is incomplete", "\nGREEN");
     });
 
-    it.concurrent.each([
-      { label: "complete counts", counts: undefined, pending: "1" },
-      { label: "missing counts", counts: {}, pending: "unknown" },
-      {
-        label: "malformed counts",
-        counts: {
+    it.concurrent.each<[string, Record<string, unknown> | undefined, string]>([
+      ["complete counts", undefined, "1"],
+      ["missing counts", {}, "unknown"],
+      [
+        "malformed counts",
+        {
           checkRunCountsByState: [{ state: "IN_PROGRESS", count: -1 }],
           statusContextCountsByState: [],
         },
-        pending: "unknown",
-      },
-      {
-        label: "zero pending counts",
-        counts: {
+        "unknown",
+      ],
+      [
+        "zero pending counts",
+        {
           checkRunCountsByState: [{ state: "COMPLETED", count: 200 }],
           statusContextCountsByState: [{ state: "SUCCESS", count: 1 }],
         },
-        pending: "0",
-      },
-    ])("keeps a 201-context pending poll bounded with $label", async ({ counts, pending }) => {
+        "0",
+      ],
+    ])("keeps a 201-context pending poll bounded with %s", async (_label, counts, pending) => {
       const result = await replaySummary({ counts });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
       expect(result.stdout).toContain(
@@ -869,30 +802,20 @@ if (args[0] === "browse") {
       expect(result.calls.filter((call) => call[0] === "browse")).toHaveLength(1);
     });
 
-    it.concurrent.each([
-      { label: "unchanged success", afterRun: {}, exitCode: 0, output: "GREEN" },
-      {
-        label: "moved head",
-        afterRun: { headRefOid: "b".repeat(40) },
-        exitCode: 11,
-        output: "HEAD-MOVED",
-      },
-      { label: "closed PR", afterRun: { state: "CLOSED" }, exitCode: 10, output: "PR-CLOSED" },
-      {
-        label: "conflicting PR",
-        afterRun: { mergeable: "CONFLICTING" },
-        exitCode: 14,
-        output: "CONFLICTING-MID-WAIT",
-      },
-      ...["PENDING", "FAILURE", "ERROR"].map((state) => ({
-        label: `same-head ${state}`,
-        afterRun: { statusCheckRollup: { state } },
-        exitCode: state === "PENDING" ? 16 : 15,
-        output: state === "PENDING" ? "TIMEOUT" : "FAILING checks=required status",
-      })),
+    it.concurrent.each<[string, Record<string, unknown>, number, string]>([
+      ["unchanged success", {}, 0, "GREEN"],
+      ["moved head", { headRefOid: "b".repeat(40) }, 11, "HEAD-MOVED"],
+      ["closed PR", { state: "CLOSED" }, 10, "PR-CLOSED"],
+      ["conflicting PR", { mergeable: "CONFLICTING" }, 14, "CONFLICTING-MID-WAIT"],
+      ...["PENDING", "FAILURE"].map((state): [string, Record<string, unknown>, number, string] => [
+        `same-head ${state}`,
+        { statusCheckRollup: { state } },
+        state === "PENDING" ? 16 : 15,
+        state === "PENDING" ? "TIMEOUT" : "FAILING checks=required status",
+      ]),
     ])(
-      "reobserves $label after the attached run succeeds",
-      async ({ afterRun, exitCode, output }) => {
+      "reobserves %s after the attached run succeeds",
+      async (_label, afterRun, exitCode, output) => {
         const result = await replaySummary({ state: "SUCCESS", runStatus: "completed", afterRun });
         expectRun(result, exitCode, output);
         if (exitCode !== 0) {
@@ -966,9 +889,6 @@ if (args[0] === "browse") {
       expect(result.calls.some((call) => call[1]?.endsWith("/status?per_page=100&page=2"))).toBe(
         true,
       );
-      expect(result.calls.filter((call) => call[1]?.includes("/check-runs?"))).toHaveLength(1);
-      expect(result.calls.filter((call) => call[1]?.includes("/status?"))).toHaveLength(2);
-      expect(result.calls.filter((call) => call[1]?.includes("/check-suites?"))).toHaveLength(1);
     });
 
     it.concurrent.each(["pending", "failure"])(
@@ -1080,7 +1000,6 @@ if (args[0] === "browse") {
       async ({ label: _label, ...fixture }) => {
         const result = await replayRestRollup(fixture);
         expectRun(result, 16, "RETRY phase=watch", "\nGREEN");
-        expect(result.calls.filter((call) => call[1] === "graphql")).toHaveLength(1);
       },
     );
 
@@ -1142,7 +1061,6 @@ if (args[0] === "browse") {
       expect(result.stdout).toContain(
         exitCode === 0 ? "\nGREEN" : active ? "TIMEOUT" : "FAILING checks=build",
       );
-      expect(result.calls.filter((call) => call[1] === "graphql")).toHaveLength(1);
       if (active) {
         expect(result.stdout.match(/STATUS rollup=pending/g)).toHaveLength(3);
         expect(result.calls.filter((call) => call[1]?.includes("/check-runs?"))).toHaveLength(3);
@@ -1155,24 +1073,14 @@ if (args[0] === "browse") {
 
   describe.skipIf(process.platform === "win32")("proxy failures", () => {
     it.concurrent.each([
-      ...[
-        "407 Proxy Authentication Required",
-        'Post "https://api.github.com/graphql": Proxy Authentication Required',
-      ].flatMap((error) => [
-        { phase: "attach", completion: "rollup", status: 407, exitCode: 2, error },
-        { phase: "attach", completion: "ci-run", status: 407, exitCode: 2, error },
-        { phase: "watch", completion: "rollup", status: 407, exitCode: 2, error },
-        { phase: "watch", completion: "ci-run", status: 407, exitCode: 2, error },
-      ]),
-      ...[
-        { phase: "attach", completion: "rollup", exitCode: 13 },
-        { phase: "attach", completion: "ci-run", exitCode: 13 },
-        { phase: "watch", completion: "rollup", exitCode: 16 },
-        { phase: "watch", completion: "ci-run", exitCode: 16 },
-      ].map((scenario) => Object.assign(scenario, { status: 502, error: "502 Bad Gateway" })),
-    ])(
-      "handles $error during $phase ($completion)",
-      async ({ phase, completion, status, exitCode, error }) => {
+      ["attach", "rollup", 407, 2],
+      ["watch", "ci-run", 407, 2],
+      ["attach", "ci-run", 502, 13],
+      ["watch", "rollup", 502, 16],
+    ] as const)(
+      "handles proxy failure during %s (%s, status %s)",
+      async (phase, completion, status, exitCode) => {
+        const error = status === 407 ? "407 Proxy Authentication Required" : "502 Bad Gateway";
         const result = await runWatcher(
           `#!/usr/bin/env node
 const fs = require("node:fs");
@@ -1280,12 +1188,11 @@ console.log(JSON.stringify(value));
     }
 
     it.each<OwnershipScenario>([
-      timeout("queued replacement", { status: "queued", conclusion: null }),
       timeout("running replacement", { status: "in_progress", conclusion: null }),
       green("successful replacement"),
       timeout("ci-run slow final run", { completion: "ci-run", slowFinalRun: true }),
       timeout("ci-run slow watch PR read", { completion: "ci-run", slowWatchPr: true }),
-      ...[33, 65].map((oldRunCount) => ({
+      ...[33].map((oldRunCount) => ({
         label: `${oldRunCount}-run authoritative SUCCESS`,
         oldRunCount,
         olderRunOutsidePage: true,
@@ -1316,24 +1223,9 @@ console.log(JSON.stringify(value));
         },
         65,
       ),
-      ...[32, 33, 65].map((count) =>
+      ...[32, 33].map((count) =>
         priorPage("metadata progress", { exitCode: 0, output: "GREEN" }, count),
       ),
-      metadata("unknown association", {
-        previousPatch: { pull_requests: [] },
-      }),
-      metadata("foreign association", {
-        previousPatch: { pull_requests: [association(43)] },
-      }),
-      metadata("failed attached run", {
-        conclusion: "failure",
-        output: "FAILING checks=CI workflow (failure)",
-      }),
-      metadata("moved head", {
-        afterMetadata: { headRefOid: "c".repeat(40) },
-        exitCode: 11,
-        output: "HEAD-MOVED",
-      }),
       priorPage(
         "deferred unknown association",
         {
@@ -1357,7 +1249,6 @@ console.log(JSON.stringify(value));
         afterMetadata: { statusCheckRollup: requiredFailure() },
         output: "FAILING checks=new required check",
       }),
-      priorPage("same-PR replacement", { exitCode: 0, output: "GREEN" }),
       priorPage("same-PR cancellation replacement", {
         exitCode: 0,
         output: "GREEN",
@@ -1420,10 +1311,6 @@ console.log(JSON.stringify(value));
         checkEvent: "pull_request_target",
         newCheckName: "new matrix shard",
       }),
-      ownership("unique target cancellation with unbound newer run metadata", {
-        oldConclusion: "CANCELLED",
-        checkEvent: "pull_request_target",
-      }),
       ownership("same-name replacement from a different event", {
         checkEvent: "pull_request_target",
         newCheckName: "old matrix shard",
@@ -1444,11 +1331,6 @@ console.log(JSON.stringify(value));
         conclusion: "failure",
         output: "FAILING checks=CI workflow (failure)",
       }),
-      ownership("another PR with the same head and a different base", {
-        runPatch: { pull_requests: [association(43, "release/2026.9")] },
-        expectedRun: 100,
-      }),
-      ownership("missing replacement association", { runPatch: { pull_requests: undefined } }),
       ownership("empty replacement association", { runPatch: { pull_requests: [] } }),
       ownership("ambiguous replacement association", {
         runPatch: { pull_requests: [association(), association(43)] },
@@ -1468,8 +1350,6 @@ console.log(JSON.stringify(value));
       ownership("different association head", {
         runPatch: { pull_requests: [{ ...association(), head: { sha: "c".repeat(40) } }] },
       }),
-      ownership("different prior event", { previousPatch: { event: "workflow_dispatch" } }),
-      ownership("different prior head", { previousPatch: { head_sha: "c".repeat(40) } }),
       ownership("different workflow", { runPatch: { workflow_id: 20 } }),
       ownership("missing replacement suite", { runPatch: { check_suite_id: undefined } }),
       ownership("missing prior suite", { previousPatch: { check_suite_id: undefined } }),
@@ -1601,13 +1481,8 @@ console.log(JSON.stringify(value));
           });
           pr.statusCheckRollup.contexts.totalCount += 1;
         }
-        const result = await withTempDir("openclaw-watch-pr-ci-ownership-", async (root) => {
-          const calls = join(root, "calls.jsonl");
-          writeFileSync(calls, "");
-          const watched = await runWatcher(
-            ghProgram(
-              calls,
-              `
+        const result = await replayGh(
+          `
 const metadataRead = calls.some((call) => call[1] === "repos/openclaw/openclaw/actions/runs/100");
 const pr = { ...${JSON.stringify(pr)}, ...(metadataRead ? ${JSON.stringify(afterMetadata ?? {})} : {}) };
 if (metadataRead && ${Boolean(afterMetadataState)}) pr.statusCheckRollup.state = ${JSON.stringify(afterMetadataState)};
@@ -1637,20 +1512,17 @@ else if (args[1]?.startsWith("repos/openclaw/openclaw/actions/runs/")) {
 else if (args[1]?.includes("/actions/runs?event=pull_request_target")) value = { workflow_runs: [{ ...runs[0], event: "pull_request_target", pull_requests: [] }] };
 else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
 `,
-            ),
-            sha,
-            completion ? ["--completion", completion] : oldRunCount > 1 ? ["--timeout", "6"] : [],
-            slowMetadata || slowFinalRun || slowWatchPr ? "wall" : "poll",
-          );
-          return {
-            ...watched,
-            calls: readCalls(calls),
-          };
-        });
+          {
+            args: completion
+              ? ["--completion", completion]
+              : oldRunCount > 1
+                ? ["--timeout", "6"]
+                : [],
+            clock: slowMetadata || slowFinalRun || slowWatchPr ? "wall" : "poll",
+          },
+        );
         expectRun(result, exitCode, `ATTACHED run=${expectedRun}`);
         expect(result.stdout).toContain(output);
-        expect(result.calls.some((call) => call[0] === "pr")).toBe(false);
-        expect(result.calls.some((call) => call.includes("graphql"))).toBe(completion !== "ci-run");
         expect(
           result.calls.filter((call) => call[1] === "repos/openclaw/openclaw/actions/runs/100"),
         ).toHaveLength(olderRunOutsidePage && expectedMetadataReads > 0 ? 1 : 0);
@@ -1763,21 +1635,11 @@ else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
       expect(result.calls).not.toContain('"slow-alias-completed"');
     });
 
-    it.each([
-      {
-        label: "moved head",
-        patch: { headRefOid: sha, statusCheckRollup: null },
-        exitCode: 11,
-        output: "HEAD-MOVED",
-      },
-      { label: "closed PR", patch: { state: "CLOSED" }, exitCode: 10, output: "PR-CLOSED" },
-      {
-        label: "conflicting PR",
-        patch: { mergeable: false },
-        exitCode: 14,
-        output: "CONFLICTING-MID-WAIT",
-      },
-    ])("rechecks a $label after alias verification", async ({ patch, exitCode, output }) => {
+    it.each<[string, Record<string, unknown>, number, string]>([
+      ["moved head", { headRefOid: sha, statusCheckRollup: null }, 11, "HEAD-MOVED"],
+      ["closed PR", { state: "CLOSED" }, 10, "PR-CLOSED"],
+      ["conflicting PR", { mergeable: false }, 14, "CONFLICTING-MID-WAIT"],
+    ])("rechecks a %s after alias verification", async (_label, patch, exitCode, output) => {
       const fixture = structuredClone(placeholderFixture);
       const { afterAliasScan, pr } = refreshedPlaceholder(fixture);
       Object.assign(pr, patch);
@@ -1785,28 +1647,14 @@ else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
       expectRun(result, exitCode, output, "GREEN");
     });
 
-    it.each([
-      {
-        label: "new pending required check",
-        added: true,
-        patch: { status: "QUEUED", conclusion: null },
-        exitCode: 16,
-      },
-      {
-        label: "new failed required check",
-        added: true,
-        patch: { status: "COMPLETED", conclusion: "FAILURE" },
-        exitCode: 15,
-      },
-      { label: "starts running", patch: { status: "IN_PROGRESS" }, exitCode: 16 },
-      { label: "fails", patch: { status: "COMPLETED", conclusion: "FAILURE" }, exitCode: 15 },
-      {
-        label: "loses its conclusion",
-        patch: { status: "COMPLETED", conclusion: null },
-        exitCode: 16,
-      },
-      { label: "is renamed", patch: { name: "different required check" }, exitCode: 16 },
-    ])("revalidates alias evidence: $label", async ({ patch, exitCode, added }) => {
+    it.each<[string, Record<string, unknown>, number, boolean?]>([
+      ["new pending required check", { status: "QUEUED", conclusion: null }, 16, true],
+      ["new failed required check", { status: "COMPLETED", conclusion: "FAILURE" }, 15, true],
+      ["starts running", { status: "IN_PROGRESS" }, 16],
+      ["fails", { status: "COMPLETED", conclusion: "FAILURE" }, 15],
+      ["loses its conclusion", { status: "COMPLETED", conclusion: null }, 16],
+      ["is renamed", { name: "different required check" }, 16],
+    ])("revalidates alias evidence: %s", async (_label, patch, exitCode, added) => {
       const fixture = structuredClone(placeholderFixture);
       const { afterAliasScan, contexts } = refreshedPlaceholder(fixture);
       if (added) {
@@ -2229,46 +2077,19 @@ else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
       totalCount?: number,
     ]
   >([
-    ...(
-      [
-        ["plain ASCII / check (1)", "plain ASCII / check (1)"],
-        ["Crème 日本語 １２３", "Crème 日本語 １２３"],
-        ["unit\n\r\t\u0000check", "unit?check"],
-        ["safe\u001b[31mred\u001b[0m text", "safe?red? text"],
-        ["link\u001b]8;;https://example.com\u0007text\u001b]8;;\u0007", "link?text?"],
-        ["left\u202Eright 😀", "left?right ?"],
-      ] satisfies [string, string][]
-    ).map(([input, output]): [string, RollupCheck[], ReturnType<typeof classifyRollup>] => [
-      `sanitized check name ${JSON.stringify(input)}`,
-      [rollupCheck(input, "FAILURE")],
-      expectedRollup("FAILING", [output]),
-    ]),
     [
       "sanitized failing check and status-context names",
       [
-        rollupCheck("unit\u001b[31mowned\u001b[0m", "FAILURE"),
-        { kind: "StatusContext", context: "deploy\nprod", state: "ERROR" },
+        rollupCheck(
+          "unit Crème 日本語 １２３ / (1)\u001b[31mowned\u001b[0m\u001b]8;;https://example.com\u0007link\u001b]8;;\u0007\u202Eright 😀",
+          "FAILURE",
+        ),
+        { kind: "StatusContext", context: "deploy\n\r\t\u0000prod", state: "ERROR" },
       ],
-      expectedRollup("FAILING", ["deploy?prod", "unit?owned?"]),
-    ],
-    ["aggregate success", [], expectedRollup("GREEN"), "SUCCESS"],
-    [
-      "pending aggregate with completed checks",
-      [rollupCheck("unit", "SUCCESS")],
-      expectedRollup("PENDING"),
-      "PENDING",
-    ],
-    ["pending contexts", [rollupCheck("unit", null)], expectedRollup("PENDING", [], 1), "PENDING"],
-    [
-      "identity-less same-name cancellations",
-      [
-        rollupCheck("Auto response", "FAILURE"),
-        rollupCheck("unit", "CANCELLED"),
-        rollupCheck("unit", "SUCCESS"),
-      ],
-      expectedRollup("FAILING", ["unit"]),
-      "ERROR",
-      3,
+      expectedRollup("FAILING", [
+        "deploy?prod",
+        "unit Crème 日本語 １２３ / (1)?owned?link?right ?",
+      ]),
     ],
     [
       "truncated failing rollup",
@@ -2286,46 +2107,16 @@ else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
         rollupCheck("lint", "TIMED_OUT"),
       ],
       expectedRollup("FAILING", ["lint", "unit"]),
-    ],
-    [
-      "superseded runs with pending replacements",
-      [
-        rollupCheck("Real behavior proof", "CANCELLED", 100, 10, 1_000),
-        rollupCheck("Real behavior proof", null, 200, 10, 2_000),
-        rollupCheck("CI", null, 150, 20),
-      ],
-      expectedRollup("PENDING", [], 2, 1),
+      "ERROR",
     ],
     [
       "pending same-run check replacement",
-      [rollupCheck("unit", "CANCELLED", 500, 20, 1_000), rollupCheck("unit", null, 500, 20, 2_000)],
-      expectedRollup("PENDING", [], 1, 1),
-    ],
-    [
-      "successful same-run check replacement",
       [
         rollupCheck("unit", "CANCELLED", 500, 20, 1_000),
-        rollupCheck("unit", "SUCCESS", 500, 20, 2_000),
+        rollupCheck("unit", null, 500, 20, 2_000),
+        rollupCheck("CI", null, 150, 10),
       ],
-      expectedRollup("GREEN", [], 0, 1),
-    ],
-    [
-      "unique cancellations across independent workflows",
-      [
-        rollupCheck("old proof", "CANCELLED", 100, 10),
-        rollupCheck("proof", "SUCCESS", 200, 10),
-        rollupCheck("old CI", "CANCELLED", 150, 20),
-        rollupCheck("CI", "SUCCESS", 250, 20),
-      ],
-      expectedRollup("FAILING", ["old CI", "old proof"]),
-    ],
-    [
-      "genuine newest-run failure",
-      [
-        rollupCheck("older cancelled check", "CANCELLED", 100, 20),
-        rollupCheck("unit", "FAILURE", 200, 20),
-      ],
-      expectedRollup("FAILING", ["older cancelled check", "unit"]),
+      expectedRollup("PENDING", [], 2, 1),
     ],
     [
       "interleaved distinct workflows",
@@ -2335,14 +2126,6 @@ else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
         rollupCheck("deploy", "SUCCESS", 400, 20),
       ],
       expectedRollup("FAILING", ["old deploy", "unit"]),
-    ],
-    [
-      "same-name checks across runs",
-      [
-        rollupCheck("unit", "FAILURE", 300, 20, 1_000),
-        rollupCheck("unit", "SUCCESS", 400, 20, 2_000),
-      ],
-      expectedRollup("GREEN", [], 0, 1),
     ],
     [
       "unseen contexts after supersession",

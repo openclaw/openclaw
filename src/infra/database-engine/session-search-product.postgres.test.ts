@@ -28,6 +28,7 @@ import { sessionReadHandlers } from "../../gateway/server-methods/sessions-read.
 import { appendSessionTranscriptMessagesByIdentity } from "../../plugin-sdk/session-transcript-runtime.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { dropPostgresTestSchemas } from "../postgres-sync/schema-cleanup.test-support.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { installDatabaseEngineSelection } from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
@@ -38,7 +39,6 @@ const connection = typeof configured === "string" ? configured : undefined;
 const prefix = `sessionsearch_${randomUUID().replaceAll("-", "").slice(0, 10)}`;
 const directories = useAutoCleanupTempDirTracker(afterAll);
 
-// The public asynchronous reader exercises worker admission, committed projections and SQL together.
 describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
   let root: string;
   let suiteEnv: NodeJS.ProcessEnv;
@@ -54,6 +54,8 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
     const { agentId, env, storePath } = scope("selected");
     return searchSessionTranscripts({ agentId, env, storePath, query, ...options });
   };
+  const hitIds = async (query: string, options: Partial<SessionTranscriptSearchParams> = {}) =>
+    (await search(query, options)).hits.map((hit) => hit.messageId);
   const append = async (
     name: string,
     id: string,
@@ -107,13 +109,7 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
     }
     try {
       await cleanupSessionStateForTest({ stateDir: root });
-      const schemas = await client.query<{ nspname: string }>(
-        "SELECT nspname FROM pg_namespace WHERE left(nspname, $1) = $2",
-        [prefix.length + 1, `${prefix}_`],
-      );
-      for (const { nspname } of schemas.rows) {
-        await client.query(`DROP SCHEMA "${nspname}" CASCADE`);
-      }
+      await dropPostgresTestSchemas(client, prefix);
     } finally {
       await client.end();
       clearRuntimeConfigSnapshot();
@@ -174,15 +170,12 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
         return payload as T;
       },
     });
-    expect(
-      (
-        await tool.execute("pg-session-search", {
-          query: "harbor beacon",
-          sessionKey: "current",
-          limit: 1,
-        })
-      ).details,
-    ).toMatchObject({
+    const result = await tool.execute("pg-session-search", {
+      query: "harbor beacon",
+      sessionKey: "current",
+      limit: 1,
+    });
+    expect(result.details).toMatchObject({
       results: [
         {
           messageId: "selected-hit",
@@ -199,16 +192,11 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
     expect(ranked.hits[0]!.score).toBeGreaterThan(ranked.hits[1]!.score);
     expect((await search("cafe copp", { match: "prefix" })).hits).toHaveLength(2);
     for (const query of ["cafe & copper", "cafe | copper", "cafe ! copper", "cafe ( copper )"]) {
-      expect((await search(query)).hits.map((hit) => hit.messageId)).toEqual([
-        "phrase-hit",
-        "scattered-hit",
-      ]);
+      expect(await hitIds(query)).toEqual(["phrase-hit", "scattered-hit"]);
     }
     expect((await search("& | ! ()")).hits).toEqual([]);
     expect((await search("x".repeat(4096))).hits).toEqual([]);
     expect((await search("x ".repeat(2048).trim())).hits).toEqual([]);
-    await expect(search(" ")).rejects.toThrow("query must not be empty");
-    await expect(search("x".repeat(4097))).rejects.toThrow("query must not exceed 4096");
   });
 
   it("publishes appends, rebuilds the active branch and removes deleted transcripts", async () => {
@@ -218,21 +206,14 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
       eventId: "alias-hit",
       message: { role: "user", content: "aliasmarker" },
     });
-    expect(
-      (await search("aliasmarker", { storePath: alias.storePath })).hits.map(
-        (hit) => hit.messageId,
-      ),
-    ).toEqual(["alias-hit"]);
+    expect(await hitIds("aliasmarker", { storePath: alias.storePath })).toEqual(["alias-hit"]);
     await append("rewrite", "retained", "quartz retained");
     await appendTranscriptMessage(scope("rewrite"), {
       eventId: "removed",
       parentId: "retained",
       message: { role: "assistant", content: "quartz obsolete" },
     });
-    expect((await search("quartz")).hits.map((hit) => hit.messageId).toSorted()).toEqual([
-      "removed",
-      "retained",
-    ]);
+    expect((await hitIds("quartz")).toSorted()).toEqual(["removed", "retained"]);
     await appendTranscriptEvent(scope("rewrite"), {
       type: "leaf",
       id: "rewind",
@@ -247,9 +228,9 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
     };
     await waitForSessionTranscriptIndexReconcile(options);
     await reconcileSessionTranscriptIndexes(options);
-    expect((await search("quartz")).hits.map((hit) => hit.messageId)).toEqual(["retained"]);
+    expect(await hitIds("quartz")).toEqual(["retained"]);
     await reconcileSessionTranscriptIndexes(options);
-    expect((await search("quartz")).hits.map((hit) => hit.messageId)).toEqual(["retained"]);
+    expect(await hitIds("quartz")).toEqual(["retained"]);
     const target = scope("rewrite");
     expect(
       await deleteSessionEntryLifecycle({

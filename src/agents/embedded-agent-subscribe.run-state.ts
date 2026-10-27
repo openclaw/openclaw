@@ -1,7 +1,6 @@
 import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import type { InlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import type { FenceScanState } from "../../packages/markdown-core/src/fences.js";
-import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
@@ -35,7 +34,6 @@ export type ToolCallSummary = {
   commandBearing: boolean;
   instanceReplaySafe: boolean;
   replaySafe: boolean;
-  mutatingAction: boolean;
   ownerKey?: string;
 };
 
@@ -68,7 +66,7 @@ export type StreamingReplyResolver = (params: {
 
 /** Incremental tag and Markdown parsing state, owned by one stream lane. */
 export type StreamBlockState = {
-  thinking: boolean;
+  reasoningDepth: number;
   final: boolean;
   inlineCode?: InlineCodeState;
   fence?: FenceScanState;
@@ -204,7 +202,6 @@ export class EmbeddedAgentSubscribeState {
   currentSourceMessagingToolSentTextsNormalized: string[] = [];
   currentSourceMessagingToolHeldPartial?: string = undefined;
   messagingToolSentTargets: MessagingToolSend[] = [];
-  heartbeatToolResponse?: HeartbeatToolResponse = undefined;
   messagingToolSentMediaUrls: string[] = [];
   messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[] = [];
   messageToolOnlySourceReplyDelivered = false;
@@ -233,6 +230,39 @@ export class EmbeddedAgentSubscribeState {
   deterministicApprovalPromptPending = false;
   deterministicApprovalPromptSent = false;
   declare lastAssistant?: AssistantMessage;
+
+  // Terminal results outlive the subscription; retain only its recorded facts.
+  setTerminalLifecycleMeta(meta: {
+    replayInvalid?: boolean;
+    livenessState?: EmbeddedRunLivenessState;
+    stopReason?: string;
+    yielded?: boolean;
+    timeoutPhase?: AgentRunTimeoutPhase;
+    providerStarted?: boolean;
+    aborted?: boolean;
+  }): void {
+    if (meta.replayInvalid !== undefined) {
+      this.replayState = { ...this.replayState, replayInvalid: meta.replayInvalid };
+    }
+    if (meta.livenessState) {
+      this.livenessState = meta.livenessState;
+    }
+    if (meta.stopReason !== undefined) {
+      this.terminalStopReason = meta.stopReason;
+    }
+    if (meta.yielded !== undefined) {
+      this.yielded = meta.yielded;
+    }
+    if (meta.timeoutPhase) {
+      this.timeoutPhase = meta.timeoutPhase;
+    }
+    if (meta.providerStarted !== undefined) {
+      this.providerStarted = meta.providerStarted;
+    }
+    if (meta.aborted !== undefined) {
+      this.terminalAborted = meta.aborted;
+    }
+  }
 
   constructor(
     params: Pick<

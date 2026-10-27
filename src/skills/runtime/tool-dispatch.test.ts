@@ -1,6 +1,6 @@
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createOpenClawToolsAsync } from "../../agents/openclaw-tools.js";
+import * as openClawTools from "../../agents/openclaw-tools.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -11,7 +11,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../../secrets/provider-env-vars.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
-import { resolveSkillDispatchTools, type SkillToolDispatchDependencies } from "./tool-dispatch.js";
+import { resolveSkillDispatchTools } from "./tool-dispatch.js";
 
 const makeTool = (name: string) => ({
   name,
@@ -21,10 +21,9 @@ const makeTool = (name: string) => ({
   execute: vi.fn(),
 });
 
-const createOpenClawToolsAsyncMock = vi.fn<
-  SkillToolDispatchDependencies["createOpenClawToolsAsync"]
->(async () => ["read", "cron", "exec", "conversations_send"].map(makeTool));
-const dependencies = { createOpenClawToolsAsync: createOpenClawToolsAsyncMock };
+const createOpenClawToolsAsyncMock = vi.fn<typeof openClawTools.createOpenClawToolsAsync>(
+  async () => ["read", "cron", "exec", "conversations_send"].map(makeTool),
+);
 const sessionDirs = useSessionStoreTempDirs(
   (cleanup) =>
     afterAll(async () => {
@@ -44,14 +43,16 @@ const dispatchDefaults = {
   model: "gpt-5.5",
   senderIsOwner: true,
 } satisfies Parameters<typeof resolveSkillDispatchTools>[0];
-const dispatch = (
-  params: Partial<Parameters<typeof resolveSkillDispatchTools>[0]> = {},
-  deps: SkillToolDispatchDependencies = dependencies,
-) => resolveSkillDispatchTools({ ...dispatchDefaults, ...params }, deps);
+const dispatch = (params: Partial<Parameters<typeof resolveSkillDispatchTools>[0]> = {}) => {
+  vi.spyOn(openClawTools, "createOpenClawToolsAsync").mockImplementation(
+    createOpenClawToolsAsyncMock,
+  );
+  return resolveSkillDispatchTools({ ...dispatchDefaults, ...params });
+};
 const toolNames = (tools: Awaited<ReturnType<typeof dispatch>>) => tools.map((tool) => tool.name);
 const lastArgs = () => createOpenClawToolsAsyncMock.mock.calls.at(-1)?.[0];
 const liveDispatch = (params: Parameters<typeof dispatch>[0]) =>
-  dispatch(params, { createOpenClawToolsAsync });
+  resolveSkillDispatchTools({ ...dispatchDefaults, ...params });
 
 beforeEach(() => {
   // Exercise auth-source preparation even on hosts with configured search providers.
@@ -59,7 +60,10 @@ beforeEach(() => {
     vi.stubEnv(name, undefined);
   }
 });
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
 
 it.each([
   [{ surface: "webchat" }, false, true],
@@ -80,11 +84,14 @@ it.each([
 );
 
 it.each([
-  [{ profile: "coding" }, ["update.run"]],
-  [{ profile: "full" }, ["config.get", "config.schema.lookup", "update.run"]],
+  [{ profile: "coding" }, ["update.run", "restart", "update.cleanup"]],
+  [
+    { profile: "full" },
+    ["config.get", "config.schema.lookup", "update.run", "restart", "update.cleanup"],
+  ],
   [
     { profile: "messaging", alsoAllow: ["gateway"] },
-    ["config.get", "config.schema.lookup", "update.run"],
+    ["config.get", "config.schema.lookup", "update.run", "restart", "update.cleanup"],
   ],
 ] satisfies Array<[OpenClawConfig["tools"], string[]]>)(
   "limits gateway actions to the skill dispatch policy: %j",

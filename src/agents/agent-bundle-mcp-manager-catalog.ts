@@ -1,3 +1,4 @@
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { compareMcpCatalogTools, mcpCatalogToolsSignature } from "./agent-bundle-mcp-names.js";
 import { sessionMcpRuntimeOwners } from "./agent-bundle-mcp-runtime-owner.js";
 import { SESSION_MCP_MAX_LIVE_RUNTIMES } from "./agent-bundle-mcp-runtime-shared.js";
@@ -82,12 +83,7 @@ export function createSessionMcpCatalogStore(
     ) {
       return;
     }
-    const toolsByServerName = new Map<string, McpCatalogTool[]>();
-    for (const tool of catalog.tools) {
-      const list = toolsByServerName.get(tool.serverName) ?? [];
-      list.push(tool);
-      toolsByServerName.set(tool.serverName, list);
-    }
+    const toolsByServerName = groupRecords(catalog.tools, (tool) => tool.serverName);
     for (const [serverName, server] of Object.entries(catalog.servers)) {
       const tools = (toolsByServerName.get(serverName) ?? []).toSorted((a, b) =>
         a.toolName.localeCompare(b.toolName),
@@ -121,7 +117,6 @@ export function createSessionMcpCatalogStore(
       // A reset, replacement or reload must not resurrect a late discovery result.
       if (
         publication &&
-        catalogByRuntimeKey.get(runtimeKey) === publication &&
         runtimes.get(runtimeKey) === runtime &&
         sessionMcpRuntimeOwners.get(runtime)?.isCurrent() !== false
       ) {

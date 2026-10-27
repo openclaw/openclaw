@@ -1,12 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
-import { getRuntimeAuthProfileStoreMetadataRevision } from "../../agents/auth-profiles/runtime-snapshots.js";
 import { readSessionRuntimeOwnershipAsync } from "../../agents/harness/session-runtime-ownership.js";
-import {
-  getPendingPreparedModelRuntimeReplacement,
-  getPublishedPreparedModelCatalogOwnerSnapshot,
-} from "../../agents/prepared-model-catalog.js";
+import { getPendingPreparedModelRuntimeReplacement } from "../../agents/prepared-model-catalog.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -33,7 +29,6 @@ import {
   captureGenerationFacts,
   ChatMetadataSnapshotUnavailableError,
   generationFactsMatch,
-  type ChatMetadataRuntimeDeps,
   type PreparedGenerationFacts,
 } from "./chat-metadata-facts.js";
 import { createChatMetadataModelList } from "./chat-metadata-model-list.js";
@@ -58,6 +53,11 @@ import type {
 
 type PreparedAgentMetadata = PreparedChatMetadataProjection["agent"];
 
+type PreparedAgentEntry = {
+  promise: Promise<PreparedAgentMetadata>;
+  ready?: PreparedAgentMetadata;
+};
+
 type PreparedProjection<T> = { read: () => T; isCurrent: () => boolean };
 
 type AgentProjectionEntry =
@@ -67,7 +67,7 @@ type AgentProjectionEntry =
 type PreparedMetadataGeneration = {
   facts: PreparedGenerationFacts;
   modelLists: ReturnType<typeof createChatMetadataModelList>;
-  agentsById: Map<string, Promise<PreparedAgentMetadata>>;
+  agentsById: Map<string, PreparedAgentEntry>;
   neutralProjectionByAgentId: Map<string, AgentProjectionEntry>;
   sessionProjectionByKey: Map<string, AgentProjectionEntry>;
 };
@@ -81,13 +81,13 @@ export function createGatewayChatMetadataRuntime(params: {
   getContext: () => GatewayModelCatalogContext;
   onChanged?: (change: {
     modelCatalogChanged: boolean;
+    modelCatalogStatusChanged?: true;
     authChanged: boolean;
     commandsChanged?: false;
   }) => void;
   log: {
     warn: (message: string) => void;
   };
-  deps?: Partial<ChatMetadataRuntimeDeps>;
 }): {
   invalidate: () => void;
   fail: (error: unknown) => void;
@@ -99,17 +99,6 @@ export function createGatewayChatMetadataRuntime(params: {
     params: ChatStartupProjectionReadParams,
   ) => Promise<ChatStartupProjectionResult | undefined>;
 } {
-  const deps: ChatMetadataRuntimeDeps = {
-    getConfig: params.getConfig,
-    getPreparedOwner: getPublishedPreparedModelCatalogOwnerSnapshot,
-    getAuthStoreRevision: getRuntimeAuthProfileStoreMetadataRevision,
-    buildCommands: async ({ cfg, agentId }) => {
-      const { buildCommandsListResult } = await import("./commands-list-result.js");
-      return buildCommandsListResult({ cfg, agentId, includeArgs: true, scope: "text" });
-    },
-    buildProjection: prepareChatMetadataModelProjection,
-    ...params.deps,
-  };
   let current: PreparedMetadataGeneration | undefined;
   let lastError: Error | undefined;
   let replacement: Deferred | undefined;
@@ -118,12 +107,14 @@ export function createGatewayChatMetadataRuntime(params: {
   const notifyChanged = (facts?: PreparedGenerationFacts, catalogStatusChanged = false) => {
     const previous = lastNotifiedFacts;
     lastNotifiedFacts = facts;
+    // Cooldown views still refresh, but they do not announce a changed model inventory.
+    const modelCatalogChanged =
+      !previous || !facts || !generationFactsMatch(previous, facts, "catalog-notification");
     params.onChanged?.({
-      modelCatalogChanged:
-        catalogStatusChanged ||
-        !previous ||
-        !facts ||
-        !generationFactsMatch(previous, facts, "catalog"),
+      modelCatalogChanged,
+      ...(!modelCatalogChanged && catalogStatusChanged
+        ? { modelCatalogStatusChanged: true as const }
+        : {}),
       authChanged: !previous || !facts || !generationFactsMatch(previous, facts, "auth"),
       ...(previous && facts && generationFactsMatch(previous, facts, "commands")
         ? { commandsChanged: false as const }
@@ -191,14 +182,13 @@ export function createGatewayChatMetadataRuntime(params: {
       }
       projections.delete(key);
     }
-    const projection = deps
-      .buildProjection({
-        context: params.getContext(),
-        facts: agent,
-        requesterProfileId: defaultProfileId,
-        ...authority,
-        ...profiles,
-      })
+    const projection = prepareChatMetadataModelProjection({
+      context: params.getContext(),
+      facts: agent,
+      requesterProfileId: defaultProfileId,
+      ...authority,
+      ...profiles,
+    })
       .then((prepared) =>
         withCurrentReadAuthority(authority, () => {
           // Shared catalogs retain agent facts, never the caller's entry or authority closure.
@@ -225,39 +215,54 @@ export function createGatewayChatMetadataRuntime(params: {
   const prepareAgent = (generation: PreparedMetadataGeneration, agentId: string) => {
     const existing = generation.agentsById.get(agentId);
     if (existing) {
-      return existing;
+      return existing.promise;
     }
     const agent = generation.facts.agents.find((candidate) => candidate.agentId === agentId);
     if (!agent) {
       return undefined;
     }
-    const preparing: Promise<PreparedAgentMetadata> = trackWork(
-      (async (): Promise<PreparedAgentMetadata> => {
-        let commands: unknown[] | undefined;
-        try {
-          commands = (await deps.buildCommands({ cfg: generation.facts.config, agentId })).commands;
-        } catch (error) {
-          params.log.warn(
-            `chat metadata continuing without text commands for ${agentId}: ${formatErrorMessage(error)}`,
-          );
-        }
-        const swarmEnabled = resolveSwarmConfig(generation.facts.config, agentId).enabled;
-        return {
-          ...agent,
-          ...(commands !== undefined ? { commands } : {}),
-          swarmEnabled,
-          revision: createHash("sha256")
-            .update(JSON.stringify({ commands, swarmEnabled }))
-            .digest("base64url"),
-        };
-      })().catch((error: unknown) => {
-        generation.agentsById.delete(agentId);
-        throw error;
-      }),
-    );
-    generation.agentsById.set(agentId, preparing);
+    const entry: PreparedAgentEntry = {
+      promise: trackWork(
+        (async (): Promise<PreparedAgentMetadata> => {
+          let commands: unknown[] | undefined;
+          try {
+            const { buildCommandsListResult } = await import("./commands-list-result.js");
+            commands = (
+              await buildCommandsListResult({
+                cfg: generation.facts.config,
+                agentId,
+                includeArgs: true,
+                scope: "text",
+              })
+            ).commands;
+          } catch (error) {
+            params.log.warn(
+              `chat metadata continuing without text commands for ${agentId}: ${formatErrorMessage(error)}`,
+            );
+          }
+          const swarmEnabled = resolveSwarmConfig(generation.facts.config, agentId).enabled;
+          return {
+            ...agent,
+            ...(commands !== undefined ? { commands } : {}),
+            swarmEnabled,
+            revision: createHash("sha256")
+              .update(JSON.stringify({ commands, swarmEnabled }))
+              .digest("base64url"),
+          };
+        })()
+          .then((prepared) => {
+            entry.ready = prepared;
+            return prepared;
+          })
+          .catch((error: unknown) => {
+            generation.agentsById.delete(agentId);
+            throw error;
+          }),
+      ),
+    };
+    generation.agentsById.set(agentId, entry);
     pruneMapToMaxSize(generation.agentsById, CHAT_METADATA_CACHE_MAX_ENTRIES);
-    return preparing;
+    return entry.promise;
   };
 
   const runRefresh = async (options: ChatMetadataRefreshOptions) => {
@@ -271,7 +276,7 @@ export function createGatewayChatMetadataRuntime(params: {
       assertOpen();
     }
     assertOpen();
-    const facts = captureGenerationFacts(deps);
+    const facts = captureGenerationFacts(params.getConfig());
     if (!current || !generationFactsMatch(current.facts, facts)) {
       // Commands and session-specific projections stay on demand within the published owner facts.
       const generation: PreparedMetadataGeneration = {
@@ -345,7 +350,7 @@ export function createGatewayChatMetadataRuntime(params: {
     // A missing owner may have published since the previous request.
     if (
       (!current && lastError instanceof ChatMetadataSnapshotUnavailableError) ||
-      (current && !authStoresCurrent(current.facts, deps))
+      (current && !authStoresCurrent(current.facts))
     ) {
       await refresh();
     }
@@ -396,7 +401,7 @@ export function createGatewayChatMetadataRuntime(params: {
       pending !== undefined ||
       getPendingPreparedModelRuntimeReplacement() !== undefined ||
       !current ||
-      !authStoresCurrent(current.facts, deps) ||
+      !authStoresCurrent(current.facts) ||
       current.facts.agents.some((agent) => !agent.owner.isCurrent());
     const retained = rebuilding ? await retainedModelsList(key, request) : undefined;
     if (retained) {
@@ -493,13 +498,13 @@ export function createGatewayChatMetadataRuntime(params: {
         }),
       );
       const acpMeta = await withCurrentReadAuthority(authority, () =>
-        prepareSessionAcpMeta({ ...readParams, sessionEntry }, deps.getConfig()),
+        prepareSessionAcpMeta({ ...readParams, sessionEntry }, params.getConfig()),
       );
       const runtimeOwnership = await withCurrentReadAuthority(authority, () =>
         readSessionRuntimeOwnershipAsync({
           ...readParams,
           sessionEntry,
-          config: deps.getConfig(),
+          config: params.getConfig(),
         }),
       );
       await withCurrentReadAuthority(authority, () => {});
@@ -513,7 +518,7 @@ export function createGatewayChatMetadataRuntime(params: {
               sessionEntry,
               requesterProfileId: draft?.owner ?? readParams.requesterProfileId,
             },
-            deps.getConfig(),
+            params.getConfig(),
             acpMeta,
             runtimeOwnership,
             readAccountSelection,
@@ -528,88 +533,71 @@ export function createGatewayChatMetadataRuntime(params: {
     assertAgentDatabaseAdmitted(readParams.agentId);
     const profiles = resolveSessionCatalogProfiles(
       readParams.sessionEntry,
-      deps.getConfig(),
+      params.getConfig(),
       readParams.agentId,
     );
     const hasSessionContext = hasSessionCatalogContext(profiles);
     const assemble = (
-      neutral: PreparedChatMetadataProjection,
-      session: PreparedChatMetadataProjection,
-    ): ChatStartupProjectionResult => {
-      if (readParams.readPolicy !== "ready") {
-        // Catalog preparation may yield; retain the requester's publication fence.
-        readParams.readRequesterProfileId?.();
-      }
-      return {
-        // The pane's model picker reads models.list; startup carries commands and worker policy.
-        ...(readParams.readPolicy === "ready"
-          ? {}
-          : {
-              // Command receipts must not give session worker policy a catalog lifetime.
-              commandsRevision: session.agent.revision,
-              metadata: {
-                commands: session.agent.commands,
-                swarmEnabled: session.agent.swarmEnabled,
-                requiredWorkerInferenceProfileId: resolveRequiredWorkerInferenceProfileId(
-                  readParams,
-                  deps.getConfig(),
-                ),
-              },
-            }),
-        sessionModelCatalog: session.modelCatalog,
-        defaultModelCatalog: neutral.modelCatalog,
-      };
-    };
-    const projectStartup = async (
-      generation: PreparedMetadataGeneration,
-    ): Promise<PreparedProjection<ChatStartupProjectionResult>> => {
-      const agentId = normalizeAgentId(readParams.agentId);
-      const agent = await prepareAgent(generation, agentId);
-      if (!agent) {
-        throw new ChatMetadataSnapshotUnavailableError(
-          `prepared chat startup projection is unavailable for agent "${agentId}"`,
-        );
-      }
-      const readNeutral = await projectAgent(generation, agent);
-      const readSession = hasSessionContext
-        ? await projectAgent(
-            generation,
-            agent,
-            readParams.sessionEntry,
-            readParams.readRequesterProfileId?.(),
-          )
-        : readNeutral;
-      return {
-        isCurrent: () => readNeutral.isCurrent() && readSession.isCurrent(),
-        read: () => assemble(readNeutral, readSession),
-      };
-    };
-    if (readParams.readPolicy !== "ready" && hasSessionContext) {
-      return readCurrent(projectStartup);
-    }
-    if (isUserModelAuthProfileId(profiles.preferredProfileId ?? "")) {
-      return undefined;
-    }
+      agent: PreparedAgentMetadata,
+      catalogs?: Pick<ChatStartupProjectionResult, "sessionModelCatalog" | "defaultModelCatalog">,
+    ): ChatStartupProjectionResult => ({
+      // The pane's model picker reads models.list; startup carries commands and worker policy.
+      ...(readParams.readPolicy === "ready"
+        ? {}
+        : {
+            // Command receipts must not give session worker policy a catalog lifetime.
+            commandsRevision: agent.revision,
+            metadata: {
+              commands: agent.commands,
+              swarmEnabled: agent.swarmEnabled,
+              requiredWorkerInferenceProfileId: resolveRequiredWorkerInferenceProfileId(
+                readParams,
+                params.getConfig(),
+              ),
+            },
+          }),
+      ...catalogs,
+    });
     const generation = current;
-    // Optional reads consume only settled exact-profile facts. Never start preparation
-    // or wait for a lifecycle replacement just to decorate an available transcript.
-    if (!generation || replacement || pending || !authStoresCurrent(generation.facts, deps)) {
+    // Catalogs decorate an available transcript; startup never waits for their replacement.
+    if (!generation || replacement || pending || !authStoresCurrent(generation.facts)) {
       return undefined;
     }
     const agentId = normalizeAgentId(readParams.agentId);
+    let agent = generation.agentsById.get(agentId)?.ready;
+    if (readParams.readPolicy !== "ready" && hasSessionContext) {
+      agent = await prepareAgent(generation, agentId);
+      if (
+        !agent ||
+        current !== generation ||
+        replacement ||
+        pending ||
+        !authStoresCurrent(generation.facts)
+      ) {
+        return undefined;
+      }
+    }
+    if (agent && !agent.owner.isCurrent()) {
+      return undefined;
+    }
     const neutral = generation.neutralProjectionByAgentId.get(agentId);
-    const session = hasSessionContext
-      ? generation.sessionProjectionByKey.get(sessionProjectionKey(agentId, profiles))
-      : neutral;
+    const session = isUserModelAuthProfileId(profiles.preferredProfileId ?? "")
+      ? undefined
+      : hasSessionContext
+        ? generation.sessionProjectionByKey.get(sessionProjectionKey(agentId, profiles))
+        : neutral;
     if (
       neutral?.state !== "ready" ||
       session?.state !== "ready" ||
       !neutral.projection.isCurrent() ||
       !session.projection.isCurrent()
     ) {
-      return undefined;
+      return readParams.readPolicy !== "ready" && agent ? assemble(agent) : undefined;
     }
-    return assemble(neutral.projection, session.projection);
+    return assemble(session.projection.agent, {
+      sessionModelCatalog: session.projection.modelCatalog,
+      defaultModelCatalog: neutral.projection.modelCatalog,
+    });
   };
 
   const invalidate = () => {

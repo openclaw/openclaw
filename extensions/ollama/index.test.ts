@@ -5,7 +5,7 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createModelProviderConfig } from "../test-support/model-provider-config.test-support.js";
 import plugin from "./index.js";
-import { createModel } from "./model.test-support.js";
+import { createModel, dynamicContext } from "./model.test-support.js";
 import { OLLAMA_DEFAULT_API_KEY } from "./src/discovery-shared.js";
 import { buildOllamaModelDefinition } from "./src/provider-models.js";
 
@@ -204,15 +204,6 @@ function mockInstalledModels(models: Record<string, boolean | undefined>, parame
     capabilities: models[modelId] ? ["completion", "tools"] : ["completion"],
     ...(parameterCount !== undefined ? { parameterCount } : {}),
   }));
-}
-
-function dynamicContext(modelId: string, config: Record<string, unknown> = {}) {
-  return {
-    config,
-    provider: "ollama",
-    modelId,
-    modelRegistry: { find: vi.fn(() => null) },
-  };
 }
 
 async function runCatalog(
@@ -673,7 +664,7 @@ describe("ollama plugin", () => {
     const discoveredFor = (name: string) => ({
       baseUrl,
       api: "ollama" as const,
-      models: [{ id: modelId, name, contextWindow: 8192, maxTokens: 2048 }],
+      models: [createModel(modelId, name, { contextWindow: 8192, maxTokens: 2048 })],
     });
     const completeDiscovery: Array<(result: ReturnType<typeof discoveredFor>) => void> = [];
     const started = Promise.withResolvers<void>();
@@ -755,8 +746,14 @@ describe("ollama plugin", () => {
       .mockResolvedValueOnce({ value: "managed-dynamic-access" })
       .mockResolvedValueOnce({ value: "rotated-managed-access" })
       .mockResolvedValueOnce({ unresolvedRefReason: "managed credential is unavailable" });
-    mockDiscovery([{ id: modelId, name: "Managed private model", contextWindow: 8192 }], baseUrl);
-    mockDiscovery([{ id: modelId, name: "Rotated managed model", contextWindow: 8192 }], baseUrl);
+    mockDiscovery(
+      [createModel(modelId, "Managed private model", { contextWindow: 8192 })],
+      baseUrl,
+    );
+    mockDiscovery(
+      [createModel(modelId, "Rotated managed model", { contextWindow: 8192 })],
+      baseUrl,
+    );
     const context = dynamicContext(modelId, config);
     await expect(provider.prepareDynamicModel?.(context as never)).resolves.toMatchObject({
       id: modelId,

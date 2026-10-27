@@ -10,54 +10,11 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { asToolParamsRecord, type AnyAgentTool, readToolStringParam } from "./common.js";
 import { createMessageToolDecisionRecorder } from "./message-tool-decision.js";
 
-type ExplicitMessageTargetContext = {
-  currentChannelProvider?: string;
-  preparedMessageToolCatalog?: PreparedMessageToolCatalog;
-};
-
 type ExplicitMessageTargetGuard = {
   prepareBeforeToolCallParams: NonNullable<AnyAgentTool["prepareBeforeToolCallParams"]>;
   finalizeBeforeToolCallParams: NonNullable<AnyAgentTool["finalizeBeforeToolCallParams"]>;
   require(params: Record<string, unknown>, action: ChannelMessageActionName): void;
 };
-
-function requireExplicitMessageTarget(
-  params: Record<string, unknown>,
-  action: ChannelMessageActionName,
-  context: ExplicitMessageTargetContext,
-): void {
-  if (action !== "broadcast" && !actionRequiresTarget(action)) {
-    return;
-  }
-  const hasCanonicalTarget =
-    (typeof params.target === "string" && params.target.trim().length > 0) ||
-    (typeof params.to === "string" && params.to.trim().length > 0) ||
-    (typeof params.channelId === "string" && params.channelId.trim().length > 0) ||
-    (Array.isArray(params.targets) &&
-      params.targets.some((value) => typeof value === "string" && value.trim().length > 0));
-  if (hasCanonicalTarget) {
-    return;
-  }
-  const channel =
-    normalizeMessageChannel(normalizeOptionalString(params.channel)) ??
-    normalizeMessageChannel(context.currentChannelProvider);
-  const aliasSpec = channel
-    ? context.preparedMessageToolCatalog?.getChannel(channel)?.actions
-        ?.messageActionTargetAliases?.[action]
-    : undefined;
-  if (
-    channel &&
-    aliasSpec &&
-    resolveActionDeliveryTargetAlias(action, params, { channel, aliasSpec })
-  ) {
-    return;
-  }
-  throw new MessageActionDeniedError(
-    "Explicit message target required for this run. Provide target/targets (and channel when needed).",
-    "message_target_missing",
-    "message-target:explicit",
-  );
-}
 
 export function createMessageToolExplicitTargetGuard(params: {
   currentChannelProvider?: string;
@@ -65,8 +22,43 @@ export function createMessageToolExplicitTargetGuard(params: {
   decisionChannel?: string;
 }): ExplicitMessageTargetGuard {
   const toolCallIds = new WeakMap<object, string>();
-  const requireTarget = (actionParams: Record<string, unknown>, action: ChannelMessageActionName) =>
-    requireExplicitMessageTarget(actionParams, action, params);
+
+  function requireTarget(
+    actionParams: Record<string, unknown>,
+    action: ChannelMessageActionName,
+  ): void {
+    if (action !== "broadcast" && !actionRequiresTarget(action)) {
+      return;
+    }
+    const hasCanonicalTarget =
+      (typeof actionParams.target === "string" && actionParams.target.trim().length > 0) ||
+      (typeof actionParams.to === "string" && actionParams.to.trim().length > 0) ||
+      (typeof actionParams.channelId === "string" && actionParams.channelId.trim().length > 0) ||
+      (Array.isArray(actionParams.targets) &&
+        actionParams.targets.some((value) => typeof value === "string" && value.trim().length > 0));
+    if (hasCanonicalTarget) {
+      return;
+    }
+    const channel =
+      normalizeMessageChannel(normalizeOptionalString(actionParams.channel)) ??
+      normalizeMessageChannel(params.currentChannelProvider);
+    const aliasSpec = channel
+      ? params.preparedMessageToolCatalog?.getChannel(channel)?.actions
+          ?.messageActionTargetAliases?.[action]
+      : undefined;
+    if (
+      channel &&
+      aliasSpec &&
+      resolveActionDeliveryTargetAlias(action, actionParams, { channel, aliasSpec })
+    ) {
+      return;
+    }
+    throw new MessageActionDeniedError(
+      "Explicit message target required for this run. Provide target/targets (and channel when needed).",
+      "message_target_missing",
+      "message-target:explicit",
+    );
+  }
 
   return {
     prepareBeforeToolCallParams(rawParams, hookContext) {

@@ -82,7 +82,7 @@ export function createGatewayCloseTestDepsFactory(mocks: GatewayCloseFixtureMock
       disposeAllCodeModeRuns: mocks.disposeAllCodeModeRuns,
       closeProviderTransportDispatcherPool: mocks.closeProviderTransportDispatcherPool,
       cron: { stop: vi.fn() },
-      heartbeatRunner: { stop: vi.fn() } as never,
+      stopScheduledServices: vi.fn(async () => {}),
       updateCheckStop: null,
       broadcast: vi.fn(),
       maintenance: {
@@ -93,7 +93,6 @@ export function createGatewayCloseTestDepsFactory(mocks: GatewayCloseFixtureMock
       },
       stopMediaCleanup: vi.fn(async () => "drained" as const),
       agentUnsub: null,
-      heartbeatUnsub: null,
       transcriptUnsub: null,
       lifecycleUnsub: null,
       chatRunState: createTestChatRunState(),

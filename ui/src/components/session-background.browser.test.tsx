@@ -6,10 +6,11 @@ import type { ApplicationContext, ApplicationTheme } from "../app/context.ts";
 import { resetProfileAppearancePrefs } from "../app/server-prefs-profile.ts";
 import { loadProfileAppearancePrefs } from "../app/server-prefs-reconcile.ts";
 import { loadSettings } from "../app/settings.ts";
+import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
 import { createApplicationGateway } from "../test-helpers/application-context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import { SessionBackground } from "./session-background.tsx";
+import { SessionBackground } from "./session-background-host.tsx";
 
 afterEach(() => {
   resetProfileAppearancePrefs();
@@ -25,18 +26,14 @@ it("samples the inherited palette when a Solid-mounted photo first joins the doc
     }
     return { status: "ok", entries: {} };
   });
-  const gateway = createApplicationGateway({
-    client,
-    phase: "connected",
-    offlineStable: false,
-    hello: null,
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: null,
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-    selfUser: { id: "profile-a" },
-  });
+  const gateway = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      client,
+      phase: "connected",
+      sessionKey: "main",
+      selfUser: { id: "profile-a" },
+    }),
+  );
   gateway.gateway.connection.gatewayUrl = gatewayUrl;
   await loadProfileAppearancePrefs(client, "profile-a", gateway.gateway.connection.gatewayUrl, {
     isCurrent: () => true,
@@ -65,7 +62,6 @@ it("samples the inherited palette when a Solid-mounted photo first joins the doc
     branding: resolveThemeBranding(undefined),
     mode: "dark",
     resolvedMode: "dark",
-    serverSelection: null,
     appliedPalette: null,
     recordServerSelection: () => undefined,
     setMode: () => undefined,

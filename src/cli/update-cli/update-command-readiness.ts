@@ -36,7 +36,6 @@ import {
   gatewayServiceCommandUsesRoot,
   resolveUpdatedGatewayRestartPort,
 } from "./update-command-service-plan.js";
-import { hasLoadedLaunchdKeepAliveSupervisor } from "./update-command-supervisor.js";
 
 export async function verifyPreviousGatewayForUpdate(params: {
   root: string;
@@ -90,7 +89,7 @@ export async function verifyPreviousGatewayForUpdate(params: {
       detail,
     };
     if (run) {
-      recordUpdateRunStep(run.runId, fact, { env: run.env });
+      recordUpdateRunStep(run.runId, fact, run);
     }
     defaultRuntime[params.opts.json ? "error" : "log"](`${fact.step}: ${detail}`);
   };
@@ -108,7 +107,7 @@ export async function verifyPreviousGatewayForUpdate(params: {
       }
       const expectedVersion = params.expectedVersion ?? installedVersion;
       progress("readiness", `checking service and listener identity on port ${port}`);
-      const { health, readyz } = await observeUpdateGatewayReadiness({
+      const { health, readyz, http } = await observeUpdateGatewayReadiness({
         serviceEnv: env,
         gatewayPort: port,
         expectedVersion: expectedVersion ?? undefined,
@@ -123,7 +122,7 @@ export async function verifyPreviousGatewayForUpdate(params: {
         assertCurrent,
         onProgress: progress,
       });
-      if (!health.healthy || !readyz) {
+      if (!health.healthy || !(http?.coreReady ?? readyz)) {
         progress(health.waitOutcome ?? "unverified", health.probeError ?? lastReason, true);
         return false;
       }
@@ -256,6 +255,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
   };
   const service = resolveGatewayService();
   const probeParams = {
+    assertCurrent,
     service,
     port: params.gatewayPort,
     expectedVersion: params.expectedVersion,
@@ -292,15 +292,21 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
       assertCurrent();
       return inspectedHealth;
     }
-    const supervisorKeepsAlive = await deadline.read("service supervisor", () =>
-      hasLoadedLaunchdKeepAliveSupervisor({ service, env: params.serviceEnv }),
+    // Read the canonical LaunchAgent KeepAlive policy once before polling so an
+    // unloaded agent can still reach the existing recovery path promptly.
+    const supervisorKeepsAlive = await deadline.read("service supervisor", async () =>
+      process.platform === "darwin"
+        ? service.isLoaded({ env: params.serviceEnv }).catch(() => false)
+        : false,
     );
     assertCurrent();
+    let probed = false;
     const observed = await waitForGatewayHealthyRestart({
       ...probeParams,
       deadlineOutcome: "snapshot",
       timeoutMs: Math.max(1, remainingMs()),
       onObservation: (snapshot) => {
+        probed = true;
         health = snapshot;
         retainChannelTimeouts(snapshot);
         params.onProgress?.(
@@ -311,7 +317,8 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
       requireRunningService: params.requireRunningService,
       supervisorKeepsAlive,
     });
-    health = observed;
+    // Expiry before the first observation returns a budget placeholder, not a probe result.
+    health = probed ? observed : { ...observed, probeError: undefined };
     assertCurrent();
     return observed;
   };
@@ -349,6 +356,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
       assertCurrent();
       http = await deadline.read("HTTP readiness", () =>
         waitForGatewayHttpReadiness({
+          requireChannelHealth: false,
           config: context.config,
           port: params.gatewayPort,
           attempts: waitForStartup ? Math.ceil(remainingMs() / DEFAULT_RESTART_HEALTH_DELAY_MS) : 1,
@@ -388,7 +396,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
           health.healthy = false;
         }
       }
-      if (!readyz || remainingMs() === 0) {
+      if (!(http.coreReady ?? readyz) || remainingMs() === 0) {
         health = {
           ...health,
           healthy: false,
@@ -430,10 +438,13 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
         healthy: false,
         waitOutcome,
         // Only the wait owner's interval may retain startup progress. A hung
-        // observation cannot inherit an earlier snapshot's startup phase.
+        // observation cannot inherit an earlier snapshot's startup phase, but the
+        // last probe error still explains why readiness never settled.
         startupPhase: interval ? health.startupPhase : `timed out during ${error.phase}`,
         elapsedMs: performance.now() - startedAtMs,
-        probeError: interval ? health.probeError : error.message,
+        probeError: interval
+          ? health.probeError
+          : `${error.message}${health.probeError ? ` Last health probe: ${health.probeError}` : ""}`,
       },
       readyz: false,
       http,

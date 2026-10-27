@@ -41,7 +41,7 @@ import {
 } from "../utils/message-channel.js";
 import type { GatewayClient } from "./client.js";
 import { GatewayStartupCleanupError } from "./server-shutdown.js";
-import { startGatewayServer, type GatewayServerOptions } from "./server.js";
+import { startGatewayServer, type GatewayServer, type GatewayServerOptions } from "./server.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 import { reserveGatewayTestListener, startClaimedGateway } from "./test-helpers.listener.js";
 
@@ -94,7 +94,13 @@ export async function connectGatewayClient(params: {
             "_",
           ),
         );
-        return path.join(identityRoot, "test-device-identities", `${safe}.sqlite`);
+        return path.join(
+          identityRoot,
+          "test-device-identities",
+          safe,
+          "client",
+          "credentials.sqlite",
+        );
       })(),
     });
   return await acquireGatewayTestClient(
@@ -305,7 +311,10 @@ export async function startGatewayWithClient(
     clientDisplayName?: string;
     scopes?: string[];
     onEvent?: (evt: { event?: string; payload?: unknown }) => void;
+    beforeConnect?: (server: GatewayServer) => void | Promise<void>;
     hotReloadRecovery?: GatewayServerOptions["hotReloadRecovery"];
+    channelAutostartSuppression?: GatewayServerOptions["channelAutostartSuppression"];
+    tryRecoverChannelAutostartSuppression?: GatewayServerOptions["tryRecoverChannelAutostartSuppression"];
   } & ({ port?: number; portClaim?: never } | { port?: never; portClaim: TestPortClaim }),
 ) {
   const gatewayStartupEnv = captureEnv([
@@ -336,11 +345,14 @@ export async function startGatewayWithClient(
         auth: params.auth ?? { mode: "token", token: params.token },
         controlUiEnabled: false,
         hotReloadRecovery: params.hotReloadRecovery,
+        channelAutostartSuppression: params.channelAutostartSuppression,
+        tryRecoverChannelAutostartSuppression: params.tryRecoverChannelAutostartSuppression,
       });
     const startedServer = secureClaim
       ? await startClaimedGateway(secureClaim, start)
       : await listener!.start(start);
     server = startedServer;
+    await params.beforeConnect?.(startedServer);
     const client = await connectGatewayClient({
       url: `${params.secure ? "wss" : "ws"}://127.0.0.1:${port}`,
       token: params.token,

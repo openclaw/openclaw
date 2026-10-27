@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { classifyAgentRunTerminalOutcome } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
@@ -13,6 +12,7 @@ import {
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
+import { AsyncContext } from "../../shared/async-context.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -26,6 +26,12 @@ import {
 } from "./session-actor-transaction.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
+import {
+  collectForeignLiveSessionPendingInputEntries,
+  copySessionPendingInputWorkerFacts,
+  publishConsumedSessionPendingInputSources,
+  publishSessionPendingInputWorkerReceipt,
+} from "./session-pending-input-live-owner.js";
 import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
 import {
   isFinalInputCompletion,
@@ -50,51 +56,25 @@ export type {
   SessionPendingInputAppend,
 } from "./session-pending-input.types.js";
 
-const workerCustody = resolveGlobalSingleton(
-  Symbol.for("openclaw.sessionPendingInputWorkerCustody"),
-  () =>
-    new AsyncLocalStorage<{
-      owner: SessionPendingInputOwner;
-      assertCurrent(): void;
-      consumed: Set<string>;
-    }>(),
-);
+const workerCustody = new AsyncContext<{
+  owner: SessionPendingInputOwner;
+  assertCurrent(): void;
+  consumed: Set<string>;
+}>(Symbol.for("openclaw.sessionPendingInputWorkerCustody"));
 
 export function captureSessionPendingInputWorkerCustody() {
   const owner = owners.current.getStore();
   if (!owner) {
     return undefined;
   }
-  const copy = (current: SessionPendingInputOwner): SessionPendingInputWorkerFacts => ({
-    agentId: current.agentId,
-    databaseAgentId: current.databaseAgentId,
-    inputId: current.inputId,
-    transcriptInputId: current.transcriptInputId,
-    sessionId: current.sessionId,
-    sessionKey: current.sessionKey,
-    databasePath: current.workerDatabasePath,
-    idempotencyKey: current.idempotencyKey,
-    lifecycleGeneration: current.lifecycleGeneration,
-    messageJson: current.messageJson,
-    preparedAuthority:
-      current.authority || current.sources?.some((source) => source.authority) ? true : undefined,
-    ...(current.sources ? { sources: current.sources.map(copy) } : {}),
-  });
   const relocation = owners.relocation.getStore();
   return {
-    facts: copy(owner),
+    facts: copySessionPendingInputWorkerFacts(owner),
     ...(relocation?.owner === owner ? { relocation: relocation.sourceInputId } : {}),
     assertCurrent: (facts?: SessionPendingInputAuthorityFacts, assertSourceCurrent?: () => void) =>
       assertPendingInputOwnerCurrent(owner, facts, assertSourceCurrent),
-    publish(receipt: SessionPendingInputWorkerReceipt) {
-      owner.transcriptInputId = receipt.transcriptInputId;
-      const consumed = new Set(receipt.consumedInputIds);
-      for (const source of owner.sources ?? [owner]) {
-        if (consumed.has(source.inputId)) {
-          source.consumed = true;
-        }
-      }
-    },
+    publish: (receipt: SessionPendingInputWorkerReceipt) =>
+      publishSessionPendingInputWorkerReceipt(owner, receipt),
   };
 }
 
@@ -151,11 +131,13 @@ export function readSessionPendingInputWorkerReceipt(
 
 const owners = resolveGlobalSingleton(Symbol.for("openclaw.sessionPendingInputOwners"), () => ({
   live: new Map<string, SessionPendingInputOwner>(),
-  current: new AsyncLocalStorage<SessionPendingInputOwner>(),
-  relocation: new AsyncLocalStorage<{
+  current: new AsyncContext<SessionPendingInputOwner>(
+    Symbol.for("openclaw.sessionPendingInputOwners.current"),
+  ),
+  relocation: new AsyncContext<{
     owner: SessionPendingInputOwner;
     sourceInputId: string;
-  }>(),
+  }>(Symbol.for("openclaw.sessionPendingInputOwners.relocation")),
   transactionRelocations: new WeakMap<EngineConnection, Map<SessionPendingInputOwner, string>>(),
 }));
 
@@ -189,6 +171,12 @@ export function releaseSessionPendingInputOwner(owner: SessionPendingInputOwner)
   if (owners.live.get(owner.inputId) === owner) {
     owners.live.delete(owner.inputId);
   }
+  // Timers can retain this owner through their async frame after settlement.
+  // Keep replay facts, but release the admission and staging closures.
+  owner.assertCurrent = assertPendingInputOwnerActive.bind(undefined, owner);
+  owner.finish = () => {};
+  owner.authority = undefined;
+  owner.promotedOwner = undefined;
 }
 
 export function assertRegisteredSessionPendingInputOwner(owner: SessionPendingInputOwner): void {
@@ -245,6 +233,18 @@ export function assertSessionPendingInputLifetimeCurrent(owner: SessionPendingIn
   }
   assertPendingInputOwnerActive(owner);
   (owner.authority?.assertLifetimeCurrent ?? owner.assertCurrent)();
+}
+
+/** Capture the calling owner before physical database discovery yields. */
+export function captureForeignLiveSessionPendingInputReader() {
+  const currentOwner = owners.current.getStore();
+  return (scope: { databasePath: string; sessionId: string; sessionKey: string }) =>
+    collectForeignLiveSessionPendingInputEntries({
+      scope,
+      liveOwners: owners.live.values(),
+      currentOwner,
+      assertLifetimeCurrent: assertSessionPendingInputLifetimeCurrent,
+    });
 }
 
 export function runWithSessionPendingInput<T>(owner: SessionPendingInputOwner, run: () => T): T {
@@ -353,6 +353,11 @@ export function writeSessionInputCompletion(
   }
   const succeeded = classifyAgentRunTerminalOutcome(outcome) === "success";
   const completedAt = Date.now();
+  const completionState = {
+    outcome_json: JSON.stringify(outcome),
+    succeeded: succeeded ? 1 : 0,
+    completed_at: completedAt,
+  };
   executeSqliteQuerySync(
     database.db,
     getSessionKysely(database.db)
@@ -363,18 +368,12 @@ export function writeSessionInputCompletion(
         idempotency_key: scope.idempotencyKey,
         run_id: scope.runId,
         request_hash: scope.requestHash,
-        outcome_json: JSON.stringify(outcome),
-        succeeded: succeeded ? 1 : 0,
-        completed_at: completedAt,
+        ...completionState,
       })
       .onConflict((conflict) =>
         conflict
           .columns(["session_id", "idempotency_key"])
-          .doUpdateSet({
-            outcome_json: JSON.stringify(outcome),
-            succeeded: succeeded ? 1 : 0,
-            completed_at: completedAt,
-          })
+          .doUpdateSet(completionState)
           .where("session_input_completions.succeeded", "=", 0),
       ),
   );
@@ -387,9 +386,7 @@ export function writeSessionInputCompletion(
       idempotency_key: scope.idempotencyKey,
       run_id: retained?.run_id ?? scope.runId,
       request_hash: retained?.request_hash ?? scope.requestHash,
-      outcome_json: JSON.stringify(outcome),
-      succeeded: succeeded ? 1 : 0,
-      completed_at: completedAt,
+      ...completionState,
     });
     if (actor.completions.size > MAX_SESSION_ACTOR_COMPLETIONS) {
       actor.completions.delete(actor.completions.keys().next().value!);
@@ -408,14 +405,16 @@ export function writeSessionInputCompletion(
         .where("idempotency_key", "=", scope.idempotencyKey)
         .where("run_id", "=", scope.runId)
         .where("request_hash", "=", scope.requestHash)
-        .where("lifecycle_generation", "=", scope.lifecycleGeneration),
+        .where("lifecycle_generation", "=", scope.lifecycleGeneration)
+        .where("consumed_event_id", "is", null),
     );
     const pending = actor?.pendingInputs.get(scope.idempotencyKey);
     if (
       pending &&
       pending.run_id === scope.runId &&
       pending.request_hash === scope.requestHash &&
-      pending.lifecycle_generation === scope.lifecycleGeneration
+      pending.lifecycle_generation === scope.lifecycleGeneration &&
+      pending.consumed_event_id === null
     ) {
       if (actor) {
         actor.pendingInputs = writableSessionActorMap(actor.pendingInputs);
@@ -722,11 +721,7 @@ export function consumeSessionPendingInput(
         worker?.consumed.delete(consumedOwner.inputId);
       }
     },
-    commit: () => {
-      for (const consumedOwner of consumedOwners) {
-        consumedOwner.consumed = true;
-      }
-    },
+    commit: () => publishConsumedSessionPendingInputSources(owner, consumedOwners),
   });
 }
 

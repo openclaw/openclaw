@@ -304,6 +304,7 @@ export function classifyFailoverClassificationFromHttpStatus(
 // Only cross-provider structured codes classify in core; provider-native
 // mappings belong to provider hooks.
 const FAILOVER_CODE_REASONS = new Map<string, FailoverReason>([
+  ["DEGENERATE_OUTPUT", "server_error"],
   ["UNKNOWN_PARAMETER", "format"],
   ["RESOURCE_EXHAUSTED", "rate_limit"],
   ["RATE_LIMIT", "rate_limit"],

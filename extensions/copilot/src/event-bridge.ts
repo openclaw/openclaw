@@ -31,9 +31,7 @@ export type { AssistantMessage, AssistantUsageSnapshot } from "./event-bridge-tr
 
 export interface OnAssistantDeltaPayload {
   delta: string;
-  sessionId?: string;
   text: string;
-  usage?: AssistantUsageSnapshot;
 }
 
 export interface SessionLike {
@@ -82,12 +80,10 @@ interface EventBridgeOptions {
 }
 
 interface EventBridgeSnapshot {
-  readonly assistantTexts: readonly string[];
   readonly completedCount: number;
-  readonly lastAssistantEvent: Extract<SessionEvent, { type: "assistant.message" }> | undefined;
   readonly startedCount: number;
   readonly streamError: Error | undefined;
-  readonly toolMetas: ReadonlyArray<AgentHarnessAttemptResult["toolMetas"][number]>;
+  readonly toolMetas: AgentHarnessAttemptResult["toolMetas"];
   readonly usage: AssistantUsageSnapshot | undefined;
 }
 
@@ -198,9 +194,7 @@ export function attachEventBridge(session: SessionLike, options: EventBridgeOpti
     }
     const payload: OnAssistantDeltaPayload = {
       delta,
-      sessionId: options.getSdkSessionId(),
       text,
-      usage,
     };
     deltaQueue = deltaQueue
       .then(() => onAssistantDelta(payload))
@@ -512,9 +506,7 @@ export function attachEventBridge(session: SessionLike, options: EventBridgeOpti
     },
     snapshot(): EventBridgeSnapshot {
       return {
-        assistantTexts: finalizeAssistantTexts(messagesById, lastAssistantEvent),
         completedCount,
-        lastAssistantEvent,
         startedCount,
         streamError,
         toolMetas: [...toolMetas],

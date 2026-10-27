@@ -1,24 +1,27 @@
 // Real process replacement covers the idle-session handoff that owner tests cannot prove.
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import type { GatewayClient } from "../src/gateway/client.js";
 import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
-import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { killProcessTree } from "../src/process/kill-tree.js";
 import { getFileLockProcessStartTime } from "../src/shared/pid-alive.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
-import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
-import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
 import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "./helpers/openai-responses-sse.js";
+  restartEnv,
+  connectRestartClient,
+  restartProviderServer,
+  restartToolNames,
+  writeRestartJsonText,
+  restartModelConfig,
+  writeRestartToolCall,
+} from "./gateway-restart.test-support.js";
+import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
+import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 import { createDeferred, withinTest } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
@@ -35,35 +38,6 @@ const CANCEL_FINAL = "BACKGROUND_PROCESS_CANCELLED";
 const RECOVERY_FINAL = "BACKGROUND_PROCESS_LOSS_RECONCILED";
 const REVOKED_FINAL = "BACKGROUND_PROCESS_REVOKED_WRITE_DENIED";
 const LOST_NOTICE = "process was lost when the Gateway restarted";
-
-function writeTool(response: ServerResponse, name: string, args: object, ordinal: number) {
-  const item = {
-    type: "function_call",
-    id: `fc_exec_${ordinal}`,
-    call_id: `call_exec_${ordinal}`,
-    name,
-    arguments: JSON.stringify(args),
-  };
-  writeOpenAiResponsesSse(response, [
-    { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
-    {
-      type: "response.function_call_arguments.delta",
-      output_index: 0,
-      item_id: item.id,
-      delta: item.arguments,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_exec_${ordinal}`,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
-    },
-  ]);
-}
 
 async function startProvider(signal: AbortSignal, holdRecovery: boolean) {
   const firstRecovery = createDeferred<string>();
@@ -84,39 +58,16 @@ async function startProvider(signal: AbortSignal, holdRecovery: boolean) {
     offsets: [0],
     signal,
     createListener: () =>
-      createServer((request, response) => {
-        void (async () => {
-          const chunks: Buffer[] = [];
-          for await (const chunk of request) {
-            chunks.push(Buffer.from(chunk));
-          }
-          const body = asRecord(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      restartProviderServer(
+        failed,
+        async (request, response, body) => {
           expect(request.url).toBe("/v1/responses");
-          const tools = Array.isArray(body.tools)
-            ? body.tools.flatMap((tool) =>
-                isRecord(tool) && typeof tool.name === "string" ? [tool.name] : [],
-              )
-            : [];
+          const tools = restartToolNames(body);
           const input = JSON.stringify(body.input);
           ordinal += 1;
           const text = (value: string) => {
             if (body.stream === false) {
-              response.writeHead(200, { "content-type": "application/json" });
-              response.end(
-                JSON.stringify({
-                  id: `resp_${ordinal}`,
-                  status: "completed",
-                  output: [
-                    {
-                      type: "message",
-                      id: `msg_${ordinal}`,
-                      role: "assistant",
-                      content: [{ type: "output_text", text: value, annotations: [] }],
-                    },
-                  ],
-                  usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-                }),
-              );
+              writeRestartJsonText(response, value, String(ordinal));
             } else {
               writeOpenAiResponsesText(response, {
                 text: value,
@@ -128,8 +79,9 @@ async function startProvider(signal: AbortSignal, holdRecovery: boolean) {
           const tool = (name: string, args: object) => {
             const nameOnWire = tools.includes(name) ? name : "dispatch_action";
             expect(tools).toContain(nameOnWire);
-            writeTool(
+            writeRestartToolCall(
               response,
+              "exec",
               nameOnWire,
               nameOnWire === name ? args : { id: name, args },
               ordinal,
@@ -203,13 +155,9 @@ async function startProvider(signal: AbortSignal, holdRecovery: boolean) {
             expect(input).toContain(cancelled ? "Termination requested" : "Command still running");
             text(cancelled ? CANCEL_FINAL : IDLE_FINAL);
           }
-        })().catch((error: unknown) => {
-          if (!request.aborted) {
-            failed.reject(error);
-          }
-          response.destroy(error instanceof Error ? error : undefined);
-        });
-      }),
+        },
+        { ignoreAborted: true },
+      ),
   });
   return {
     baseUrl: `http://127.0.0.1:${reservation.claim.port}/v1`,
@@ -254,29 +202,7 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
         browser: { enabled: false },
         discovery: { mdns: { mode: "off" } },
         plugins: { enabled: false },
-        models: {
-          mode: "replace",
-          providers: {
-            [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
-          },
-        },
-        agents: {
-          defaults: {
-            model: { primary: model.modelRef },
-            modelPolicy: { allow: [model.modelRef] },
-            models: {
-              [model.modelRef]: {
-                agentRuntime: { id: "openclaw" },
-                params: { transport: "sse", openaiWsWarmup: false },
-              },
-            },
-            heartbeat: { every: "0m" },
-            skipBootstrap: true,
-            skills: [],
-            timeoutSeconds: 120,
-          },
-          entries: { main: {} },
-        },
+        ...restartModelConfig(model, undefined),
         tools: {
           allow: ["exec", "process"],
           codeMode: { enabled: false },
@@ -290,11 +216,7 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
         },
       },
       env: {
-        OPENAI_API_KEY: undefined,
-        OPENAI_BASE_URL: undefined,
-        OPENAI_API_BASE: undefined,
-        OPENCLAW_SKIP_PROVIDERS: undefined,
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        ...restartEnv,
         OPENCLAW_NO_RESPAWN: "1",
         OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
       },
@@ -309,25 +231,11 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
       },
     });
     let client: GatewayClient | undefined;
-    const connect = () =>
-      acquireGatewayTestClient(
-        {
-          url: instance.url,
-          token: instance.gatewayToken,
-          clientName: "gateway-client",
-          mode: "backend",
-          scopes: ["operator.admin", "operator.read", "operator.write"],
-          deviceIdentity: loadOrCreateDeviceIdentity({
-            path: instance.state.path("device.sqlite"),
-          }),
-        },
-        {
-          timeoutMs: 30_000,
-          timeoutMessage: "background-process restart client did not connect",
-          closeMessage: "background-process restart client closed",
-          signal,
-        },
-      );
+    const calls = (kind: (typeof provider.calls)[number]["kind"]) =>
+      provider.calls.filter((call) => call.kind === kind);
+    const readEffect = (file: string) =>
+      readFile(path.join(instance.state.workspaceDir, file), "utf8");
+    const connect = () => connectRestartClient(instance, { mode: "backend" }, signal);
     const waitForIdleFinal = async (sessionKey: string, final: string) => {
       await withinTest(
         Promise.race([
@@ -335,6 +243,8 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
             async () => {
               const history = await client!.request("chat.history", { sessionKey });
               expect(JSON.stringify(history)).toContain(final);
+              // History includes terminal persistence; the roster can already appear idle.
+              expect(history).toMatchObject({ sessionInfo: { hasActiveRun: false } });
               const sessions = await client!.request<SessionsListResult>("sessions.list", {
                 agentId: "main",
               });
@@ -398,17 +308,19 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
             agentId: "main",
             permissionMode: "full",
           });
-          await client.request(
+          const accepted = await client.request<{ runId: string }>(
             "chat.send",
             { sessionKey, message, idempotencyKey: sessionKey },
             { expectFinal: false },
           );
           await waitForIdleFinal(sessionKey, final);
+          // Idle presentation can precede cleanup of the run's permission owner.
+          expect(
+            await client.request("agent.wait", { runId: accepted.runId, timeoutMs: 30_000 }),
+          ).toMatchObject({ status: "ok" });
         }
         await client.request("sessions.patch", { key: REVOKED_KEY, permissionMode: "read-only" });
-        expect(await readFile(path.join(instance.state.workspaceDir, "exec-count"), "utf8")).toBe(
-          "started\n",
-        );
+        expect(await readEffect("exec-count")).toBe("started\n");
         provider.beginRecovery();
         await restart(mode);
         await withinTest(Promise.race([provider.firstRecovery, provider.failed]), signal);
@@ -419,14 +331,12 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
           provider.releaseRecovery();
         }
         await waitForIdleFinal(SESSION_KEY, RECOVERY_FINAL);
-        expect(provider.calls.filter((call) => call.kind === "revocation-recovery")).toHaveLength(
-          2,
-        );
+        expect(calls("revocation-recovery")).toHaveLength(2);
         await expect(
           readFile(path.join(instance.state.workspaceDir, "revoked-effect")),
         ).rejects.toMatchObject({ code: "ENOENT" });
         // Display history hides exec inputs; count notices at the model boundary.
-        const recoveries = provider.calls.filter((call) => call.kind === "recovery");
+        const recoveries = calls("recovery");
         for (const recovery of recoveries) {
           expect(
             recovery.input.match(/process was lost when the Gateway restarted/gi),
@@ -436,23 +346,13 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
         expect(recoveryCount).toBe(mode === "SIGKILL" ? 2 : 1);
         await restart("managed");
         await waitForIdleFinal(SESSION_KEY, RECOVERY_FINAL);
-        expect(provider.calls.filter((call) => call.kind === "recovery")).toHaveLength(
-          recoveryCount,
-        );
+        expect(calls("recovery")).toHaveLength(recoveryCount);
         await waitForIdleFinal(CANCEL_KEY, CANCEL_FINAL);
         await waitForIdleFinal(REVOKED_KEY, REVOKED_FINAL);
-        expect(provider.calls.filter((call) => call.kind === "revocation-recovery")).toHaveLength(
-          2,
-        );
-        expect(await readFile(path.join(instance.state.workspaceDir, "exec-count"), "utf8")).toBe(
-          "started\n",
-        );
-        expect(await readFile(path.join(instance.state.workspaceDir, "cancel-count"), "utf8")).toBe(
-          "started\n",
-        );
+        expect(calls("revocation-recovery")).toHaveLength(2);
         expect(
-          await readFile(path.join(instance.state.workspaceDir, "revoked-count"), "utf8"),
-        ).toBe("started\n");
+          await Promise.all(["exec-count", "cancel-count", "revoked-count"].map(readEffect)),
+        ).toEqual(["started\n", "started\n", "started\n"]);
       },
       async () => client?.stopAndWait(),
       () => instance.cleanup(),

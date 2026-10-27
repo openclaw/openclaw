@@ -12,6 +12,7 @@ import { listAuditEventsInDatabase } from "./audit-event-read.kernel.js";
 import {
   pruneExpiredAuditEventsInDatabase,
   recordAuditEventInDatabase,
+  recordAuditRunInDatabase,
 } from "./audit-event-store.js";
 import type { AuditEventListQuery } from "./audit-event-types.js";
 import { isOutboundMessageProgressInput } from "./audit-event-types.js";
@@ -90,6 +91,8 @@ export const auditOperations = {
             } else {
               recordAuditEventInDatabase(request.input, database, request.eventId);
             }
+          } else if (request.type === "record-run") {
+            recordAuditRunInDatabase(request.start, request.finish, database, request.eventIds);
           } else if (request.type === "record-execution-identity") {
             processExecutionIdentityAdmissionWorkInDatabase(request.work, database);
           } else if (request.type === "record-execution-decision-work") {

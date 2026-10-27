@@ -2,20 +2,22 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createAssistantMessageEventStream, streamSimple } from "openclaw/plugin-sdk/llm";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import {
   clampPositiveTimerTimeoutMs,
   finiteSecondsToTimerSafeMilliseconds,
 } from "openclaw/plugin-sdk/number-runtime";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import {
   createOpenAICompatibleCompletionsThinkingOffWrapper,
   createPlainTextToolCallCompatWrapper,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   buildAssistantMessage,
+  buildGuardedModelFetch,
   createEmptyTransportUsage,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
-import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asPositiveSafeInteger,
   asRecord,
@@ -30,11 +32,14 @@ import {
   type LmstudioPreparedModel,
 } from "./models.fetch.js";
 import { normalizeLmstudioModelKey, resolveLmstudioInferenceBase } from "./models.js";
-import { resolveLmstudioProviderHeaders, resolveLmstudioRuntimeApiKey } from "./runtime.js";
+import {
+  buildLmstudioAuthHeaders,
+  resolveLmstudioProviderHeaders,
+  resolveLmstudioRuntimeApiKey,
+} from "./runtime.js";
 
 const log = createSubsystemLogger("extensions/lmstudio/stream");
 
-type StreamOptions = Parameters<StreamFn>[2];
 type StreamModel = Parameters<StreamFn>[0];
 
 const preloadInFlight = new Map<string, Promise<LmstudioPreparedModel | undefined>>();
@@ -68,42 +73,6 @@ function withLmstudioUsageCompat(model: StreamModel): StreamModel {
   };
 }
 
-async function prepareLmstudioInference(params: {
-  baseUrl: string;
-  modelKey: string;
-  requestedContextLength?: number;
-  timeoutMs?: number;
-  options: StreamOptions;
-  ctx: ProviderWrapStreamFnContext;
-  modelHeaders?: Record<string, string>;
-}): Promise<LmstudioPreparedModel> {
-  const providerConfig = params.ctx.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID];
-  const providerHeaders = { ...providerConfig?.headers, ...params.modelHeaders };
-  const runtimeApiKey = params.options?.apiKey?.trim() || undefined;
-  const headers = await resolveLmstudioProviderHeaders({
-    config: params.ctx.config,
-    headers: providerHeaders,
-  });
-  const configuredApiKey =
-    runtimeApiKey !== undefined
-      ? undefined
-      : await resolveLmstudioRuntimeApiKey({
-          config: params.ctx.config,
-          agentDir: params.ctx.agentDir,
-          headers: providerHeaders,
-        });
-
-  return await prepareLmstudioModelForInference({
-    baseUrl: params.baseUrl,
-    apiKey: runtimeApiKey ?? configuredApiKey,
-    headers,
-    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedHostname(params.baseUrl),
-    modelKey: params.modelKey,
-    requestedContextLength: params.requestedContextLength,
-    timeoutMs: params.timeoutMs,
-  });
-}
-
 export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): StreamFn {
   const underlying = ctx.streamFn ?? streamSimple;
   // LM Studio does not ride the shared OpenAI provider hook stack, so the
@@ -131,58 +100,95 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
     const resolvedBaseUrl = resolveLmstudioInferenceBase(model.baseUrl ?? providerConfig?.baseUrl);
     const requestedContextLength =
       asPositiveSafeInteger(model.contextTokens) ?? asPositiveSafeInteger(model.contextWindow);
-    const preloadKey = `${resolvedBaseUrl}::${modelKey}::${requestedContextLength ?? "default"}`;
-
-    const cooldown = preloadCooldown.get(preloadKey);
-    const cooldownEntry = cooldown && cooldown.untilMs > Date.now() ? cooldown : undefined;
-    const existing = preloadInFlight.get(preloadKey);
-    const preloadPromise: Promise<LmstudioPreparedModel | undefined> | undefined =
-      existing ??
-      (cooldownEntry
-        ? undefined
-        : (() => {
-            const created = prepareLmstudioInference({
-              baseUrl: resolvedBaseUrl,
-              modelKey,
-              requestedContextLength,
-              timeoutMs:
-                clampPositiveTimerTimeoutMs(
-                  options?.timeoutMs ?? asRecord(model).requestTimeoutMs,
-                ) ?? finiteSecondsToTimerSafeMilliseconds(providerConfig?.timeoutSeconds),
-              options,
-              ctx,
-              modelHeaders: model.headers,
-            })
-              .then(
-                (preparedModel) => {
-                  preloadCooldown.delete(preloadKey);
-                  return preparedModel;
-                },
-                (error: unknown) => {
-                  const previous = preloadCooldown.get(preloadKey);
-                  preloadCooldown.set(preloadKey, {
-                    untilMs: Date.now() + PRELOAD_RETRY_COOLDOWN_MS,
-                    error:
-                      previous?.error instanceof LmstudioModelLoadError &&
-                      previous.error.requiredContextLength !== undefined
-                        ? previous.error
-                        : error,
-                    resolvedModelKey:
-                      error instanceof LmstudioModelLoadError
-                        ? error.resolvedModelKey
-                        : previous?.resolvedModelKey,
-                  });
-                  throw error;
-                },
-              )
-              .finally(() => {
-                preloadInFlight.delete(preloadKey);
-              });
-            preloadInFlight.set(preloadKey, created);
-            return created;
-          })());
-
     return (async () => {
+      async function resolveLmstudioPreloadRequest() {
+        const requestedTimeoutMs =
+          clampPositiveTimerTimeoutMs(options?.timeoutMs ?? asRecord(model).requestTimeoutMs) ??
+          finiteSecondsToTimerSafeMilliseconds(providerConfig?.timeoutSeconds);
+        const providerHeaders = { ...providerConfig?.headers, ...model.headers };
+        const runtimeApiKey = options?.apiKey?.trim();
+        const timeoutMs = requestedTimeoutMs ?? 120_000;
+        const headers = await resolveLmstudioProviderHeaders({
+          config: ctx.config,
+          headers: providerHeaders,
+        });
+        return {
+          baseUrl: resolvedBaseUrl,
+          apiKey:
+            runtimeApiKey && !isNonSecretApiKeyMarker(runtimeApiKey)
+              ? runtimeApiKey
+              : await resolveLmstudioRuntimeApiKey({
+                  config: ctx.config,
+                  agentDir: ctx.agentDir,
+                  headers: providerHeaders,
+                }),
+          headers,
+          fetchImpl: buildGuardedModelFetch({ ...model, baseUrl: resolvedBaseUrl }, timeoutMs),
+          modelKey,
+          requestedContextLength,
+          timeoutMs,
+        };
+      }
+      let request: Awaited<ReturnType<typeof resolveLmstudioPreloadRequest>>;
+      try {
+        request = await resolveLmstudioPreloadRequest();
+      } catch (error) {
+        options?.signal?.throwIfAborted();
+        log.warn(`LM Studio inference preload failed for "${modelKey}": ${String(error)}`);
+        return streamWithThinkingLevel(withLmstudioUsageCompat(model), context, options);
+      }
+      options?.signal?.throwIfAborted();
+      // Hash effective wire auth, including header casing/ordering normalization;
+      // neither credentials nor credential-bearing URLs become retained cache keys.
+      const preloadKey = sha256Hex(
+        JSON.stringify([
+          resolvedBaseUrl,
+          modelKey,
+          requestedContextLength ?? null,
+          ctx.agentDir ?? null,
+          request.timeoutMs,
+          [...new Headers(buildLmstudioAuthHeaders(request)).entries()],
+        ]),
+      );
+
+      const cooldown = preloadCooldown.get(preloadKey);
+      const cooldownEntry = cooldown && cooldown.untilMs > Date.now() ? cooldown : undefined;
+      const existing = preloadInFlight.get(preloadKey);
+      const preloadPromise: Promise<LmstudioPreparedModel | undefined> | undefined =
+        existing ??
+        (cooldownEntry
+          ? undefined
+          : (() => {
+              const created = prepareLmstudioModelForInference(request)
+                .then(
+                  (preparedModel) => {
+                    preloadCooldown.delete(preloadKey);
+                    return preparedModel;
+                  },
+                  (error: unknown) => {
+                    const previous = preloadCooldown.get(preloadKey);
+                    preloadCooldown.set(preloadKey, {
+                      untilMs: Date.now() + PRELOAD_RETRY_COOLDOWN_MS,
+                      error:
+                        previous?.error instanceof LmstudioModelLoadError &&
+                        previous.error.requiredContextLength !== undefined
+                          ? previous.error
+                          : error,
+                      resolvedModelKey:
+                        error instanceof LmstudioModelLoadError
+                          ? error.resolvedModelKey
+                          : previous?.resolvedModelKey,
+                    });
+                    throw error;
+                  },
+                )
+                .finally(() => {
+                  preloadInFlight.delete(preloadKey);
+                });
+              preloadInFlight.set(preloadKey, created);
+              return created;
+            })());
+
       let preparedModel: LmstudioPreparedModel | undefined;
       let failure = cooldownEntry;
       if (preloadPromise) {

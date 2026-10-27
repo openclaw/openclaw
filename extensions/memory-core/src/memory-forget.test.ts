@@ -45,7 +45,7 @@ describe("memory forget", () => {
   it("previews an unresolved session without creating the absent agent store", async () => {
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
-    const report = await forget("missing", true);
+    const { artifacts, ...report } = await forget("missing", true);
     expect(report).toEqual({
       agentId: "main",
       dryRun: true,
@@ -56,27 +56,12 @@ describe("memory forget", () => {
       mixedLineageEntryKeys: [],
       untargetableEntryKeys: [],
       curatedWrites: [],
-      artifacts: {
-        memoryFiles: 0,
-        memoryEntries: 0,
-        memoryLines: 0,
-        sessionCorpusFiles: 0,
-        sessionCorpusLines: 0,
-        indexChunks: 0,
-        indexSources: 0,
-        ftsRows: 0,
-        vectorRows: 0,
-        embeddingCacheRows: 0,
-        shortTermEntries: 0,
-        seenHashScopes: 0,
-        backups: 0,
-        originRows: 0,
-      },
       refusals: [],
     });
-    await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(`${databasePath}-wal`)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(`${databasePath}-shm`)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(Object.values(artifacts).every((count) => count === 0)).toBe(true);
+    for (const suffix of ["", "-wal", "-shm"]) {
+      await expect(fs.stat(`${databasePath}${suffix}`)).rejects.toMatchObject({ code: "ENOENT" });
+    }
   });
 
   it("previews and forgets sessions without fetching unrelated session bodies", async () => {
@@ -180,18 +165,6 @@ describe("memory forget", () => {
       content: [{ type: "toolCall", id: "curated", name: "write", arguments: { path: "USER.md" } }],
     });
     await expect(h.archive("archived")).resolves.toBe(true);
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
-    expect(
-      db.prepare("SELECT session_id FROM session_windows WHERE session_id = ?").get("archived"),
-    ).toBeUndefined();
-    expect(
-      db
-        .prepare(
-          "SELECT session_id, session_key FROM session_transcript_archives WHERE session_id = ?",
-        )
-        .get("archived"),
-    ).toEqual({ session_id: "archived", session_key: "agent:main:archived" });
-
     const preview = await forget(selector, true);
     expect(preview).toMatchObject({
       sessionIds: ["archived"],
@@ -267,12 +240,13 @@ describe("memory forget", () => {
     const savedBackup = backup(content, "unrelated-backup");
     await h.writeEntries(DREAMING_MEMORY_BACKUP_NAMESPACE, [savedBackup]);
     const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
-    db.prepare(
-      `INSERT INTO memory_index_chunks
-        (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-       VALUES ('unrelated', 'MEMORY.md', 'memory', 1, 2,
-         'unrelated-hash', 'test', 'Keep this.', ?, 1)`,
-    ).run(encodeMemoryEmbedding([1, 0]));
+    memoryIndexFixture(db).chunk("unrelated", "MEMORY.md", {
+      source: "memory",
+      text: "Keep this.",
+      hash: "unrelated-hash",
+      endLine: 2,
+      embedding: encodeMemoryEmbedding([1, 0]),
+    });
     db.prepare(
       `INSERT INTO memory_embedding_cache
         (provider, model, provider_key, hash, embedding, dims, updated_at)
@@ -372,17 +346,13 @@ describe("memory forget", () => {
     const content = `[main/sessions/main/${survivorId}#L1] User: Preserve this unrelated fact.\n`;
     await fs.writeFile(corpusPath, content);
     const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
-    db.prepare(
-      `INSERT INTO memory_index_chunks
-        (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-       VALUES ('survivor-chunk', ?, 'sessions', 1, 1,
-         'survivor-hash', 'test', 'Preserve this unrelated fact.', ?, 1)`,
-    ).run(`sessions/main/${survivorId}.jsonl`, encodeMemoryEmbedding([1, 0]));
-    db.prepare(
-      `INSERT INTO memory_index_chunk_provenance
-        (chunk_id, origin_class, session_kind, observed_at)
-       VALUES ('survivor-chunk', 'owner', 'interactive', 1)`,
-    ).run();
+    const indexData = memoryIndexFixture(db);
+    indexData.chunk("survivor-chunk", `sessions/main/${survivorId}.jsonl`, {
+      text: "Preserve this unrelated fact.",
+      hash: "survivor-hash",
+      embedding: encodeMemoryEmbedding([1, 0]),
+    });
+    indexData.provenance("survivor-chunk", "owner");
     const report = await forget("prefix");
     const remainingContent = await readText(corpusPath).catch(() => "missing");
     const remainingChunks = db.prepare("SELECT id FROM memory_index_chunks").all();

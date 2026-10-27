@@ -8,6 +8,7 @@ import {
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 
 type AuditIdentityDatabase = Pick<
@@ -89,11 +90,7 @@ export function loadOrCreateAuditIdentityKey(db: EngineConnection): AuditIdentit
     db,
     kysely.selectFrom("audit_events").select("sequence").where("kind", "=", "message").limit(1),
   );
-  const hasExecutionContextTable = Boolean(
-    db /* sqlite-allow-raw -- Missing-key integrity must tolerate pre-ensure current-schema DBs. */
-      .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
-      .get("execution_identity_contexts"),
-  );
+  const hasExecutionContextTable = tableExists(db, "execution_identity_contexts");
   const retainedExecutionContext = hasExecutionContextTable
     ? executeSqliteQueryTakeFirstSync(
         db,

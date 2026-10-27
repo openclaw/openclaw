@@ -11,7 +11,6 @@ import { withInstallActivity } from "../infra/install-progress.js";
 import {
   buildNpmResolutionFields,
   formatNpmCommandFailureOutput,
-  type NpmIntegrityDrift,
   type NpmSpecResolution,
 } from "../infra/install-source-utils.js";
 import { resolveNpmCommand } from "../infra/npm-command.js";
@@ -70,7 +69,7 @@ import {
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "./plugin-peer-link.js";
 import {
-  findMissingRequiredPluginDependencies,
+  buildManagedPluginDependencyStatus,
   normalizePluginDependencySpecs,
 } from "./status-dependencies-core.js";
 
@@ -127,7 +126,6 @@ export async function installPluginFromManagedNpmRoot(
     policyPreflightSourcePath?: string;
     signal?: AbortSignal;
     expectedReplacementPluginId?: string;
-    integrityDrift?: NpmIntegrityDrift;
   },
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
@@ -176,7 +174,6 @@ export async function installPluginFromManagedNpmRoot(
           requestedSpecifier: params.installPolicyRequest.requestedSpecifier ?? params.displaySpec,
           source: params.installPolicyRequest.source,
           sourcePath: policyPreflightSourcePath,
-          sourcePathKind: "file",
         }),
     });
     if (preflightPolicyResult) {
@@ -191,7 +188,6 @@ export async function installPluginFromManagedNpmRoot(
       targetDir: targetPackageDir,
       extensions: [],
       npmResolution: params.npmResolution,
-      ...(params.integrityDrift ? { integrityDrift: params.integrityDrift } : {}),
     };
   }
   params.signal?.throwIfAborted();
@@ -504,7 +500,7 @@ export async function installPluginFromManagedNpmRoot(
       };
     }
 
-    const missingRequired = await findMissingRequiredPluginDependencies({
+    const { missing: missingRequired } = buildManagedPluginDependencyStatus({
       rootDir: installRoot,
       dependencyRootDir: npmRoot,
       ...normalizePluginDependencySpecs(packageManifestResult.manifest ?? {}),
@@ -592,7 +588,6 @@ export async function installPluginFromManagedNpmRoot(
     return {
       ...result,
       npmResolution: params.npmResolution,
-      ...(params.integrityDrift ? { integrityDrift: params.integrityDrift } : {}),
     };
   };
 
@@ -628,6 +623,7 @@ export async function installPluginFromManagedNpmRoot(
         },
       },
       transactionRequest?.assertOwned,
+      transactionRequest?.prepareSettlement,
     ),
   );
   if (staged.failure) {

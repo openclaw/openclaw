@@ -1,5 +1,3 @@
-// Tool invoke HTTP tests cover request auth, tool context construction, hook
-// filtering, plugin metadata, payload validation, and response shaping.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -31,23 +29,21 @@ import {
   registerToolsInvokeErrorTests,
 } from "./tools-invoke.policy.test-support.js";
 
-type RunBeforeToolCallHook = typeof runBeforeToolCallHookType;
-type RunBeforeToolCallHookArgs = Parameters<RunBeforeToolCallHook>[0];
-type RunBeforeToolCallHookResult = Awaited<ReturnType<RunBeforeToolCallHook>>;
-
 const hookMocks = vi.hoisted(() => ({
+  gatewayPolicyExecute: vi.fn<AnyAgentTool["execute"]>(async () => ({
+    content: [],
+    details: { completed: true },
+  })),
   uploadToolExecute: vi.fn<AnyAgentTool["execute"]>(async () => ({
     ok: true,
     content: [],
     details: {},
   })),
   resolveToolLoopDetectionConfig: vi.fn(() => ({ warnAt: 3 })),
-  runBeforeToolCallHook: vi.fn(
-    async (args: RunBeforeToolCallHookArgs): Promise<RunBeforeToolCallHookResult> => ({
-      blocked: false,
-      params: args.params,
-    }),
-  ),
+  runBeforeToolCallHook: vi.fn<typeof runBeforeToolCallHookType>(async (args) => ({
+    blocked: false,
+    params: args.params,
+  })),
 }));
 
 const sessionEntries = vi.hoisted(() => new Map<string, Record<string, unknown>>());
@@ -169,6 +165,16 @@ vi.mock("../agents/openclaw-tools.js", async () => {
     fixtureTool("gateway", async () => {
       throw toolInputError("invalid args");
     }),
+    {
+      name: "policy_action",
+      label: "Policy action",
+      description: "Gateway policy fixture",
+      parameters: {
+        type: "object",
+        properties: { action: { type: "string", enum: ["read", "write"] } },
+      },
+      execute: hookMocks.gatewayPolicyExecute,
+    },
     successfulTool("automations", "automations"),
     successfulTool("exec", "exec"),
     successfulTool("apply_patch", "apply_patch"),
@@ -178,9 +184,7 @@ vi.mock("../agents/openclaw-tools.js", async () => {
       name: "tools_invoke_test",
       parameters: {
         type: "object",
-        properties: {
-          mode: { type: "string" },
-        },
+        properties: { mode: { type: "string" } },
         required: ["mode"],
         additionalProperties: false,
       },
@@ -255,6 +259,7 @@ beforeEach(() => {
   server.resetContext();
   lastCreateOpenClawToolsContext = undefined;
   hookMocks.uploadToolExecute.mockClear();
+  hookMocks.gatewayPolicyExecute.mockClear();
   sessionEntries.clear();
   hookMocks.resolveToolLoopDetectionConfig.mockReset();
   hookMocks.runBeforeToolCallHook.mockReset();
@@ -291,11 +296,7 @@ const invokeTool = async (params: {
 const invokeToolAuthed = invokeTool;
 
 const invokeAgentsListAuthed = async (params: { sessionKey?: string } = {}) =>
-  invokeTool({
-    tool: "agents_list",
-    action: "json",
-    sessionKey: params.sessionKey,
-  });
+  invokeTool({ tool: "agents_list", action: "json", ...params });
 
 const firstHookCallArg = () =>
   expectDefined(hookMocks.runBeforeToolCallHook.mock.calls[0], "before-tool-call hook")[0];
@@ -343,11 +344,7 @@ const setMainAllowedTools = (params: { allow: string[]; gatewayAllow?: string[] 
   cfg = {
     ...cfg,
     agents: { entries: { main: { tools: { allow: params.allow } } } },
-    ...(params.gatewayAllow
-      ? {
-          gateway: { tools: { allow: params.gatewayAllow } },
-        }
-      : {}),
+    ...(params.gatewayAllow ? { gateway: { tools: { allow: params.gatewayAllow } } } : {}),
   };
 };
 const allowAgentsListForMain = () => setMainAllowedTools({ allow: ["agents_list"] });
@@ -400,6 +397,29 @@ describe("POST /tools/invoke", () => {
     setMainAllowedTools,
     invokeToolAuthed,
     expectOkInvokeResponse,
+  });
+
+  it("enforces action policy for administrator tool calls after hook rewrites", async () => {
+    cfg = {
+      tools: { gatewayPolicy: { allow: ["policy_action"], actions: { policy_action: ["read"] } } },
+    };
+    const invoke = (action: string) =>
+      invokeTool({ headers: gatewayAdminHeaders(), tool: "policy_action", action });
+    const allowed = await invoke("read");
+    expect(allowed.status).toBe(200);
+    expect(hookMocks.gatewayPolicyExecute).toHaveBeenCalledTimes(1);
+    const denied = await invoke("write");
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toMatchObject({
+      error: { message: expect.stringContaining("Gateway tool policy denies") },
+    });
+    hookMocks.runBeforeToolCallHook.mockImplementationOnce(async () => ({
+      blocked: false,
+      params: { action: "write" },
+    }));
+    const rewritten = await invoke("read");
+    expect(rewritten.status).toBe(403);
+    expect(hookMocks.gatewayPolicyExecute).toHaveBeenCalledTimes(1);
   });
 
   it("blocks an operator-triggered session spawn targeting an agent outside the role", async () => {
@@ -601,9 +621,7 @@ describe("POST /tools/invoke", () => {
     authenticateOnce("trusted-proxy");
 
     const res = await invokeTool({
-      headers: {
-        "x-openclaw-scopes": "",
-      },
+      headers: { "x-openclaw-scopes": "" },
       tool: "agents_list",
       sessionKey: "main",
     });
@@ -650,12 +668,7 @@ describe("POST /tools/invoke", () => {
       const owner = ensureProfileForEmail("role-owner@example.test");
       const sessionKey = "agent:main:shared-secret-owner-session";
       await sharedSession(sessionKey, "shared-secret-owner-session", owner.id);
-      cfg = {
-        ...cfg,
-        gateway: {
-          roles: guestRole(["guest-agent"], "none"),
-        },
-      };
+      cfg = { ...cfg, gateway: { roles: guestRole(["guest-agent"], "none") } };
       authenticateOnce("token");
 
       const roleConfiguredOwnerResponse = await invokeTool({

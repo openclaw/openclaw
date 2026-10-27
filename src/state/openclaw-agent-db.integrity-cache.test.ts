@@ -119,11 +119,14 @@ it("certifies idle handles after grace and borrowed handles only after their fin
 it.each([
   "unchanged",
   "legacy-matching",
+  "legacy-components-matching",
   "no-proof",
   "malformed-proof",
+  "malformed-identity",
   "identity-mismatch",
-  "runtime-mismatch",
-  "sqlite-mismatch",
+  "runtime-change",
+  "sqlite-change",
+  "feature-mismatch",
   "schema-mismatch",
   "policy-mismatch",
 ] as const)("reports the next admission's clean-close proof outcome (%s)", (outcome) => {
@@ -144,29 +147,52 @@ it.each([
   } else if (outcome === "malformed-proof") {
     fs.writeFileSync(`${first.path}.seal`, "{torn");
   } else if (outcome !== "unchanged") {
-    const identity = { ...sqliteDatabaseSealSchemaFor("agent")!.identity };
-    if (outcome === "runtime-mismatch") {
+    const identity = structuredClone(sqliteDatabaseSealSchemaFor("agent")!.identity);
+    if (outcome === "runtime-change") {
       identity.runtime = '["other-runtime",null]';
-    } else if (outcome === "sqlite-mismatch") {
-      identity.sqlite = "other-sqlite";
+    } else if (outcome === "sqlite-change") {
+      identity.sqlite.version = "3.54.0";
+      identity.sqlite.sourceId = "prior-source";
+    } else if (outcome === "feature-mismatch") {
+      identity.runtime = '["other-runtime",null]';
+      identity.sqlite.compileOptions += ",OMIT_JSON";
     } else if (outcome === "schema-mismatch") {
+      identity.runtime = '["other-runtime",null]';
       identity.schema = "other-schema";
     } else if (outcome === "policy-mismatch") {
+      identity.runtime = '["other-runtime",null]';
       identity.policy -= 1;
     }
     expect(
       writeSqliteCleanCloseSeal(
         first.path,
-        outcome === "legacy-matching" ? seal.schemaIdentity : "other-identity",
+        outcome.startsWith("legacy-") ? seal.schemaIdentity : "other-identity",
         file,
         {
           ...seal,
           identity:
-            outcome === "legacy-matching" || outcome === "identity-mismatch" ? undefined : identity,
+            outcome === "legacy-matching" || outcome === "identity-mismatch"
+              ? undefined
+              : outcome === "legacy-components-matching"
+                ? { ...identity, sqlite: "legacy-combined-hash" }
+                : outcome === "malformed-identity"
+                  ? { ...identity, sqlite: { version: "3.54.0" } }
+                  : identity,
         },
       ),
     ).toBe(true);
   }
+  const statements: string[] = [];
+  const open = sqlite.openNodeSqliteDatabase;
+  vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
+    const database = open(...args);
+    const prepare = database.prepare.bind(database);
+    vi.spyOn(database, "prepare").mockImplementation((sql) => {
+      statements.push(sql);
+      return prepare(sql);
+    });
+    return database;
+  });
   logger.info.mockClear();
   const reopened = openOpenClawAgentDatabase(options);
   expect(
@@ -174,18 +200,39 @@ it.each([
       .prepare("SELECT state_key FROM auth_profile_state WHERE state_key='preserved'")
       .get(),
   ).toEqual({ state_key: "preserved" });
-  if (outcome === "unchanged" || outcome === "legacy-matching") {
+  if (
+    [
+      "unchanged",
+      "legacy-matching",
+      "legacy-components-matching",
+      "runtime-change",
+      "sqlite-change",
+    ].includes(outcome)
+  ) {
+    expect(statements.filter((sql) => /PRAGMA (?:integrity|quick)_check/i.test(sql))).toEqual([]);
     expect(logger.info).not.toHaveBeenCalledWith(
       "agent database integrity gate",
       expect.anything(),
     );
     expect(readSqliteDatabaseCleanClose(first.path)).toBe(true);
+    closeOpenClawAgentDatabasesForTest();
+    const reminted = readSqliteCleanCloseSeal(
+      first.path,
+      fs.statSync(first.path, { bigint: true }),
+    )!;
+    expect(reminted.verifiedAt).toBe(seal.verifiedAt);
+    expect(reminted.identity).toEqual(sqliteDatabaseSealSchemaFor("agent")!.identity);
+    retireSqliteDatabaseAdmissionForPath(first.path);
+    statements.length = 0;
+    openOpenClawAgentDatabase(options);
+    expect(readSqliteDatabaseCleanClose(first.path)).toBe(true);
+    expect(statements.filter((sql) => /PRAGMA (?:integrity|quick)_check/i.test(sql))).toEqual([]);
   } else {
     expect(logger.info).toHaveBeenCalledWith(
       "agent database integrity gate",
       expect.objectContaining({
         agentId: "receipt-agent",
-        integrityGateReason: outcome,
+        integrityGateReason: outcome === "malformed-identity" ? "malformed-proof" : outcome,
         integrityGateMode: "full",
         integrityGateOutcome: "healthy",
       }),

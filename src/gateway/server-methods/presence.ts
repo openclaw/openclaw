@@ -1,14 +1,10 @@
 import { isIP } from "node:net";
-import { Type } from "typebox";
-import { lazyCompile } from "../../../packages/gateway-protocol/src/protocol-validator.js";
-import { closedObject } from "../../../packages/gateway-protocol/src/schema/closed-object.js";
 import {
   ErrorCodes,
   errorShape,
 } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
 import {
-  PresenceLocationSchema,
-  PresenceQueryParamsSchema,
+  validatePresenceQueryParams as validateParams,
   type PresenceDevice,
   type PresenceLocation,
   type PresencePerson,
@@ -17,10 +13,12 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/presence.js";
 import type { PresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
 import { groupPresenceUsers, presenceUserKey } from "../../shared/presence-user.js";
 import { buildAuthenticatedPresenceUser } from "../authenticated-presence-user.js";
 import type { NodeSession } from "../node-session.types.js";
 import { resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
+import { validatePresenceLocationResult } from "./presence-location-validator.generated.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayClient, GatewayRequestHandlers, GatewayRequestOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -121,15 +119,7 @@ function projectDevices(
   include: NonNullable<PresenceQueryParams["include"]>,
   locations: ReadonlyMap<string, PresenceLocation>,
 ): PresenceDevice[] {
-  const grouped = new Map<string, Observation[]>();
-  for (const observation of observations) {
-    const group = grouped.get(observation.deviceId);
-    if (group) {
-      group.push(observation);
-    } else {
-      grouped.set(observation.deviceId, [observation]);
-    }
-  }
+  const grouped = groupRecords(observations, (observation) => observation.deviceId);
   return [...grouped.entries()]
     .toSorted(([a], [b]) => a.localeCompare(b))
     .map(([id, group]) => {
@@ -174,19 +164,6 @@ function projectDevices(
       return device;
     });
 }
-
-const validateParams = lazyCompile(PresenceQueryParamsSchema);
-const validateLocationResult = lazyCompile(
-  closedObject({
-    results: Type.Array(
-      closedObject({
-        ip: Type.String(),
-        ...Type.Omit(PresenceLocationSchema, ["source"]).properties,
-      }),
-      { maxItems: 200 },
-    ),
-  }),
-);
 
 function requesterKey(client: GatewayClient | null): string | undefined {
   const actor = resolveGatewayOperatorRoleActor(client);
@@ -240,7 +217,7 @@ async function lookupLocations(
       },
     );
     readGatewayRequestMutationAuthority(options).assertCurrent();
-    if (result.ok && validateLocationResult(result.payload)) {
+    if (result.ok && validatePresenceLocationResult(result.payload)) {
       for (const { ip, ...location } of result.payload.results) {
         locations.set(ip, { source: "ip", ...location });
       }

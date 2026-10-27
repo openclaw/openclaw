@@ -64,7 +64,11 @@ final class PairingApprovalCenter {
 
     typealias DecisionHandler = @MainActor (Card, Decision) async -> Void
 
-    private(set) var cards: [Card] = []
+    private let approvalSource = UUID()
+    private(set) var cards: [Card] = [] {
+        didSet { ApprovalPromptState.shared.setPending(!self.cards.isEmpty, source: self.approvalSource) }
+    }
+
     private(set) var decisionsInFlight: Set<Card.ID> = []
     private var handlersByKind: [Kind: DecisionHandler] = [:]
     private let logger = Logger(subsystem: "ai.openclaw", category: "pairing-decisions")
@@ -75,6 +79,10 @@ final class PairingApprovalCenter {
     /// Request ids the visible panel has already presented. Periodic queue
     /// syncs must not re-activate the app; only genuinely new requests may.
     private var presentedRequestIds: Set<Card.ID> = []
+
+    isolated deinit {
+        ApprovalPromptState.shared.setPending(false, source: self.approvalSource)
+    }
 
     func register(kind: Kind, handler: @escaping DecisionHandler) {
         self.handlersByKind[kind] = handler
@@ -289,6 +297,7 @@ final class PairingApprovalPanelController {
             backing: .buffered,
             defer: false)
         panel.title = String(localized: "OpenClaw Pairing Approval")
+        panel.sharingType = .none
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         for buttonType in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {

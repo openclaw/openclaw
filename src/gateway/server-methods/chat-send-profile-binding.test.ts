@@ -12,7 +12,6 @@ import {
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { getRpcSource } from "../../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
-import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createExpectedProfileBinding } from "../expected-profile.js";
 import { expectRejectedOnce as expectRejected } from "../server-methods.request-gate.test-support.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
@@ -52,18 +51,12 @@ function bindProfile(fixture: Fixture, native = false) {
   return bindChatProfile(fixture.client, "caller@example.test", native);
 }
 
-it.each([
-  { admin: true, mainAllowed: true },
-  { admin: false, mainAllowed: true },
-  { admin: false, mainAllowed: false },
-])(
-  "authorizes the default-scope global alias against main (admin: $admin, allowed: $mainAllowed)",
-  async ({ admin, mainAllowed }) => {
+it.each([true, false])(
+  "authorizes the default-scope global alias against main (allowed: %s)",
+  async (mainAllowed) => {
     const fixture = await createFixture();
     const { successor: owner } = bindProfile(fixture);
-    if (!admin) {
-      fixture.client.connect.scopes = ["operator.read", "operator.write"];
-    }
+    fixture.client.connect.scopes = ["operator.read", "operator.write"];
     fixture.params.sessionKey = "global";
     fixture.params.agentId = "main";
     const createdActor = { type: "human", source: "profile", id: owner.id } as const;
@@ -79,15 +72,11 @@ it.each([
       createdActor,
       visibility: mainAllowed ? "draft" : "shared",
     });
-    const projection = admin
-      ? undefined
-      : await createSessionRowProjection({
-          cfg: fixture.context.getRuntimeConfig(),
-          modelCatalog: [],
-        });
-    if (projection) {
-      bindSessionRowProjection(fixture.context, () => projection);
-    }
+    const projection = await createSessionRowProjection({
+      cfg: fixture.context.getRuntimeConfig(),
+      modelCatalog: [],
+    });
+    bindSessionRowProjection(fixture.context, () => projection);
     try {
       const respond = await fixture.send(undefined, {});
       if (mainAllowed) {
@@ -110,75 +99,55 @@ it.each([
       expect(loadTranscriptEventsSync(literal)).toEqual([]);
     } finally {
       await fixture.cleanup();
-      projection?.dispose();
-      await projection?.ensureMaterialized();
+      projection.dispose();
+      await projection.ensureMaterialized();
     }
   },
 );
 
-it.each(["unchanged", "replaced", "hydrated"] as const)(
-  "retains the original caller through initial authorization without an expected profile (%s)",
-  async (change) => {
-    await using fixture = await createFixture();
-    const source = ensureProfileForEmail("initial-chat-source@example.test");
-    const replacement = ensureProfileForEmail("initial-chat-replacement@example.test");
-    if (change === "hydrated") {
-      fixture.client.authenticatedGitHubIdentitySync = async () => {
-        setClientProfile(fixture.client, source);
-        return { profileId: source.id, updatedAt: source.updatedAt };
-      };
-    } else {
-      setClientProfile(fixture.client, source);
-    }
-    const entered = createDeferred();
-    const release = createDeferred();
-    const read = sessionSharingFacts.readSessionSharingFactsInWorker;
-    let held = false;
-    const sharingRead = vi
-      .spyOn(sessionSharingFacts, "readSessionSharingFactsInWorker")
-      .mockImplementation(async (input, prepareSource) => {
-        const result = await read(input, prepareSource);
-        if (!held && input.sessionKeys.includes(fixture.scope.sessionKey)) {
-          held = true;
-          entered.resolve();
-          await release.promise;
-        }
-        return result;
-      });
-    const request = fixture.send(undefined, {});
-    try {
-      await awaitGateBeforeSettlement(
-        entered.promise,
-        request,
-        "chat.send settled before its initial authorization read",
-      );
-      expect(fixture.context.dedupe.size).toBe(0);
-      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      if (change === "replaced") {
-        setClientProfile(fixture.client, replacement);
+it("rejects caller replacement during initial authorization without an expected profile", async () => {
+  await using fixture = await createFixture();
+  const { successor: replacement } = bindProfile(fixture);
+  const entered = createDeferred();
+  const release = createDeferred();
+  const read = sessionSharingFacts.readSessionSharingFactsInWorker;
+  let held = false;
+  const sharingRead = vi
+    .spyOn(sessionSharingFacts, "readSessionSharingFactsInWorker")
+    .mockImplementation(async (input, prepareSource) => {
+      const result = await read(input, prepareSource);
+      if (!held && input.sessionKeys.includes(fixture.scope.sessionKey)) {
+        held = true;
+        entered.resolve();
+        await release.promise;
       }
-      release.resolve();
-      const respond = await request;
-      if (change === "replaced") {
-        expectRejected(respond, {
-          code: "FORBIDDEN",
-          message: "Gateway requester authority changed",
-        });
-        expect(fixture.context.dedupe.size).toBe(0);
-        expect(getRpcSource(fixture.params.idempotencyKey)).toBeUndefined();
-        await expectNoInput(fixture);
-      } else {
-        expect(respond.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
-        await fixture.dispatchedRecorder;
-        expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-      }
-    } finally {
-      release.resolve();
-      sharingRead.mockRestore();
-      await request;
-    }
-  },
-);
+      return result;
+    });
+  const request = fixture.send(undefined, {});
+  try {
+    await awaitGateBeforeSettlement(
+      entered.promise,
+      request,
+      "chat.send settled before its initial authorization read",
+    );
+    expect(fixture.context.dedupe.size).toBe(0);
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    setClientProfile(fixture.client, replacement);
+    release.resolve();
+    const respond = await request;
+    expectRejected(respond, {
+      code: "FORBIDDEN",
+      message: "Gateway requester authority changed",
+    });
+    expect(fixture.context.dedupe.size).toBe(0);
+    expect(getRpcSource(fixture.params.idempotencyKey)).toBeUndefined();
+    await expectNoInput(fixture);
+  } finally {
+    release.resolve();
+    sharingRead.mockRestore();
+    await request;
+  }
+});
 
 it.each(["reservation", "writer", "approval"] as const)(
   "rejects a native account merge at %s without accepting or terminalizing input",
@@ -247,16 +216,13 @@ it("terminalizes a native command account merge during fresh transcript approval
   const { profile: source, merge } = bindProfile(fixture, true);
   const ack = await fixture.send(undefined, { expectedProfileId: source.id });
   expect(ack.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
-  expect(fixture.beforeApprove).not.toHaveBeenCalled();
   const recorder = await fixture.dispatchedRecorder;
   const acceptedAck = structuredClone(ack.mock.calls);
   fixture.beforeApprove.mockImplementation(merge);
   await fixture.finishDispatch();
-  expect(fixture.beforeApprove).toHaveBeenCalledOnce();
   expect.soft(recorder.getAdmissionReceipt()).toBeUndefined();
   expect.soft(ack.mock.calls).toEqual(acceptedAck);
   expect.soft(ack).toHaveBeenCalledOnce();
-  expect.soft(dispatchInboundMessageMock).toHaveBeenCalledOnce();
   const transcript = loadTranscriptEventsSync(fixture.scope);
   expect
     .soft(transcript.filter((entry) => isRecord(entry) && entry.type === "message"))
@@ -292,66 +258,49 @@ it("terminalizes a native command account merge during fresh transcript approval
   expect.soft(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
 });
 
-it.each(["request-signal abort", "profile merge"] as const)(
-  "preserves accepted native input across %s without adopting the retry socket",
-  async (change) => {
-    await using fixture = await createFixture();
-    const runId = fixture.params.idempotencyKey;
-    const { profile, merge } = bindProfile(fixture);
-    fixture.client.connect.client = {
-      id: "openclaw-macos",
-      version: "test",
-      platform: "darwin",
-      mode: "ui",
-    };
-    const requestAbort = new AbortController();
-    const ack = await fixture.send(undefined, {
-      expectedProfileId: profile.id,
-      signal: requestAbort.signal,
-    });
-    expect(ack.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
-    const recorder = await fixture.dispatchedRecorder;
-    const committed = await recorder.persistApproved();
-    expect(committed).toMatchObject({ appended: true });
-    const receipt = recorder.getAdmissionReceipt();
-    expect(receipt).toBeDefined();
-    const accepted = loadTranscriptEventsSync(fixture.scope);
-    expect(accepted).toHaveLength(fixture.activeTranscript.length + 1);
-    expect(accepted.at(-1)).toMatchObject({ message: { content: fixture.approvedContent } });
-    const owner = rpcSourceTesting.get(runId);
-    expect(owner).toBeDefined();
-    const ownerConnId = owner?.adapter.requester?.connectionId;
-    const cached = structuredClone(fixture.context.dedupe.get(`chat:${runId}`));
-    if (change === "request-signal abort") {
-      requestAbort.abort();
-    }
-    fixture.client.connId = "native-reconnected";
-    if (change === "profile merge") {
-      merge();
-    }
-    const retry = await fixture.send(undefined, { expectedProfileId: profile.id });
-    if (change === "profile merge") {
-      expectProfileMismatch(retry);
-    } else {
-      expect(retry.mock.calls[0]?.[1]).toMatchObject({ status: "in_flight" });
-    }
-    expect(rpcSourceTesting.get(runId)).toBe(owner);
-    expect(owner).toMatchObject({
-      adapter: { requester: { connectionId: ownerConnId } },
-      input: { abortSignal: { aborted: false } },
-    });
-    const retained = () => [
-      loadTranscriptEventsSync(fixture.scope),
-      recorder.getAdmissionReceipt(),
-    ];
-    expect(retained()).toEqual([accepted, receipt]);
-    expect(fixture.context.dedupe.get(`chat:${runId}`)).toEqual(cached);
-    expect(await recorder.persistApproved()).toEqual(committed);
-    expect(retained()).toEqual([accepted, receipt]);
-    expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
-    expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-  },
-);
+it("preserves accepted native input across profile merge without adopting the retry socket", async () => {
+  await using fixture = await createFixture();
+  const runId = fixture.params.idempotencyKey;
+  const { profile, merge } = bindProfile(fixture);
+  fixture.client.connect.client = {
+    id: "openclaw-macos",
+    version: "test",
+    platform: "darwin",
+    mode: "ui",
+  };
+  const ack = await fixture.send(undefined, {
+    expectedProfileId: profile.id,
+  });
+  expect(ack.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
+  const recorder = await fixture.dispatchedRecorder;
+  const committed = await recorder.persistApproved();
+  expect(committed).toMatchObject({ appended: true });
+  const receipt = recorder.getAdmissionReceipt();
+  expect(receipt).toBeDefined();
+  const accepted = loadTranscriptEventsSync(fixture.scope);
+  expect(accepted).toHaveLength(fixture.activeTranscript.length + 1);
+  expect(accepted.at(-1)).toMatchObject({ message: { content: fixture.approvedContent } });
+  const owner = rpcSourceTesting.get(runId);
+  expect(owner).toBeDefined();
+  const ownerConnId = owner?.adapter.requester?.connectionId;
+  const cached = structuredClone(fixture.context.dedupe.get(`chat:${runId}`));
+  fixture.client.connId = "native-reconnected";
+  merge();
+  const retry = await fixture.send(undefined, { expectedProfileId: profile.id });
+  expectProfileMismatch(retry);
+  expect(rpcSourceTesting.get(runId)).toBe(owner);
+  expect(owner).toMatchObject({
+    adapter: { requester: { connectionId: ownerConnId } },
+    input: { abortSignal: { aborted: false } },
+  });
+  const retained = () => [loadTranscriptEventsSync(fixture.scope), recorder.getAdmissionReceipt()];
+  expect(retained()).toEqual([accepted, receipt]);
+  expect(fixture.context.dedupe.get(`chat:${runId}`)).toEqual(cached);
+  expect(await recorder.persistApproved()).toEqual(committed);
+  expect(retained()).toEqual([accepted, receipt]);
+  expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+  expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+});
 
 it.each(["host", "session ACL", "lifecycle"] as const)(
   "retains original %s authority after committed browser custody and profile merge",

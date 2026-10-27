@@ -7,6 +7,7 @@ import {
   createSessionRouteContext,
   createSessionRouteRow,
 } from "../pages/chat/route-resolution.test-support.ts";
+import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
 import { createApplicationGateway } from "../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
@@ -16,18 +17,16 @@ afterEach(() => vi.restoreAllMocks());
 
 async function setup(pathname = "/chat/main/dashboard/12345678-90ab-cdef-1234-567890abcdef") {
   const request = vi.fn(async (): Promise<{ ok: boolean; key?: string }> => ({ ok: true }));
-  const fixture = createApplicationGateway({
-    phase: "connected",
-    client: createTestGatewayClient(request),
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: "main",
-    sessionKey: "agent:main:main",
-    lastError: null,
-    lastErrorCode: null,
-    hello: gatewayHelloForMethods([]),
-    selfUser: { id: "reader" },
-  });
+  const fixture = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      phase: "connected",
+      client: createTestGatewayClient(request),
+      assistantAgentId: "main",
+      sessionKey: "agent:main:main",
+      hello: gatewayHelloForMethods([]),
+      selfUser: { id: "reader" },
+    }),
+  );
   const context = {
     basePath: "",
     gateway: fixture.gateway,
@@ -97,17 +96,6 @@ describe("session route reconnect recovery", () => {
     kind: "session",
     sessionKey: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
   };
-
-  it("keeps connected roster navigation under its existing discovery lifecycle", async () => {
-    const f = await setup(referencePath);
-    f.load
-      .mockResolvedValueOnce({ ...session, sessionResolutionFromCache: "roster" })
-      .mockResolvedValue(session);
-    await f.router.navigate("chat", f.context, {}, f.destination);
-    await vi.dynamicImportSettled();
-    expect(f.load).toHaveBeenCalledOnce();
-    expect(f.request).not.toHaveBeenCalled();
-  });
 
   it.each(["pending", "cached"])(
     "verifies first-connect data only when it was already committed offline: %s",

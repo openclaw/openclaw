@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
-  normalizePluginsConfig,
   resolveEffectiveEnableState,
   resolveLivePluginConfigObject,
 } from "openclaw/plugin-sdk/plugin-config-runtime";
@@ -73,6 +73,20 @@ import {
 } from "./src/supervision-tools.js";
 import { createCodexWebSearchProvider } from "./src/web-search-provider.js";
 
+const loadAccountUsage = createLazyRuntimeModule(() => import("./src/account-usage-runtime.js"));
+const loadPluginState = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/plugin-state-runtime"),
+);
+const loadConfigMutation = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/config-mutation"),
+);
+const loadSessionBinding = createLazyRuntimeModule(
+  () => import("./src/app-server/session-binding.js"),
+);
+const loadSessionRetirement = createLazyRuntimeModule(
+  () => import("./src/app-server/session-retirement.js"),
+);
+
 const ENDED_SESSION_REASONS: ReadonlySet<string> = new Set(["new", "reset", "idle", "daily"]);
 
 export default definePluginEntry({
@@ -86,7 +100,7 @@ export default definePluginEntry({
     api.registerGatewayMethod(
       "codex.accountUsage",
       async (options) => {
-        const { handleCodexAccountUsage } = await import("./src/account-usage-runtime.js");
+        const { handleCodexAccountUsage } = await loadAccountUsage();
         await handleCodexAccountUsage(options);
       },
       { scope: "operator.admin" },
@@ -107,7 +121,6 @@ export default definePluginEntry({
       const enabled = resolveEffectiveEnableState({
         id: "codex",
         origin: "bundled",
-        config: normalizePluginsConfig(liveConfig.plugins),
         rootConfig: liveConfig,
         // Core auto-enables this bundled plugin whenever the operator declares a
         // codex config block, so a live block is the plugin-side default. Gating
@@ -155,8 +168,12 @@ export default definePluginEntry({
       // Final effect guards retain raw SDK revocations through 2026-12-31.
       lookup: (key) => openBindingStateStore().lookup(key),
       prepareRead: async (key) => {
-        const { preparePluginStateRead } = await import("openclaw/plugin-sdk/plugin-state-runtime");
+        const { preparePluginStateRead } = await loadPluginState();
         return await preparePluginStateRead(openBindingMutationStore(), key);
+      },
+      prepareGuard: async (key, assertValueCurrent) => {
+        const { preparePluginStateGuard } = await loadPluginState();
+        return await preparePluginStateGuard(openBindingMutationStore(), key, assertValueCurrent);
       },
       asyncReads: {
         lookup: (key) => openBindingMutationStore().lookup(key),
@@ -232,15 +249,12 @@ export default definePluginEntry({
     if (registrationConfig.supervision?.enabled === true) {
       const {
         resolveCodexAppServerAuthProfileIdForAgent,
-        resolveCodexAppServerAuthProfileIdAtEffect,
+        withCodexAppServerAuthProfileIdAtEffect,
       } = createCodexAuthProfileSelection(api.runtime.modelAuth);
       api.registerTool(
         {
           contextVersion: 2,
           create: (context) => {
-            if (context.senderIsOwner !== true) {
-              return [];
-            }
             const resolveToolRuntimeConfig = () =>
               context.getRuntimeConfig?.() ??
               context.runtimeConfig ??
@@ -250,9 +264,11 @@ export default definePluginEntry({
               getPluginConfig: () => resolvePluginConfig(resolveToolRuntimeConfig),
               getRuntimeConfig: resolveToolRuntimeConfig,
               resolveAuthProfileId: resolveCodexAppServerAuthProfileIdForAgent,
-              resolveAuthProfileIdAtEffect: resolveCodexAppServerAuthProfileIdAtEffect,
+              withAuthProfileIdAtEffect: withCodexAppServerAuthProfileIdAtEffect,
               resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
-              senderIsOwner: context.senderIsOwner,
+              get senderIsOwner() {
+                return context.senderIsOwner === true;
+              },
               assertInvocationCurrent: context.assertInvocationCurrent,
             });
           },
@@ -353,7 +369,7 @@ export default definePluginEntry({
               });
             },
             mutate: async (update, assertCurrent) => {
-              const { mutateConfigFile } = await import("openclaw/plugin-sdk/config-mutation");
+              const { mutateConfigFile } = await loadConfigMutation();
               await mutateConfigFile({
                 writeOptions: { assertCurrent },
                 mutate: (draft) => {
@@ -409,10 +425,7 @@ export default definePluginEntry({
       }
       const config = resolveCurrentConfig();
       const [{ sessionBindingIdentity }, { retireCodexAppServerSessionGeneration }] =
-        await Promise.all([
-          import("./src/app-server/session-binding.js"),
-          import("./src/app-server/session-retirement.js"),
-        ]);
+        await Promise.all([loadSessionBinding(), loadSessionRetirement()]);
       await retireCodexAppServerSessionGeneration({
         bindingStore,
         identity: sessionBindingIdentity({

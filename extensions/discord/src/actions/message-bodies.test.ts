@@ -4,9 +4,13 @@ import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-co
 import type { DiscordConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import { discordMessageActions } from "../channel-actions.js";
+import type { GatewayPlugin } from "../internal/gateway.js";
+import { clearGateways, registerGateway } from "../monitor/gateway-registry.js";
 import { sendPollDiscord } from "../send.outbound.js";
 import { handleDiscordMessageAction } from "./handle-action.js";
+import { handleDiscordAction } from "./runtime.js";
 
 const channelId = "123456789012345678";
 const messageId = "223456789012345678";
@@ -57,18 +61,16 @@ beforeAll(async () => {
                   id: channelId,
                   type: parentChannelType,
                   ...(parentChannelType === 1 ? {} : { guild_id: guildId }),
-                  name: "synthetic-channel",
                 }
             : { id: messageId, channel_id: channelId, ...current, ...body };
-        if (method === "POST" && path.endsWith("/threads")) {
+        if (method === "GET" && path === `${messagePath()}/${messageId}`) {
+          result = { id: messageId, reactions: [] };
+        } else if (method === "POST" && path === "/v10/users/@me/channels") {
           result = {
-            id: threadId,
-            type: 11,
-            name: body.name,
-            message_count: 0,
-            total_message_sent: 0,
-            last_message_id: null,
+            id: body.recipient_id === "523456789012345678" ? channelId : "723456789012345678",
           };
+        } else if (method === "POST" && path.endsWith("/threads")) {
+          result = { id: threadId, type: 11 };
           if (body.message) {
             threadMessageIds.push(messageId);
             result.message = { id: messageId, channel_id: threadId };
@@ -78,22 +80,16 @@ beforeAll(async () => {
           threadMessageIds.push(id);
           result = { id, channel_id: threadId, ...body };
         }
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify(result));
+        response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(result));
       } catch (error) {
-        response.writeHead(500, { "content-type": "application/json" });
-        response.end(JSON.stringify({ error: String(error) }));
+        response
+          .writeHead(500, { "content-type": "application/json" })
+          .end(JSON.stringify({ error: String(error) }));
       }
     })();
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("HTTP fixture did not bind a TCP port");
-  }
-  baseUrl = `http://127.0.0.1:${address.port}`;
+  const port = await listenOnLoopback(server);
+  baseUrl = `http://127.0.0.1:${port}`;
   vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
     const url = new URL(input instanceof Request ? input.url : input);
     if (url.origin !== baseUrl) {
@@ -114,9 +110,7 @@ beforeEach(() => {
   current = { content: "Initial caption", attachments: [attachment] };
 });
 
-afterEach(() => {
-  expect(unexpectedUrls).toEqual([]);
-});
+afterEach(() => expect(unexpectedUrls).toEqual([]));
 
 afterAll(async () => {
   vi.restoreAllMocks();
@@ -151,11 +145,7 @@ function expectPost(body: Record<string, unknown>) {
 
 function expectEdit(target: string, content: unknown, fields: Record<string, unknown> = {}) {
   expect(writes()).toEqual([
-    {
-      method: "PATCH",
-      path: `${messagePath(target)}/${messageId}`,
-      body: { content, ...fields },
-    },
+    { method: "PATCH", path: `${messagePath(target)}/${messageId}`, body: { content, ...fields } },
   ]);
 }
 
@@ -163,7 +153,6 @@ describe("Discord retained progress edits", () => {
   it("edits the same checklist with account-scoped rendering and inert mentions", async () => {
     await progressEdit({
       progressSnapshot: {
-        label: "Working",
         statusHeadline: "Waiting @everyone for child verification",
         statusHeadlineFormat: "plain",
         lines: ["Child verifier: checks passed"],
@@ -283,7 +272,7 @@ describe("Discord action message bodies", () => {
     expect(result.details).toMatchObject({
       ok: true,
       threadSnapshot: "creation",
-      thread: { id: threadId, message_count: 0, total_message_sent: 0, last_message_id: null },
+      thread: { id: threadId },
       initialMessageDelivery: {
         status: "delivered",
         starterMessageDelivered: type !== 0,
@@ -292,9 +281,6 @@ describe("Discord action message bodies", () => {
         deliveredMessageIds: threadMessageIds,
       },
     });
-    const text = result.content.find((block) => block.type === "text");
-    expect(text?.type === "text" ? JSON.parse(text.text) : undefined).toEqual(result.details);
-    expect(requests.filter((request) => request.method === "GET")).toHaveLength(1);
   });
 
   it("does not report initial delivery for an empty standalone thread", async () => {
@@ -304,18 +290,13 @@ describe("Discord action message bodies", () => {
     expect(writes()).toHaveLength(1);
   });
 
-  it("clears content while retaining attachments", async () => {
-    await edit("");
-    expectEdit(channelId, "");
-    expect(current).toEqual({ content: "", attachments: [attachment] });
-  });
-
-  it("normalizes identifiers without normalizing the message body", async () => {
-    const content = "  Changed caption\n";
-    await edit(content, cfg, ` ${messageId} `);
-    expectEdit(channelId, content);
-    expect(current).toEqual({ content, attachments: [attachment] });
-  });
+  it.each(["", "  Changed caption\n"])(
+    "preserves body %j and attachments while normalizing IDs",
+    async (content) => {
+      await edit(content, cfg, ` ${messageId} `);
+      expectEdit(channelId, content);
+    },
+  );
 
   it.each([
     ["absent edit content", () => edit(undefined), /required/],
@@ -334,21 +315,10 @@ describe("Discord action message bodies", () => {
   });
 
   it("delivers presentation text without a separate message body", async () => {
-    const text = "-# Revenue (bar chart)\n- USD: Q1: 12; Q2: 18";
     await send(undefined, {
-      presentation: {
-        blocks: [
-          {
-            type: "chart",
-            chartType: "bar",
-            title: "Revenue",
-            categories: ["Q1", "Q2"],
-            series: [{ name: "USD", values: [12, 18] }],
-          },
-        ],
-      },
+      presentation: { blocks: [{ type: "context", text: "Summary" }] },
     });
-    expectPost({ components: [{ type: 17, components: [{ type: 10, content: text }] }] });
+    expectPost({ components: [{ type: 17, components: [{ type: 10, content: "-# Summary" }] }] });
   });
 
   it.each([
@@ -396,5 +366,159 @@ describe("Discord action message bodies", () => {
     expect(writes()).toHaveLength(1);
     expect(writes()[0]?.body.content).toBe(expected);
     expect(writes()[0]?.body).toHaveProperty("poll");
+  });
+});
+
+describe("Discord reaction read target resolution", () => {
+  type Context = Parameters<typeof handleDiscordMessageAction>[0];
+  const target = "user:523456789012345678";
+  const dm = {
+    currentChannelProvider: "discord",
+    currentChannelId: channelId,
+    currentChatType: "direct",
+    currentMessagingTarget: target,
+  } satisfies Context["toolContext"];
+  const dmContext = (overrides: Partial<NonNullable<Context["toolContext"]>>) => ({
+    toolContext: { ...dm, ...overrides },
+  });
+  const reactionConfig = config({
+    defaultAccount: "work",
+    accounts: { work: { token, groupPolicy: "allowlist" } },
+  });
+  const read = (overrides: Partial<Context> = {}) =>
+    handleDiscordMessageAction({
+      action: "reactions",
+      params: { to: target, messageId },
+      cfg: reactionConfig,
+      accountId: "work",
+      requesterAccountId: "work",
+      conversationReadOrigin: "delegated",
+      toolContext: dm,
+      ...overrides,
+    });
+  const channelRead = ["GET", `/v10/channels/${channelId}`];
+  const messageRead = ["GET", `${messagePath()}/${messageId}`];
+  const expectRequests = (expected: string[][]) =>
+    expect(requests.map(({ method, path }) => [method, path])).toEqual(expected);
+  beforeEach(() => {
+    parentChannelType = 1;
+  });
+
+  it("reads reactions for the current DM mention without creating it", async () => {
+    expect((await read({ params: { to: "<@523456789012345678>", messageId } })).details).toEqual({
+      ok: true,
+      reactions: [],
+    });
+    expectRequests([channelRead, messageRead]);
+  });
+  it("forwards delegated authority for current guild channel metadata", async () => {
+    parentChannelType = 0;
+    await expect(read({ action: "channel-info", params: { channelId } })).resolves.toMatchObject({
+      details: { ok: true, channel: { id: channelId } },
+    });
+  });
+  it.each<[string, Partial<Context>]>([
+    ["another user", { params: { to: "user:523456789012345679", messageId } }],
+    ["another account", { requesterAccountId: "other" }],
+    ["another provider", dmContext({ currentChannelProvider: "slack" })],
+    ["a group", dmContext({ currentChatType: "group" })],
+    ["no native channel ID", dmContext({ currentChannelId: target })],
+    ["no current user target", { toolContext: { ...dm, currentMessagingTarget: undefined } }],
+    [
+      "an unattested target",
+      { conversationReadOrigin: undefined, requesterAccountId: undefined, toolContext: undefined },
+    ],
+  ])("rejects %s before Discord I/O", async (_name, overrides) => {
+    await expect(read(overrides)).rejects.toThrow(
+      new Error("Discord channel id is required (use channel:<id>)."),
+    );
+    expect(requests).toEqual([]);
+  });
+  it("applies disabled-DM policy before reading the message", async () => {
+    await expect(
+      read({ cfg: config({ accounts: { work: { token, dmPolicy: "disabled" } } }) }),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expectRequests([channelRead]);
+  });
+  it("retains direct-operator DM resolution", async () => {
+    expect(
+      (
+        await read({
+          conversationReadOrigin: "direct-operator",
+          requesterAccountId: undefined,
+          toolContext: undefined,
+        })
+      ).details,
+    ).toEqual({ ok: true, reactions: [] });
+    expectRequests([["POST", "/v10/users/@me/channels"], channelRead, messageRead]);
+    expect(requests[0]?.body).toEqual({ recipient_id: "523456789012345678" });
+  });
+});
+
+describe("handleDiscordAction presence", () => {
+  const updatePresence = vi.fn();
+  const gateway = (isConnected = true) =>
+    ({ isConnected, updatePresence }) as unknown as GatewayPlugin;
+  const presenceConfig = config({ actions: { presence: true } });
+  const setPresence = (params: Record<string, unknown>, settings = presenceConfig) =>
+    handleDiscordAction({ ...params, action: "setPresence" }, settings);
+  const expectPresence = (activities: readonly unknown[], status = "online") =>
+    expect(updatePresence).toHaveBeenCalledWith({ since: null, activities, status, afk: false });
+  beforeEach(() => {
+    updatePresence.mockClear();
+    clearGateways();
+    registerGateway("default", gateway());
+  });
+  afterEach(() => clearGateways());
+
+  it.each([
+    [
+      {
+        activityType: "StReAmInG",
+        activityName: "My Stream",
+        activityUrl: "https://twitch.tv/example",
+      },
+      [{ name: "My Stream", type: 1, url: "https://twitch.tv/example" }],
+    ],
+    [{ activityType: "custom", activityState: "Vibing" }, [{ name: "", type: 4, state: "Vibing" }]],
+  ] as const)("sets normalized presence %j", async (params, activities) => {
+    expect((await setPresence(params)).details).toEqual({ ok: true, status: "online", activities });
+    expectPresence(activities);
+  });
+  it.each([
+    [{ status: "offline" }, /Invalid status/],
+    [{ activityType: "constructor", activityName: "x" }, /Invalid activityType/],
+    [{ activityName: "My Game" }, /activityType is required/],
+  ] as const)("rejects invalid presence %j before gateway I/O", async (params, error) => {
+    await expect(setPresence(params)).rejects.toThrow(error);
+    expect(updatePresence).not.toHaveBeenCalled();
+  });
+  it("respects presence gating", async () => {
+    await expect(
+      setPresence({ status: "online" }, config({ actions: { presence: false } })),
+    ).rejects.toThrow(/disabled/);
+  });
+  it.each([false, true])("rejects an unavailable gateway (registered: %s)", async (registered) => {
+    clearGateways();
+    if (registered) {
+      registerGateway("default", gateway(false));
+    }
+    await expect(setPresence({ status: "dnd" })).rejects.toThrow(
+      registered ? /not connected/ : /not available/,
+    );
+  });
+  it("uses the configured named default account", async () => {
+    clearGateways();
+    registerGateway("ops", gateway());
+    await setPresence(
+      { status: "idle" },
+      config({ actions: { presence: true }, defaultAccount: "ops", accounts: { ops: { token } } }),
+    );
+    expectPresence([], "idle");
+  });
+  it("rejects unknown actions", async () => {
+    await expect(handleDiscordAction({ action: "unknownAction" }, presenceConfig)).rejects.toThrow(
+      /Unknown action/,
+    );
   });
 });

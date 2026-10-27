@@ -3,33 +3,91 @@ import { createComponent, createEffect, createSignal } from "solid-js";
 import { vi } from "vitest";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { createGatewayEvent } from "../../app/gateway-store.test-support.ts";
+import { loadSettings } from "../../app/settings.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createActivityPageState } from "./activity-page-state.ts";
 import { ActivityPageView } from "./activity-page-view.tsx";
 
+export function activitySettings(): ReturnType<typeof loadSettings> {
+  return {
+    ...loadSettings(),
+    gatewayUrl: "wss://activity.example.test",
+    token: "",
+    sessionKey: "main",
+    lastActiveSessionKey: "main",
+  };
+}
+
 export type TestActivityPage = ReturnType<typeof createActivityPage>;
+
+class UnavailableActivityCapabilities {
+  router!: never;
+  connectionBootstrap!: never;
+  agentSelection!: never;
+  settingsAgentSelection!: never;
+  acquireChannels!: never;
+  config!: never;
+  scopeUpgrade!: never;
+  sidebarAttention!: never;
+  runtimeConfig!: never;
+  placementStartup!: never;
+  plugins!: never;
+  assistantDock!: never;
+  overlays!: never;
+  navigation!: never;
+  theme!: never;
+  nativeChatDrafts!: never;
+  webPush!: never;
+  chatSubmissions!: never;
+  chatAttachmentHandoff!: never;
+}
+
+export function createActivityContext(
+  source: ApplicationContext["gateway"],
+  capabilities: Pick<ApplicationContext, "sessions" | "agents" | "agentIdentity">,
+  basePath = "",
+): ApplicationContext {
+  const context = Object.assign(new UnavailableActivityCapabilities(), {
+    gateway: source,
+    ...capabilities,
+    basePath,
+    resourceBasePath: "",
+    replace: vi.fn(),
+    navigate: vi.fn(),
+    navigateAndWait: vi.fn(async () => {}),
+    revalidate: vi.fn(async () => {}),
+    preload: vi.fn(async () => {}),
+    nativeDeviceSettings: null,
+    nativeNotifications: null,
+  });
+  // Unsupported fields are runtime markers; the proxy always throws before returning them.
+  return new Proxy(context, {
+    get(target, key, receiver) {
+      const value = Reflect.get(target, key, receiver);
+      if (Object.hasOwn(target, key) && value === undefined) {
+        throw new Error(`Activity fixture does not provide ${String(key)}`);
+      }
+      return value;
+    },
+  });
+}
 
 export function createActivityPage(context: ApplicationContext, initial?: RouteLocation) {
   const [location, setLocation] = createSignal(initial);
-  const mounted = mountSolid(
-    () => {
-      const page = createActivityPageState(context);
-      createEffect(location, (next) => page.setRouteLocation(next));
-      return createComponent(ActivityPageView, { page });
-    },
-    {
-      wrapper: (props) =>
-        createComponent(ApplicationProvider, {
-          value: context,
-          get children() {
-            return props.children;
-          },
-        }),
-    },
+  const mounted = mountSolid(() =>
+    createComponent(ApplicationProvider, {
+      value: context,
+      get children() {
+        const page = createActivityPageState(context);
+        createEffect(location, (next) => page.setRouteLocation(next));
+        return createComponent(ActivityPageView, { page });
+      },
+    }),
   );
   flush();
   return {
@@ -45,9 +103,8 @@ export function createActivityPage(context: ApplicationContext, initial?: RouteL
 
 export function previews(page: TestActivityPage) {
   flush();
-  return [...page.container.querySelectorAll(".activity-entry__preview")].map(
-    (entry) => entry.textContent,
-  );
+  const entries = page.container.querySelectorAll(".activity-entry__preview");
+  return Array.from(entries, (entry) => entry.textContent);
 }
 
 export function expandFirst(page: TestActivityPage) {
@@ -60,39 +117,18 @@ export function expandFirst(page: TestActivityPage) {
 }
 
 export function toolEvent(id: string, sessionKey = "main", name = "read", runId = `run-${id}`) {
-  return createGatewayEvent("session.tool", {
-    stream: "tool",
-    runId,
-    sessionKey,
-    data: {
-      toolCallId: id,
-      name,
-      phase: "result",
-      result: { text: `${id} output` },
-    },
-  });
+  const data = { toolCallId: id, name, phase: "result", result: { text: `${id} output` } };
+  return createGatewayEvent("session.tool", { stream: "tool", runId, sessionKey, data });
 }
 
-export function activityHello(recoveryScope = "activity-owner-a"): GatewayHelloOk {
-  return {
-    type: "hello-ok",
-    protocol: 1,
-    auth: { role: "operator", scopes: ["operator.read"], recoveryScope },
-  };
-}
+export const activityHello = (recoveryScope = "activity-owner-a"): GatewayHelloOk => ({
+  type: "hello-ok",
+  protocol: 1,
+  auth: { role: "operator", scopes: ["operator.read"], recoveryScope },
+});
 
 export function createActivityGatewayStub(): ApplicationContext["gateway"] {
-  const snapshot: ApplicationGatewaySnapshot = {
-    client: null,
-    phase: "stopped",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
-    assistantAgentId: null,
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  const snapshot = { ...createApplicationGateway().gateway.snapshot, sessionKey: "main" };
   // SAFETY: Static route tests only read the snapshot and register these observers.
   return {
     snapshot,
@@ -106,14 +142,8 @@ export function createActivityGatewayStub(): ApplicationContext["gateway"] {
 
 export function inspectorGateway(client: GatewayBrowserClient) {
   const source = createActivityGatewayStub();
-  Object.assign(source.snapshot, {
-    client,
-    phase: "connected",
-    hello: {
-      ...activityHello(),
-      features: { methods: ["audit.run.inspect"], events: [] },
-    },
-  });
+  const hello = { ...activityHello(), features: { methods: ["audit.run.inspect"], events: [] } };
+  Object.assign(source.snapshot, { client, phase: "connected", hello });
   return source;
 }
 
@@ -123,24 +153,15 @@ export function activityRoster(
     { key: "agent:other:work", kind: "direct", hasActiveRun: true },
   ],
 ): SessionsListResult {
-  return {
-    ts: 1,
-    path: "",
-    count: sessions.length,
-    sessions,
-    defaults: { model: null, modelProvider: null, contextTokens: null },
-  };
+  const defaults = { model: null, modelProvider: null, contextTokens: null };
+  return { ts: 1, path: "", count: sessions.length, sessions, defaults };
 }
 
-export function activityResponse(method: string, params: unknown) {
-  switch (method) {
-    case "sessions.list":
-      return activityRoster();
-    case "sessions.subscribe":
-      return { subscribed: true };
-    case "sessions.messages.subscribe":
-      return params;
-    default:
-      return {};
-  }
-}
+export const activityResponse = (method: string, params: unknown) =>
+  method === "sessions.list"
+    ? activityRoster()
+    : method === "sessions.subscribe"
+      ? { subscribed: true }
+      : method === "sessions.messages.subscribe"
+        ? params
+        : {};

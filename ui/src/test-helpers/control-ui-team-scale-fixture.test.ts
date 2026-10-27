@@ -1,15 +1,164 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { CronJobSchema } from "../../../packages/gateway-protocol/src/schema/cron.ts";
+import { ChatHistoryDeltaResultSchema } from "../../../packages/gateway-protocol/src/schema/logs-chat.ts";
 import { GatewaySessionRowEvents } from "../api/gateway-session-row-events.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { canApplySessionListSnapshot } from "../lib/sessions/session-list-query.ts";
+import { sessionGatewayTest } from "./control-ui-e2e.sessions.test-support.ts";
 import { createTeamScaleSidebarListOwner } from "./control-ui-sidebar-list-fixture.ts";
 import { createControlUiTeamScaleFixture } from "./control-ui-team-scale-fixture.ts";
 
 const now = 1_800_000_000_000;
+const session = (
+  id: string,
+  updatedAt: number | null,
+  fields: Partial<GatewaySessionRow> = {},
+): GatewaySessionRow => ({ key: `agent:main:${id}`, kind: "direct", updatedAt, ...fields });
+const pinned = (
+  id: string,
+  updatedAt: number,
+  pinnedAt: number,
+  fields: Partial<GatewaySessionRow> = {},
+) => session(id, updatedAt, { pinned: true, pinnedAt, ...fields });
+const rootOnly = { excludeSubagents: true, excludeCron: true, excludeSystem: true };
+function expectAbsent(value: unknown, fields: string) {
+  for (const field of fields.split(" ")) {
+    expect(value).not.toHaveProperty(field);
+  }
+}
 
 describe("Team-scale Gateway fixture", () => {
+  sessionGatewayTest.for(["normal", "large"] as const)(
+    "revalidates the selected %s transcript without retransmitting cached messages",
+    async (mode, { connect }) => {
+      const fixture = createControlUiTeamScaleFixture({
+        now,
+        largeSnapshot: mode === "large",
+      });
+      const { request } = await connect(fixture.scenario);
+      const key = fixture.selectedSessionKey;
+      const cold = await request("sessions.messages.subscribe", {
+        key,
+        initialHistory: { knownState: {} },
+      });
+      const full = asOptionalRecord(asOptionalRecord(cold.payload.initialHistory)?.payload);
+      expect(full).toMatchObject({
+        deltaCursor: expect.any(String),
+        sessionId: "team-session-271",
+        sessionInfo: { key, sessionId: "team-session-271" },
+        pendingInputs: { items: [], total: 0, queuedCount: 0 },
+        metadata: { commands: [] },
+        stateRevision: {
+          sessionInfo: "fixture-session-v1",
+          commands: "fixture-commands-v1",
+          pendingInputs: "fixture-pending-inputs-v1",
+        },
+      });
+      if (mode === "normal") {
+        const catalog = await request("models.list", {});
+        expect(catalog.payload.models).toContainEqual(
+          expect.objectContaining({ id: fixture.scenario.agentModel, reasoning: true }),
+        );
+        expect(full).toHaveProperty("metadata.models", catalog.payload.models);
+      }
+      const messageCount = mode === "large" ? 1_100 : 240;
+      expect(full?.messages).toHaveLength(messageCount);
+      expect(full?.messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ __openclaw: { id: "team-message-1", seq: 1 } }),
+          expect.objectContaining({
+            __openclaw: { id: `team-message-${messageCount}`, seq: messageCount },
+          }),
+        ]),
+      );
+      const cursor = full?.deltaCursor;
+      if (typeof cursor !== "string") {
+        throw new Error("The selected fixture transcript must emit a cursor");
+      }
+      const windowed = await request("sessions.messages.subscribe", {
+        key,
+        initialHistory: { limit: 80, maxBytes: 256 * 1024, knownState: {} },
+      });
+      const tail = asOptionalRecord(asOptionalRecord(windowed.payload.initialHistory)?.payload);
+      expect(tail).toMatchObject({
+        deltaCursor: cursor,
+        hasMore: true,
+        nextOffset: 80,
+        totalMessages: messageCount,
+        metadata: { commands: [] },
+        pendingInputs: { items: [], total: 0, queuedCount: 0 },
+        stateRevision: {
+          sessionInfo: "fixture-session-v1",
+          commands: "fixture-commands-v1",
+          pendingInputs: "fixture-pending-inputs-v1",
+        },
+      });
+      expect(tail?.messages).toHaveLength(80);
+      expect(tail).toHaveProperty("messages.0.__openclaw", {
+        id: `team-message-${messageCount - 79}`,
+        seq: messageCount - 79,
+      });
+      expect(tail).toHaveProperty("messages.79.__openclaw", {
+        id: `team-message-${messageCount}`,
+        seq: messageCount,
+      });
+      expect(Buffer.byteLength(JSON.stringify(windowed))).toBeLessThanOrEqual(256 * 1024);
+      const older = await request("chat.history", { sessionKey: key, limit: 80, offset: 80 });
+      expect(older.payload.messages).toHaveLength(messageCount);
+      expect(older.payload).not.toHaveProperty("nextOffset", 80);
+      const warm = await request("sessions.messages.subscribe", {
+        key,
+        initialHistory: { cursor, limit: 80, maxBytes: 256 * 1024, knownState: {} },
+      });
+      const delta = asOptionalRecord(warm.payload.initialHistory)?.payload;
+      expect(delta).toMatchObject({
+        kind: "delta",
+        messages: [],
+        deltaCursor: cursor,
+        sessionInfo: { key, sessionId: "team-session-271" },
+        pendingInputs: { items: [], total: 0, queuedCount: 0 },
+        metadata: { commands: [] },
+        stateRevision: {
+          sessionInfo: "fixture-session-v1",
+          commands: "fixture-commands-v1",
+          pendingInputs: "fixture-pending-inputs-v1",
+        },
+      });
+      expect(Value.Check(ChatHistoryDeltaResultSchema, delta)).toBe(true);
+      expect((await request("chat.history", { sessionKey: key, cursor })).payload).toMatchObject({
+        kind: "delta",
+        messages: [],
+      });
+      for (const params of [
+        { sessionKey: key, cursor: "retired-cursor" },
+        { sessionKey: "agent:main:main", cursor },
+      ]) {
+        const result = (await request("chat.history", params)).payload;
+        expect(result).not.toHaveProperty("kind");
+        expect(result.messages).toHaveLength(messageCount);
+        expect(result.sessionInfo).toMatchObject({ key: params.sessionKey });
+      }
+    },
+  );
+
+  it("seeds scoped display preferences independently of the full editable config", () => {
+    const { scenario } = createControlUiTeamScaleFixture({ now });
+    expect(scenario.bootstrapPreferences).toMatchObject({
+      profileId: "team-person-001",
+      config: { tts: { maxTextLength: 4096 } },
+    });
+    expect(scenario.bootstrapPreferences?.config).not.toHaveProperty("models");
+    expect(scenario.methodResponses?.["config.get"]).toMatchObject({
+      hash: "synthetic-config-v1",
+      configRevisionHash: "synthetic-config-v1",
+      appliedConfigHash: "synthetic-config-v1",
+    });
+    const bytes = Buffer.byteLength(JSON.stringify(scenario.methodResponses?.["config.get"]));
+    expect(bytes).toBeGreaterThanOrEqual(152_000);
+    expect(bytes).toBeLessThanOrEqual(169_000);
+  });
   it("sustains certified ancestor churn past the minute fallback and preserves the raw delta baseline", () => {
     const fixture = createControlUiTeamScaleFixture({
       now,
@@ -62,122 +211,35 @@ describe("Team-scale Gateway fixture", () => {
   it("pages session lists using pin placement, stable key ties, and the requested activity clock", () => {
     const fixture = createControlUiTeamScaleFixture({ now });
     const rows: GatewaySessionRow[] = [
-      {
-        key: "agent:main:newest",
-        kind: "direct",
-        updatedAt: 900,
-        lastInteractionAt: 100,
-        lastActivityAt: 200,
-      },
-      {
-        key: "agent:main:pin-old",
-        kind: "direct",
-        updatedAt: 100,
-        pinned: true,
-        pinnedAt: 10,
-        parentSessionKey: "agent:main:main",
-        lastInteractionAt: 800,
-      },
-      {
-        key: "agent:main:pin-new",
-        kind: "direct",
-        updatedAt: 50,
-        pinned: true,
-        pinnedAt: 20,
-        lastInteractionAt: 200,
-      },
-      {
-        key: "agent:main:tie-a",
-        kind: "direct",
-        updatedAt: 700,
-        lastInteractionAt: 300,
-        lastActivityAt: 500,
-      },
-      {
-        key: "agent:main:tie-B",
-        kind: "direct",
-        updatedAt: 700,
-        lastInteractionAt: 300,
-        lastActivityAt: 500,
-      },
-      {
-        key: "agent:main:subagent:nested",
-        kind: "direct",
-        updatedAt: 800,
-        pinned: true,
-        pinnedAt: 1_000,
-        spawnedBy: "agent:main:main",
-      },
-      {
-        key: "agent:main:promoted",
-        kind: "direct",
-        updatedAt: 600,
-        pinned: true,
-        pinnedAt: 30,
-        spawnedBy: "agent:main:main",
-        sidebarRoot: true,
-      },
-      {
-        key: "agent:main:false-pin",
-        kind: "direct",
-        updatedAt: 650,
+      session("newest", 900, { lastInteractionAt: 100, lastActivityAt: 200 }),
+      pinned("pin-old", 100, 10, { parentSessionKey: "agent:main:main", lastInteractionAt: 800 }),
+      pinned("pin-new", 50, 20, { lastInteractionAt: 200 }),
+      session("tie-a", 700, { lastInteractionAt: 300, lastActivityAt: 500 }),
+      session("tie-B", 700, { lastInteractionAt: 300, lastActivityAt: 500 }),
+      pinned("subagent:nested", 800, 1_000, { spawnedBy: "agent:main:main" }),
+      pinned("promoted", 600, 30, { spawnedBy: "agent:main:main", sidebarRoot: true }),
+      session("false-pin", 650, {
         pinned: false,
         pinnedAt: 10_000,
         lastInteractionAt: 900,
         lastActivityAt: 800,
-      },
-      { key: "agent:main:created", kind: "direct", updatedAt: null, createdAt: 1_000 },
+      }),
+      session("created", null, { createdAt: 1_000 }),
     ];
     const owner = createTeamScaleSidebarListOwner({ ...fixture.sidebarListInput, rows });
     for (const [sortBy, expected] of [
-      [
-        undefined,
-        [
-          "promoted",
-          "pin-new",
-          "pin-old",
-          "newest",
-          "subagent:nested",
-          "tie-B",
-          "tie-a",
-          "false-pin",
-          "created",
-        ],
-      ],
+      [undefined, "promoted pin-new pin-old newest subagent:nested tie-B tie-a false-pin created"],
       [
         "lastInteractionAt",
-        [
-          "false-pin",
-          "pin-old",
-          "tie-B",
-          "tie-a",
-          "pin-new",
-          "newest",
-          "created",
-          "promoted",
-          "subagent:nested",
-        ],
+        "false-pin pin-old tie-B tie-a pin-new newest created promoted subagent:nested",
       ],
-      [
-        "activity",
-        [
-          "created",
-          "false-pin",
-          "pin-old",
-          "subagent:nested",
-          "promoted",
-          "tie-B",
-          "tie-a",
-          "newest",
-          "pin-new",
-        ],
-      ],
+      ["activity", "created false-pin pin-old subagent:nested promoted tie-B tie-a newest pin-new"],
     ] as const) {
       const pages = [0, 3, 6].map((offset) => owner.list({ sortBy, offset, limit: 3 }).result);
       expect(
         pages.flatMap((page) => page.sessions.map((row) => row.key)),
         sortBy ?? "updatedAt",
-      ).toEqual(expected.map((id) => `agent:main:${id}`));
+      ).toEqual(expected.split(" ").map((id) => `agent:main:${id}`));
       expect(pages.map((page) => page.nextOffset)).toEqual([3, 6, null]);
     }
   });
@@ -207,9 +269,7 @@ describe("Team-scale Gateway fixture", () => {
     const counts = owner.list({
       rowMode: "compact",
       limit: 1,
-      excludeSubagents: true,
-      excludeCron: true,
-      excludeSystem: true,
+      ...rootOnly,
       includeOwnerSessionCounts: true,
     }).result;
 
@@ -247,17 +307,58 @@ describe("Team-scale Gateway fixture", () => {
       expect(owner.list({ [flag]: true, limit: 1 }).result.totalCount).toBe(total);
     }
 
-    const secondPage = owner.list({
-      limit: 100,
-      offset: 200,
-      excludeSubagents: true,
-      excludeCron: true,
-      excludeSystem: true,
-    }).result;
+    const secondPage = owner.list({ limit: 100, offset: 200, ...rootOnly }).result;
     expect(secondPage.sessions).toHaveLength(100);
     expect(secondPage.sessions[0]?.sessionId).toBe("team-session-171");
     expect(secondPage).toMatchObject({ offset: 200, nextOffset: null, hasMore: false });
   });
+
+  it("keeps persistent child details outside both boot root windows", () => {
+    const fixture = createControlUiTeamScaleFixture({ now, sidebarPersistentChildren: true });
+    const { parentKey, childKeys } = fixture.sidebarPersistentChildren!;
+    const owner = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
+    const roots = [
+      owner.list({ rowMode: "sidebar", limit: 200, ownerFirst: true }).result,
+      owner.list({ rowMode: "sidebar", limit: 200, involvingMe: true }).result,
+    ];
+    expect(childKeys).toHaveLength(4);
+    for (const root of roots) {
+      expect(root.sessions.some((row) => row.key === parentKey)).toBe(true);
+      expect(root.sessions.some((row) => childKeys.includes(row.key))).toBe(false);
+    }
+    const children = owner.list({ spawnedBy: parentKey, limit: 100 }).result;
+    expect(children.sessions.map((row) => row.key)).toEqual(childKeys);
+    expect(children.sessions.every((row) => !row.key.includes(":subagent:"))).toBe(true);
+  });
+
+  sessionGatewayTest(
+    "resolves an off-roster short deep link outside both boot windows and pins",
+    async ({ connect }) => {
+      const fixture = createControlUiTeamScaleFixture({ now, offRosterSession: true });
+      const owner = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
+      for (const query of [{ ownerFirst: true }, { involvingMe: true }]) {
+        const result = owner.list({ rowMode: "sidebar", limit: 200, ...query }).result;
+        expect(result.sessions.some((row) => row.key === fixture.selectedSessionKey)).toBe(false);
+      }
+      expect(fixture.pinnedKeys).not.toContain(fixture.selectedSessionKey);
+      expect(fixture.scenario.sessions?.some((row) => row.key === fixture.selectedSessionKey)).toBe(
+        true,
+      );
+      const { request } = await connect(fixture.scenario);
+      expect(
+        await request("sessions.resolve", { shortId: "f00dcafe", agentId: "main" }),
+      ).toMatchObject({
+        ok: true,
+        payload: {
+          ok: true,
+          key: "agent:main:dashboard:f00dcafe-0000-4000-8000-000000000271",
+          agentId: "main",
+          displayName: "Project dashboard 1",
+          boardFace: "dashboard",
+        },
+      });
+    },
+  );
 
   it("projects real row modes and bounds transcript enrichment without changing row identity on reread", () => {
     const fixture = createControlUiTeamScaleFixture({ now });
@@ -274,22 +375,17 @@ describe("Team-scale Gateway fixture", () => {
       derivedTitle: expect.any(String),
       lastMessagePreview: expect.any(String),
     });
-    expect(first.sessions[0]).not.toHaveProperty("thinkingLevels");
-    expect(first.sessions[0]).not.toHaveProperty("model");
+    expectAbsent(first.sessions[0], "thinkingLevels model");
     expect(first.sessions[99]).toHaveProperty("derivedTitle");
-    expect(first.sessions[100]).not.toHaveProperty("derivedTitle");
-    expect(first.sessions[100]).not.toHaveProperty("lastMessagePreview");
+    expectAbsent(first.sessions[100], "derivedTitle lastMessagePreview");
     expect(owner.list(params).result.sessions).toBe(first.sessions);
 
     const compact = owner.list({ rowMode: "compact", limit: 1 }).result.sessions[0];
     expect(compact).toMatchObject({ rowMode: "compact", model: "gpt-5-mini" });
-    expect(compact).not.toHaveProperty("thinkingLevels");
-    expect(compact).not.toHaveProperty("derivedTitle");
-    expect(compact).not.toHaveProperty("lastMessagePreview");
+    expectAbsent(compact, "thinkingLevels derivedTitle lastMessagePreview");
     const dashboard = owner.list({ rowMode: "dashboard", limit: 1 }).result.sessions[0];
     expect(dashboard).toMatchObject({ rowMode: "dashboard", owner: expect.any(Object) });
-    expect(dashboard).not.toHaveProperty("participants");
-    expect(dashboard).not.toHaveProperty("hasActiveRun");
+    expectAbsent(dashboard, "participants hasActiveRun");
   });
 
   it("provides a valid three-page cron inventory and seven plugin activations", () => {
@@ -332,12 +428,9 @@ describe("Team-scale Gateway fixture", () => {
       sortDir: "asc",
     });
     expect(catalog.jobs).toHaveLength(120);
-    expect(catalog.jobs.slice(0, 4).map((job) => job.id)).toEqual([
-      "team-cron-1",
-      "team-cron-10",
-      "team-cron-100",
-      "team-cron-101",
-    ]);
+    expect(catalog.jobs.slice(0, 4).map((job) => job.id)).toEqual(
+      [1, 10, 100, 101].map((id) => `team-cron-${id}`),
+    );
     const page = fixture.listCronJobs({
       limit: 1,
       offset: 1,

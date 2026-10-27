@@ -69,6 +69,7 @@ const rawSqliteAllowPathGroups = {
     "src/infra/sqlite-schema-contract.ts",
     // Cross-store reservations own native BEGIN/ROLLBACK, without application queries.
     "src/infra/sqlite-source-fence.ts",
+    "src/infra/sqlite-staging-token.ts",
     "src/infra/sqlite-strict.ts",
     "src/infra/sqlite-transaction.ts",
     "src/infra/sqlite-user-version.ts",
@@ -136,6 +137,8 @@ const rawSqliteAllowPathGroups = {
     "src/agents/harness/native-hook-relay-client-read.ts",
   ],
   "read-only schema preflight and integrity verification access": [
+    // Legacy-table presence was split from the migration so readers avoid its codecs.
+    "src/infra/state-legacy-cron-presence.ts",
     "src/state/openclaw-database-preflight.ts",
     "src/state/openclaw-database-verify.worker.ts",
     "src/state/openclaw-state-ownership.ts",
@@ -165,7 +168,6 @@ const rawSqliteAllowPathGroups = {
     "src/infra/state-migrations.debug-proxy.ts",
     "src/infra/state-migrations.meeting-transcripts-detection.ts",
     "src/infra/state-migrations.meeting-transcripts-files.ts",
-    "src/infra/state-migrations.meeting-transcripts-verify.ts",
     "src/infra/state-migrations.media-persistence.ts",
     // Doctor FK PRAGMAs classify repair eligibility; row operations still use Kysely.
     "src/infra/state-migrations.session-window-repair.ts",

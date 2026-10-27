@@ -42,21 +42,17 @@ it("creates distinct sessions through concurrent first-store preparations", asyn
           create(scopes[index]!, preparation, `created-${index}`),
         ),
       );
-      expect(results).toEqual(
-        scopes.map((_, index) => ({
-          status: "fulfilled",
-          value: expect.objectContaining({
-            ok: true,
-            entry: expect.objectContaining({ sessionId: `created-${index}` }),
-          }),
-        })),
-      );
       const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
-      expect(
-        scopes.map(
-          (scope) => readExactSessionEntryRow(database, scope.sessionKey)?.entry.sessionId,
-        ),
-      ).toEqual(scopes.map((_, index) => `created-${index}`));
+      for (const [index, result] of results.entries()) {
+        const sessionId = `created-${index}`;
+        expect(result).toMatchObject({
+          status: "fulfilled",
+          value: { ok: true, entry: { sessionId } },
+        });
+        expect(readExactSessionEntryRow(database, scopes[index]!.sessionKey)?.entry.sessionId).toBe(
+          sessionId,
+        );
+      }
     } finally {
       await Promise.all(preparations.map((preparation) => preparation[Symbol.asyncDispose]()));
     }

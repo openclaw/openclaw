@@ -1,34 +1,8 @@
-import type { Transferable } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WorkerLifecycle } from "./worker-lifecycle.js";
 import type { WorkerTaskHost } from "./worker-task-host.js";
 import { releaseWorkerNativeSectionsOnExit } from "./worker-task-native-sections.js";
 import type { Slot, Task, WorkerTaskPoolOptions } from "./worker-task-pool.types.js";
-
-function postWorkerTaskInput<Input, Output>(
-  worker: WorkerLifecycle,
-  slot: Slot<Input, Output>,
-  task: Task<Input, Output>,
-  input: Input,
-  transferList: readonly Transferable[] | undefined,
-  taskContext: unknown,
-): void {
-  const transferStartedAt = performance.now();
-  worker.postMessage(
-    {
-      input,
-      taskId: task.id,
-      interactive: Boolean(
-        task.options.onRequest || task.options.onRequestSync || task.options.onNotification,
-      ),
-      nativeSections: slot.nativeSections.buffer,
-      taskContext,
-      sampleMemory: true,
-    },
-    transferList,
-  );
-  task.transferMs += performance.now() - transferStartedAt;
-}
 
 export function sendWorkerTaskInput<Input, Output>(params: {
   slot: Slot<Input, Output>;
@@ -67,14 +41,27 @@ export function sendWorkerTaskInput<Input, Output>(params: {
     const transferList = task.options.transferList?.(input);
     if (!task.done) {
       const context = params.host.captureTaskContext(worker);
-      postWorkerTaskInput(
-        worker,
-        slot,
-        task,
-        input,
-        [...(transferList ?? []), ...(params.host.taskContextTransferList?.(context) ?? [])],
-        context,
+      const transfers = [
+        ...(transferList ?? []),
+        ...(params.host.taskContextTransferList?.(context) ?? []),
+      ];
+      const transferStartedAt = performance.now();
+      const progressSignal = task.options.progressSignal;
+      worker.postMessage(
+        {
+          input,
+          taskId: task.id,
+          interactive: Boolean(
+            task.options.onRequest || task.options.onRequestSync || task.options.onNotification,
+          ),
+          nativeSections: slot.nativeSections.buffer,
+          ...(progressSignal ? { progressSignal } : {}),
+          taskContext: context,
+          sampleMemory: true,
+        },
+        transfers,
       );
+      task.transferMs += performance.now() - transferStartedAt;
     }
   } catch (error) {
     params.fail(error);
@@ -94,6 +81,7 @@ export function createWorkerTaskPoolWorker<Input, Output>(params: {
   onExit: (code: number | undefined, counted: boolean) => void;
 }): WorkerLifecycle {
   const { slot, options } = params;
+  let observeStart = params.host.captureWorkerStartObserver?.(options.workerUrl);
   const worker: WorkerLifecycle = params.runInContext(() => {
     const prepared = options.prepareWorker?.();
     slot.releaseResources = prepared?.releaseResources;
@@ -129,6 +117,8 @@ export function createWorkerTaskPoolWorker<Input, Output>(params: {
     }
     counted = true;
     params.onStarted(worker);
+    observeStart?.();
+    observeStart = undefined;
   };
   if (slot.native) {
     slot.native.on("started", started);

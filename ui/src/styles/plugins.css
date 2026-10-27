@@ -347,10 +347,6 @@
 }
 
 .plugin-catalog-card__head {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: var(--space-2);
   min-width: 0;
 }
 
@@ -358,8 +354,10 @@
   position: relative;
   z-index: 3;
   display: flex;
-  min-height: 30px;
+  height: 1lh;
+  flex: 0 0 auto;
   align-items: center;
+  margin-inline-start: auto;
 }
 
 .plugin-catalog-card__install,
@@ -547,24 +545,6 @@
   background: var(--bg-hover);
 }
 
-/* Keyboard-accessible detail opener: the row text is a real button so the
-   row's primary action is focusable instead of a div click handler. */
-.plugins-item__detail-button {
-  border: 0;
-  border-radius: var(--radius-sm);
-  padding: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: var(--cursor-action);
-}
-
-.plugins-item__detail-button:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .clawhub-skill-icon {
   width: 40px;
   height: 40px;
@@ -648,11 +628,7 @@
 .plugins-tile--fallback svg {
   width: 21px;
   height: 21px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 1.6px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .plugins-row-message {
@@ -660,10 +636,6 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  border-radius: var(--radius-md);
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -677,9 +649,8 @@
   flex: 1 1 100%;
 }
 
-.plugins-row-message--error {
-  background: var(--danger-subtle);
-  color: var(--danger);
+.plugin-catalog-detail__panel > .plugins-row-message {
+  margin-bottom: var(--space-4);
 }
 
 .plugins-row-message--info {
@@ -688,6 +659,8 @@
   border: 0;
   background: transparent;
   color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.45;
   white-space: normal;
 }
 
@@ -1139,11 +1112,16 @@ openclaw-plugins-page
   height: 1em;
 }
 .plugin-catalog-detail__security-score {
+  /* The hover fill bleeds past the label and bars so neither sits flush with its edge. */
+  --plugin-security-score-bleed: 8px;
+
   display: grid;
   grid-template-columns: 1fr repeat(3, 26px);
   align-items: center;
   gap: 6px;
-  padding: 8px 0;
+  margin-inline: calc(-1 * var(--plugin-security-score-bleed));
+  padding: 8px var(--plugin-security-score-bleed);
+  border-radius: var(--radius-md);
 }
 .plugin-catalog-detail__security-score strong {
   font-size: var(--control-ui-text-sm);
@@ -1286,9 +1264,6 @@ openclaw-plugins-page
   font-size: var(--control-ui-text-sm);
 }
 .plugin-capability__copy > span {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
   overflow: hidden;
   line-height: 1.5;
 }

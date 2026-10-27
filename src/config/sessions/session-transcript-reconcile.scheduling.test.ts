@@ -8,11 +8,11 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
-import { persistSessionTranscriptTurn } from "./session-accessor.js";
 import {
   closeSessionTranscriptReconcileWorkerPool,
   getSessionTranscriptReconcileWorkerPoolSnapshot,
 } from "./session-transcript-reconcile-pool.js";
+import * as fixtures from "./session-transcript-reconcile.fixtures.test-support.js";
 import {
   reconcileSessionTranscriptIndexes,
   startSessionTranscriptIndexReconcile,
@@ -24,7 +24,7 @@ it("drains deferred reconciliation after the caller retires its timer queue", as
   signal,
 }) => {
   const stateDir = useAutoCleanupTempDirTracker(onTestFinished).make("openclaw-reconcile-clock-");
-  const options = { agentId: "main", env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
+  const { options, scope } = fixtures.reconcileScope(stateDir, "deferred");
   let releaseYield: (() => void) | undefined;
   const release = () => {
     releaseYield?.();
@@ -39,18 +39,12 @@ it("drains deferred reconciliation after the caller retires its timer queue", as
     clearRuntimeConfigSnapshot();
   });
   setRuntimeConfigSnapshot({});
-  await persistSessionTranscriptTurn(
-    { ...options, sessionId: "deferred", sessionKey: "agent:main:deferred" },
-    {
-      messages: [{ eventId: "message", message: { role: "user", content: "Deferred repair" } }],
-      touchSessionEntry: false,
-    },
-  );
+  await fixtures.seedTranscript(scope, "message", "Deferred repair");
   await waitForSessionTranscriptIndexReconcile(options);
   await closeSessionTranscriptReconcileWorkerPool();
   const database = openOpenClawAgentDatabase(options);
   database.db.prepare("DELETE FROM session_transcript_fts").run();
-  database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
+  fixtures.markRebuild(database.db);
 
   signal.throwIfAborted();
   // A failing regression must release the withheld callback before fixture teardown.
@@ -67,11 +61,11 @@ it("drains deferred reconciliation after the caller retires its timer queue", as
   }
 
   await closeSessionTranscriptReconcileWorkerPool();
-  expect(database.db.prepare("SELECT message_id, text FROM session_transcript_fts").all()).toEqual([
+  expect(fixtures.projectionMessages(database.db)).toEqual([
     { message_id: "message", text: "Deferred repair" },
   ]);
   expect(
-    database.db.prepare("SELECT needs_rebuild FROM session_transcript_index_state").all(),
+    fixtures.rows(database.db, "SELECT needs_rebuild FROM session_transcript_index_state"),
   ).toEqual([{ needs_rebuild: 0 }]);
   expect(getSessionTranscriptReconcileWorkerPoolSnapshot()).toMatchObject({
     maxWorkers: 1,

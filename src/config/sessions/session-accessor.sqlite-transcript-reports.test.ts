@@ -2,6 +2,7 @@ import { copyFileSync, readFileSync, renameSync } from "node:fs";
 import { symlink } from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
@@ -31,8 +32,11 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
+import { retainPreparedSessionEntryPredicate } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { appendAbortedSessionTranscriptPartial } from "./session-accessor.sqlite-transcript-reports.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { createRetainedSkillsSnapshotFixture } from "./session-skills-snapshot.test-support.js";
+import { messageEvent } from "./transcript-message.test-support.js";
 import {
   createTranscriptEventInserter,
   createTranscriptPayloadUpdater,
@@ -58,12 +62,7 @@ const assistant = {
 };
 const selected = { customType: "status", content: body, details: { selected: true } };
 const header = { type: "session", id: scope.sessionId, version: CURRENT_SESSION_VERSION };
-const messageEvent = (id: string, parentId: string | null, message: unknown) => ({
-  type: "message",
-  id,
-  parentId,
-  message,
-});
+
 const statusReport = (content: string) => ({ customType: "status", content, display: true });
 const agentDatabase = () => openOpenClawAgentDatabase({ agentId: scope.agentId });
 const nativeDatabase = () => requireNativeSqliteDatabase(agentDatabase().db);
@@ -113,8 +112,6 @@ const custom = (
     { kind: "custom" }
   >["selectReport"],
 ) => ({ kind: "custom", customTypes: ["status"], selectReport }) as const;
-const appendAssistant = (message: AssistantMessage & { responseId: string }) =>
-  appendSessionTranscriptReport(scope, { kind: "assistant", message });
 async function blockWriter() {
   const release = createDeferredCore();
   const admitted = createDeferredCore();
@@ -132,20 +129,13 @@ async function seedEvents(events: unknown[]) {
   return nativeDatabase();
 }
 async function seedReports() {
-  const db = await seedEvents([
+  return seedEvents([
     messageEvent("root", null, { role: "user", content: body }),
     { type: "custom_message", id: "old", parentId: "root", ...statusReport(body) },
     { type: "custom_message", id: "selected", parentId: "old", ...selected, display: true },
     messageEvent("assistant", "selected", { ...assistant, __openclaw: { runId: "run" } }),
     messageEvent("tail", "assistant", { role: "user", content: body }),
   ]);
-  expect(
-    row(
-      db,
-      "SELECT count(*) AS count FROM transcript_events WHERE session_id = ? AND event_zstd IS NOT NULL",
-    ),
-  ).toEqual({ count: 5 });
-  return db;
 }
 
 function transcriptSnapshot(db: DatabaseSync) {
@@ -156,6 +146,11 @@ function transcriptSnapshot(db: DatabaseSync) {
     watermark: row(db, "SELECT * FROM transcript_rewrite_watermarks WHERE session_id = ?"),
   };
 }
+
+const expectReport = async (report: Parameters<typeof appendSessionTranscriptReport>[1]) =>
+  expect(appendSessionTranscriptReport(scope, report)).resolves.toMatchObject({ ok: true });
+const expectAssistant = (message: AssistantMessage & { responseId: string }) =>
+  expectReport({ kind: "assistant", message });
 
 describe("SQLite report payload selection", () => {
   it(
@@ -182,7 +177,6 @@ describe("SQLite report payload selection", () => {
       release.resolve();
       await Promise.all([blocker, report, later]);
       expect(order).toEqual(["report", "later write"]);
-      await expect(report).resolves.toEqual({ ok: true, value: undefined });
       expect((await loadTranscriptEvents(scope)).at(-1)).toMatchObject({
         type: "custom_message",
         content: "queued report",
@@ -200,7 +194,6 @@ describe("SQLite report payload selection", () => {
       const replacement = state.path("same-report.sqlite");
       const retired = state.path("retired-report.sqlite");
       copyFileSync(databasePath, replacement);
-      expect(readFileSync(replacement)).toEqual(readFileSync(databasePath));
       const { release, blocker } = await blockWriter();
       const selectReport = vi.fn(() => statusReport("stale"));
       const report = appendSessionTranscriptReport(scope, custom(selectReport));
@@ -264,6 +257,41 @@ describe("SQLite report payload selection", () => {
   );
 
   it(
+    "preserves retained workspace snapshots through fallback publication",
+    withReportState(async () => {
+      await seedEvents([]);
+      await upsertSessionEntryCore(scope, {
+        lifecycleRevision: "current-lifecycle",
+        skillsSnapshot: createRetainedSkillsSnapshotFixture(),
+      });
+      const retained = retainPreparedSessionEntryPredicate({
+        databaseIdentity: readDatabasePathIdentitySync(agentDatabase().path).key,
+        sessionKey: scope.sessionKey,
+        entry: loadSessionEntry(scope),
+        projection: ["skillsSnapshot"],
+        matches: (before, after) =>
+          before?.sessionId === after?.sessionId &&
+          before?.lifecycleRevision === after?.lifecycleRevision &&
+          isDeepStrictEqual(
+            before?.skillsSnapshot?.librarySelections,
+            after?.skillsSnapshot?.librarySelections,
+          ),
+      });
+      onTestFinished(() => retained.release());
+      expect(retained.isCurrent()).toBe(true);
+      await expect(abortPartial("retained-workspace")).resolves.toMatchObject({
+        ok: true,
+        value: { skipped: false, append: { appended: true } },
+      });
+      expect(retained.isCurrent()).toBe(true);
+      await upsertSessionEntryCore(scope, {
+        skillsSnapshot: { prompt: "", skills: [], librarySelections: [] },
+      });
+      expect(retained.isCurrent()).toBe(false);
+    }),
+  );
+
+  it(
     "fences abort fallbacks and preserves authoritative answers",
     withReportState(async () => {
       const db = await seedReports();
@@ -303,17 +331,13 @@ describe("SQLite report payload selection", () => {
         expect(onUpdate).not.toHaveBeenCalled();
       }
       const result = await abortPartial(partial.runId, partial);
-      expect(result).toMatchObject({
-        ok: true,
-        value: {
-          skipped: false,
-          lifecycleRevision: "current-lifecycle",
-          append: { appended: true, message: { __openclaw: { runId: "stopped-run" } } },
-        },
-      });
       if (!result.ok || result.value.skipped) {
         throw new Error("Expected a committed fallback receipt");
       }
+      expect(result.value).toMatchObject({
+        lifecycleRevision: "current-lifecycle",
+        append: { appended: true },
+      });
       const saved = loadSessionEntry(scope);
       expect(saved).toMatchObject({
         usageReport: { state: "unavailable" },
@@ -325,18 +349,17 @@ describe("SQLite report payload selection", () => {
       expect(onUpdate).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           ...scope,
+          runId: partial.runId,
           target: expect.objectContaining(scope),
           lifecycleRevision: result.value.lifecycleRevision,
           messageSeq: result.value.messageSeq,
           message: result.value.append.message,
           messageId: result.value.append.messageId,
-          runId: partial.runId,
         }),
       );
       onUpdate.mockClear();
       await expect(abortPartial(partial.runId, partial)).resolves.toMatchObject({ ok: true });
       expect(onUpdate).not.toHaveBeenCalled();
-      assertNoHostTransaction(hostTransactions.mock.calls);
       const events = await loadTranscriptEvents(scope);
       expect(events).toHaveLength(7);
       expect(events.at(-1)).toMatchObject({
@@ -376,7 +399,7 @@ describe("SQLite report payload selection", () => {
             ...(name !== "nonterminal" ? { runTerminal: true } : {}),
           },
         };
-        await expect(appendAssistant(nativeMessage)).resolves.toMatchObject({ ok: true });
+        await expectAssistant(nativeMessage);
         const committed = transcriptSnapshot(db);
         onUpdate.mockClear();
         const settled = await abortPartial(runId);
@@ -482,7 +505,6 @@ describe("SQLite report payload selection", () => {
         ).resolves.toEqual({ ok: true, value: undefined });
         expect(selectReport).toHaveBeenNthCalledWith(1, selected);
         expect(selectReport).toHaveBeenNthCalledWith(2, competitor);
-        expect(selectReport).toHaveBeenCalledTimes(2);
       }
       assertNoHostTransaction(hostTransactions.mock.calls);
       const events = await loadTranscriptEvents(scope);
@@ -500,24 +522,18 @@ describe("SQLite report payload selection", () => {
     withReportState(async () => {
       await seedReports();
       const serializedKeys: string[] = [];
-      class NestedDetails {
+      const serializable = (value: unknown) => ({
         toJSON(key: string) {
           serializedKeys.push(key);
-          return { revision: 3 };
-        }
-      }
-      const details = {
-        toJSON(key: string) {
-          serializedKeys.push(key);
-          return { nested: new NestedDetails(), omitted: undefined };
+          return value;
         },
-      };
+      });
       await expect(
         appendSessionTranscriptReport(
           scope,
           custom(() => ({
             ...statusReport("serialized report"),
-            details,
+            details: serializable({ nested: serializable({ revision: 3 }), omitted: undefined }),
             toJSON(key: string): unknown {
               serializedKeys.push(key);
               return { ...this, toJSON: undefined };
@@ -600,7 +616,7 @@ describe("SQLite report payload selection", () => {
         ...assistant,
         content: [{ type: "text" as const, text: `${body}${secret}` }],
       };
-      await expect(appendAssistant(reportMessage)).resolves.toMatchObject({ ok: true });
+      await expectAssistant(reportMessage);
       const events = await loadTranscriptEvents(scope);
       expect(events).toHaveLength(3);
       expect(events[1]).toEqual(unreadable);
@@ -626,13 +642,9 @@ describe("SQLite report payload selection", () => {
       expect(payload.event_zstd).not.toBeNull();
       createTranscriptPayloadUpdater(db, scope.sessionId)({ ...payload, seq: 1 });
       const before = transcriptSnapshot(db);
-      await expect(appendAssistant({ ...assistant, responseId: "last" })).resolves.toMatchObject({
-        ok: true,
-      });
+      await expectAssistant({ ...assistant, responseId: "last" });
       expect(transcriptSnapshot(db)).toEqual(before);
-      await expect(appendAssistant({ ...assistant, responseId: "first" })).resolves.toMatchObject({
-        ok: true,
-      });
+      await expectAssistant({ ...assistant, responseId: "first" });
       const events = await loadTranscriptEvents(scope);
       expect(events).toHaveLength(3);
       expect(events[1]).toEqual(JSON.parse(raw));

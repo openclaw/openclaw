@@ -39,15 +39,15 @@ export type AdmissionFactValue = {
 
 export function readSqliteDatabaseAdmissionFact<T>(
   fact: AdmissionFactValue,
-  key: SqliteDatabaseAdmissionKey<T>,
+  key: SqliteDatabaseFactKey<T>,
 ): T | undefined {
-  fact[decodedValue] ??= { value: key.read(fact.value) };
-  // SAFETY: A private key name identifies one value type, decoded by that key at admission.
+  fact[decodedValue] ??= { value: key.read ? key.read(fact.value) : fact.value };
+  // SAFETY: Each key names its typed publisher's value; boundary keys retain their decoder.
   return fact[decodedValue].value as T | undefined;
 }
 
 export function admitSqliteDatabaseFactValue<T>(
-  key: SqliteDatabaseAdmissionKey<T>,
+  key: SqliteDatabaseFactKey<T>,
   value: T,
 ): AdmissionFactValue {
   const fact: AdmissionFactValue = { value };
@@ -148,6 +148,7 @@ export type Admission = {
   facts: Map<string, AdmissionFact>;
 };
 export type SqliteDatabaseAdmissions = Admission[];
+type AdmissionPublications = Map<Admission, string[] | undefined>;
 export type SqliteDatabaseAdmissionKey<T> = {
   name: string;
   read(this: void, value: unknown): T | undefined;
@@ -161,6 +162,11 @@ export type SqliteDatabaseAdmissionExchange = (
   location?: string,
   create?: boolean,
 ) => SqliteDatabaseAdmissions;
+
+/** Internal typed publications need no decoder; public/custom keys retain their read contract. */
+export type SqliteDatabaseFactKey<T> = Omit<SqliteDatabaseAdmissionKey<T>, "read"> & {
+  read?: SqliteDatabaseAdmissionKey<T>["read"];
+};
 
 export function readSqliteDatabaseAdmissions(value: unknown): SqliteDatabaseAdmissions | undefined {
   // SAFETY: These facts come only from this process's paired worker and bootstrap transports.
@@ -357,10 +363,8 @@ export class SqliteDatabaseAdmissionRegistry {
   private exchangeCursor = createSqliteDatabaseAdmissionCursor();
   private readonly locations = new Map<string, string>();
   private readonly published = new Map<string, PublishedAdmission>();
-  readonly descriptors = new Map<
-    string,
-    { descriptor: number; facts: Map<string, AdmissionFact> }
-  >();
+  private readonly scopeSweeps = new WeakMap<Admission, number>();
+  readonly descriptors = new Map<string, Pick<Admission, "descriptor" | "facts">>();
   private revision = 0;
   private retainProcessFacts = true;
 
@@ -419,6 +423,7 @@ export class SqliteDatabaseAdmissionRegistry {
   }
 
   releaseWorker(owner: number): void {
+    const changedRecords: AdmissionPublications = new Map();
     for (const record of this.records.values()) {
       const references = owner > 0 ? record.references.get(owner) : undefined;
       if (!references) {
@@ -427,8 +432,11 @@ export class SqliteDatabaseAdmissionRegistry {
       // Zero permits a live worker to reopen; negative cells cannot be revived by old snapshots.
       Atomics.store(new Int32Array(references), 0, -1);
       this.retireUnreferenced(record);
+      changedRecords.set(record, undefined);
     }
-    this.publish();
+    if (changedRecords.size > 0) {
+      this.publish(changedRecords);
+    }
   }
 
   observeLocation(location: string, identity: string): void {
@@ -517,12 +525,9 @@ export class SqliteDatabaseAdmissionRegistry {
     return true;
   }
 
-  publish(selected?: Admission | Set<Admission>, scopeKeys?: readonly string[]): void {
-    if (
-      selected &&
-      !(selected instanceof Set) &&
-      this.records.get(selected.identity) !== selected
-    ) {
+  publish(selected?: Admission | AdmissionPublications, scopeKeys?: readonly string[]): void {
+    const isBatch = selected instanceof Map;
+    if (selected && !isBatch && this.records.get(selected.identity) !== selected) {
       return;
     }
     // Another isolate can retire shared custody. Reclaim it at publication, not on every request.
@@ -534,10 +539,10 @@ export class SqliteDatabaseAdmissionRegistry {
         this.forget(current.identity);
         continue;
       }
-      if (selected && selected !== current && !(selected instanceof Set && selected.has(current))) {
+      if (selected && selected !== current && !(isBatch && selected.has(current))) {
         continue;
       }
-      let changed = selected === current || selected instanceof Set;
+      let changed = selected === current || isBatch;
       for (const [owner, references] of current.references) {
         if (Atomics.load(new Int32Array(references), 0) < 0) {
           current.references.delete(owner);
@@ -545,12 +550,18 @@ export class SqliteDatabaseAdmissionRegistry {
         }
       }
       const previous = this.published.get(current.identity);
-      // Discovery already knows its keys; general publication also sweeps remote retirements.
+      const scopeRevision = readSqliteDatabaseGeneration(current, "writeScopeRevision");
+      const keys = previous && selected ? (isBatch ? selected.get(current) : scopeKeys) : undefined;
+      const sweep = keys === undefined && this.scopeSweeps.get(current) !== scopeRevision;
       const writeScopes = snapshotWriteScopes(
         current.writeScopes,
         previous?.writeScopes,
-        previous && selected === current ? scopeKeys : undefined,
+        keys ?? (sweep ? undefined : []),
       );
+      // Keyed publications can acknowledge a revision without sweeping remote retirements.
+      if (sweep) {
+        this.scopeSweeps.set(current, scopeRevision);
+      }
       changed ||= writeScopes !== previous?.writeScopes;
       if (!changed) {
         continue;
@@ -660,12 +671,12 @@ export class SqliteDatabaseAdmissionRegistry {
   }
 
   install(admissions: SqliteDatabaseAdmissions): boolean {
-    const changedRecords = new Set<Admission>();
+    const changedRecords: AdmissionPublications = new Map();
     for (const incoming of admissions) {
       let record = this.records.get(incoming.identity);
       if (incoming.descriptorOwner !== 0 || isSqliteDatabaseAdmissionRetired(incoming)) {
         if (record && isSqliteDatabaseAdmissionRetired(record)) {
-          changedRecords.add(record);
+          changedRecords.set(record, undefined);
         }
         continue;
       }
@@ -701,6 +712,7 @@ export class SqliteDatabaseAdmissionRegistry {
           changed = true;
         }
       }
+      const scopeKeys = changedRecords.get(record) ?? [];
       for (const [key, revision] of incoming.writeScopes) {
         if (Atomics.load(revision.state, 1) !== 0) {
           continue;
@@ -714,9 +726,14 @@ export class SqliteDatabaseAdmissionRegistry {
           continue;
         }
         if (threadId === 0) {
-          advanceSqliteDatabaseGeneration(record, "writeScopeRevision");
+          const previousRevision = advanceSqliteDatabaseGeneration(record, "writeScopeRevision");
+          // The keyed publication covers this addition, never an unseen peer's retirement.
+          if (this.scopeSweeps.get(record) === previousRevision) {
+            this.scopeSweeps.set(record, (previousRevision + 1) | 0);
+          }
         }
         retainSqliteDatabaseWriteScope(record, key, revision);
+        scopeKeys.push(key);
         changed = true;
       }
       const writeScopeRevision = readSqliteDatabaseGeneration(record, "writeScopeRevision");
@@ -742,13 +759,13 @@ export class SqliteDatabaseAdmissionRegistry {
       // Only the host has every borrower's reference cell; worker snapshots can omit later peers.
       this.retireUnreferenced(record);
       if (changed || isSqliteDatabaseAdmissionRetired(record)) {
-        changedRecords.add(record);
+        // Reuse the admitted snapshot; only imported cells need keyed publication.
+        changedRecords.set(record, scopeKeys.length > 0 ? scopeKeys : undefined);
       }
     }
     if (changedRecords.size > 0) {
       this.publish(changedRecords);
-      return true;
     }
-    return false;
+    return changedRecords.size > 0;
   }
 }

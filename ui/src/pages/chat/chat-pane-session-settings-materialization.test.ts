@@ -9,6 +9,7 @@ import type {
   SessionsPatchResult,
 } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import { withSessionMutationOperations } from "../../lib/sessions/session-mutation-operations.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import { renderPaneModelControl } from "./chat-pane-model-control.test-support.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
@@ -109,6 +110,10 @@ it.each([
       expect(previousTail).toBeDefined();
       queued = switchChatSetting(pane.state, { kind: "thinkingLevel", value: "low" });
       expect(getPendingChatPickerPatch(pane.state, placeholder.key, "main")).not.toBe(previousTail);
+      expect(sessions.settingsPreview(placeholder.key, "main")).toMatchObject({
+        thinkingLevel: "low",
+      });
+      await withSessionMutationOperations(() => undefined);
       expect(patch).toHaveBeenCalledOnce();
       expect(patch.mock.calls[0]?.[1]).toMatchObject({
         key: placeholder.key,
@@ -143,7 +148,6 @@ it.each([
           sessionId: materialized.sessionId,
           thinkingLevel: "low",
         });
-        expect(pane.state.chatThinkingLevel).toBe("low");
       } else {
         expect(rows[0]).toEqual(unrelated);
         expect(selectedChatSessionRow(pane.state)).toMatchObject(unrelated);
@@ -252,6 +256,8 @@ it.each(["unbound", "materialized"] as const)(
       expect(middleReady).toBeDefined();
       expect(lastReady).toBeDefined();
       expect(lastReady).not.toBe(middleReady);
+      expect(sessions.settingsPreview(key, "main")).toMatchObject({ thinkingLevel: "medium" });
+      await withSessionMutationOperations(() => undefined);
       expect(patch).toHaveBeenCalledOnce();
 
       if (lastTarget === "unbound") {
@@ -327,7 +333,6 @@ it.each(["unbound", "materialized"] as const)(
         sessionId: materialized.sessionId,
         thinkingLevel: "medium",
       });
-      expect(pane.state.chatThinkingLevel).toBe("medium");
       expect(getPendingChatPickerPatch(pane.state, key, "main")).toBeUndefined();
     } finally {
       stopManaged?.();
@@ -366,16 +371,23 @@ it.each([
       entry: { sessionId: "unobserved-ack-session", updatedAt: 2, thinkingLevel: "high" },
     } satisfies SessionsPatchResult;
     const firstReply = createDeferred<SessionsPatchResult>();
-    const replies = Array.from({ length: 3 }, () => createDeferred<SessionsPatchResult>());
-    const dispatched = Array.from({ length: 3 }, () => createDeferred());
+    const replies = Array.from({ length: 4 }, () => createDeferred<SessionsPatchResult>());
+    const dispatched = Array.from({ length: 4 }, () => createDeferred());
     const requested = [
       { thinkingLevel: "low" },
       { fastMode: true },
       { contextWindow: "128k" },
+      { cyberAccessProgram: "daybreak_blue" },
     ] as const;
     const remainingPreviews = [
-      { fastMode: true, effectiveFastMode: true, contextWindow: "128k" },
-      { contextWindow: "128k" },
+      {
+        fastMode: true,
+        effectiveFastMode: true,
+        contextWindow: "128k",
+        cyberAccessProgram: "daybreak_blue",
+      },
+      { contextWindow: "128k", cyberAccessProgram: "daybreak_blue" },
+      { cyberAccessProgram: "daybreak_blue" },
       undefined,
     ];
     const patch = vi.fn<GatewayRequestHandler>((_method, raw): Promise<SessionsPatchResult> => {
@@ -410,15 +422,20 @@ it.each([
       queued.push(switchChatSetting(pane.state, { kind: "thinkingLevel", value: "low" }));
       queued.push(switchChatSetting(pane.state, { kind: "fastMode", value: "on" }));
       queued.push(switchChatSetting(pane.state, { kind: "contextWindow", value: "128k" }));
-      expect(patch).toHaveBeenCalledOnce();
-      expect(patch.mock.calls[0]?.[1]).toEqual({ key, thinkingLevel: "high" });
+      queued.push(
+        switchChatSetting(pane.state, { kind: "cyberAccessProgram", value: "daybreak_blue" }),
+      );
       const pendingPreview = {
         thinkingLevel: "low",
         fastMode: true,
         effectiveFastMode: true,
         contextWindow: "128k",
+        cyberAccessProgram: "daybreak_blue",
       };
       expect(sessions.settingsPreview(key, "main")).toEqual(pendingPreview);
+      await withSessionMutationOperations(() => undefined);
+      expect(patch).toHaveBeenCalledOnce();
+      expect(patch.mock.calls[0]?.[1]).toEqual({ key, thinkingLevel: "high" });
 
       if (initialState === "published placeholder") {
         rows.push(placeholder);
@@ -474,7 +491,7 @@ it.each([
         expect(pane.state.chatError).toContain(
           outcome === "reasoning rejection"
             ? "Synthetic queued setting 0 rejection"
-            : "Synthetic queued setting 2 rejection",
+            : "Synthetic queued setting 3 rejection",
         );
         expect(pane.state.lastError).toBe(pane.state.chatError);
       } else {

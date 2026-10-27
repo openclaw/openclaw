@@ -34,18 +34,14 @@ type ExperienceReviewAgentEndEvent = {
 };
 
 type ExperienceReviewAgentContext = {
-  agentId?: string;
   runId?: string;
   sessionKey?: string;
-  sessionId?: string;
   workspaceDir?: string;
   modelProviderId?: string;
   modelId?: string;
-  modelContextWindowTokens?: number;
   authProfileId?: string;
   modelIterations?: number;
   skillWorkshopAvailable?: boolean;
-  compacted?: boolean;
   foregroundPromptContext: EmbeddedForegroundPromptContext;
 };
 
@@ -243,7 +239,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         log.debug(`experience review skipped: reason=errored-completion session=${sessionKey}`);
         return;
       }
-      if (resolveSkillWorkshopConfig(params.config).autonomous.mode !== "auto") {
+      if (resolveSkillWorkshopConfig(params.config).autonomous.mode === "off") {
         cancel(key);
         return;
       }

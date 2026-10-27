@@ -1,7 +1,6 @@
 import type { EmbeddedRunCompletionRegistration } from "../../agents/embedded-agent-runner/run-state.js";
 import { prepareEmbeddedAgentRunCompletionClaim } from "../../agents/embedded-agent-runner/runs.js";
 import { registerRequesterFinalAttachment } from "../../agents/subagents/requester-final-attachment.js";
-import { normalizeTalkSection } from "../../config/talk.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -35,12 +34,12 @@ import type {
   TalkRequesterFinalBinding,
 } from "./client-agent-consult.types.js";
 import { createTalkClientAgentRuntime } from "./client-agent-runtime.js";
+import type { TalkClientRunAuthority } from "./client-run-authority.js";
 import {
+  prepareTalkClientToolContext,
   resolveTalkAgentConsultAuthority,
   type TalkAgentConsultAuthority,
-} from "./client-gateway-control.js";
-import type { TalkClientRunAuthority } from "./client-run-authority.js";
-import { prepareTalkClientToolContext } from "./client-tool-authority.js";
+} from "./client-tool-authority.js";
 import { isTalkConsultSourceCurrent } from "./run-ownership.js";
 import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 
@@ -200,7 +199,7 @@ export function createTalkClientAgentConsultRunner(params: {
             assertCurrent: assertConsultCurrent,
           })
         : getAgentRuntime();
-    const talkConfig = normalizeTalkSection(config.talk);
+    const talkConfig = config.talk;
     // A voice turn outlives offer setup and must drain under its own root,
     // while new turns still respect suspension and restart admission.
     const admission = tryBeginGatewayIndependentRootWorkAdmission("talk-agent-consult", {
@@ -534,6 +533,7 @@ export function createTalkClientAgentConsultRunner(params: {
         owner.source === "native-delegation"
           ? (text) =>
               createUserTurnTranscriptRecorder({
+                sessionLifecyclePatch: { lastInteractionAt: Date.now() },
                 input: { text, display: false },
                 target: {
                   agentId,

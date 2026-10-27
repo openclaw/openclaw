@@ -1,6 +1,5 @@
 import type { WorktreeTemplateWorkerOperations } from "../agents/worktrees/template-registry.worker.js";
 import { isClawAddStateCommand } from "../claws/add-state-worker-contract.js";
-import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { refreshSqlitePlannerStatistics } from "../infra/sqlite-planner-statistics.js";
 import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js";
@@ -42,7 +41,6 @@ import {
 } from "./openclaw-state-lease-worker.js";
 import type {
   OpenClawStateWorkerBackend,
-  OpenClawStateWorkerOpenPreparation,
   OpenClawStateWorkerOperations,
 } from "./openclaw-state-worker-contract.js";
 import { stateWorkerRegistry } from "./openclaw-state-worker-registry.js";
@@ -58,13 +56,10 @@ const commandRegistry = createWorkerOperationRegistry<
       OpenClawStateWorkerOperations,
       | "worktrees.reserveCapacity"
       | "worktrees.recoverPending"
-      | Extract<keyof OpenClawStateWorkerOperations, `deviceAuth.${string}`>
       | Extract<keyof OpenClawStateWorkerOperations, `restartLifecycle.${string}`>
     >,
   WorkerWriteOperationContext
 >({
-  deviceAuth: async () =>
-    (await import("../infra/device-auth-store.worker.js")).deviceAuthWorkerOperations,
   restartLifecycle: () =>
     import("../infra/restart-lifecycle.worker.js").then(
       (loaded) => loaded.restartLifecycleOperations,
@@ -104,15 +99,8 @@ function stateDatabaseInitializationEnvironment(): NodeJS.ProcessEnv {
 
 export function createSqliteWorkerBackend(
   _input: undefined,
-  context: { databasePath: string; preparation?: OpenClawStateWorkerOpenPreparation },
+  context: { databasePath: string },
 ): OpenClawStateWorkerBackend {
-  if (context.preparation?.type === "deviceIdentity") {
-    loadOrCreateDeviceIdentity({
-      path: context.databasePath,
-      env: stateDatabaseInitializationEnvironment(),
-      identityKey: context.preparation.identityKey,
-    });
-  }
   const database = openOpenClawStateDatabase({
     path: context.databasePath,
     env: stateDatabaseInitializationEnvironment(),
@@ -211,9 +199,11 @@ function createSharedStateWorkerBackend(
   ) => {
     const { receipt, transactionEnvironment, ...options } = transactionOptions;
     const openedDatabase = open();
+    // Waiting for the host must not hold the writer lock. The commit grant still
+    // revalidates authority after the transaction's current-row checks.
+    requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
     return write(
       (database) => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
         const result = operation(database);
         requestSqliteWorkerOperationAdmission({
           stage: "commit",
@@ -332,7 +322,6 @@ function createSharedStateWorkerBackend(
           : undefined;
       }
       if (
-        commandType.startsWith("deviceAuth.") ||
         commandType.startsWith("restartLifecycle.") ||
         commandType.startsWith("worktrees.templates.") ||
         commandType === "worktrees.reserveCapacity" ||
@@ -368,7 +357,6 @@ function createSharedStateWorkerBackend(
         commandType === "database.walMaintenance" ||
         commandType === "database.publishSchema" ||
         commandType === "stateLease.acquire" ||
-        commandType === "deviceIdentity.load" ||
         commandType === "stateLease.verify" ||
         commandType === "stateLease.renew" ||
         commandType === "stateLease.release"
@@ -414,17 +402,6 @@ function createSharedStateWorkerBackend(
           throw new Error("Capture worker command runtime is not prepared");
         }
         return capture.executeCaptureCommand(command, open());
-      }
-      if (command.type === "deviceIdentity.load") {
-        try {
-          return loadOrCreateDeviceIdentity({
-            path: context.databasePath,
-            identityKey: command.input.identityKey,
-            env: stateDatabaseInitializationEnvironment(),
-          });
-        } finally {
-          retainCachedDatabase();
-        }
       }
       if (command.type === "agentDatabases.releaseExitedLease") {
         if (!agentCleanup) {
@@ -528,6 +505,9 @@ function createSharedStateWorkerBackend(
       updateRunWriter?.assertSettled();
       if (nativeDatabase) {
         assertTransactionUsable(nativeDatabase.db);
+        if (!nativeDatabase.db.isOpen && isPostgresSqlConnection(nativeDatabase.db)) {
+          throw new Error("Shared-state worker retained a closed PostgreSQL connection");
+        }
         if (nativeDatabase.db.isOpen && nativeDatabase.db.isTransaction) {
           throw new Error("Shared-state worker retained an unsettled transaction");
         }

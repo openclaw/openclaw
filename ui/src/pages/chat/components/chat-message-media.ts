@@ -3,6 +3,8 @@ import type { ChatImageRenditionWidth } from "../../../../../src/shared/chat-ima
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import type { MessageContentItem, MessageImageSource } from "../../../lib/chat/chat-types.ts";
 import { readTranscriptMediaEntries } from "../../../lib/chat/message-extract.ts";
@@ -16,6 +18,10 @@ import {
 } from "../../../lib/media-file-extension.ts";
 import { isCrossOriginHttpSource } from "./chat-attachment-href.ts";
 
+registerChatComposerEnglish();
+
+registerChatMediaEnglish();
+
 export type ImageBlock = {
   factIndex?: number;
   fileName?: string;
@@ -26,6 +32,17 @@ export type ImageBlock = {
   width?: number;
   height?: number;
 } & ({ url: string; artifactId?: string } | { url?: undefined; artifactId: string });
+
+/** Native admission and open actions shared with non-preview catalog rows. */
+export type MessageMediaAction = {
+  onOpen?: () => void;
+  onRetry?: () => void;
+  onAllow?: () => void;
+  onFocus?: () => void;
+  observeElement?: (element: Element | undefined) => void;
+  pending: boolean;
+  reason?: string;
+};
 
 export type ArtifactDownloadResolver = (
   params: {
@@ -49,11 +66,13 @@ export type ImageRenderOptions = {
   policyKey?: string;
   canonicalMessageKey?: string;
   localSubmission?: boolean;
+  messageSendId?: string;
   connectionEpoch?: number;
   resourceBasePath?: string;
   authToken?: string | null;
   /** Synchronous cancellation custody, independent of any rendering callback. */
   mediaOwner?: object;
+  mediaReadAllowed?: boolean;
   /** A local resource observer; never a pane or page redraw callback. */
   onMediaChange?: () => void;
   onRequestOpenImage?: () => number;
@@ -472,11 +491,8 @@ export function resolveAttachmentImageKind(
     : "raster";
 }
 
-export function projectMessageMedia(
-  message: unknown,
-  content: readonly MessageContentItem[],
-  nowMs = Date.now(),
-) {
+export function projectMessageMedia(message: unknown, content: readonly MessageContentItem[]) {
+  const nowMs = Date.now();
   const record = asNonArrayRecord(message);
   const images: ImageBlock[] = [];
   const attachments: AssistantAttachmentItem[] = [];

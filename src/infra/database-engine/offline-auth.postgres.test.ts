@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { getEnvironmentData } from "node:worker_threads";
 import { Command } from "commander";
-import pg from "pg";
+import type pg from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   loadAuthProfileStoreForRuntimeAsync,
@@ -22,6 +22,7 @@ import { runStartupConfigPreflight } from "../../commands/startup-config-preflig
 import { captureConfigHealthStateStore } from "../../config/io.health-state.js";
 import { resetConfigRuntimeState } from "../../config/runtime-snapshot.js";
 import { saveCronJobsStore } from "../../cron/store.js";
+import { createReloadCronJob } from "../../cron/store.test-support.js";
 import { cronStoreKey } from "../../cron/store/key.js";
 import {
   inspectCronJobsReadOnly,
@@ -46,6 +47,7 @@ import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { installDatabaseEngineSelection } from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
+import { withPostgresConnection } from "./postgres-store-metadata.js";
 import { resolveDatabaseFamilyEngines } from "./registry.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
@@ -67,12 +69,34 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+async function withDatabase(
+  label: string,
+  run: (client: pg.Client, prefix: string) => Promise<void>,
+) {
+  const prefix = `${label}_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+  await withPostgresConnection(
+    { connection: connection!, schemaPrefix: prefix },
+    async (client) => {
+      try {
+        await run(client, prefix);
+      } finally {
+        await closeStateDatabaseForTest();
+        resetDatabaseEngineSelectionForTest();
+        const schemas = await client.query<{ nspname: string }>(
+          "SELECT nspname FROM pg_namespace WHERE starts_with(nspname, $1)",
+          [`${prefix}_`],
+        );
+        for (const { nspname } of schemas.rows) {
+          await client.query(`DROP SCHEMA "${nspname}" CASCADE`);
+        }
+      }
+    },
+  );
+}
+
 describe.skipIf(!connection)("offline CLI on PostgreSQL", () => {
   it("selects PostgreSQL before auth, persists a key, and leaves Gateway admission usable", async () => {
-    const prefix = `cli_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
-    const client = new pg.Client({ connectionString: connection });
-    await client.connect();
-    try {
+    await withDatabase("cli", async (client, prefix) => {
       await withOpenClawTestState(
         { label: "postgres-offline-auth", env: { OPENCLAW_TEST_AUTH_DSN: connection } },
         async (state) => {
@@ -111,18 +135,18 @@ describe.skipIf(!connection)("offline CLI on PostgreSQL", () => {
               runtime: defaultRuntime,
               commandPath: ["models", "auth", "paste-api-key"],
             });
-            await expect(
-              agentsDeleteCommand({ id: "main", force: true }, defaultRuntime),
-            ).rejects.toBeInstanceOf(ExitError);
+            await expect(agentsDeleteCommand({ id: "main", force: true })).rejects.toBeInstanceOf(
+              ExitError,
+            );
             expect(error).toHaveBeenCalledWith(
               'Agent "main" owns the legacy shared auth store and cannot be deleted. Run openclaw doctor --fix to migrate shared auth, then retry.',
             );
-            const run = async (args: string[]) => {
+            const run = async (...args: string[]) => {
               const program = new Command().enablePositionalOptions();
               registerModelsCli(program);
               await program.parseAsync(["models", "auth", ...args], { from: "user" });
             };
-            await run([
+            await run(
               "paste-api-key",
               "--provider",
               "openai",
@@ -130,7 +154,7 @@ describe.skipIf(!connection)("offline CLI on PostgreSQL", () => {
               "openai:offline",
               "--agent",
               "main",
-            ]);
+            );
             const readCold = async <T>(read: () => Promise<T>) => {
               const cache = createPluginCache();
               try {
@@ -139,16 +163,8 @@ describe.skipIf(!connection)("offline CLI on PostgreSQL", () => {
                 await retirePluginCache(cache);
               }
             };
-            await readCold(() => run(["list", "--agent", "main", "--json"]));
-            await run([
-              "order",
-              "set",
-              "--provider",
-              "openai",
-              "--agent",
-              "main",
-              "openai:offline",
-            ]);
+            await readCold(() => run("list", "--agent", "main", "--json"));
+            await run("order", "set", "--provider", "openai", "--agent", "main", "openai:offline");
             await mkdir(state.agentDir("reader"), { recursive: true });
             await saveModelProviderApiKey({
               provider: "openai",
@@ -218,25 +234,13 @@ describe.skipIf(!connection)("offline CLI on PostgreSQL", () => {
           }
         },
       );
-    } finally {
-      const schemas = await client.query<{ nspname: string }>(
-        "SELECT nspname FROM pg_namespace WHERE starts_with(nspname, $1)",
-        [prefix + "_"],
-      );
-      for (const { nspname } of schemas.rows) {
-        await client.query(`DROP SCHEMA "${nspname}" CASCADE`);
-      }
-      await client.end();
-    }
+    });
   });
 });
 
 describe.skipIf(!connection)("PostgreSQL cron read-only owner", () => {
   it("loads jobs and Doctor inventory through PostgreSQL while retaining an anchor-only local store", async () => {
-    const prefix = `cron_read_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
-    const client = new pg.Client({ connectionString: connection });
-    await client.connect();
-    try {
+    await withDatabase("cron_read", async (_client, prefix) => {
       await withOpenClawTestState({ label: "postgres-cron-read-only" }, async (state) => {
         installDatabaseEngineSelection({
           effectiveEngines: resolveDatabaseFamilyEngines({
@@ -248,19 +252,11 @@ describe.skipIf(!connection)("PostgreSQL cron read-only owner", () => {
         const store: CronStoreFile = {
           version: 1,
           jobs: [
-            {
+            createReloadCronJob({
               id: "postgres-read-only",
-              name: "persisted PostgreSQL job",
-              enabled: true,
               agentId: "main",
-              createdAtMs: 1,
-              updatedAtMs: 2,
-              schedule: { kind: "every", everyMs: 60_000 },
-              sessionTarget: "main",
-              wakeMode: "next-heartbeat",
-              payload: { kind: "systemEvent", text: "synthetic event" },
               state: { nextRunAtMs: 60_001 },
-            },
+            }),
           ],
         };
         await saveCronJobsStore(storePath, store);
@@ -280,8 +276,7 @@ describe.skipIf(!connection)("PostgreSQL cron read-only owner", () => {
           const loaded = await (preserveArtifacts
             ? withArtifactPreservingStateReads(read)
             : read());
-          expect(loaded.store).toEqual(store);
-          expect(loaded.invalidConfigRows).toEqual([]);
+          expect([loaded.store, loaded.invalidConfigRows]).toEqual([store, []]);
         }
         expect(await inspectCronJobsReadOnly(state.env)).toEqual([
           expect.objectContaining({ id: "postgres-read-only", definition: expect.any(Object) }),
@@ -293,20 +288,6 @@ describe.skipIf(!connection)("PostgreSQL cron read-only owner", () => {
           anchor.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all(),
         ).toEqual([{ name: "openclaw_engine_anchor" }]);
       });
-    } finally {
-      await closeStateDatabaseForTest();
-      resetDatabaseEngineSelectionForTest();
-      try {
-        const schemas = await client.query<{ schema_name: string }>(
-          "SELECT schema_name FROM information_schema.schemata WHERE starts_with(schema_name, $1)",
-          [`${prefix}_`],
-        );
-        for (const { schema_name: schema } of schemas.rows) {
-          await client.query(`DROP SCHEMA "${schema}" CASCADE`);
-        }
-      } finally {
-        await client.end();
-      }
-    }
+    });
   });
 });

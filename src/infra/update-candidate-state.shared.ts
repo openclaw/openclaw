@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
@@ -6,12 +7,14 @@ import {
   resolveOpenClawRegisteredAgentDatabasePath,
   resolveOpenClawStateDirForDatabasePath,
 } from "../state/openclaw-state-db.paths.js";
+import { ignoreMissingPath } from "./errno.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import {
   queueStateDatabaseSpelling,
+  resolveUpdateCandidateStateIdentity,
   type StateDatabaseDiscovery,
 } from "./update-candidate-paths.js";
 import type { UpdateCandidateBundledSource } from "./update-candidate-plugins.js";
@@ -20,6 +23,7 @@ export type StateInput = {
   additionalPaths?: readonly string[];
   config: OpenClawConfigWithLegacyRoster;
   includeLocalStoreVersions?: boolean;
+  includeClientCredentialStoreVersion?: boolean;
   env?: NodeJS.ProcessEnv;
   includeRetainedAgentPaths?: true;
   sourceBundledPlugins?: UpdateCandidateBundledSource;
@@ -110,4 +114,32 @@ export async function readUpdateStoreSchemaVersion(
     }
   }
   return { userVersion };
+}
+
+export async function collectSupplementalStateDatabasePaths(
+  input: StateInput,
+  files: Map<string, StateDatabaseDiscovery>,
+) {
+  const { discoverBackupDatabasePaths } = await import("./backup-sqlite-snapshot.js");
+  const knownRealpaths = new Set(
+    await Promise.all([...files.keys()].map((file) => fs.realpath(file).catch(ignoreMissingPath))),
+  );
+  // The private snapshot below owns registry reads, including legacy schemas.
+  // Include declared retained plugin databases on either physical engine here.
+  for (const file of input.additionalPaths ??
+    (await discoverBackupDatabasePaths({ ...input, agentRegistry: [] }))) {
+    // Supplemental realpaths must not add aliases to the legacy versions inventory.
+    // Registry discovery below still preserves every explicitly recorded spelling.
+    if (files.has(resolveUpdateCandidateStateIdentity(input.stateDir, file))) {
+      continue;
+    }
+    const realpath = await fs.realpath(file).catch(ignoreMissingPath);
+    if (realpath === undefined || !knownRealpaths.has(realpath)) {
+      queueStateDatabaseSpelling(files, input.stateDir, file);
+      if (realpath !== undefined) {
+        knownRealpaths.add(realpath);
+      }
+    }
+  }
+  return files;
 }

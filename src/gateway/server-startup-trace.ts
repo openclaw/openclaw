@@ -1,5 +1,8 @@
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
-import { consumeGatewayBootstrapSteps } from "../cli/startup-trace.js";
+import {
+  consumeGatewayBootstrapSteps,
+  formatGatewayStartupMemoryUsage,
+} from "../cli/startup-trace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   emitDiagnosticsTimelineEvent,
@@ -11,11 +14,11 @@ import {
   supportsUpdateCanaryProgress,
   UPDATE_CANARY_PROGRESS_PREFIX,
 } from "../infra/update-candidate-canary-progress.js";
+import { runWithWorkerStartObserver } from "../infra/worker-request-diagnostics.js";
 import { withDiagnosticPhase } from "../logging/diagnostic-phase.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { recordGatewayRestartTraceDetail, recordGatewayRestartTraceSpan } from "./restart-trace.js";
 
-type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 type Awaitable<T> = T | Promise<T>;
 const TIMELINE_NAMES = new Map([
   ["config.snapshot", "config.load"],
@@ -65,13 +68,6 @@ const STARTUP_PROGRESS_PHASES = new Set([
 const RECOVERY_PHASE = "sidecars.subagent-recovery";
 const RECOVERY_TIMINGS = new Map([
   ["sidecars.recovery-readers", "readersMs"],
-  ["sidecars.delivery-recovery", "deliveryMs"],
-  ["sidecars.delivery-discovery", "deliveryDiscoveryMs"],
-  ["sidecars.delivery-entries", "deliveryEntriesMs"],
-  ["sidecars.delivery-history", "deliveryHistoryMs"],
-  ["sidecars.delivery-replay", "deliveryReplayMs"],
-  ["sidecars.delivery-notices", "deliveryNoticesMs"],
-  ["sidecars.delivery-retry-wait", "retryWaitMs"],
   ["sidecars.exec-recovery", "execMs"],
   ["sidecars.subagent-load", "registryLoadMs"],
   ["sidecars.subagent-activation", "registryActivationMs"],
@@ -79,7 +75,6 @@ const RECOVERY_TIMINGS = new Map([
   ["sidecars.subagent-requesters", "registryActivationRequestersMs"],
   ["sidecars.subagent-reserve", "registryActivationReserveMs"],
   ["sidecars.subagent-resume", "registryActivationResumeMs"],
-  ["sidecars.subagent-interrupted", "registryActivationInterruptedMs"],
 ]);
 
 const RECOVERY_DETAILS = [
@@ -108,7 +103,7 @@ export async function measureStartup<T>(
 }
 
 export function createGatewayStartupTrace(
-  log: GatewayLogger,
+  log: ReturnType<typeof createSubsystemLogger>,
   startedAt = performance.now(),
   updateCanary = false,
 ) {
@@ -132,10 +127,12 @@ export function createGatewayStartupTrace(
     eventLoopDelay.enable();
   };
   ensureEventLoopDelay();
+  const pluginWorkers = new Map<string, Map<string, number>>();
   const close = () => {
     eventLoopDelay?.disable();
     eventLoopDelay = undefined;
     closed = true;
+    pluginWorkers.clear();
   };
   const started = startedAt;
   let last = started;
@@ -211,8 +208,12 @@ export function createGatewayStartupTrace(
     ];
     recordGatewayRestartTraceSpan(`restart.ready.${name}`, durationMs, totalMs, metrics);
     if (logEnabled || (serviceOutcome && durationMs >= 250)) {
+      // Bootstrap steps are replayed later; current memory would misattribute their peak.
+      const memory = name.startsWith("process.bootstrap.")
+        ? ""
+        : ` ${formatGatewayStartupMemoryUsage()}`;
       log.info(
-        `startup trace: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms ${metrics.map(([key, value]) => formatMetric(key, value)).join(" ")}`,
+        `startup trace: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms ${metrics.map(([key, value]) => formatMetric(key, value)).join(" ")}${memory}`,
       );
     } else if (STARTUP_PROGRESS_PHASES.has(name)) {
       const summary =
@@ -222,12 +223,27 @@ export function createGatewayStartupTrace(
               .join(" ")
           : "";
       log.info(
-        `startup phase: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms${summary ? ` ${summary}` : ""}`,
+        `startup phase: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms${summary ? ` ${summary}` : ""} ${formatGatewayStartupMemoryUsage()}`,
       );
     }
   };
   return {
     close,
+    run<T>(name: string, run: () => T): T {
+      if (closed) {
+        return run();
+      }
+      let workers = pluginWorkers.get(name);
+      if (!workers) {
+        workers = new Map();
+        pluginWorkers.set(name, workers);
+      }
+      const counts = workers;
+      return runWithWorkerStartObserver(
+        (script) => counts.set(script, (counts.get(script) ?? 0) + 1),
+        run,
+      );
+    },
     setConfig(config: OpenClawConfig) {
       timelineConfig = config;
       ensureEventLoopDelay();
@@ -275,6 +291,23 @@ export function createGatewayStartupTrace(
       }
     },
     detail(name: string, metrics: ReadonlyArray<readonly [string, number | string]>) {
+      const pluginLoad = name.startsWith("plugins.gateway-load.plugin.") && !closed;
+      if (pluginLoad) {
+        const workers = pluginWorkers.get(name);
+        pluginWorkers.delete(name);
+        const workersStarted = [...(workers?.values() ?? [])].reduce(
+          (sum, count) => sum + count,
+          0,
+        );
+        const duration =
+          metrics.find(([key]) => key === "loadAndRegisterMs")?.[1] ??
+          metrics.find(([key]) => key === "loadMs")?.[1];
+        if (logEnabled || workersStarted || (typeof duration === "number" && duration >= 250)) {
+          log.info(
+            `startup trace: ${name} ${metrics.map(([key, value]) => formatMetric(key, value)).join(" ")} workersStarted=${workersStarted} workerScripts=${[...(workers ?? [])].map(([script, count]) => `${script}:${count}`).join(",") || "none"}`,
+          );
+        }
+      }
       if (name === "sidecars.subagent-activation") {
         for (const key of RECOVERY_DETAILS) {
           const value = metrics.find(([metricName]) => metricName === key)?.[1];
@@ -285,7 +318,7 @@ export function createGatewayStartupTrace(
       }
       const attributes = Object.fromEntries(metrics);
       recordGatewayRestartTraceDetail(`restart.ready.${name}`, metrics);
-      if (logEnabled) {
+      if (logEnabled && !pluginLoad) {
         log.info(
           `startup trace: ${name} ${metrics.map(([key, value]) => formatMetric(key, value)).join(" ")}`,
         );

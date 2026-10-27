@@ -30,6 +30,7 @@ let logger: MeetingTranscriptBridgeLogger;
 
 beforeEach(async () => {
   stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-bridge-"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   current = {
     id: "meeting-1",
     url: "https://meeting.example/room",
@@ -58,6 +59,7 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   await fs.rm(stateDir, { force: true, recursive: true });
+  vi.unstubAllEnvs();
 });
 
 function createBridge(config?: { enabled: boolean }) {
@@ -99,9 +101,7 @@ it("retires simultaneous tool subscribers when meeting metadata finalization fai
   const registry = createEmptyPluginRegistry();
   registry.transcriptSourceProviders.push({ pluginId: "meeting", source: "test", provider });
   const tool = createTranscriptsTool({
-    stateDir,
     agentId: "research",
-    logger,
     caller: { kind: "operator", source: "local" },
   });
   const execute = (params: Record<string, unknown>) =>

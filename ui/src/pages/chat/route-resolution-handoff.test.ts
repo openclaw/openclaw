@@ -12,12 +12,20 @@ import {
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { locationWithoutDraft } from "./route-draft.ts";
-import { loadChatRoute } from "./route-loader.ts";
 import {
+  canonicalSession,
   createSessionRouteContext as contextFor,
   createSessionRouteRow as row,
   installShortSessionResolver as installShortResolver,
+  loadSessionRoute as load,
 } from "./route-resolution.test-support.ts";
+
+const monitor = (suffix: string) =>
+  row({
+    key: `agent:roboclaw:thread:12345678-${suffix}`,
+    displayName: "Deploy monitor",
+  });
+const location = (pathname: string, search = "") => ({ pathname, search, hash: "" });
 
 describe("session route navigation handoffs", () => {
   it.each([
@@ -36,33 +44,25 @@ describe("session route navigation handoffs", () => {
       const currentKey = sessionKey.replace(":thread:", ":dashboard:");
       const { context, request } = contextFor({ ok: true, key: currentKey, agentId: "roboclaw" });
       prepareSessionNavigationHandoff(context.gateway, pathname, sessionKey);
-      const first = await loadChatRoute(
-        context,
-        {
-          pathname,
-          search: `${search}&${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(sessionKey)}`,
-          hash: "",
-        },
-        "chat",
-        new AbortController().signal,
+      const first = canonicalSession(
+        await load(
+          context,
+          location(
+            pathname,
+            `${search}&${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(sessionKey)}`,
+          ),
+        ),
       );
-      if (!("kind" in first) || first.kind !== "session" || !first.canonicalLocation) {
-        throw new Error("Expected navigation-key cleanup");
-      }
       expect(first.canonicalLocation.search).toBe(search);
-      await expect(
-        loadChatRoute(context, first.canonicalLocation, "chat", new AbortController().signal),
-      ).resolves.toMatchObject({ kind: "session", sessionKey });
+      await expect(load(context, first.canonicalLocation)).resolves.toMatchObject({
+        kind: "session",
+        sessionKey,
+      });
       expect(request).not.toHaveBeenCalled();
       if (reconnect) {
         context.gateway.snapshot.hello = gatewayHelloForMethods(["sessions.resolve"]);
       }
-      const cleaned = await loadChatRoute(
-        context,
-        locationWithoutDraft(first.canonicalLocation),
-        "chat",
-        new AbortController().signal,
-      );
+      const cleaned = await load(context, locationWithoutDraft(first.canonicalLocation));
       if (reconnect) {
         expect(cleaned).toMatchObject({ kind: "session", sessionKey: currentKey });
         expect(request).toHaveBeenCalledOnce();
@@ -82,12 +82,7 @@ describe("session route navigation handoffs", () => {
       row: storedRow,
     });
     prepareSessionNavigationHandoff(context.gateway, target.options.pathname, storedRow.key);
-    const loaded = await loadChatRoute(
-      context,
-      { pathname: target.options.pathname, search: "", hash: "" },
-      "chat",
-      new AbortController().signal,
-    );
+    const loaded = await load(context, location(target.options.pathname));
 
     expect(loaded).toMatchObject({
       kind: "session",
@@ -97,159 +92,94 @@ describe("session route navigation handoffs", () => {
   });
 
   it.each([
-    {
-      connectionChange: "gateway client replacement",
-      replaceConnection: (snapshot: ApplicationContext["gateway"]["snapshot"]) => {
-        const request = (snapshot.client as { request?: unknown } | null)?.request;
-        snapshot.client = { request } as NonNullable<typeof snapshot.client>;
-      },
-    },
-    {
-      connectionChange: "hello replacement on the same gateway client",
-      replaceConnection: (snapshot: ApplicationContext["gateway"]["snapshot"]) => {
-        snapshot.hello = {
-          snapshot: { sessionDefaults: { mainKey: "main" } },
-        } as NonNullable<typeof snapshot.hello>;
-      },
-    },
-  ])("does not trust a carried session after $connectionChange", async ({ replaceConnection }) => {
-    const oldSession = row({
-      key: "agent:roboclaw:thread:12345678-0aaa-4000-8000-000000000001",
-      displayName: "Deploy monitor",
-    });
-    const currentSession = row({
-      key: "agent:roboclaw:thread:12345678-0bbb-4000-8000-000000000002",
-      displayName: "Deploy monitor",
-    });
-    const { context, list } = contextFor({ ok: true, ...oldSession, agentId: "roboclaw" });
-    context.gateway.snapshot.hello = {
-      snapshot: { sessionDefaults: { mainKey: "main" } },
-    } as NonNullable<typeof context.gateway.snapshot.hello>;
-    const resolved = await loadChatRoute(
-      context,
-      { pathname: "/chat/roboclaw/deploy-monitor", search: "", hash: "" },
-      "chat",
-      new AbortController().signal,
-    );
-    if (!("kind" in resolved) || resolved.kind !== "session" || !resolved.canonicalLocation) {
-      throw new Error("Expected a canonical session location");
-    }
-    const request = installShortResolver(context, [currentSession]);
-    replaceConnection(context.gateway.snapshot);
-
-    const loaded = await loadChatRoute(
-      context,
-      resolved.canonicalLocation,
-      "chat",
-      new AbortController().signal,
-    );
-
-    expect(loaded).toMatchObject({ kind: "session", sessionKey: currentSession.key });
-    expect(list).not.toHaveBeenCalled();
-    expect(request).toHaveBeenCalledOnce();
-  });
-
-  it.each(["client", "hello"] as const)(
-    "does not rebind an in-flight short result after %s replacement",
-    async (replaced) => {
-      const oldSession = row({
-        key: "agent:roboclaw:thread:12345678-0aaa-4000-8000-000000000001",
-        displayName: "Deploy monitor",
+    { replaced: "client", pending: false },
+    { replaced: "hello", pending: false },
+    { replaced: "client", pending: true },
+    { replaced: "hello", pending: true },
+  ])(
+    "rejects old resolution after $replaced replacement (in-flight: $pending)",
+    async ({ replaced, pending }) => {
+      const oldSession = monitor("0aaa-4000-8000-000000000001");
+      const currentSession = monitor("0bbb-4000-8000-000000000002");
+      const h = contextFor({
+        ok: true,
+        ...(pending ? currentSession : oldSession),
+        agentId: "roboclaw",
       });
-      const currentSession = row({
-        key: "agent:roboclaw:thread:12345678-0bbb-4000-8000-000000000002",
-        displayName: "Deploy monitor",
-      });
-      const { context, request } = contextFor({ ok: true, ...currentSession, agentId: "roboclaw" });
-      const pending = createDeferred<SessionsResolveResult>();
-      request.mockImplementationOnce(() => pending.promise);
-      const navigation = loadChatRoute(
-        context,
-        { pathname: "/dashboard/roboclaw/old-name-12345678", search: "", hash: "" },
-        "dashboard",
-        new AbortController().signal,
-      );
-      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-      if (replaced === "client") {
-        context.gateway.snapshot.client = createTestGatewayClient(request);
+      const { context, list } = h;
+      const snapshot = context.gateway.snapshot;
+      const hello = () =>
+        ({ snapshot: { sessionDefaults: { mainKey: "main" } } }) as NonNullable<
+          ApplicationContext["gateway"]["snapshot"]["hello"]
+        >;
+      const deferred = createDeferred<SessionsResolveResult>();
+      const face = pending ? "dashboard" : "chat";
+      if (pending) {
+        h.request.mockImplementationOnce(() => deferred.promise);
       } else {
-        context.gateway.snapshot.hello = {
-          snapshot: { sessionDefaults: { mainKey: "main" } },
-        } as NonNullable<typeof context.gateway.snapshot.hello>;
+        snapshot.hello = hello();
       }
-      pending.resolve({ ok: true, ...oldSession, agentId: "roboclaw" });
-      const resolved = await navigation;
-      if (!("kind" in resolved) || resolved.kind !== "session" || !resolved.canonicalLocation) {
-        throw new Error("Expected a canonical session location");
-      }
-      expect(resolved.sessionKey).toBe(oldSession.key);
-      await expect(
-        loadChatRoute(
-          context,
-          resolved.canonicalLocation,
-          "dashboard",
-          new AbortController().signal,
+      const navigation = load(
+        context,
+        location(
+          pending ? "/dashboard/roboclaw/old-name-12345678" : "/chat/roboclaw/deploy-monitor",
         ),
-      ).resolves.toMatchObject({ kind: "session", sessionKey: currentSession.key });
-      expect(request).toHaveBeenCalledTimes(2);
+        face,
+      );
+      const completed = pending ? null : canonicalSession(await navigation);
+      if (pending) {
+        await vi.waitFor(() => expect(h.request).toHaveBeenCalledOnce());
+      }
+      const request = pending ? h.request : installShortResolver(context, [currentSession]);
+      if (replaced === "hello") {
+        snapshot.hello = hello();
+      } else {
+        snapshot.client = createTestGatewayClient(request);
+      }
+      deferred.resolve({ ok: true, ...oldSession, agentId: "roboclaw" });
+      const resolved = completed ?? canonicalSession(await navigation);
+      expect(resolved.sessionKey).toBe(oldSession.key);
+      await expect(load(context, resolved.canonicalLocation, face)).resolves.toMatchObject({
+        kind: "session",
+        sessionKey: currentSession.key,
+      });
+      expect(request).toHaveBeenCalledTimes(pending ? 2 : 1);
+      expect(list).not.toHaveBeenCalled();
     },
   );
 
   it("prefers the current location key over a residual colliding handoff", async () => {
-    const current = row({
-      key: "agent:roboclaw:thread:12345678-0aaa-4000-8000-000000000001",
-      displayName: "Deploy monitor",
-    });
-    const residual = row({
-      key: "agent:roboclaw:thread:12345678-0bbb-4000-8000-000000000002",
-      displayName: "Deploy monitor",
-    });
+    const current = monitor("0aaa-4000-8000-000000000001");
+    const residual = monitor("0bbb-4000-8000-000000000002");
     const { context, list } = contextFor({ ok: false }, [current, residual]);
     const pathname = "/chat/roboclaw/deploy-monitor-12345678";
     prepareSessionNavigationHandoff(context.gateway, pathname, residual.key);
 
-    const loaded = await loadChatRoute(
+    const loaded = await load(
       context,
-      {
-        pathname,
-        search: `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(current.key)}`,
-        hash: "",
-      },
-      "chat",
-      new AbortController().signal,
+      location(pathname, `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(current.key)}`),
     );
 
     expect(loaded).toMatchObject({ kind: "session", sessionKey: current.key });
     expect(list).not.toHaveBeenCalled();
 
-    const canonicalReload = await loadChatRoute(
-      context,
-      { pathname, search: "", hash: "" },
-      "chat",
-      new AbortController().signal,
-    );
+    const canonicalReload = await load(context, location(pathname));
     expect(canonicalReload).toMatchObject({ kind: "session", sessionKey: current.key });
     expect(list).not.toHaveBeenCalled();
   });
 
   it("does not trust a URL-only full key that is absent from cached rows", async () => {
-    const expected = row({
-      key: "agent:roboclaw:thread:12345678-0aaa-4000-8000-000000000001",
-      displayName: "Deploy monitor",
-    });
+    const expected = monitor("0aaa-4000-8000-000000000001");
     const staleKey = "agent:roboclaw:thread:12345678-0bbb-4000-8000-000000000002";
     const { context, list } = contextFor();
     const request = installShortResolver(context, [expected]);
 
-    const loaded = await loadChatRoute(
+    const loaded = await load(
       context,
-      {
-        pathname: "/chat/roboclaw/deploy-monitor-12345678",
-        search: `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(staleKey)}`,
-        hash: "",
-      },
-      "chat",
-      new AbortController().signal,
+      location(
+        "/chat/roboclaw/deploy-monitor-12345678",
+        `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(staleKey)}`,
+      ),
     );
 
     expect(loaded).toMatchObject({ kind: "session", sessionKey: expected.key });

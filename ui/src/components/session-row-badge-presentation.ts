@@ -9,19 +9,32 @@ import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { sessionPullRequestStateIcons } from "../lib/session-pull-request-presentation.ts";
+import type { SessionPullRequestIndicators } from "./app-sidebar-session-pr-indicators.ts";
+import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { sessionMachineParts } from "./session-machine.ts";
 
-export type SessionPlacementState = NonNullable<GatewaySessionRow["placement"]>["state"];
+export function sidebarSessionBadgeFacts(
+  source: Pick<SessionPullRequestIndicators, "summary" | "count">,
+  row: SidebarRecentSession,
+  team: boolean,
+  initialPullRequest = row.pullRequest,
+) {
+  const attention = row.ownAttention ?? row.attention;
+  return (
+    row.snapshot ?? {
+      hasApproval:
+        (attention.kind === "question"
+          ? attention.requests.some((request) => request.kind === "approval")
+          : !team && attention.kind === "approval") || undefined,
+      pullRequest: source.summary(row.key, row.worktreeId ?? "", initialPullRequest),
+      pullRequestCount: source.count(row.key),
+    }
+  );
+}
+
+type SessionPlacementState = NonNullable<GatewaySessionRow["placement"]>["state"];
 
 export { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
-
-function formatSessionPullRequestSummary(
-  summary: SessionCatalogPullRequestSummary,
-  translate: typeof t,
-): string {
-  const numbers = summary.numbers.map((number) => `#${number}`).join(", ");
-  return `${numbers} · ${translate(`chat.pullRequests.${summary.state}`)}`;
-}
 
 export type SessionRowBadgesParams = {
   isChild?: boolean;
@@ -63,7 +76,7 @@ export function resolveSessionRowBadges(
   translate = t,
 ): SessionRowBadge[] {
   const pullRequestLabel = params.pullRequest
-    ? formatSessionPullRequestSummary(params.pullRequest, translate)
+    ? `${params.pullRequest.numbers.map((number) => `#${number}`).join(", ")} · ${translate(`chat.pullRequests.${params.pullRequest.state}`)}`
     : undefined;
   const pullRequestState = params.pullRequest?.state;
   const placementState = params.isChild ? undefined : params.placementState;

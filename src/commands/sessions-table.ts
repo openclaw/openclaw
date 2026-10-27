@@ -7,7 +7,7 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
-import type { SessionActor } from "../config/sessions/session-entry-provenance.js";
+import { resolveSessionCreatorActor } from "../config/sessions/session-entry-provenance.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 
 export function toSessionDisplayRow(key: string, entry: SessionEntry) {
@@ -31,7 +31,7 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry) {
     color: entry?.color,
     status: entry?.status,
     visibility: entry?.visibility ?? "shared",
-    createdActor: entry?.createdActor,
+    createdActor: resolveSessionCreatorActor(entry?.createdActor),
     owner: entry?.owner,
     participants: entry?.participants,
     participantCount: entry?.participantCount,
@@ -66,18 +66,14 @@ export function toSessionDisplayRows(store: Record<string, SessionEntry>) {
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 }
 
-function truncateSessionKey(key: string): string {
-  const graphemes = splitGraphemes(key);
-  if (graphemes.length <= 26) {
-    return key;
-  }
-  // Keep both the stable prefix and suffix; the tail often contains direct
-  // recipient or runtime identifiers that distinguish otherwise similar keys.
-  return `${graphemes.slice(0, 16).join("")}...${graphemes.slice(-6).join("")}`;
-}
-
 export function formatSessionKeyCell(key: string, rich: boolean): string {
-  const label = truncateSessionKey(sanitizeTerminalText(key));
+  let label = sanitizeTerminalText(key);
+  const graphemes = splitGraphemes(label);
+  if (graphemes.length > 26) {
+    // Keep both the stable prefix and suffix; the tail often contains direct
+    // recipient or runtime identifiers that distinguish otherwise similar keys.
+    label = `${graphemes.slice(0, 16).join("")}...${graphemes.slice(-6).join("")}`;
+  }
   return rich ? theme.accent(label) : label;
 }
 
@@ -89,10 +85,6 @@ export function formatSessionAgeCell(updatedAt: number | null | undefined, rich:
 export function formatSessionModelCell(model: string | null | undefined, rich: boolean): string {
   const label = sanitizeTerminalText(model ?? "unknown");
   return rich ? theme.info(label) : label;
-}
-
-function formatSessionActor(actor: SessionActor): string {
-  return actor.label?.trim() || actor.id?.trim() || actor.type;
 }
 
 export function formatSessionFlagsCell(
@@ -140,7 +132,7 @@ export function formatSessionFlagsCell(
     row.systemSent ? "system" : null,
     row.abortedLastRun ? "aborted" : null,
     row.visibility ? `visibility:${row.visibility}` : null,
-    owner ? `owner:${formatSessionActor(owner)}` : null,
+    owner ? `owner:${owner.label?.trim() || owner.id?.trim() || owner.type}` : null,
     participantSummary ? `participants:${participantSummary}` : null,
     row.runtimePolicySessionKey ? `policy:${row.runtimePolicySessionKey}` : null,
     row.sessionId ? `id:${row.sessionId}` : null,

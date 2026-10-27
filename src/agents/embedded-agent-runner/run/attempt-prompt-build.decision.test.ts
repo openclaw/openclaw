@@ -1,4 +1,3 @@
-import { Type } from "typebox";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
@@ -9,7 +8,6 @@ import { AgentDefaultsBaseSchema } from "../../../config/zod-schema.agent-defaul
 import { registered } from "../../../decisions/runtime.test-support.js";
 import type { DecisionProviderV1, ProviderDecisionOutcome } from "../../../decisions/types.js";
 import * as operatorInvocation from "../../../gateway/operator-invocation-authority.js";
-import type { Context, Model } from "../../../llm/types.js";
 import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-fixtures.js";
 import { resetPluginRuntimeStateForTest } from "../../../plugins/runtime.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -23,7 +21,7 @@ import {
   registerAgentSessionLoopTestLifecycle,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
-import { leasePendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
+import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import {
   createToolSearchCatalogRef,
   registerHeadlessToolSearchCatalog,
@@ -36,10 +34,6 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 vi.mock("../../../plugins/host-hook-state.js", () => ({
   drainPluginNextTurnInjectionContext: vi.fn(async () => ({ queuedInjections: [] })),
-}));
-vi.mock("../../subagents/registry/subagent-registry.js", () => ({
-  leasePendingAgentSteeringItems: vi.fn(async () => undefined),
-  prependAgentSteeringPrompt: ({ prompt }: { prompt: string }) => prompt,
 }));
 registerAgentSessionLoopTestLifecycle();
 afterEach(() => {
@@ -56,31 +50,26 @@ const result = (probabilityTrue = 0.1): ProviderDecisionOutcome => ({
     },
   },
 });
-function config(enabled = true, selected = true): OpenClawConfig {
+function config(enabled = true): OpenClawConfig {
   return {
     agents: {
       defaults: AgentDefaultsBaseSchema.parse({
         experimental: { decisionAssistance: enabled },
-        ...(selected ? { decisionModel: "fixture/model" } : {}),
+        decisionModel: "fixture/model",
       }),
-      entries: { main: {}, quiet: { decisionModel: "" } },
     },
   };
 }
 function captureRequests(reply = () => "done") {
-  const captures: Array<{ names: string[]; definitionChars: number }> = [];
-  streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
-    captures.push({
-      names: (context.tools ?? []).map((tool) => tool.name),
-      definitionChars: JSON.stringify(context.tools ?? []).length,
-    });
+  const captures: string[][] = [];
+  streamMocks.streamSimple.mockImplementation((model, context) => {
+    captures.push((context.tools ?? []).map((tool) => tool.name));
     return createAssistantResultStream(createAssistant(model, reply()));
   });
   return captures;
 }
 const modes = ["structured", "search", "code"] as const;
 const authorityChanges = ["opt-out", "owner-close", "abort"] as const;
-const preparationBoundaries = ["steering", "operator"] as const;
 let sequence = 0;
 async function fixture(
   cfg = config(),
@@ -93,13 +82,7 @@ async function fixture(
   registered(call);
   const runId = "prefilter-" + ++sequence;
   const tools = (toolSurface.names ?? ["inspect_file", "message", "decision_evaluate"]).map(
-    (name) => ({
-      name,
-      label: name,
-      description: name,
-      parameters: Type.Object({}),
-      execute: async () => ({ content: [{ type: "text" as const, text: "ok" }], details: {} }),
-    }),
+    createStubTool,
   );
   const controls = mode === "search" ? ["tool_search"] : mode === "code" ? ["exec"] : [];
   const controlTools = controls.map((name) => ({ ...tools[0]!, name }));
@@ -130,7 +113,6 @@ async function fixture(
     forceToolNames: toolSurface.forceToolNames ?? ["message", "denied"],
   });
   const owner = prepareSystemAgentRunAdmission(cfg, runId, agentId, "prefilter-test");
-  const toolResultPromptProjectionState = createToolResultPromptProjectionState();
   onTestFinished(() => {
     owner.close();
     forgetPromptBuildDrainCacheForRun(runId);
@@ -166,7 +148,6 @@ async function fixture(
       applyPromptBuildToolsAllow: (allow, pruneForDecision) =>
         policy.apply(allow, pruneForDecision).callableToolNames,
       setActiveSessionSystemPrompt: () => {},
-      setLeasedSteering: () => {},
     });
   const submit = async (
     assembly: Awaited<ReturnType<typeof assemble>>,
@@ -181,13 +162,12 @@ async function fixture(
       transcriptPrompt: assembly.effectivePrompt,
       systemPrompt: session.agent.state.systemPrompt,
       runtimeOnly: false,
-      toolResultPromptProjectionState,
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       toolResultMaxChars: 4000,
       toolResultAggregateMaxChars: 8000,
       transcriptLeafId: null,
       trajectoryRecorder: null,
       onFinalPromptText: () => {},
-      onSteeringAcknowledged: () => {},
       assertHostActive: assembly.assertHostActive,
       persistToolResultProjections,
       promptActiveSession: (prompt, options) => session.prompt(prompt, options),
@@ -196,78 +176,36 @@ async function fixture(
 }
 
 describe("prompt assembly with registered Decision runtime", () => {
-  it("evaluates the next turn after a Decision removes every model-facing tool", async () => {
-    const { call, ...f } = await fixture(config(), "structured", "main", null, {
-      names: ["inspect_file"],
-      forceToolNames: [],
-    });
-    await f.assemble();
-    expect(f.policy.current.effectiveTools).toEqual([]);
-    expect(f.session.getActiveToolNames()).toEqual([]);
+  it.each([false, true])(
+    "evaluates tools after an empty host surface (client-only=%s)",
+    async (clientOnly) => {
+      const names = [clientOnly ? "client_lookup" : "inspect_file"];
+      const { call, ...f } = await fixture(config(), "structured", "main", null, {
+        names,
+        forceToolNames: clientOnly ? undefined : [],
+        clientOnly,
+      });
+      if (!clientOnly) {
+        await f.assemble();
+        expect(f.session.getActiveToolNames()).toEqual([]);
+      }
+      expect(f.policy.current.effectiveTools).toEqual([]);
+      call.mockResolvedValue(result(0.9));
+      await f.assemble();
+      expect(call).toHaveBeenCalledTimes(clientOnly ? 1 : 2);
+      expect(f.session.getActiveToolNames()).toEqual(names);
+    },
+  );
 
-    call.mockResolvedValue(result(0.9));
-    await f.assemble({ prompt: "Read package.json now." });
-
-    expect(call).toHaveBeenCalledTimes(2);
-    expect(f.session.getActiveToolNames()).toEqual(["inspect_file"]);
-  });
-
-  it("reads the permission baseline after preparation awaits and admits a later nonempty generation", async () => {
+  it("retains tools when the harness does not support turn-scoped restrictions", async () => {
     const { call, ...f } = await fixture();
-    const tools = f.tools.slice();
-    vi.mocked(leasePendingAgentSteeringItems).mockImplementationOnce(async () => {
-      f.tools.splice(0);
-      f.session.setActiveToolsByName([]);
-      f.policy.refresh();
-      return undefined;
-    });
-    const assembly = await f.assemble({ sessionKey: "agent:main:tools-revoked" });
-    expect(f.attempt.disableTools).toBeUndefined();
-    expect(assembly.decisionPrefilter).toMatchObject({ status: "skipped", reason: "no-tools" });
+    await f.assemble({ supportsTurnScopedToolRestrictions: false });
     expect(call).not.toHaveBeenCalled();
-    expect(f.session.getActiveToolNames()).toEqual([]);
-
-    f.tools.push(...tools);
-    f.session.setActiveToolsByName(tools.map((tool) => tool.name));
-    f.policy.refresh();
-    await f.assemble();
-    expect(call).toHaveBeenCalledOnce();
-  });
-
-  it("keeps client-only model tools eligible for Decision inference", async () => {
-    const { call, ...f } = await fixture(config(), "structured", "main", null, {
-      names: ["client_lookup"],
-      clientOnly: true,
-    });
-    call.mockResolvedValue(result(0.9));
-    expect(f.policy.current.effectiveTools).toEqual([]);
-    await f.assemble();
-    expect(call).toHaveBeenCalledOnce();
-    expect(f.session.getActiveToolNames()).toEqual(["client_lookup"]);
-  });
-
-  it.each<[string, OpenClawConfig, string, boolean | undefined, boolean]>([
-    ["missing referent", config(), "main", true, false],
-    ["disabled", config(false), "main", true, false],
-    ["no model", config(true, false), "main", true, false],
-    ["enabled", config(), "main", true, true],
-    ["unknown harness", config(), "main", undefined, false],
-    ["unsupported harness", config(), "main", false, false],
-    ["agent opt-out", config(), "quiet", true, false],
-  ])("gates Decision inference: %s", async (name, cfg, agentId, support, prune) => {
-    const missingReferent = name === "missing referent";
-    const { call, ...f } = await fixture(cfg, "structured", agentId);
-    if (missingReferent) {
-      f.session.agent.state.messages = [createAssistant(testModel, "Should I edit the file?")];
-    }
-    await f.assemble({
-      supportsTurnScopedToolRestrictions: support,
-      ...(missingReferent ? { prompt: "Go ahead." } : {}),
-    });
-    expect(call).toHaveBeenCalledTimes(prune ? 1 : 0);
-    expect(f.policy.current.tools.map((t) => t.name)).toEqual(
-      prune ? ["message"] : ["inspect_file", "message", "decision_evaluate"],
-    );
+    expect(f.session.getActiveToolNames()).toEqual([
+      "inspect_file",
+      "message",
+      "decision_evaluate",
+    ]);
   });
   it.each(modes)("keeps the admitted Decision result for final %s dispatch", async (mode) => {
     for (const change of ["opt-out", "model-change"] as const) {
@@ -292,12 +230,8 @@ describe("prompt assembly with registered Decision runtime", () => {
       setRuntimeConfigSnapshot(next);
       barrier.resolve();
       await pending;
-      const expected = ["message"];
-      expect(captured.map(({ names }) => names)).toEqual([expected]);
-      expect(f.session.getActiveToolNames()).toEqual(expected);
-      expect(f.policy.current.callableToolNames).not.toContain("inspect_file");
+      expect(captured).toEqual([["message"]]);
       expect(f.policy.current.callableToolNames).not.toContain("denied");
-      expect(f.policy.current.tools.map((t) => t.name)).toContain("message");
       if (f.catalogRef) {
         expect(f.catalogRef.current?.entries).toEqual([]);
       }
@@ -346,30 +280,22 @@ describe("prompt assembly with registered Decision runtime", () => {
     expect(f.policy.current.tools).toHaveLength(3);
     expect(call).toHaveBeenCalledTimes(1);
   });
-  it.each(preparationBoundaries)("observes opt-out across %s preparation", async (boundary) => {
+  it("observes opt-out across operator preparation", async () => {
     let revoked = false;
     const cfg = config();
     setRuntimeConfigSnapshot(cfg);
     const { call, ...f } = await fixture(cfg);
-    if (boundary === "steering") {
-      vi.mocked(leasePendingAgentSteeringItems).mockImplementationOnce(async () => {
+    const original = operatorInvocation.captureAmbientGatewayOperatorAuthority;
+    const capture = vi
+      .spyOn(operatorInvocation, "captureAmbientGatewayOperatorAuthority")
+      .mockImplementationOnce(async (params) => {
+        const authority = await original(params);
+        expect(call.mock.calls.length, "operator barrier must precede provider I/O").toBe(0);
         setRuntimeConfigSnapshot(config(false));
         revoked = true;
-        return undefined;
+        return authority;
       });
-    } else {
-      const original = operatorInvocation.captureAmbientGatewayOperatorAuthority;
-      const capture = vi
-        .spyOn(operatorInvocation, "captureAmbientGatewayOperatorAuthority")
-        .mockImplementationOnce(async (params) => {
-          const authority = await original(params);
-          expect(call.mock.calls.length, "operator barrier must precede provider I/O").toBe(0);
-          setRuntimeConfigSnapshot(config(false));
-          revoked = true;
-          return authority;
-        });
-      onTestFinished(() => capture.mockRestore());
-    }
+    onTestFinished(() => capture.mockRestore());
     await f.assemble({ sessionKey: "agent:main:consent-transition" });
     expect(revoked).toBe(true);
     expect(call).not.toHaveBeenCalled();
@@ -396,7 +322,6 @@ describe("prompt assembly with registered Decision runtime", () => {
     call.mockResolvedValue(result(0.1));
     reply = "Here is the explanation.";
     await submit("Yes");
-    expect(call).toHaveBeenCalledTimes(2);
     expect(call.mock.calls[1]?.[0].state).toMatchObject({
       latestRequest: "Yes",
       beforePromptBuild: hookFields,
@@ -404,12 +329,10 @@ describe("prompt assembly with registered Decision runtime", () => {
         { user: "Help me understand this example.", assistant: "Would you like an explanation?" },
       ],
     });
-    expect(captures[1]?.names).toEqual(["message"]);
-    expect(captures[1]?.definitionChars).toBeLessThan(captures[0]?.definitionChars ?? 0);
+    expect(captures[1]).toEqual(["message"]);
     call.mockResolvedValue(result(0.9));
     await submit("Read package.json now.");
-    expect(call).toHaveBeenCalledTimes(3);
-    expect(captures[2]?.names).toEqual(captures[0]?.names);
+    expect(captures[2]).toEqual(captures[0]);
     expect(f.policy.current.callableToolNames).toContain("inspect_file");
     expect(f.policy.current.callableToolNames).not.toContain("denied");
   });

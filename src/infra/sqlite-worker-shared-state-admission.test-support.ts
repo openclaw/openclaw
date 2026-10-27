@@ -1,7 +1,9 @@
 import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import type { NativeHookRelayBridgeRecord } from "../agents/harness/native-hook-relay-bridge-record.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   openOpenClawStateDatabase,
@@ -13,23 +15,27 @@ import {
   executeOpenClawStateWorker,
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
-import {
-  readDeviceAuthTokenObservationFromDatabase,
-  storeDeviceAuthTokenInDatabase,
-} from "./device-auth-store.kernel.js";
 import { acquireGatewayStateOwner } from "./gateway-state-owner.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import {
+  createSqliteAuditRecordKernel,
+  prepareSqliteAuditRecord,
+} from "./sqlite-audit-record.kernel.js";
 import type { SqliteWorkerCommand, SqliteWorkerRequest } from "./sqlite-worker-contract.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe } from "./sqlite-worker-owner-probe.test-support.js";
 import {
   openSharedStateSqliteWorkerStore,
   runSqliteWorkerStoreOperation,
 } from "./sqlite-worker-store.js";
 
 async function preparedStore(captured: OpenClawStateWorkerContext) {
-  await executeOpenClawStateWorker(captured, { type: "deviceAuth.prepare", input: undefined });
+  await executeOpenClawStateWorker(captured, {
+    type: "nativeHookRelay.listRecords",
+    input: undefined,
+  });
   const store = await openSharedStateSqliteWorkerStore<OpenClawStateWorkerOperations>(
     {
       moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sharedStateStore),
@@ -71,11 +77,6 @@ function readRelay(captured: OpenClawStateWorkerContext, relayId = "queued-write
   });
 }
 
-const deviceToken = (deviceId: string, token = "synthetic-owner-token") => ({
-  deviceId,
-  token,
-  role: "operator",
-});
 const rejection = (pending: Promise<unknown>) =>
   pending.then(
     () => undefined,
@@ -96,11 +97,12 @@ function checkedAdmission(captured: OpenClawStateWorkerContext) {
 export function registerSharedStateWorkerAdmissionTests(
   createContext: () => OpenClawStateWorkerContext,
 ): void {
-  it("requires the exact live maintenance owner through the worker commit grant", async () => {
+  it("admits before taking the writer lock and requires the live owner through commit", async () => {
     const captured = createContext();
     const { store, run } = await preparedStore(captured);
     const options = { path: captured.admission.databasePath, env: captured.environment };
     const database = openOpenClawStateDatabase(options);
+    using contention = sqliteWorkerOwnerProbe.writerLock(database.path);
     const owner = acquireGatewayStateOwner({ databasePath: database.path });
     const other = acquireGatewayStateOwner({
       databasePath: createContext().admission.databasePath,
@@ -114,25 +116,38 @@ export function registerSharedStateWorkerAdmissionTests(
     const maintenance = scopeFor(owner);
     const wrongOwner = scopeFor(other);
     const unbound = scopeFor(owner, false);
-    const stored = (deviceId: string) =>
-      readDeviceAuthTokenObservationFromDatabase(database.db, { deviceId, role: "operator" }).entry;
+    const auditOptions = { scope: "shared-state-admission", maxEntries: 20 };
+    const record = (key: string) =>
+      prepareSqliteAuditRecord(auditOptions.scope, {
+        key,
+        value: "synthetic-owner-value",
+        createdAt: 1,
+      });
+    const stored = (key: string) =>
+      createSqliteAuditRecordKernel<string>(database.db, auditOptions)
+        .entries()
+        .find((entry) => entry.key === key) ?? null;
     const stages: string[] = [];
     let lateOwner: ReturnType<typeof acquireGatewayStateOwner> | undefined;
-    const write = (deviceId: string, beforeCommit?: () => void) =>
-      run({ type: "deviceAuth.store", input: deviceToken(deviceId) }, (request, grant) => {
-        stages.push(`${deviceId}:${request.stage}`);
-        if (request.stage === "commit") {
-          beforeCommit?.();
-        }
-        grant();
-      });
+    const write = (key: string, beforeCommit?: () => void) =>
+      run(
+        { type: "diagnostic.register", input: { ...auditOptions, record: record(key) } },
+        (request, grant) => {
+          stages.push(`${key}:${request.stage}`);
+          contention.observe(request.stage);
+          if (request.stage === "commit") {
+            beforeCommit?.();
+          }
+          grant();
+        },
+      );
     try {
       expect(() => openOpenClawStateDatabase(options)).toThrow(
         "without an active schema lease or maintenance scope",
       );
       expect(() =>
         runOpenClawStateWriteTransaction(
-          ({ db }) => storeDeviceAuthTokenInDatabase(db, deviceToken("sync", "must-not-commit")),
+          ({ db }) => createSqliteAuditRecordKernel(db, auditOptions).register(record("sync")),
           options,
         ),
       ).toThrow("without an active schema lease or maintenance scope");
@@ -142,9 +157,7 @@ export function registerSharedStateWorkerAdmissionTests(
       await expect(wrongOwner.run(() => write("wrong"))).rejects.toThrow("does not own");
       await expect(unbound.run(() => write("unbound"))).rejects.toThrow("does not own");
       expect(stages).toEqual([]);
-      await expect(maintenance.run(() => write("accepted"))).resolves.toMatchObject({
-        token: "synthetic-owner-token",
-      });
+      await expect(maintenance.run(() => write("accepted"))).resolves.toBeUndefined();
       await expect(maintenance.run(() => write("revoked", () => owner.release()))).rejects.toThrow(
         "no longer current",
       );
@@ -157,10 +170,13 @@ export function registerSharedStateWorkerAdmissionTests(
       expect(stages).toEqual(
         ["accepted", "revoked", "late"].flatMap((id) => [`${id}:transaction`, `${id}:commit`]),
       );
+      expect(contention.observed).toEqual(
+        Array.from({ length: 3 }, () => ["transaction:free", "commit:held"]).flat(),
+      );
       expect(["sync", "unrelated", "wrong", "unbound", "revoked", "late"].map(stored)).toEqual(
         Array(6).fill(null),
       );
-      expect(stored("accepted")?.token).toBe("synthetic-owner-token");
+      expect(stored("accepted")?.value).toBe("synthetic-owner-value");
     } finally {
       lateOwner?.release();
       owner.release();
@@ -175,44 +191,82 @@ export function registerSharedStateWorkerAdmissionTests(
     async (singleStatement) => {
       const captured = createContext();
       const { store, run } = await preparedStore(captured);
+      using contention = sqliteWorkerOwnerProbe.writerLock(captured.admission.databasePath);
       const stages: string[] = [];
       let nativeFailure: unknown;
       let nativeWrites = 0;
-      const workerInput = deviceToken("synthetic-broker-worker", "synthetic-worker-token");
-      const nativeInput = { ...workerInput, deviceId: "synthetic-broker-native" };
+      let insideNativeWrite = false;
+      let servicedWhileWaiting = false;
+      const auditOptions = { scope: "shared-state-broker", maxEntries: 20 };
+      const workerRecord = prepareSqliteAuditRecord(auditOptions.scope, {
+        key: "synthetic-broker-worker",
+        value: "synthetic-worker-value",
+        createdAt: 1,
+      });
+      const nativeRecord = { ...workerRecord, event_key: "synthetic-broker-native" };
       try {
-        await run({ type: "deviceAuth.store", input: workerInput }, (request, grant) => {
-          stages.push(request.stage);
-          expect(grant()).toBe(true);
-          if (request.stage === "transaction") {
-            // The worker holds BEGIN IMMEDIATE and next needs its commit grant.
-            try {
-              runOpenClawStateWriteTransaction(
-                ({ db }) => {
-                  nativeWrites += 1;
-                  return storeDeviceAuthTokenInDatabase(db, nativeInput);
-                },
-                { path: captured.admission.databasePath, env: captured.environment },
-                singleStatement ? { singleStatement: true } : {},
-              );
-            } catch (error) {
-              nativeFailure = error;
+        await run(
+          { type: "diagnostic.register", input: { ...auditOptions, record: workerRecord } },
+          (request, grant) => {
+            stages.push(request.stage);
+            if (request.stage === "commit") {
+              servicedWhileWaiting = insideNativeWrite && nativeWrites === 0;
             }
-          }
-        });
+            expect(grant()).toBe(true);
+            if (request.stage === "transaction") {
+              // Initial admission precedes BEGIN. Wait for the actual lock without
+              // servicing messages so the native writer must service the commit grant.
+              const deadline = Date.now() + 5_000;
+              const pause = new Int32Array(new SharedArrayBuffer(4));
+              contention.observe("transaction");
+              while (contention.observed.at(-1) !== "transaction:held") {
+                if (Date.now() >= deadline) {
+                  throw new Error("Worker did not take the writer lock");
+                }
+                Atomics.wait(pause, 0, 0, 1);
+                contention.observe("transaction");
+              }
+              insideNativeWrite = true;
+              try {
+                runOpenClawStateWriteTransaction(
+                  ({ db }) => {
+                    nativeWrites += 1;
+                    // The retained broker makes both variants reserve before this callback.
+                    return db
+                      .prepare(
+                        "INSERT INTO diagnostic_events(scope,event_key,payload_json,created_at,sequence) VALUES (?,?,?,?,?)",
+                      )
+                      .run(
+                        auditOptions.scope,
+                        nativeRecord.event_key,
+                        nativeRecord.payload_json,
+                        nativeRecord.created_at,
+                        2,
+                      );
+                  },
+                  { path: captured.admission.databasePath, env: captured.environment },
+                  singleStatement ? { singleStatement: true } : {},
+                );
+              } catch (error) {
+                nativeFailure = error;
+              } finally {
+                insideNativeWrite = false;
+              }
+            }
+          },
+        );
         expect(nativeFailure).toBeUndefined();
         expect(nativeWrites).toBe(1);
+        expect(servicedWhileWaiting).toBe(true);
         expect(stages).toEqual(["transaction", "commit"]);
-        for (const input of [workerInput, nativeInput]) {
-          expect(
-            await store.execute({
-              type: "deviceAuth.read",
-              input: { deviceId: input.deviceId, role: input.role, readOnly: true },
-            }),
-          ).toMatchObject({
-            entry: { token: input.token, role: input.role },
-          });
-        }
+        const database = openOpenClawStateDatabase({
+          path: captured.admission.databasePath,
+          env: captured.environment,
+        });
+        expect(createSqliteAuditRecordKernel(database.db, auditOptions).entries()).toEqual([
+          { key: workerRecord.event_key, value: "synthetic-worker-value", createdAt: 1 },
+          { key: nativeRecord.event_key, value: "synthetic-worker-value", createdAt: 1 },
+        ]);
       } finally {
         await store.close();
       }
@@ -228,7 +282,16 @@ export function registerSharedStateWorkerAdmissionTests(
       const canceled = new AbortController();
       const stopped = new Error("synthetic caller stopped");
       let current = true;
-      const posts = vi.spyOn(worker, "postMessage");
+      const posted = createDeferredCore();
+      const postMessage = worker.postMessage.bind(worker);
+      const posts = vi
+        .spyOn(worker, "postMessage")
+        .mockImplementation((request: SqliteWorkerRequest, transfers) => {
+          postMessage(request, transfers);
+          if (request.type === "execute") {
+            posted.resolve();
+          }
+        });
       try {
         await runOpenClawStateWorkerOperation(
           captured,
@@ -238,6 +301,7 @@ export function registerSharedStateWorkerAdmissionTests(
             const pending = scope.execute(relayWrite(1), { signal: canceled.signal });
             const outcome = rejection(pending);
             try {
+              await awaitGateBeforeSettlement(posted.promise, head, "Head write was not posted");
               if (stop === "abort") {
                 canceled.abort(stopped);
               } else if (stop === "revoke") {
@@ -405,7 +469,10 @@ export function registerSharedStateWorkerAdmissionTests(
 async function prepareSharedStateWorker(captured: OpenClawStateWorkerContext): Promise<Worker> {
   const posts = vi.spyOn(Worker.prototype, "postMessage");
   try {
-    await executeOpenClawStateWorker(captured, { type: "deviceAuth.prepare", input: undefined });
+    await executeOpenClawStateWorker(captured, {
+      type: "nativeHookRelay.listRecords",
+      input: undefined,
+    });
     const worker = posts.mock.contexts[0];
     if (!(worker instanceof Worker)) {
       throw new Error("Expected the prepared shared-state worker");

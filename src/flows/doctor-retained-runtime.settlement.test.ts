@@ -16,7 +16,8 @@ import type { RetainedNativeWorkerSource } from "../infra/worker-native-lifecycl
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { runRetainedUpdateRuntimesHealth } from "./doctor-health-contribution-runners.state.js";
+import { initialDoctorHealthContribution } from "./doctor-health-contributions-selection.test-support.js";
+import { createDoctorRuntimeProjection } from "./doctor-health-contributions.test-support.js";
 import { useDoctorHealthFixture } from "./doctor-health.fixture.test-support.js";
 import { runDoctorHealthFlow } from "./doctor-health.js";
 
@@ -84,19 +85,9 @@ it.each([
       materializeSharedStateDatabase(state.env);
       const root = fs.realpathSync(state.root);
       const packageRoot = path.join(root, "checkout");
-      const artifact = path.join(root, "openclaw-update-runtime-Old001");
-      const base = path.parse(packageRoot).root;
-      const marker = path.join(
-        artifact,
-        "tree",
-        Buffer.from(base).toString("hex"),
-        path.relative(base, packageRoot),
-        "package.json",
-      );
       fs.mkdirSync(packageRoot);
       fs.writeFileSync(path.join(packageRoot, "package.json"), '{"name":"openclaw"}');
-      fs.mkdirSync(path.dirname(marker), { recursive: true });
-      fs.writeFileSync(marker, '{"name":"openclaw"}');
+      const artifact = createDoctorRuntimeProjection(root, packageRoot, "Old001");
       vi.spyOn(os, "tmpdir").mockReturnValue(root);
       vi.spyOn(packageRoots, "resolveOpenClawPackageRootsSync").mockReturnValue([packageRoot]);
       mocks.service.mockReturnValue({
@@ -163,7 +154,7 @@ it.each([
           readSource = captureRetainedNativeWorkerSource();
           expect(readSource.hasActiveWorkers).toBe(true);
         }
-        await runRetainedUpdateRuntimesHealth(ctx);
+        await initialDoctorHealthContribution("doctor:retained-update-runtimes").run(ctx);
         expect(fs.existsSync(artifact)).toBe(true);
         checksFinished = true;
       });

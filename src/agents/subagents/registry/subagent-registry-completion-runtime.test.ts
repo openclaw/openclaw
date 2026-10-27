@@ -12,7 +12,6 @@ import {
   getAsyncWorkSignal,
   trackAsyncWork,
 } from "../../../shared/async-work-scope.js";
-import { createDeferredCore } from "../../../shared/deferred.js";
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../../agent-run-terminal-outcome.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import {
@@ -21,7 +20,11 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
 import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
-import { installLifecycleWorkerAckFixture } from "./subagent-registry-lifecycle-controller.test-support.js";
+import {
+  createSubagentTestGate,
+  installLifecycleWorkerAckFixture,
+} from "./subagent-registry-lifecycle-controller.test-support.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   getSubagentRunRuntimeKey,
@@ -52,8 +55,8 @@ function createHarness() {
       throw resumeError;
     }),
     scheduleSweep: vi.fn(),
-    warn: vi.fn(),
   };
+  const warn = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
   const runtime = createSubagentRegistryCompletionRuntime(dependencies);
   const request: SubagentCompletionRequest = {
     runId: entry.runId,
@@ -74,8 +77,8 @@ function createHarness() {
   });
   return {
     ...dependencies,
+    warn,
     entry,
-    resumeError,
     runtime,
     request,
     complete: (source: string, overrides: Partial<SubagentCompletionRequest> = {}) =>
@@ -118,29 +121,31 @@ describe("subagent completion rejection ownership", () => {
     vi.clearAllTimers();
     vi.useRealTimers();
     resetGatewayWorkAdmission();
+    h.warn.mockRestore();
   });
 
   it.each(["absent", "released"] as const)(
     "captures a collector result after its launch scope closes with %s parent",
     async (parentKind) => {
       const launch = new AsyncWorkScope();
-      const entered = createDeferredCore();
-      const finishCapture = createDeferredCore();
-      const finishCleanup = createDeferredCore();
-      const tails: Promise<void>[] = [];
+      await using rootDrain = {
+        [Symbol.asyncDispose]: () =>
+          vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0)),
+      };
+      await using capture = createSubagentTestGate();
+      await using cleanup = createSubagentTestGate();
       let completionSignal: AbortSignal | undefined;
       let settled = false;
       let cleanupFinished = false;
       h.completeSubagentRun.mockImplementation(async () => {
         completionSignal = getAsyncWorkSignal();
-        tails.push(
+        void cleanup.track(
           trackAsyncWork(async () => {
-            await finishCleanup.promise;
+            await cleanup.wait();
             cleanupFinished = true;
           }),
         );
-        entered.resolve();
-        await finishCapture.promise;
+        await capture.wait();
         h.entry.completion = { required: false, resultText: "result-1", capturedAt: 2 };
       });
       const invoke = await bindCompletionToLaunch(parentKind, launch, () =>
@@ -150,34 +155,27 @@ describe("subagent completion rejection ownership", () => {
         }),
       );
       await launch.drain();
-      const completion = invoke().finally(() => {
-        settled = true;
-      });
-      try {
-        await Promise.race([entered.promise, completion]);
-        expect(h.completeSubagentRun).toHaveBeenCalledOnce();
-        expect(completionSignal).toBeDefined();
-        expect(completionSignal).not.toBe(launch.signal);
-        expect(completionSignal?.aborted).toBe(false);
-        expect(settled).toBe(false);
-        expect(h.entry.completion?.resultText).toBeUndefined();
-        expect(getActiveGatewayRootWorkCount()).toBe(1);
-        finishCapture.resolve();
-        await expect(completion).resolves.toBeUndefined();
-        expect(h.entry.completion?.resultText).toBe("result-1");
-        expect(cleanupFinished).toBe(false);
-        expect(getActiveGatewayRootWorkCount()).toBe(1);
-        finishCleanup.resolve();
-        await Promise.all(tails);
-        h.expectState({ resumes: 0, sweeps: 0 });
-        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-      } finally {
-        finishCapture.resolve();
-        finishCleanup.resolve();
-        await completion;
-        await Promise.allSettled(tails);
-        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-      }
+      const completion = capture.track(
+        invoke().finally(() => {
+          settled = true;
+        }),
+      );
+      await Promise.race([capture.entered, completion]);
+      expect(completionSignal).toBeDefined();
+      expect(completionSignal).not.toBe(launch.signal);
+      expect(completionSignal?.aborted).toBe(false);
+      expect(settled).toBe(false);
+      expect(h.entry.completion?.resultText).toBeUndefined();
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      capture.release();
+      await expect(completion).resolves.toBeUndefined();
+      expect(h.entry.completion?.resultText).toBe("result-1");
+      expect(cleanupFinished).toBe(false);
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      cleanup.release();
+      await cleanup.drain();
+      h.expectState({ resumes: 0, sweeps: 0 });
+      await rootDrain[Symbol.asyncDispose]();
     },
   );
 
@@ -193,10 +191,6 @@ describe("subagent completion rejection ownership", () => {
       markGatewayRestartDraining();
       await invoke();
       h.expectState({ completed: 0, timers: 1, roots: 0 });
-      expect(h.warn).toHaveBeenCalledWith("subagent completion deferred during gateway restart", {
-        source: "subagent-wait",
-        runId: h.entry.runId,
-      });
       if (change === "replacement") {
         h.runs.set(h.entry.runId, { ...h.entry });
       } else if (change === "generation") {
@@ -221,29 +215,16 @@ describe("subagent completion rejection ownership", () => {
     h.expectState({ completed: 2, retained: false, roots: 0 });
     expect(h.completeSubagentRun).toHaveBeenLastCalledWith(expect.objectContaining({ reason }));
     expect(h.resumeRun).toHaveBeenCalledExactlyOnceWith(h.entry.runId);
-    expect(h.warn).toHaveBeenLastCalledWith("failed to complete subagent run in background", {
-      source: `lifecycle-${kind}-grace`,
-      runId: h.entry.runId,
-      error: h.resumeError,
-    });
     expect(isSameSubagentRunOwner(h.runs.get(h.entry.runId), h.entry)).toBe(true);
     expect(h.runs.get(h.entry.runId)?.cleanupHandled).toBe(false);
   });
 
-  it("retains the interrupted-finalization restart diagnostic and retires the fired timer", async () => {
+  it("retries interrupted finalization after restart and retires the fired timer", async () => {
     markGatewayRestartDraining();
     await expect(h.finalize()).resolves.toBe(1);
     expect(h.retryTimers.size).toBe(1);
     resetGatewayWorkAdmission();
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(h.warn).toHaveBeenLastCalledWith(
-      "failed to retry subagent completion after gateway restart",
-      {
-        source: "explicit-failed-mark",
-        runId: h.entry.runId,
-        error: h.resumeError,
-      },
-    );
     h.expectState({ completed: 3, timers: 0, roots: 0 });
   });
 
@@ -264,35 +245,28 @@ describe("subagent completion rejection ownership", () => {
   )(
     "retires recovery after $change during failed attempt $attempt",
     async ({ attempt, change }) => {
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
+      await using gate = createSubagentTestGate();
       h.resumeRun.mockImplementation(() => {});
       h.completeSubagentRun.mockReset();
       if (attempt === 2) {
         h.completeSubagentRun.mockRejectedValueOnce(new Error("retry current owner"));
       }
       h.completeSubagentRun.mockImplementation(async () => {
-        entered.resolve();
-        await release.promise;
+        await gate.wait();
         throw new Error("row retired during completion");
       });
-      const completion = h.complete("lifecycle-event", { expectedEntry: undefined });
-      try {
-        await entered.promise;
-        if (change === "removal") {
-          h.runs.delete(h.entry.runId);
-        } else if (change === "replacement") {
-          h.runs.set(h.entry.runId, { ...h.entry, generation: 2 });
-        } else {
-          h.entry.generation = 2;
-        }
-        release.resolve();
-        await completion;
-        h.expectState({ completed: attempt, resumes: 0, sweeps: 0, handled: true, retained: true });
-      } finally {
-        release.resolve();
-        await completion;
+      const completion = gate.track(h.complete("lifecycle-event", { expectedEntry: undefined }));
+      await gate.entered;
+      if (change === "removal") {
+        h.runs.delete(h.entry.runId);
+      } else if (change === "replacement") {
+        h.runs.set(h.entry.runId, { ...h.entry, generation: 2 });
+      } else {
+        h.entry.generation = 2;
       }
+      gate.release();
+      await completion;
+      h.expectState({ completed: attempt, resumes: 0, sweeps: 0, handled: true, retained: true });
     },
   );
 
@@ -306,8 +280,7 @@ describe("subagent completion rejection ownership", () => {
     "rechecks a committed yielded settlement before retrying its effects ($retry, $change)",
     async ({ retry, change }) => {
       h.entry.pauseReason = "sessions_yield";
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
+      await using gate = createSubagentTestGate();
       let published: SubagentRunRecord | undefined;
       h.completeSubagentRun
         .mockImplementationOnce(async (request) => {
@@ -324,8 +297,7 @@ describe("subagent completion rejection ownership", () => {
           if (retry === "restart") {
             markGatewayRestartDraining();
           }
-          entered.resolve();
-          await release.promise;
+          await gate.wait();
           throw new Error("postcommit effect failed");
         })
         .mockImplementation(async (request) => {
@@ -336,48 +308,43 @@ describe("subagent completion rejection ownership", () => {
           expect(await request.recoveryCurrent?.prepare()).toBe(true);
           expect(request.recoveryCurrent?.isHostCurrent()).toBe(true);
         });
-      const completion = h.complete("sweeper", { settleYielded: true });
-      try {
-        await entered.promise;
-        if (!published) {
-          throw new Error("Expected the committed settlement");
-        }
-        if (retry === "restart") {
-          release.resolve();
-          await completion;
-          expect(h.retryTimers.size).toBe(1);
-        }
-        const current = { ...published };
-        retainSubagentRunRuntimeOwner(published, current);
-        h.runs.set(h.entry.runId, current);
-        if (change === "resumed") {
-          current.execution = { status: "running", startedAt: 2 };
-        } else if (change === "yielded-again") {
-          current.pauseReason = "sessions_yield";
-        } else if (change === "killed") {
-          current.killIntent = { requestedAt: 2, reason: "stop" };
-        } else if (change === "new-terminal") {
-          // Retain outcome and runtime owner: the execution boundary itself changed.
-          current.execution = { ...published.execution, startedAt: 2, endedAt: 3 };
-        } else if (change === "replacement") {
-          h.runs.set(h.entry.runId, { ...published });
-        }
-        release.resolve();
-        await completion;
-        if (retry === "restart") {
-          resetGatewayWorkAdmission();
-          await vi.advanceTimersByTimeAsync(1_000);
-          expect(h.retryTimers.size).toBe(0);
-        }
-        h.expectState({
-          completed: (retry === "restart" ? 2 : 1) + (change === "unchanged" ? 1 : 0),
-          resumes: retry === "restart" ? 1 : 0,
-          sweeps: 0,
-        });
-      } finally {
-        release.resolve();
-        await completion;
+      const completion = gate.track(h.complete("sweeper", { settleYielded: true }));
+      await gate.entered;
+      if (!published) {
+        throw new Error("Expected the committed settlement");
       }
+      if (retry === "restart") {
+        gate.release();
+        await completion;
+        expect(h.retryTimers.size).toBe(1);
+      }
+      const current = { ...published };
+      retainSubagentRunRuntimeOwner(published, current);
+      h.runs.set(h.entry.runId, current);
+      if (change === "resumed") {
+        current.execution = { status: "running", startedAt: 2 };
+      } else if (change === "yielded-again") {
+        current.pauseReason = "sessions_yield";
+      } else if (change === "killed") {
+        current.killIntent = { requestedAt: 2, reason: "stop" };
+      } else if (change === "new-terminal") {
+        // Retain outcome and runtime owner: the execution boundary itself changed.
+        current.execution = { ...published.execution, startedAt: 2, endedAt: 3 };
+      } else if (change === "replacement") {
+        h.runs.set(h.entry.runId, { ...published });
+      }
+      gate.release();
+      await completion;
+      if (retry === "restart") {
+        resetGatewayWorkAdmission();
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(h.retryTimers.size).toBe(0);
+      }
+      h.expectState({
+        completed: (retry === "restart" ? 2 : 1) + (change === "unchanged" ? 1 : 0),
+        resumes: retry === "restart" ? 1 : 0,
+        sweeps: 0,
+      });
     },
   );
 

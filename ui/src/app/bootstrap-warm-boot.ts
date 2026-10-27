@@ -1,5 +1,11 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
-import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
+import type { RouteLocation } from "@openclaw/uirouter";
+import { sessionRefFromPath } from "../app-session-route-paths.ts";
+import {
+  buildAgentMainSessionKey,
+  isDashboardSessionKey,
+  parseAgentSessionKey,
+} from "../lib/sessions/session-key.ts";
 import { clearStoredChatSnapshots } from "../pages/chat/session-snapshot-invalidation.runtime.ts";
 import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
 import { prewarmChatSnapshot } from "../pages/chat/session-snapshot-prewarm.ts";
@@ -18,9 +24,37 @@ import {
 import type { ApplicationContext } from "./context.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 
-export function prewarmBootChat(record: BootRecord, sessionKey: string): void {
+export function prewarmBootChat(
+  record: BootRecord,
+  lastSessionKey: string,
+  location: RouteLocation,
+  basePath: string,
+): void {
+  const target = sessionRefFromPath(location.pathname, basePath, record.agents.mainKey);
+  const path = location.pathname.slice(basePath.length).replace(/\/$/u, "");
+  if (!target && path !== "" && path !== "/chat") {
+    return;
+  }
+  // Dashboard names are ambiguous until the roster resolves them. Warm one
+  // same-agent last-viewed candidate; only the route's exact key can consume it.
+  const savedDashboardCandidate =
+    target?.namespace === "dashboard" &&
+    target.kind === "literal" &&
+    target.slugCandidate &&
+    isDashboardSessionKey(lastSessionKey) &&
+    parseAgentSessionKey(lastSessionKey)?.agentId === target.agentId;
+  const sessionKey = savedDashboardCandidate
+    ? lastSessionKey
+    : target?.kind === "main"
+      ? buildAgentMainSessionKey({ agentId: target.agentId, mainKey: record.agents.mainKey })
+      : target?.kind === "literal"
+        ? target.sessionKey
+        : lastSessionKey;
+  if (target?.kind === "short" && parseAgentSessionKey(sessionKey)?.agentId !== target.agentId) {
+    return;
+  }
   if (parseAgentSessionKey(sessionKey)) {
-    prewarmChatSnapshot(
+    void prewarmChatSnapshot(
       resolveChatSnapshotKey(
         {
           agentsList: record.agents,
@@ -99,6 +133,7 @@ export function subscribeWarmBootConnection(
       }
     },
   );
+  // Rejected connection receipts retire warm-boot ownership before recovery consumers run.
   const stopConnection = gateway.subscribe((snapshot) => {
     if (gateway.connectionRevision !== bootConnectionRevision) {
       pendingBootProfileId = undefined;
@@ -190,6 +225,7 @@ export function subscribeBootRecordPersistence(
       });
     }
   };
+  // Persist admitted owner snapshots independently of mounted views.
   const stops = [gateway, agents, sessions].map((capability) =>
     capability.subscribe(persistLiveBootRecord),
   );

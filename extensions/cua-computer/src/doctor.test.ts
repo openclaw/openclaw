@@ -9,7 +9,7 @@ vi.mock("./driver-artifacts.js", () => ({
   verifyInstalledCuaDriverArtifacts: mocks.verify,
 }));
 
-import { CUA_DRIVER_ARTIFACT_CHECK_ID, registerCuaDriverDoctorChecks } from "./doctor.js";
+import { CUA_DRIVER_ARTIFACT_CHECK_ID, registerCuaDriverDoctorChecks } from "../api.js";
 
 describe("CUA Driver doctor check", () => {
   beforeEach(() => {

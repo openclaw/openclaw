@@ -27,6 +27,7 @@ import {
   getAgentRunContextOwnerStatus,
   releaseAgentRunContext,
 } from "../infra/agent-run-registry.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
 import {
   startSessionControllerInterruption,
   captureSessionTarget,
@@ -119,7 +120,7 @@ function subscribe(
 
 async function stopSubscriptions(subscriptions: Subscriptions | undefined) {
   await subscriptions?.agentUnsub();
-  subscriptions?.heartbeatUnsub();
+  heartbeatNotifications.onEvent = () => {};
   subscriptions?.transcriptUnsub();
   subscriptions?.lifecycleUnsub();
 }

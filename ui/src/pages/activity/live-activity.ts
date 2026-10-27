@@ -1,5 +1,4 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { notifyGatewayObservers } from "../../app/gateway-observers.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -83,7 +82,7 @@ export function createLiveActivity(gateway: ApplicationGateway, sessions: Sessio
   const stopVisibility = listen(document, "visibilitychange", handleVisibility);
   const stopPageHide = listen(globalThis, "pagehide", handleVisibility);
   const stopPageShow = listen(globalThis, "pageshow", handleVisibility);
-  const listeners = new Set<(snapshot: LiveActivitySnapshot) => void>();
+  let render: ((snapshot: LiveActivitySnapshot) => void) | undefined;
 
   const publish = (next: ActivityEntry[], reset = false) => {
     const error = errors.values().next().value ?? null;
@@ -92,12 +91,13 @@ export function createLiveActivity(gateway: ApplicationGateway, sessions: Sessio
     }
     entries = next;
     snapshot = { entries, revision: snapshot.revision + (reset ? 1 : 0), error };
-    notifyGatewayObservers(
-      listeners,
-      snapshot,
-      "activity",
-      (current) => !disposed && current === snapshot,
-    );
+    if (!disposed) {
+      try {
+        render?.(snapshot);
+      } catch (handlerError) {
+        console.error("[gateway] activity handler error:", handlerError);
+      }
+    }
   };
 
   const retireChangedContext = () => {
@@ -152,8 +152,10 @@ export function createLiveActivity(gateway: ApplicationGateway, sessions: Sessio
       return snapshot;
     },
     subscribe(listener: (snapshot: LiveActivitySnapshot) => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+      render = listener;
+      return () => {
+        render = undefined;
+      };
     },
     syncSessions(nextRows: readonly GatewaySessionRow[]) {
       if (rows === nextRows) {
@@ -181,7 +183,7 @@ export function createLiveActivity(gateway: ApplicationGateway, sessions: Sessio
       stopEvents();
       entries = [];
       snapshot = { entries, revision: snapshot.revision + 1, error: null };
-      listeners.clear();
+      render = undefined;
     },
   };
 }

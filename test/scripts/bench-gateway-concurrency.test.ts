@@ -1126,8 +1126,43 @@ describe("gateway concurrency benchmark script", () => {
     });
   });
 
+  it("accepts a start barrier only for one reported fixed-duration mock run", () => {
+    const controls = [
+      ["--start-barrier", "/tmp/paired-release"],
+      ["--output", "/tmp/paired-report.json"],
+      ["--duration-ms", "600000"],
+      ["--timeout-ms", "900000"],
+      ["--runs", "1"],
+      ["--warmup", "0"],
+    ];
+    expect(testing.parseOptions(controls.flat())).toMatchObject({
+      startBarrier: "/tmp/paired-release",
+      output: "/tmp/paired-report.json",
+      durationMs: 600_000,
+    });
+    for (const omitted of ["--output", "--duration-ms"]) {
+      expect(() =>
+        testing.parseOptions(controls.filter(([flag]) => flag !== omitted).flat()),
+      ).toThrow("--start-barrier requires");
+    }
+    for (const replacement of [
+      ["--runs", "2"],
+      ["--warmup", "1"],
+      ["--provider", "openai"],
+    ]) {
+      expect(() =>
+        testing.parseOptions([
+          ...controls.filter(([flag]) => flag !== replacement[0]).flat(),
+          ...replacement,
+        ]),
+      ).toThrow("Fixed-duration turns require");
+    }
+  });
+
   it("parses bounded mock and live benchmark controls without booting a gateway", () => {
     expect(testing.parseOptions([]).gatewayRuntime).toBe(process.execPath);
+    expect(testing.parseOptions([]).postgres).toBe(false);
+    expect(testing.parseOptions(["--postgres"]).postgres).toBe(true);
     expect(
       testing.parseOptions([
         "--gateway-runtime",
@@ -2112,7 +2147,6 @@ syncBuiltinESMExports();\n`,
             config: { dreaming: { enabled: false } },
           });
           expect(config.agents.defaults.maxConcurrent).toBe(1);
-          expect(config.agents.defaults.heartbeat).toEqual({ every: "0m" });
           if (liveFailure) {
             expect(Object.keys(config.agents.entries)).toEqual(["main"]);
             expect(config.models.providers.openai.apiKey).toEqual({
@@ -2125,6 +2159,7 @@ syncBuiltinESMExports();\n`,
             expect(config.agents.defaults.utilityModel).toBe(LIVE_GATEWAY_MODEL);
             expect(config.agents.defaults.thinkingDefault).toBe("off");
             expect(config.agents.defaults.models[LIVE_GATEWAY_MODEL].params.maxTokens).toBe(128);
+            expect(config.cron).toEqual({ enabled: false });
             expect(config.tools).toEqual({ deny: ["*"] });
           } else {
             expect(config.models.providers.openai.baseUrl).toMatch(
@@ -2146,6 +2181,34 @@ syncBuiltinESMExports();\n`,
           await vi.waitFor(() => expect(mockAlive()).toBe(false));
         }
       }
+    });
+  });
+
+  it("isolates PostgreSQL runs with an env connection reference while keeping SQLite the default", async () => {
+    await withTempDir("gateway-postgres-config-", async (root) => {
+      const write = (postgres: boolean) => {
+        const configPath = testing.buildConfig(root, 12345, 64, 0, 0, ["main"], "mock");
+        if (postgres) {
+          testing.configurePostgresBenchConfig(configPath);
+        }
+        return configPath;
+      };
+      const sqlite = JSON.parse(await readFile(write(false), "utf8"));
+      expect(sqlite.database).toBeUndefined();
+      const first = JSON.parse(await readFile(write(true), "utf8"));
+      const second = JSON.parse(await readFile(write(true), "utf8"));
+      expect(first.database).toEqual({
+        engine: "postgres",
+        postgres: {
+          connection: {
+            source: "env",
+            provider: "default",
+            id: "OPENCLAW_BENCH_POSTGRES_CONNECTION",
+          },
+          schemaPrefix: expect.stringMatching(/^[a-z_][a-z0-9_]{0,26}$/u),
+        },
+      });
+      expect(second.database.postgres.schemaPrefix).not.toBe(first.database.postgres.schemaPrefix);
     });
   });
 

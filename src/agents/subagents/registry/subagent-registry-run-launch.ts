@@ -1,5 +1,4 @@
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
-import { decodeGatewayOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.codec.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import {
@@ -12,14 +11,11 @@ import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
-import {
-  parseAgentSessionKey,
-  resolveAgentIdFromSessionKey,
-} from "../../../routing/session-key.js";
+import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
-import { intersectOperatorScopes } from "../../../shared/operator-scope-compat.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
+import { createOperatorInputRecoverySource } from "../../operator-run-recovery-source.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import {
   prepareTerminatedCollectorLaunch,
@@ -28,10 +24,7 @@ import {
   updateSwarmCollectorCompletion,
 } from "../swarm/swarm-collector.js";
 import { bindSwarmRunReservation, ownsSwarmRunReservation } from "../swarm/swarm-scheduler.js";
-import {
-  matchesSubagentChildSessionOwner,
-  resolveSubagentChildAgentId,
-} from "./subagent-child-owner-match.js";
+import { resolveSubagentChildAgentId } from "./subagent-child-owner-match.js";
 import { bindSubagentExecRequestOwners } from "./subagent-exec-request-ownership.js";
 import {
   getCurrentSubagentRunOwner,
@@ -45,6 +38,7 @@ import {
   SubagentRegistryMutationRejectedError,
   waitForPendingSubagentKillClaim,
 } from "./subagent-registry-persistence.js";
+import { resolveSwarmWaitOwnerSessionKeys } from "./subagent-registry-queries.js";
 import { registerRequiredQueuedSubagent } from "./subagent-registry-queued-registration.js";
 import {
   createFailedQueuedRun,
@@ -64,40 +58,8 @@ import {
   getSubagentRunRuntimeKey,
   isSameSubagentRunOwner,
   isSubagentRunGenerationCandidate,
-  latestSubagentRun,
   nextSubagentRunGeneration,
 } from "./subagent-run-generation.js";
-
-function resolveSwarmWaitOwnerSessionKeys(
-  getRunsForChildSession: (
-    childSessionKey: string,
-    childAgentId?: string,
-  ) => Iterable<SubagentRunRecord>,
-  requesterSessionKey: string,
-  requesterAgentId?: string,
-): string[] {
-  const ownerSessionKeys: string[] = [];
-  const visited: Array<{ childSessionKey: string; childAgentId?: string }> = [];
-  let currentSessionKey = requesterSessionKey.trim();
-  let currentAgentId = requesterAgentId;
-  while (
-    currentSessionKey &&
-    !visited.some((entry) =>
-      matchesSubagentChildSessionOwner(entry, currentSessionKey, currentAgentId),
-    )
-  ) {
-    visited.push({ childSessionKey: currentSessionKey, childAgentId: currentAgentId });
-    ownerSessionKeys.push(currentSessionKey);
-    const latestOwner = latestSubagentRun(
-      getRunsForChildSession(currentSessionKey, currentAgentId),
-    );
-    currentSessionKey =
-      latestOwner?.controllerSessionKey?.trim() || latestOwner?.requesterSessionKey.trim() || "";
-    currentAgentId =
-      parseAgentSessionKey(currentSessionKey)?.agentId ?? latestOwner?.requesterAgentId;
-  }
-  return ownerSessionKeys;
-}
 
 export class SubagentLaunchManager extends SubagentRecoveryManager {
   private findRunByIdentity(runId: string): SubagentRunRecord | undefined {
@@ -257,33 +219,33 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
               settleFailedLaunch,
             }),
       );
-      authority = registerParams.collect
-        ? undefined
-        : await captureOperatorToolGatewayContinuationContext();
-      const operator = authority?.operatorAuthority;
-      let operatorRecoverySource: SubagentRunRecord["operatorRecoverySource"];
-      if (
-        operator?.recoverySnapshot &&
+      authority = await captureOperatorToolGatewayContinuationContext();
+      // Direct child turns have no spawning requester turn. Save their own admitted
+      // source before launch so a restart never depends on an absent parent claim.
+      const recoveryTarget =
+        requesterAgentId &&
         registerParams.completionRequesterSessionId &&
         registerParams.requesterTurnRunId
-      ) {
-        try {
-          operatorRecoverySource = decodeGatewayOperatorRecoverySource({
-            version: 1,
-            agentId: requesterAgentId,
-            sessionKey: requesterSessionKey,
-            sessionId: registerParams.completionRequesterSessionId,
-            lifecycleRevision: registerParams.completionRequesterLifecycleRevision,
-            sourceRunId: registerParams.requesterTurnRunId,
-            snapshot: {
-              ...operator.recoverySnapshot,
-              scopes: intersectOperatorScopes(operator.recoverySnapshot.scopes, operator.scopes),
-            },
-          });
-        } catch {
-          // Oversized evidence must not block admission or become executable recovery authority.
-        }
-      }
+          ? {
+              agentId: requesterAgentId,
+              sessionKey: requesterSessionKey,
+              entry: {
+                sessionId: registerParams.completionRequesterSessionId,
+                lifecycleRevision: registerParams.completionRequesterLifecycleRevision,
+                updatedAt: Date.now(),
+              },
+              sourceRunId: registerParams.requesterTurnRunId,
+            }
+          : {
+              agentId: childAgentId,
+              sessionKey: childSessionKey,
+              entry: { ...registerParams.sessionEntry, updatedAt: Date.now() },
+              sourceRunId: runId,
+            };
+      const operatorRecoverySource = createOperatorInputRecoverySource({
+        ...recoveryTarget,
+        authority: authority?.operatorAuthority,
+      });
       const assertCurrent = () => {
         options.assertCurrent?.();
         authority?.assertCurrent();
@@ -409,6 +371,10 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
               return;
             }
             registered = entry;
+            bindGatewayContextResolver(entry, gatewayContextResolver);
+            options.retainAdmission?.(
+              this.captureAdmissionRejection(entry, options.admissionSessionEffects),
+            );
             try {
               options.assertPublicationCurrent?.();
               bindSubagentExecRequestOwners(entry, readExecRequestOwners(options), {
@@ -418,12 +384,11 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                   requesterAgentId,
                 ),
               });
-              if (authority) {
+              if (authority && !registerParams.collect) {
                 subagentRuns.bindCompletionAuthority(entry, authority);
                 custodyTransferred = true;
               }
             } finally {
-              bindGatewayContextResolver(entry, gatewayContextResolver);
               if (!registrationOwnership.superseded) {
                 registrationOwnership.accept(entry);
               }

@@ -1,20 +1,33 @@
-import { createMemo, createSignal, For, Show, untrack } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  Errored,
+  For,
+  isPending,
+  lazy,
+  latest,
+  Loading,
+  Show,
+  untrack,
+} from "solid-js";
 import "../../styles/lobster-pet.css";
-import { ConfigForm } from "../../components/config-form.render.tsx";
 import { countSensitiveConfigValues } from "../../components/config-form.shared.ts";
-import { HighlightedJson } from "../../components/solid/highlighted-json.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import "../../components/tooltip.ts";
 import { SettingsSegmented, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isJson5Warm, warmJson5 } from "../../lib/json5-runtime.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
-import { NotificationsSection } from "./notifications-section.tsx";
-import { SetupSection } from "./setup.tsx";
+import { omitCuratedOwnedConfigLeaves } from "./config-sections.ts";
 import { AppearanceSection } from "./view-appearance.tsx";
 import { computeRawDiff, formatConfigDiffPath, renderRawDiffValue } from "./view-diff.ts";
+import { ConfigForm, NotificationsSection, SetupSection } from "./view-lazy.ts";
 import {
   CATEGORISED_KEYS,
   ConfigAccordionNav,
@@ -22,6 +35,7 @@ import {
   SECTION_CATEGORIES,
   type SectionCategory,
 } from "./view-navigation.tsx";
+import { ConfigReadBoundary, ConfigReadError, ConfigReadLoading } from "./view-readiness.tsx";
 import {
   asConfigSchema,
   configValueExistsAtPath,
@@ -38,9 +52,12 @@ import type { ConfigProps } from "./view-types.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
 export type { ConfigProps } from "./view-types.ts";
-void warmJson5().catch(() => undefined);
+const HighlightedJson = lazy(() => import("../../components/solid/highlighted-json.tsx"), {
+  export: "HighlightedJson",
+});
 
 export function Config(props: ConfigProps) {
+  const plainIssues = () => <pre class="code-block">{JSON.stringify(props.issues, null, 2)}</pre>;
   let content: HTMLDivElement | undefined;
   function resetContentScroll() {
     queueMicrotask(() => {
@@ -64,18 +81,20 @@ export function Config(props: ConfigProps) {
     revision();
     return props.viewState;
   };
+  const schema = createMemo(() => asConfigSchema(props.schema));
+  const includedSections = createMemo(() =>
+    props.includeSections?.length ? new Set(props.includeSections) : null,
+  );
+  const excludedSections = createMemo(() =>
+    props.excludeSections?.length ? new Set(props.excludeSections) : null,
+  );
+  const schemaAnalysis = createMemo(() =>
+    getConfigSchemaAnalysis(schema(), includedSections(), excludedSections()),
+  );
   const state = createMemo(() => {
     const viewState = view();
     const showModeToggle = props.showModeToggle ?? false;
-    const includeVirtualSections = props.includeVirtualSections ?? true;
-    const include = props.includeSections?.length ? new Set(props.includeSections) : null;
-    const exclude = props.excludeSections?.length ? new Set(props.excludeSections) : null;
-    const analysis = getConfigSchemaAnalysis(
-      viewState,
-      asConfigSchema(props.schema),
-      include,
-      exclude,
-    );
+    const analysis = schemaAnalysis();
     const unsupportedActivePaths = analysis.unsupportedPaths.filter(
       (path) =>
         path !== "<root>" &&
@@ -103,9 +122,9 @@ export function Config(props: ConfigProps) {
     const schemaProps = analysis.schema?.properties ?? {};
     const virtualSections = new Set(["__appearance__", "__notifications__"]);
     const visibleVirtual = (key: string) =>
-      includeVirtualSections &&
+      (props.includeVirtualSections ?? true) &&
       virtualSections.has(key) &&
-      (key === "__appearance__" || include?.has(key) === true);
+      (key === "__appearance__" || includedSections()?.has(key) === true);
     const sectionLabel = (key: string) =>
       t(
         `configView.sections.${key === "__appearance__" ? "theme" : key === "__notifications__" ? "notifications" : key}`,
@@ -116,9 +135,11 @@ export function Config(props: ConfigProps) {
       sections: category.sections
         .filter(
           (key) =>
-            (visibleVirtual(key) || key in schemaProps) &&
-            (!include || include.has(key)) &&
-            (!exclude || !exclude.has(key)),
+            (visibleVirtual(key) ||
+              key in schemaProps ||
+              (key === "ui" && includedSections()?.has("__appearance__"))) &&
+            includedSections()?.has(key) !== false &&
+            !excludedSections()?.has(key),
         )
         .map((key) => ({ key, label: sectionLabel(key) })),
     })).filter((category) => category.sections.length > 0);
@@ -152,7 +173,7 @@ export function Config(props: ConfigProps) {
           }
         : analysis.schema;
     const setupSchema = formSchema?.properties?.wizard;
-    const editorSchema = setupSchema
+    const editorSchemaBase = setupSchema
       ? {
           ...formSchema,
           properties: Object.fromEntries(
@@ -160,6 +181,9 @@ export function Config(props: ConfigProps) {
           ),
         }
       : formSchema;
+    const editorSchema = editorSchemaBase
+      ? omitCuratedOwnedConfigLeaves(editorSchemaBase)
+      : editorSchemaBase;
     const topTabs: Array<{ key: string | null; label: string }> = [
       ...((props.showRootTab ?? true)
         ? [{ key: null, label: props.navRootLabel ?? t("nav.settings") }]
@@ -191,11 +215,11 @@ export function Config(props: ConfigProps) {
     const showSectionTabs = props.settingsLayout !== "accordion" && topTabs.length > 1;
     const showToolbar = showModeToggle || showSectionTabs;
     const showValidityWarning = props.valid === false && !viewState.validityDismissed;
-    const sensitiveCount = countSensitiveConfigValues(props.formValue, [], props.uiHints);
     return {
+      displayReady: props.activeSection === "__appearance__" && props.appearanceDisplayReady,
       showModeToggle,
-      includeVirtualSections,
-      include,
+      includeVirtualSections: props.includeVirtualSections ?? true,
+      include: includedSections(),
       analysis,
       unsupportedActivePaths,
       rawAvailable,
@@ -213,7 +237,6 @@ export function Config(props: ConfigProps) {
       configBusy,
       formBusy,
       mutationAllowed,
-      showSchemaLoading: props.schemaLoading && !analysis.schema,
       showSectionTabs,
       showToolbar,
       showValidityWarning,
@@ -222,14 +245,57 @@ export function Config(props: ConfigProps) {
         props.settingsLayout === "accordion" ||
         showValidityWarning ||
         Boolean(channelGroup),
-      sensitiveCount,
     };
   });
+  const schemaRead = createMemo(() => ({ completion: props.schemaRead }), {
+    equals: (previous, next) => previous.completion === next.completion,
+  });
+  const hasSchema = createMemo(() => Boolean(props.schema));
+  const readSchema = () => {
+    const hasAcceptedSchema = hasSchema();
+    return schemaRead().completion?.then((result) => {
+      if (!result.ok && !hasAcceptedSchema) {
+        throw new Error(result.error);
+      }
+      return result.ok ? undefined : result.error;
+    });
+  };
+  const schemaReady = createMemo(readSchema);
+  const readSchemaReady = () => (hasSchema() ? latest(schemaReady) : schemaReady());
   function RawEditor() {
-    const rawRef = createLiveValue(() => props.raw);
+    void warmJson5().catch(() => undefined);
+    const sensitiveCount = createMemo(() =>
+      countSensitiveConfigValues(props.formValue, [], props.uiHints),
+    );
+    const [commandPending, setCommandPending] = createOptimistic(false);
+    const [savePending, setSavePending] = createOptimistic(false);
+    const presentCommand = action(function* (
+      operation: "save" | "discard" | "open",
+      result: void | Promise<unknown>,
+      retired: Promise<void>,
+    ) {
+      if (retired === props.presentationRetired()) {
+        setCommandPending(true);
+        setSavePending(operation === "save");
+      }
+      yield Promise.race([result, retired]);
+    });
+    const command = async (operation: "save" | "discard" | "open") => {
+      const retired = props.presentationRetired();
+      const result =
+        operation === "save"
+          ? props.onSave()
+          : operation === "discard"
+            ? props.onRawDiscard()
+            : props.onOpenFile?.();
+      await Promise.resolve();
+      return presentCommand(operation, result, retired);
+    };
+    const busy = () => commandPending() || state().configBusy;
+    const saving = () => savePending() || props.saving;
     // Resolve the raw branch once; a dynamic children factory recreates the textarea on each edit.
-    const editor = (
-      <>
+    return (
+      <SettingsPage>
         {state().hasRawChanges ? (
           <details
             class="config-diff"
@@ -295,30 +361,27 @@ export function Config(props: ConfigProps) {
           <div class="settings-row settings-row--stacked">
             <div class="config-raw-actions">
               {props.onOpenFile && props.openFileAllowed !== false ? (
-                <button class="btn btn--sm" onClick={() => props.onOpenFile?.()}>
+                <button class="btn btn--sm" disabled={busy()} onClick={() => void command("open")}>
                   <Icon name="fileText" />
                   {t("configView.open")}
                 </button>
               ) : null}
               <button
                 class="btn btn--sm"
-                disabled={state().configBusy || !state().hasRawChanges}
-                onClick={() => props.onRawDiscard()}
+                disabled={busy() || !state().hasRawChanges}
+                onClick={() => void command("discard")}
               >
                 {t("configView.rawDiscard")}
               </button>
               <button
                 class="btn btn--sm primary"
                 disabled={
-                  !props.connected ||
-                  !state().mutationAllowed ||
-                  state().configBusy ||
-                  !state().hasRawChanges
+                  !props.connected || !state().mutationAllowed || busy() || !state().hasRawChanges
                 }
-                aria-busy={props.saving ? "true" : "false"}
-                onClick={() => props.onSave()}
+                aria-busy={saving() ? "true" : "false"}
+                onClick={() => void command("save")}
               >
-                {props.saving ? (
+                {saving() ? (
                   <>
                     <span class="config-action-spinner" aria-hidden="true">
                       <Icon name="loader" />
@@ -333,14 +396,14 @@ export function Config(props: ConfigProps) {
             <div class="field config-raw-field">
               <span style={{ display: "flex", "align-items": "center", gap: "8px" }}>
                 {t("configView.rawConfig")}
-                {state().sensitiveCount > 0 ? (
+                {sensitiveCount() > 0 ? (
                   <>
                     <span class="settings-count">
                       {t(
-                        state().sensitiveCount === 1
+                        sensitiveCount() === 1
                           ? "configView.secretCount"
                           : "configView.secretCountPlural",
-                        { count: String(state().sensitiveCount) },
+                        { count: String(sensitiveCount()) },
                       )}{" "}
                       {t(view().rawRevealed ? "configView.visible" : "configView.redacted")}
                     </span>
@@ -366,30 +429,29 @@ export function Config(props: ConfigProps) {
                   </>
                 ) : null}
               </span>
-              {state().sensitiveCount > 0 && !view().rawRevealed ? (
+              {sensitiveCount() > 0 && !view().rawRevealed ? (
                 <div class="callout info" style={{ "margin-top": "12px" }}>
                   {t(
-                    state().sensitiveCount === 1
+                    sensitiveCount() === 1
                       ? "configView.sensitiveHidden"
                       : "configView.sensitiveHiddenPlural",
-                    { count: String(state().sensitiveCount) },
+                    { count: String(sensitiveCount()) },
                   )}
                 </div>
               ) : (
                 <textarea
                   aria-label={t("configView.rawConfig")}
                   placeholder={t("configView.rawConfig")}
-                  ref={rawRef}
-                  disabled={state().configBusy || !state().mutationAllowed}
+                  ref={createLiveValue(() => props.raw)}
+                  disabled={busy() || !state().mutationAllowed}
                   onInput={(event) => props.onRawChange(event.currentTarget.value)}
                 />
               )}
             </div>
           </div>
         </div>
-      </>
+      </SettingsPage>
     );
-    return <SettingsPage>{editor}</SettingsPage>;
   }
   function FormEditor() {
     const editor = (
@@ -512,25 +574,17 @@ export function Config(props: ConfigProps) {
               <div class="config-toolbar">
                 <label class="field">
                   <span>{t("configView.channelSettings")}</span>
-                  <select
-                    class="settings-select"
+                  <SettingsSelect
                     value={channelGroup().key ?? ""}
                     onChange={(event) => {
                       props.onSubsectionChange(event.currentTarget.value || null);
                       resetContentScroll();
                     }}
-                  >
-                    <For each={state().channelGroups} keyed={(group) => group.key}>
-                      {(group) => (
-                        <option
-                          value={group().key ?? ""}
-                          selected={group().key === channelGroup().key}
-                        >
-                          {group().label}
-                        </option>
-                      )}
-                    </For>
-                  </select>
+                    options={state().channelGroups.map((group) => ({
+                      value: group.key ?? "",
+                      label: group.label,
+                    }))}
+                  />
                 </label>
               </div>
             )}
@@ -565,60 +619,87 @@ export function Config(props: ConfigProps) {
         }
         aria-label={state().showSectionTabs ? undefined : t("common.settingsSections")}
       >
-        {props.activeSection === "__appearance__" ? (
-          state().includeVirtualSections ? (
-            <AppearanceSection {...props} />
-          ) : null
-        ) : props.activeSection === "__notifications__" ? (
-          state().includeVirtualSections ? (
-            <NotificationsSection {...props} />
-          ) : null
-        ) : state().formMode === "form" ? (
-          <>
-            {state().unsupportedActivePaths.length > 0 &&
-            state().showModeToggle &&
-            state().rawAvailable ? (
-              <div class="config-content-callout">
-                <div class="callout info">
-                  <UnsupportedPathSummary paths={state().unsupportedActivePaths} />{" "}
-                  <button
-                    type="button"
-                    class="btn btn--sm"
-                    onClick={() => props.onFormModeChange("raw")}
-                  >
-                    {t("configView.openRawEditor")}
-                  </button>
-                </div>
-              </div>
-            ) : null}
-            {state().includeVirtualSections &&
-            props.activeSection === null &&
-            state().include?.has("__appearance__") ? (
+        <ConfigReadBoundary config={props} displayReady={state().displayReady}>
+          {props.activeSection === "__appearance__" ? (
+            state().includeVirtualSections ? (
               <AppearanceSection {...props} />
-            ) : null}
-            {state().showSchemaLoading ? (
-              <div class="config-loading">
-                <div class="config-loading__spinner" />
-                <span>{t("configView.loadingSchema")}</span>
-              </div>
-            ) : (
-              <FormEditor />
-            )}
-            {state().showSetup && !state().showSchemaLoading ? (
-              <SetupSection
-                schema={state().setupSchema!}
-                config={props}
-                disabled={state().formBusy || !props.formValue || !state().mutationAllowed}
-              />
-            ) : null}
-          </>
-        ) : (
-          <RawEditor />
-        )}
+            ) : null
+          ) : props.activeSection === "__notifications__" ? (
+            state().includeVirtualSections ? (
+              <NotificationsSection {...props} />
+            ) : null
+          ) : state().formMode === "form" ? (
+            <>
+              {state().unsupportedActivePaths.length > 0 &&
+              state().showModeToggle &&
+              state().rawAvailable ? (
+                <div class="config-content-callout">
+                  <div class="callout info">
+                    <UnsupportedPathSummary paths={state().unsupportedActivePaths} />{" "}
+                    <button
+                      type="button"
+                      class="btn btn--sm"
+                      onClick={() => props.onFormModeChange("raw")}
+                    >
+                      {t("configView.openRawEditor")}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              {state().includeVirtualSections &&
+              props.activeSection === null &&
+              state().include?.has("__appearance__") ? (
+                <AppearanceSection {...props} />
+              ) : null}
+              <Errored
+                fallback={(error, reset) => (
+                  <ConfigReadError
+                    message={formatUiError(error())}
+                    onRetry={() => {
+                      props.onRetrySchema?.();
+                      reset();
+                    }}
+                  />
+                )}
+              >
+                <Loading
+                  on={hasSchema() ? undefined : schemaRead()}
+                  fallback={<ConfigReadLoading message={t("configView.loadingSchema")} />}
+                >
+                  <Show when={readSchemaReady()}>
+                    {(message) => (
+                      <ConfigReadError
+                        message={message()}
+                        onRetry={() => props.onRetrySchema?.()}
+                      />
+                    )}
+                  </Show>
+                  <span class="sr-only" role="status">
+                    {isPending(schemaReady) ? t("configView.loadingSchema") : ""}
+                  </span>
+                  <FormEditor />
+                  {state().showSetup ? (
+                    <SetupSection
+                      schema={state().setupSchema!}
+                      config={props}
+                      disabled={state().formBusy || !props.formValue || !state().mutationAllowed}
+                    />
+                  ) : null}
+                </Loading>
+              </Errored>
+            </>
+          ) : (
+            <RawEditor />
+          )}
+        </ConfigReadBoundary>
         {props.issues.length > 0 ? (
           <div class="config-content-callout">
             <div class="callout danger">
-              <HighlightedJson class="code-block" value={props.issues} />
+              <Errored fallback={plainIssues}>
+                <Loading fallback={plainIssues()}>
+                  <HighlightedJson class="code-block" value={props.issues} />
+                </Loading>
+              </Errored>
             </div>
           </div>
         ) : null}

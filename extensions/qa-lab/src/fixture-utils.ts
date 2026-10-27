@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { listDirectoryTreeStrict } from "openclaw/plugin-sdk/file-access-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { hasNodeErrorCode } from "openclaw/plugin-sdk/path-existence-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { asOptionalObjectRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
@@ -100,16 +102,6 @@ export async function fetchQaFixtureJson(
   return parsed;
 }
 
-export function outputToolNames(response: unknown): string[] {
-  const output = (response as { output?: Array<{ type?: unknown; name?: unknown }> }).output;
-  if (!Array.isArray(output)) {
-    return [];
-  }
-  return output.flatMap((item) =>
-    item.type === "function_call" && typeof item.name === "string" ? [item.name] : [],
-  );
-}
-
 export function outputText(response: unknown): string {
   const output = (response as { output?: Array<{ type?: unknown; content?: unknown }> }).output;
   if (!Array.isArray(output)) {
@@ -126,38 +118,6 @@ export function outputText(response: unknown): string {
       });
     })
     .join("\n");
-}
-
-function readContentText(content: unknown): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  return content
-    .map((item) => readStringField(asOptionalObjectRecord(item), "text") ?? "")
-    .join("\n");
-}
-
-export function countSystemPromptChars(body: unknown): number {
-  if (!body || typeof body !== "object") {
-    return 0;
-  }
-  const record = body as { instructions?: unknown; input?: unknown };
-  let total = typeof record.instructions === "string" ? record.instructions.length : 0;
-  if (Array.isArray(record.input)) {
-    for (const item of record.input) {
-      if (!item || typeof item !== "object") {
-        continue;
-      }
-      const inputRecord = item as { role?: unknown; content?: unknown };
-      if (inputRecord.role === "system" || inputRecord.role === "developer") {
-        total += readContentText(inputRecord.content).length;
-      }
-    }
-  }
-  return total;
 }
 
 const TOOL_IDENTIFIER_CHARACTERS =
@@ -242,9 +202,14 @@ async function visitSessionLogEvents(
   sessionsDir: string,
   visit: (eventJson: string) => void,
 ): Promise<void> {
-  const files = await fs.readdir(sessionsDir, { recursive: true }).catch(() => []);
-  for (const file of files) {
-    if (!file.endsWith(".jsonl")) {
+  const files = await listDirectoryTreeStrict(sessionsDir).catch((error: unknown) => {
+    if (hasNodeErrorCode(error, "ENOENT")) {
+      return [];
+    }
+    throw error;
+  });
+  for (const { relativePath: file, dirent } of files) {
+    if (!dirent.isFile() || !file.endsWith(".jsonl")) {
       continue;
     }
     const text = await fs.readFile(path.join(sessionsDir, file), "utf8").catch(() => "");

@@ -5,6 +5,7 @@ import {
   createSignal,
   createRoot,
   getOwner,
+  latest,
   runWithOwner,
   Show,
   useContext,
@@ -14,16 +15,19 @@ import {
   type MarkdownContentValue,
 } from "../../../components/markdown-dom-ref.ts";
 import type { MarkdownJson } from "../../../components/markdown-json.ts";
+import { loadStreamingMarkdown } from "../../../components/markdown-live-loader.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import { partitionMarkdownHtml, toSanitizedJsonHtml } from "../../../components/markdown.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
+import type { MarkdownContent as PreparedMarkdownContent } from "../../../lib/markdown-content.ts";
 import type { MarkdownDomMedia, MarkdownMediaRoot } from "../../../lib/markdown-dom-reconciler.ts";
+import { elementRef as registerElementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
-import { hydrateLinkFavicons } from "../link-favicon-loader.ts";
+import { hydrateLinkFavicons, releaseLinkFavicons } from "../link-favicon-loader.ts";
 import type { MarkdownMedia } from "./chat-message-media-markdown.ts";
 import { messageOverflowRef, shouldCollapseUserMessage } from "./chat-message-overflow.ts";
 import {
@@ -75,6 +79,13 @@ export type MessageMarkdownProps = {
 };
 
 export function MessageMarkdown(props: MessageMarkdownProps) {
+  const streaming = createMemo(
+    () =>
+      props.options.isStreaming
+        ? (loadStreamingMarkdown.peek() ?? loadStreamingMarkdown())
+        : loadStreamingMarkdown.peek(),
+    { loadingValue: undefined },
+  );
   const presentation = createMemo(() =>
     prepareMessageMarkdown(
       props.markdown,
@@ -82,6 +93,8 @@ export function MessageMarkdown(props: MessageMarkdownProps) {
       props.options,
       props.markdownOptions,
       props.duplicateSuffix,
+      latest(streaming)?.toStreamingMarkdownDomParts,
+      props.options.isStreaming && !latest(streaming),
     ),
   );
   return (
@@ -90,7 +103,7 @@ export function MessageMarkdown(props: MessageMarkdownProps) {
         source={props.markdown}
         messageKey={props.messageKey}
         options={props.options}
-        parts={presentation().parts}
+        parts={presentation().parts()}
       >
         {(elementRef) => (
           <MarkdownText
@@ -127,7 +140,7 @@ function TextDisclosure(props: {
   source: string;
   messageKey: string;
   options: MessageTextOptions;
-  parts: readonly [string, string];
+  parts: readonly [PreparedMarkdownContent, PreparedMarkdownContent];
   children: (elementRef: (element: HTMLDivElement) => void) => JSX.Element;
 }) {
   let text: HTMLDivElement | undefined;
@@ -185,7 +198,7 @@ function TextDisclosure(props: {
 }
 
 function DisclosureContent(props: {
-  parts: readonly [string, string];
+  parts: readonly [PreparedMarkdownContent, PreparedMarkdownContent];
   expanded: boolean;
   forwarded: boolean;
   getNodes: () => { text?: HTMLElement; toggle?: HTMLButtonElement };
@@ -225,6 +238,8 @@ type MarkdownContentProps = {
 
 /** Transcript text and inline media share the same incremental DOM owner. */
 export function MarkdownContent(props: MarkdownContentProps) {
+  // The markdown reconciler owns media containers outside Solid's DOM tree.
+  // Its callbacks mount media with this context; the reconciler retires each root.
   const solidOwner = getOwner();
   const presented = useContext(ContentPresentation);
   const fragment = document.createDocumentFragment();
@@ -296,16 +311,19 @@ export function MarkdownText(
   let element!: HTMLDivElement;
   const hydrate = createMemo(() => {
     const fetcher = props.fetchLinkFavicon;
-    return fetcher ? () => hydrateLinkFavicons(element, fetcher) : undefined;
+    return () => hydrateLinkFavicons(element, fetcher);
   });
   return (
     <div
       class={props.class ?? "chat-text"}
       dir={props.direction}
-      ref={(node) => {
-        element = node;
-        props.elementRef?.(node);
-      }}
+      ref={[
+        registerElementRef((node: HTMLDivElement) => {
+          element = node;
+          props.elementRef?.(node);
+          return () => releaseLinkFavicons(node);
+        }),
+      ]}
     >
       <MarkdownContent {...props} onUpdate={hydrate()} />
     </div>

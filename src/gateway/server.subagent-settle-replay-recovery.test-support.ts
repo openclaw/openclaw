@@ -1,14 +1,16 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi, type Mock } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { buildRestartRecoveryTerminalDeliveryEvidence } from "../agents/agent-command-restart-recovery.js";
 import { buildAnnounceIdempotencyKey } from "../agents/announce-idempotency.js";
 import type { AgentCommandOpts } from "../agents/command/types.js";
 import { buildMainSessionRecoveryClearPatch } from "../agents/main-session-recovery/main-session-recovery-clear.js";
 import { recoverRestartAbortedMainSessions } from "../agents/main-session-recovery/main-session-restart-recovery.js";
 import { createRestartRecoveryOperatorSource } from "../agents/operator-run-recovery-source.js";
+import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../agents/restart-recovery-prompt.js";
 import type { RequesterSettleWakeParams } from "../agents/subagents/announce/subagent-announce.requester-settle-state.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { subscribeSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
 import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -20,11 +22,13 @@ import {
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import type { PendingInputScope } from "../config/sessions/session-pending-input-store.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { readUserTurnCompletionForTest } from "./pending-input-commit.test-support.js";
 import * as inProcessDispatch from "./server-plugin-in-process-dispatch.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import type { GatewayServerHarness } from "./server.e2e-ws-harness.js";
@@ -44,6 +48,9 @@ export async function runPublicSettleRecoveryCase(
   reply:
     | "visible final"
     | "channel visible final"
+    | "child visible final"
+    | "private child final"
+    | "private child parent replaced"
     | "progress only"
     | "missing original authority"
     | "unconsumed revoked cohort",
@@ -66,35 +73,33 @@ export async function runPublicSettleRecoveryCase(
     };
     prepareVisibleRequesterCommand: (command: AgentCommandOpts) => Promise<RequesterScope>;
     markCommandExecutionStarted: (command: AgentCommandOpts) => Promise<void>;
+    recoverViaRpc: () => Promise<unknown>;
   },
 ) {
-  const {
-    harness,
-    getKernel,
-    requesterSessionKey,
-    requesterSessionId,
-    requesterScope,
-    sequence,
-    installChild,
-    persistChild,
-    start,
-    wake,
-    settleWakeReplay,
-    prepareVisibleRequesterCommand,
-    markCommandExecutionStarted,
-  } = context;
+  const { requesterScope: scope, requesterSessionKey, requesterSessionId, wake } = context;
   const channelRequester = reply === "channel visible final";
   const humanWork = "Continue the previously accepted human work.";
   const settleRequest =
     "Review the child result, finish verification, and land the requested change.";
-  const visibleFinal = reply === "visible final" || channelRequester;
+  const privateChild = reply.startsWith("private child");
+  const visibleFinal =
+    reply === "visible final" ||
+    reply === "child visible final" ||
+    privateChild ||
+    channelRequester;
+  const missingReply = {
+    delivered: false,
+    path: "direct",
+    reason: "visible_reply_missing",
+    error: "completion agent did not produce a visible reply",
+  };
   const requesterOrigin = {
     sessionKey: requesterSessionKey,
     messageProvider: "telegram",
     senderId: "settle-channel-bob",
   };
   let child = context.child;
-  let kernel = getKernel();
+  let kernel = context.getKernel();
   let sibling = {
     ...child,
     runId: `${child.runId}-public-sibling`,
@@ -102,6 +107,10 @@ export async function runPublicSettleRecoveryCase(
   };
   const batchRunIds = [child.runId, sibling.runId].toSorted();
   for (const entry of [child, sibling]) {
+    // Missing-answer recovery still owes a reply while a child result is undelivered.
+    if (reply === "progress only") {
+      entry.delivery = { status: "pending" };
+    }
     entry.cleanupCompletedAt = Date.now();
     entry.requesterSettleWake = {
       ...child.requesterSettleWake!,
@@ -109,15 +118,18 @@ export async function runPublicSettleRecoveryCase(
       attemptCount: 1,
       batchRunIds,
     };
-    installChild(entry);
-    persistChild(entry);
+    context.installChild(entry);
+    context.persistChild(entry);
   }
   const working = createDeferred();
   const interruptedRelease = createDeferred();
   const resumed = createDeferred();
   const resumedRelease = createDeferred();
   let recoveryRunId: string | undefined;
-  const scope = requesterScope;
+  let acceptedPrivateInput: unknown;
+  let privateMessage: string | undefined;
+  let retainedPrivateAuthority: AgentCommandOpts["operatorAuthority"];
+  let releasePrivateAuthority: (() => void) | undefined;
   const runId = buildAnnounceIdempotencyKey(
     `requester-settle:main:${requesterSessionKey}:${batchRunIds.join(",")}:yield-1`,
   );
@@ -125,41 +137,87 @@ export async function runPublicSettleRecoveryCase(
     interruptedRelease.resolve();
     resumedRelease.resolve();
   };
+  const recover = () =>
+    recoverRestartAbortedMainSessions({
+      cfg: getRuntimeConfig(),
+      stateDir: process.env.OPENCLAW_STATE_DIR!,
+      gatewayRuntime: kernel.gatewayInstanceRuntime.recovery,
+    });
+  const transcript = () => loadTranscriptEventsSync(scope);
+  const append = (message: Parameters<typeof appendTranscriptMessage>[1]["message"]) =>
+    appendTranscriptMessage(scope, { cwd: process.env.OPENCLAW_STATE_DIR!, message });
+  const readWake = () => loadSubagentRegistryFromSqlite().get(child.runId)?.requesterSettleWake;
+  const assertNoReplay = async () => {
+    const replay = wake(sibling);
+    expect(await replay.result).toBe(false);
+    expect(replay.completeBatch).not.toHaveBeenCalled();
+    expect(agentCommandMock).toHaveBeenCalledTimes(2);
+  };
+  const assertRecoveryIdle = async (
+    before: ReturnType<typeof transcript>,
+    commandCount: number,
+  ) => {
+    await expect(recover()).resolves.toEqual({ started: 0, settled: 0, failed: 0, skipped: 0 });
+    expect(transcript()).toEqual(before);
+    expect(agentCommandMock).toHaveBeenCalledTimes(commandCount);
+  };
+  const assertSettled = (status: "done" | "interrupted") => {
+    const settled = loadSessionEntryReadOnly(scope);
+    expect(settled).toMatchObject({
+      status,
+      abortedLastRun: false,
+      restartRecoveryTerminalRunIds: expect.arrayContaining([runId]),
+    });
+    expect(settled?.mainRestartRecovery).toBeUndefined();
+    expect(settled?.restartRecoveryRuns).toBeUndefined();
+    return settled;
+  };
+  const publishTerminal = (
+    command: AgentCommandOpts,
+    evidence: Parameters<typeof buildRestartRecoveryTerminalDeliveryEvidence>[0],
+    clearRecovery = false,
+  ) =>
+    updateSessionEntry(scope, (entry) => ({
+      ...buildRestartRecoveryClaimCleanupPatch({
+        entry,
+        recordTerminalSource: true,
+        terminalRunId: command.runId,
+        terminalDeliveryEvidence: buildRestartRecoveryTerminalDeliveryEvidence(evidence),
+      }),
+      ...(clearRecovery ? buildMainSessionRecoveryClearPatch(entry) : {}),
+      status: "done",
+      endedAt: Date.now(),
+    }));
   signal.addEventListener("abort", release, { once: true });
   if (reply === "unconsumed revoked cohort") {
-    await appendTranscriptMessage(scope, {
-      cwd: process.env.OPENCLAW_STATE_DIR!,
-      message: {
-        role: "user",
-        content: humanWork,
-        provenance: { kind: "external_user" },
-      },
+    await append({
+      role: "user",
+      content: humanWork,
+      provenance: { kind: "external_user" },
     });
   }
   agentCommandMock.mockImplementationOnce(async (input) => {
     const command = input as AgentCommandOpts;
-    await prepareVisibleRequesterCommand(command);
+    if (privateChild) {
+      privateMessage = command.message;
+      acceptedPrivateInput = command.userTurnTranscriptRecorder?.getPendingInputMessage?.();
+    }
+    await context.prepareVisibleRequesterCommand(command);
     if (reply !== "unconsumed revoked cohort") {
       await command.userTurnTranscriptRecorder!.persistApproved();
     }
-    await markCommandExecutionStarted(command);
-    await appendTranscriptMessage(scope, {
-      cwd: process.env.OPENCLAW_STATE_DIR!,
-      message: {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "verify-work", name: "exec", arguments: {} }],
-        stopReason: "toolUse",
-      },
+    await context.markCommandExecutionStarted(command);
+    await append({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "verify-work", name: "exec", arguments: {} }],
+      stopReason: "toolUse",
     });
-    await appendTranscriptMessage(scope, {
-      cwd: process.env.OPENCLAW_STATE_DIR!,
-      message: {
-        role: "toolResult",
-        toolCallId: "verify-work",
-        toolName: "exec",
-        content: [{ type: "text", text: "Changes verified; the requested landing remains." }],
-        isError: false,
-      },
+    await append({
+      role: "toolResult",
+      toolCallId: "verify-work",
+      toolName: "exec",
+      content: [{ type: "text", text: "Changes verified; the requested landing remains." }],
+      isError: false,
     });
     command.abortSignal!.addEventListener("abort", () => interruptedRelease.resolve(), {
       once: true,
@@ -169,7 +227,7 @@ export async function runPublicSettleRecoveryCase(
     command.abortSignal!.throwIfAborted();
     throw new Error("the Gateway restart must interrupt unfinished work");
   });
-  const profile = ensureProfileForEmail(`settle-recovery-${sequence}@example.test`);
+  const profile = ensureProfileForEmail(`settle-recovery-${context.sequence}@example.test`);
   const client = createOperatorClient({ profileId: profile.id, scopes: ["operator.write"] });
   client.connect.client.id = "openclaw-control-ui";
   client.connect.client.mode = "webchat";
@@ -205,7 +263,22 @@ export async function runPublicSettleRecoveryCase(
   for (const entry of [child, sibling]) {
     entry.completionRequesterLifecycleRevision = requester.lifecycleRevision;
     entry.operatorRecoverySource = operatorRecoverySource;
-    persistChild(entry);
+    context.persistChild(entry);
+    if (privateChild) {
+      const continuation = await withPluginRuntimeGatewayRequestScope(
+        {
+          client: {
+            ...client,
+            internal: { ...client.internal, operatorRunAuthority: originalSource!.authority },
+          },
+          context: kernel.gatewayRequestContext,
+          resolveGatewayContext: kernel.gatewayRequestContext.resolveGatewayContext,
+          isWebchatConnect: () => false,
+        },
+        () => inProcessDispatch.captureOperatorToolGatewayContinuationContext(),
+      );
+      subagentRuns.bindCompletionAuthority(entry, expectDefined(continuation, "Private source"));
+    }
   }
   const dispatchOriginal = () =>
     inProcessDispatch.dispatchGatewayMethodInProcess<Record<string, unknown>>(
@@ -235,12 +308,16 @@ export async function runPublicSettleRecoveryCase(
               },
             }
           : {}),
-        settleWakeReplay: settleWakeReplay([child.childSessionKey, sibling.childSessionKey]),
+        settleWakeReplay: context.settleWakeReplay([
+          child.childSessionKey,
+          sibling.childSessionKey,
+        ]),
         resolveGatewayContext: kernel.gatewayRequestContext.resolveGatewayContext,
       },
     );
-  const original = (
-    channelRequester
+  const original = privateChild
+    ? wake(child).result
+    : channelRequester
       ? dispatchOriginal()
       : inProcessDispatch.withOperatorToolGatewayAuthority(
           {
@@ -249,29 +326,19 @@ export async function runPublicSettleRecoveryCase(
             operatorRunAuthority: originalSource!.authority,
           },
           dispatchOriginal,
-        )
-  ).then(
-    (value) => ({ value }),
-    (error: unknown) => ({ error }),
-  );
+        );
+  void original.catch(() => {});
   let recovery: ReturnType<typeof recoverRestartAbortedMainSessions> | undefined;
   try {
-    await Promise.race([
-      working.promise,
-      original.then((result) => {
-        if ("error" in result) {
-          throw result.error;
-        }
-      }),
-    ]);
+    await Promise.race([working.promise, original]);
     const priorDedupe = kernel.gatewayRequestContext.dedupe;
     expect(priorDedupe.get(`agent:${runId}`)?.payload).toMatchObject({ status: "accepted" });
-    await harness.server.close({
+    await context.harness.server.close({
       reason: "gateway restart",
       restartExpectedMs: 0,
       drainTimeoutMs: 0,
     });
-    await original;
+    await original.catch(() => {});
     const interruptedEntry = loadSessionEntryReadOnly(scope);
     expect(interruptedEntry).toMatchObject({
       status: "interrupted",
@@ -299,20 +366,139 @@ export async function runPublicSettleRecoveryCase(
     if (reply === "unconsumed revoked cohort") {
       for (const entry of [child, sibling]) {
         const revoked = { ...entry, requesterSettleWake: undefined };
-        persistChild(revoked);
-        installChild(revoked);
+        context.persistChild(revoked);
+        context.installChild(revoked);
       }
     }
+    if (reply === "private child parent replaced") {
+      await updateSessionEntry({ ...scope, sessionKey: interruptedEntry!.spawnedBy! }, () => ({
+        lifecycleRevision: "replaced-parent-before-private-recovery",
+      }));
+    }
     closeOpenClawAgentDatabasesForTest();
-    await start();
-    kernel = getKernel();
+    await context.start();
+    kernel = context.getKernel();
     await prepareGatewayReplyRuntimeForTest({ force: true });
     const { activateSubagentRegistry } =
       await import("../agents/subagents/registry/subagent-registry.js");
+    if (reply === "private child parent replaced") {
+      await activateSubagentRegistry(
+        expectDefined(kernel.gatewayRequestContext.resolveGatewayContext, "Gateway resolver"),
+      ).settled;
+      await expect(recover()).resolves.toMatchObject({ started: 0, settled: 1, failed: 0 });
+      expect(
+        agentCommandMock,
+        JSON.stringify(
+          agentCommandMock.mock.calls.map(([command]) => {
+            const input = command as AgentCommandOpts;
+            return {
+              sessionKey: input.sessionKey,
+              runId: input.runId,
+              provenance: input.inputProvenance,
+            };
+          }),
+        ),
+      ).toHaveBeenCalledTimes(1);
+      const retained = loadSessionEntryReadOnly(scope);
+      expect(retained).toMatchObject({ status: "failed", abortedLastRun: false });
+      expect(retained?.mainRestartRecovery?.tombstone).toBeDefined();
+      expect(JSON.stringify(transcript())).toContain("In WebChat, use Resume");
+      expect(readWake()).toBeUndefined();
+      await assertRecoveryIdle(transcript(), 1);
+      return;
+    }
+    if (privateChild) {
+      // An older Gateway may already have minted ordinary recovery custody.
+      // The original private input must still retain execution and its receipt.
+      expect(loadSessionEntryReadOnly(scope)?.mainRestartRecovery).toBeDefined();
+      await expect(recover()).resolves.toMatchObject({ started: 0, failed: 0 });
+      expect(agentCommandMock).toHaveBeenCalledTimes(1);
+      await expect(context.recoverViaRpc()).resolves.toMatchObject({
+        ok: false,
+        error: {
+          message:
+            "This interrupted turn is queued for automatic recovery. Wait for its result before resuming it manually.",
+        },
+      });
+      // A crash between input admission and backend start has the same private owner.
+      await updateSessionEntry(scope, () => ({ status: undefined, abortedLastRun: false }));
+      await expect(context.recoverViaRpc()).resolves.toMatchObject({
+        ok: false,
+        error: {
+          message:
+            "This interrupted turn is queued for automatic recovery. Wait for its result before resuming it manually.",
+        },
+      });
+      expect(agentCommandMock).toHaveBeenCalledTimes(1);
+      agentCommandMock.mockImplementationOnce(async (input) => {
+        const command = input as AgentCommandOpts;
+        expect(command.runId).toBe(runId);
+        expect(command.message).toBe(privateMessage);
+        expect(command.privateCompletion).toBe(true);
+        expect(command.userTurnTranscriptRecorder?.getPendingInputMessage?.()).toEqual(
+          acceptedPrivateInput,
+        );
+        const instructions = (command.runtimeContextFragments ?? [])
+          .map((fragment) => fragment.text)
+          .join("\n");
+        expect(instructions.split(RESTART_RECOVERY_INTERRUPTION_NOTE)).toHaveLength(2);
+        const authority = expectDefined(command.operatorAuthority, "Private operator authority");
+        const retain = expectDefined(authority.retain, "Private operator authority retention");
+        authority.assertCurrent();
+        retainedPrivateAuthority = authority;
+        releasePrivateAuthority = retain();
+        await context.prepareVisibleRequesterCommand(command);
+        await command.userTurnTranscriptRecorder!.persistApproved();
+        await context.markCommandExecutionStarted(command);
+        await publishTerminal(command, finalResult(), true);
+        return finalResult();
+      });
+      const batchSettled = createDeferred();
+      const stopObserving = subscribeSubagentRunChanges("persistence", () => {
+        if (
+          batchRunIds.every((id) => {
+            const entry = subagentRuns.get(id);
+            return entry !== undefined && entry.requesterSettleWake === undefined;
+          })
+        ) {
+          batchSettled.resolve();
+        }
+      });
+      try {
+        await withinTest(
+          activateSubagentRegistry(
+            expectDefined(kernel.gatewayRequestContext.resolveGatewayContext, "Gateway resolver"),
+          ).settled,
+          signal,
+        );
+        // The run receipt precedes the registry's settlement of the whole batch.
+        await withinTest(batchSettled.promise, signal);
+      } finally {
+        stopObserving();
+      }
+      expect(await readUserTurnCompletionForTest(scope, runId)).toMatchObject({
+        outcome: { status: "ok", reason: "completed" },
+      });
+      expect(agentCommandMock).toHaveBeenCalledTimes(2);
+      assertSettled("done");
+      child = context.installChild(subagentRuns.get(child.runId)!);
+      sibling = subagentRuns.get(sibling.runId)!;
+      await wake(sibling).result;
+      expect(agentCommandMock).toHaveBeenCalledTimes(2);
+      expect(readWake()).toBeUndefined();
+      await assertRecoveryIdle(transcript(), 2);
+      retainedPrivateAuthority!.assertCurrent();
+      const parentSessionKey = loadSessionEntryReadOnly(scope)!.spawnedBy!;
+      await updateSessionEntry({ ...scope, sessionKey: parentSessionKey }, () => ({
+        lifecycleRevision: "replaced-parent-after-private-recovery",
+      }));
+      expect(() => retainedPrivateAuthority!.assertCurrent()).toThrow();
+      return;
+    }
     await activateSubagentRegistry(
       expectDefined(kernel.gatewayRequestContext.resolveGatewayContext, "Gateway resolver"),
-    );
-    child = installChild(subagentRuns.get(child.runId)!);
+    ).settled;
+    child = context.installChild(subagentRuns.get(child.runId)!);
     sibling = subagentRuns.get(sibling.runId)!;
     expect(kernel.gatewayRequestContext.dedupe).not.toBe(priorDedupe);
     if (reply === "unconsumed revoked cohort") {
@@ -321,9 +507,9 @@ export async function runPublicSettleRecoveryCase(
       expect(await readMainSessionRecoveryCheckpoint(scope)).toMatchObject({
         source: "external_user",
       });
-      const transcript = JSON.stringify(loadTranscriptEventsSync(scope));
-      expect(transcript).toContain(humanWork);
-      expect(transcript).not.toContain(settleRequest);
+      const contents = JSON.stringify(transcript());
+      expect(contents).toContain(humanWork);
+      expect(contents).not.toContain(settleRequest);
     }
     agentCommandMock.mockImplementationOnce(async (input) => {
       const command = input as AgentCommandOpts;
@@ -339,7 +525,7 @@ export async function runPublicSettleRecoveryCase(
         command.operatorAuthority!.assertCurrent();
       }
       recoveryRunId = command.runId;
-      expect(command.message).toContain("restart");
+      expect(command.message?.split(RESTART_RECOVERY_INTERRUPTION_NOTE)).toHaveLength(2);
       if (reply === "unconsumed revoked cohort") {
         expect(command.inputProvenance).toMatchObject({
           kind: "internal_system",
@@ -347,10 +533,10 @@ export async function runPublicSettleRecoveryCase(
         });
         expect(command.message).not.toContain(settleRequest);
       }
-      expect(JSON.stringify(loadTranscriptEventsSync(scope))).toContain(
+      expect(JSON.stringify(transcript())).toContain(
         "Changes verified; the requested landing remains.",
       );
-      await markCommandExecutionStarted(command);
+      await context.markCommandExecutionStarted(command);
       resumed.resolve();
       await resumedRelease.promise;
       const rawEvidence = visibleFinal
@@ -360,50 +546,21 @@ export async function runPublicSettleRecoveryCase(
           };
       // The controlled command uses the same durable final projection and
       // claim cleanup as real command finalization; Gateway admission stays real.
-      await updateSessionEntry(scope, (entry) => ({
-        ...buildRestartRecoveryClaimCleanupPatch({
-          entry,
-          recordTerminalSource: true,
-          terminalRunId: command.runId,
-          terminalDeliveryEvidence: buildRestartRecoveryTerminalDeliveryEvidence(rawEvidence),
-        }),
-        ...buildMainSessionRecoveryClearPatch(entry),
-        status: "done",
-        endedAt: Date.now(),
-      }));
+      await publishTerminal(command, rawEvidence, true);
       return visibleFinal ? finalResult() : { payloads: [], meta: { durationMs: 1 } };
     });
-    recovery = recoverRestartAbortedMainSessions({
-      cfg: getRuntimeConfig(),
-      stateDir: process.env.OPENCLAW_STATE_DIR!,
-      gatewayRuntime: kernel.gatewayInstanceRuntime.recovery,
-    });
+    recovery = recover();
     if (reply === "missing original authority") {
       await expect(recovery).resolves.toMatchObject({ started: 0, settled: 1, failed: 0 });
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
-      const settled = loadSessionEntryReadOnly(scope);
-      expect(settled).toMatchObject({
-        sessionId: requesterSessionId,
-        status: "interrupted",
-        abortedLastRun: false,
-        restartRecoveryTerminalRunIds: expect.arrayContaining([runId]),
-      });
-      expect(settled?.mainRestartRecovery).toBeUndefined();
-      expect(settled?.restartRecoveryRuns).toBeUndefined();
+      const settled = assertSettled("interrupted");
+      expect(settled?.sessionId).toBe(requesterSessionId);
       expect(settled?.restartRecoveryDeliverySourceRunId).toBeUndefined();
-      const transcript = loadTranscriptEventsSync(scope);
-      expect(transcript.at(-1)).toMatchObject({
+      const events = transcript();
+      expect(events.at(-1)).toMatchObject({
         message: { idempotencyKey: `main-session-restart-recovery:${runId}:interrupted` },
       });
-      await expect(
-        recoverRestartAbortedMainSessions({
-          cfg: getRuntimeConfig(),
-          stateDir: process.env.OPENCLAW_STATE_DIR!,
-          gatewayRuntime: kernel.gatewayInstanceRuntime.recovery,
-        }),
-      ).resolves.toEqual({ started: 0, settled: 0, failed: 0, skipped: 0 });
-      expect(loadTranscriptEventsSync(scope)).toEqual(transcript);
-      expect(agentCommandMock).toHaveBeenCalledTimes(1);
+      await assertRecoveryIdle(events, 1);
       return;
     }
     await Promise.race([
@@ -411,10 +568,7 @@ export async function runPublicSettleRecoveryCase(
       recovery.then((result) => expect(result).toMatchObject({ started: 1, failed: 0 })),
     ]);
     expect(agentCommandMock).toHaveBeenCalledTimes(2);
-    const pendingReplay = wake(sibling);
-    expect(await pendingReplay.result).toBe(false);
-    expect(pendingReplay.completeBatch).not.toHaveBeenCalled();
-    expect(agentCommandMock).toHaveBeenCalledTimes(2);
+    await assertNoReplay();
     // Let the real recovery owner settle its startup admission before the
     // controlled command publishes its synthetic terminal claim cleanup.
     await expect(recovery).resolves.toMatchObject({ started: 1, failed: 0 });
@@ -428,34 +582,17 @@ export async function runPublicSettleRecoveryCase(
     ).resolves.toMatchObject({ status: "ok" });
     if (reply === "unconsumed revoked cohort") {
       // The retained human work may recover; the withdrawn completion input may not.
-      const completedReplay = wake(sibling);
-      expect(await completedReplay.result).toBe(false);
-      expect(completedReplay.completeBatch).not.toHaveBeenCalled();
+      await assertNoReplay();
       const persisted = loadSubagentRegistryFromSqlite();
       for (const entry of [child, sibling]) {
         expect(entry.requesterSettleWake).toBeUndefined();
         expect(persisted.get(entry.runId)?.requesterSettleWake).toBeUndefined();
       }
-      const settled = loadSessionEntryReadOnly(scope);
-      expect(settled).toMatchObject({
-        status: "done",
-        abortedLastRun: false,
-        restartRecoveryTerminalRunIds: expect.arrayContaining([runId]),
-      });
-      expect(settled?.mainRestartRecovery).toBeUndefined();
-      expect(settled?.restartRecoveryRuns).toBeUndefined();
-      const transcript = loadTranscriptEventsSync(scope);
-      expect(JSON.stringify(transcript)).toContain(humanWork);
-      expect(JSON.stringify(transcript)).not.toContain(settleRequest);
-      await expect(
-        recoverRestartAbortedMainSessions({
-          cfg: getRuntimeConfig(),
-          stateDir: process.env.OPENCLAW_STATE_DIR!,
-          gatewayRuntime: kernel.gatewayInstanceRuntime.recovery,
-        }),
-      ).resolves.toEqual({ started: 0, settled: 0, failed: 0, skipped: 0 });
-      expect(loadTranscriptEventsSync(scope)).toEqual(transcript);
-      expect(agentCommandMock).toHaveBeenCalledTimes(2);
+      assertSettled("done");
+      const events = transcript();
+      expect(JSON.stringify(events)).toContain(humanWork);
+      expect(JSON.stringify(events)).not.toContain(settleRequest);
+      await assertRecoveryIdle(events, 2);
       return;
     }
     expect(child.requesterSettleWake?.nextAttemptAt).toBeUndefined();
@@ -465,123 +602,98 @@ export async function runPublicSettleRecoveryCase(
     const completedReplay = wake(sibling);
     expect(await completedReplay.result).toBe(visibleFinal);
     expect(agentCommandMock).toHaveBeenCalledTimes(2);
-    const persisted = loadSubagentRegistryFromSqlite().get(child.runId);
+    const pendingWake = readWake();
     if (visibleFinal) {
-      expect(persisted?.requesterSettleWake).toBeUndefined();
+      expect(pendingWake).toBeUndefined();
       expect(completedReplay.completeBatch).toHaveBeenCalledOnce();
       expect(completedReplay.completeBatch.mock.calls[0]?.[2]).toMatchObject({
         delivered: true,
-        requesterVisibleFinalDelivered: true,
       });
-    } else {
-      expect(completedReplay.completeBatch).not.toHaveBeenCalled();
-      expect(persisted?.requesterSettleWake).toMatchObject({
-        status: "pending",
-        attemptCount: 1,
-        batchRunIds,
-        lastError: "completion agent did not produce a visible reply",
-      });
-      expect(persisted?.requesterSettleWake?.nextAttemptAt).toBeGreaterThanOrEqual(
-        reconciliationAt + 30_000,
+      expect(completedReplay.completeBatch.mock.calls[0]?.[2]?.requesterVisibleFinalDelivered).toBe(
+        reply === "child visible final" || privateChild ? undefined : true,
       );
-      expect(persisted?.requesterSettleWake?.nextAttemptAt).toBeLessThanOrEqual(
-        Date.now() + 30_000,
-      );
-      vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(
-        expectDefined(persisted?.requesterSettleWake?.nextAttemptAt, "Public retry deadline") - 1,
-      );
-      const early = wake(sibling);
-      expect(await early.result).toBe(false);
-      expect(early.completeBatch).not.toHaveBeenCalled();
-      expect(agentCommandMock).toHaveBeenCalledTimes(2);
-      expect(
-        loadSessionEntryReadOnly(scope)?.restartRecoveryTerminalDeliveryEvidence?.find(
-          (evidence) => evidence.runId === runId,
-        ),
-      ).toEqual({
-        runId,
-        captured: true,
-        payloads: [{ visible: false }],
-        transcriptRunId: recoveryRunId,
-      });
-      const retryRunIds: string[] = [];
-      let terminalRetry: ReturnType<typeof wake> | undefined;
-      for (const attempt of [2, 3]) {
-        const retryAt = expectDefined(
-          loadSubagentRegistryFromSqlite().get(child.runId)?.requesterSettleWake?.nextAttemptAt,
-          "Public retry deadline",
-        );
-        vi.setSystemTime(retryAt);
-        agentCommandMock.mockImplementationOnce(async (input) => {
-          const command = input as AgentCommandOpts;
-          expect(command.runId).not.toBe(runId);
-          expect(command.runId).not.toBe(recoveryRunId);
-          expect(retryRunIds).not.toContain(command.runId);
-          retryRunIds.push(expectDefined(command.runId, "Public retry run"));
-          expect(command.message).toContain("provide the missing result");
-          await prepareVisibleRequesterCommand(command);
-          await command.userTurnTranscriptRecorder!.persistApproved();
-          await markCommandExecutionStarted(command);
-          const result = { payloads: [], meta: { durationMs: 1 } };
-          await updateSessionEntry(scope, (entry) => ({
-            ...buildRestartRecoveryClaimCleanupPatch({
-              entry,
-              recordTerminalSource: true,
-              terminalRunId: command.runId,
-              terminalDeliveryEvidence: buildRestartRecoveryTerminalDeliveryEvidence({
-                payloads: result.payloads,
-              }),
-            }),
-            status: "done",
-            endedAt: Date.now(),
-          }));
-          return result;
-        });
-        const retry = wake(sibling);
-        expect(await retry.result).toBe(false);
-        expect(agentCommandMock).toHaveBeenCalledTimes(attempt + 1);
-        const next = loadSubagentRegistryFromSqlite().get(child.runId)?.requesterSettleWake;
-        if (attempt === 2) {
-          expect(retry.completeBatch).not.toHaveBeenCalled();
-          expect(next).toMatchObject({
-            status: "pending",
-            attemptCount: 2,
-            nextAttemptAt: retryAt + 120_000,
-          });
-        } else {
-          expect(next).toBeUndefined();
-          terminalRetry = retry;
-        }
-      }
-      expect(terminalRetry?.completeBatch).toHaveBeenCalledOnce();
-      expect(terminalRetry?.completeBatch.mock.calls[0]?.[2]).toEqual({
-        delivered: false,
-        path: "direct",
-        disposition: "retryable",
-        reason: "visible_reply_missing",
-        error: "completion agent did not produce a visible reply",
-        phases: [
-          {
-            phase: "direct-primary",
-            delivered: false,
-            path: "direct",
-            deliveredAt: undefined,
-            enqueuedAt: undefined,
-            reason: "visible_reply_missing",
-            error: "completion agent did not produce a visible reply",
-          },
-        ],
-      });
-      expect(await wake(sibling).result).toBe(false);
-      expect(agentCommandMock).toHaveBeenCalledTimes(4);
+      return;
     }
+    expect(completedReplay.completeBatch).not.toHaveBeenCalled();
+    expect(pendingWake).toMatchObject({
+      status: "pending",
+      attemptCount: 1,
+      batchRunIds,
+      lastError: missingReply.error,
+    });
+    const nextAttemptAt = pendingWake?.nextAttemptAt;
+    expect(nextAttemptAt).toBeGreaterThanOrEqual(reconciliationAt + 30_000);
+    expect(nextAttemptAt).toBeLessThanOrEqual(Date.now() + 30_000);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(expectDefined(nextAttemptAt, "Public retry deadline") - 1);
+    await assertNoReplay();
+    expect(
+      loadSessionEntryReadOnly(scope)?.restartRecoveryTerminalDeliveryEvidence?.find(
+        (evidence) => evidence.runId === runId,
+      ),
+    ).toEqual({
+      runId,
+      captured: true,
+      payloads: [{ visible: false }],
+      transcriptRunId: recoveryRunId,
+    });
+    const retryRunIds: string[] = [];
+    let terminalRetry: ReturnType<typeof wake> | undefined;
+    for (const attempt of [2, 3]) {
+      const retryAt = expectDefined(readWake()?.nextAttemptAt, "Public retry deadline");
+      vi.setSystemTime(retryAt);
+      agentCommandMock.mockImplementationOnce(async (input) => {
+        const command = input as AgentCommandOpts;
+        expect(command.runId).not.toBe(runId);
+        expect(command.runId).not.toBe(recoveryRunId);
+        expect(retryRunIds).not.toContain(command.runId);
+        retryRunIds.push(expectDefined(command.runId, "Public retry run"));
+        expect(command.message).toContain("provide the missing result");
+        await context.prepareVisibleRequesterCommand(command);
+        await command.userTurnTranscriptRecorder!.persistApproved();
+        await context.markCommandExecutionStarted(command);
+        const result = { payloads: [], meta: { durationMs: 1 } };
+        await publishTerminal(command, { payloads: result.payloads });
+        return result;
+      });
+      const retry = wake(sibling);
+      expect(await retry.result).toBe(false);
+      expect(agentCommandMock).toHaveBeenCalledTimes(attempt + 1);
+      const next = readWake();
+      if (attempt === 2) {
+        expect(retry.completeBatch).not.toHaveBeenCalled();
+        expect(next).toMatchObject({
+          status: "pending",
+          attemptCount: 2,
+          nextAttemptAt: retryAt + 120_000,
+        });
+      } else {
+        expect(next).toBeUndefined();
+        terminalRetry = retry;
+      }
+    }
+    expect(terminalRetry?.completeBatch).toHaveBeenCalledOnce();
+    expect(terminalRetry?.completeBatch.mock.calls[0]?.[2]).toEqual({
+      ...missingReply,
+      disposition: "retryable",
+      phases: [
+        {
+          ...missingReply,
+          phase: "direct-primary",
+          deliveredAt: undefined,
+          enqueuedAt: undefined,
+        },
+      ],
+    });
+    expect(await wake(sibling).result).toBe(false);
+    expect(agentCommandMock).toHaveBeenCalledTimes(4);
   } finally {
     vi.useRealTimers();
     release();
     await Promise.allSettled([original, recovery]);
     signal.removeEventListener("abort", release);
     originalSource?.release();
+    releasePrivateAuthority?.();
     subagentRuns.delete(sibling.runId);
   }
 }

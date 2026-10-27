@@ -114,6 +114,29 @@
   outline-offset: 2px;
 }
 
+.markdown-hex-color {
+  margin-inline: 0.2em;
+  white-space: nowrap;
+
+  &:not(:is(strong, b) *) {
+    font-weight: 500;
+  }
+}
+
+.markdown-hex-color__swatch {
+  display: inline-block;
+  width: 0.85em;
+  height: 0.85em;
+  margin-inline-end: 0.3em;
+  vertical-align: -0.05em;
+  border: 1px solid var(--muted);
+  border-radius: 3px;
+  background: repeating-conic-gradient(var(--bg-elevated) 0% 25%, var(--border) 0% 50%) 50% / 8px
+    8px;
+  pointer-events: none;
+  user-select: none;
+}
+
 .chat-text :where(p, ul, ol, pre, blockquote, table, details, .markdown-table) {
   margin: 0;
 }
@@ -192,7 +215,7 @@
   padding: 10px;
   border: 0;
   background: transparent;
-  color: var(--text);
+  color: color-mix(in srgb, var(--muted) 94%, transparent);
   cursor: var(--cursor-action);
   place-items: center;
 }
@@ -254,6 +277,7 @@
 }
 
 .markdown-table-dialog__close {
+  color: var(--text);
   position: fixed;
   top: 8px;
   right: 8px;
@@ -310,58 +334,71 @@
 }
 
 /* Auto layout gives prose more space than short values, then wraps it. */
-:is(.markdown-table, .markdown-table-dialog.chat-text) :where(table) {
-  display: table;
-  width: 100%;
-  table-layout: auto;
-  margin: 0;
-  border: 0;
-  border-collapse: collapse;
-  background: transparent;
-  box-shadow: none;
-  overflow: visible;
-}
+.markdown-table,
+.markdown-table-dialog.chat-text {
+  :where(table) {
+    display: table;
+    width: 100%;
+    table-layout: auto;
+    margin: 0;
+    border: 0;
+    border-collapse: collapse;
+    background: transparent;
+    box-shadow: none;
+    overflow: visible;
+  }
 
-/* Many-column comparisons keep useful column widths instead of wrapping a
-   notes column into a word per line. Short numeric columns still fit naturally. */
-:is(.markdown-table, .markdown-table-dialog.chat-text) table:has(tr > :nth-child(5)) {
-  width: max-content;
-  min-width: 100%;
-}
+  /* Many-column comparisons keep useful column widths instead of wrapping a
+   notes column into a word per line. Markdown body rows have the header's column
+   count, so inspecting the header avoids searching every row. */
+  table:has(> :where(thead) > tr > :nth-child(5)) {
+    width: max-content;
+    min-width: 100%;
+  }
 
-:is(.markdown-table, .markdown-table-dialog.chat-text) :where(table, thead, tbody, tr, th, td) {
-  background: transparent;
-}
+  :where(table),
+  :where(thead),
+  :where(tbody),
+  :where(tr),
+  :where(th),
+  :where(td) {
+    background: transparent;
+  }
 
-:is(.markdown-table, .markdown-table-dialog.chat-text) :where(th, td) {
-  padding-block: 12px;
-  border-right: 0;
-  border-bottom-color: color-mix(in srgb, var(--border) 42%, transparent);
-  min-width: 0;
-  /* Preserve short tokens' intrinsic width; long hashes still wrap at the cap. */
-  max-width: 24rem;
-  overflow-wrap: break-word;
-  white-space: normal;
-  word-break: normal;
-  vertical-align: top;
-}
+  :where(th),
+  :where(td) {
+    padding-block: 12px;
+    border-right: 0;
+    border-bottom-color: color-mix(in srgb, var(--border) 42%, transparent);
+    min-width: 0;
+    /* Preserve short tokens' intrinsic width; long hashes still wrap at the cap. */
+    max-width: 24rem;
+    overflow-wrap: break-word;
+    white-space: normal;
+    word-break: normal;
+    vertical-align: top;
+  }
 
-:is(.markdown-table, .markdown-table-dialog.chat-text) :where(th:first-child, td:first-child) {
-  padding-inline-start: 0;
-}
+  :where(th:first-child),
+  :where(td:first-child) {
+    padding-inline-start: 0;
+  }
 
-:is(.markdown-table, .markdown-table-dialog.chat-text) :where(th) {
-  border-bottom-color: var(--border-strong);
-  background: transparent;
-}
+  :where(th) {
+    border-bottom-color: var(--border-strong);
+    background: transparent;
+  }
 
-:is(.markdown-table, .markdown-table-dialog.chat-text) :where(tbody tr) {
-  transition: none;
-}
+  :where(tbody tr) {
+    transition: none;
+  }
 
-:is(.markdown-table, .markdown-table-dialog.chat-text)
-  :where(tbody tr:nth-child(even), tbody tr:hover) {
-  background: transparent;
+  @media (hover: hover) {
+    :where(tbody tr:nth-child(even)),
+    :where(tbody tr:hover) {
+      background: transparent;
+    }
+  }
 }
 
 .markdown-table-dialog.chat-text :where(thead) {
@@ -372,7 +409,7 @@
   box-shadow: 0 1px var(--border-strong);
 }
 
-/* The transcript, not the window, owns spare width (including split panes).
+/* The transcript, excluding reserved Details space, owns spare width.
    Only top-level assistant tables borrow it; prose and nested tables stay put. */
 @container chat-transcript (min-width: 900px) {
   .chat-virtual-row {
@@ -382,8 +419,9 @@
         12rem,
         calc(
           (
-              100cqw - var(--chat-transcript-column-width, 100cqw) - 2 * var(--chat-thread-gutter) -
-                2 * var(--chat-thread-side-inset)
+              100cqw - var(--chat-table-reserved-space, 0px) -
+                var(--chat-transcript-column-width, 100cqw) - 2 * var(--chat-thread-gutter) - 2 *
+                var(--chat-thread-side-inset)
             ) /
             2
         )
@@ -641,7 +679,8 @@
 }
 
 .chat-text :where(.markdown-link-favicon) {
-  display: none;
+  display: inline-block;
+  visibility: hidden;
   width: 1em;
   height: 1em;
   margin-inline-end: 0.3em;
@@ -649,7 +688,7 @@
 }
 
 .chat-text :where(.markdown-link-favicon.is-loaded) {
-  display: inline-block;
+  visibility: visible;
 }
 
 .chat-text :where(a:has(> .markdown-link-favicon.is-loaded)) {
@@ -891,6 +930,7 @@
   margin: 0;
   border: 0;
   border-radius: 50%;
+  outline: 0;
   box-shadow: none;
 }
 
@@ -1060,14 +1100,13 @@
   color: var(--link-hover);
 }
 
-/* Code surfaces must lift off the host bubble in every theme. --secondary equals
-   --card on every dark palette, so chips painted with it vanished inside user
-   bubbles; --bg-muted/--border-strong separate in both modes without an override. */
+/* Inline-code overrides let palettes separate chips from their host without
+   changing the muted surfaces and strong borders of other components. */
 .chat-text :where(:not(pre, a.markdown-file-link) > code) {
-  background: var(--bg-muted);
+  background: var(--inline-code-bg, var(--bg-muted));
   padding: 0.1em 0.2em;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--inline-code-border, var(--border-strong));
   overflow-wrap: anywhere;
   word-break: break-word;
 }
@@ -1118,7 +1157,9 @@
   overscroll-behavior-inline: contain;
 }
 
-.code-block-viewport :where(pre) {
+/* Outrank passive code and sidebar pre rules: the focused viewport must own
+   horizontal scrolling, not a nested pre that keyboard input cannot reach. */
+.code-block-wrapper .code-block-viewport pre {
   overflow: visible;
 }
 
@@ -1162,8 +1203,7 @@
 }
 
 .code-block-chevron,
-.code-block-wrap__enable,
-.code-block-wrap__disable {
+.code-block-wrap__icon {
   display: block;
   width: 16px;
   height: 16px;
@@ -1196,21 +1236,8 @@
   display: inline-flex;
 }
 
-.code-block-wrap__enable {
+.code-block-wrap__icon {
   --code-block-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 6h18M3 12h15a3 3 0 1 1 0 6h-4m2-2-2 2 2 2M3 18h7'/%3E%3C/svg%3E");
-}
-
-.code-block-wrap__disable {
-  --code-block-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12h14m-4-4 4 4-4 4'/%3E%3C/svg%3E");
-  display: none;
-}
-
-.code-block-wrapper.is-wrapped .code-block-wrap__enable {
-  display: none;
-}
-
-.code-block-wrapper.is-wrapped .code-block-wrap__disable {
-  display: block;
 }
 
 .code-block-wrapper.is-wrapped .code-block-viewport :where(pre code),
@@ -1231,12 +1258,14 @@
 }
 
 .code-block-expand:focus-visible,
+.code-block-viewport:focus-visible,
 .code-block-wrap:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
-.code-block-expand:focus-visible {
+.code-block-expand:focus-visible,
+.code-block-viewport:focus-visible {
   /* Keep the bottom edge inside the clipped code wrapper. */
   outline-offset: -2px;
 }
@@ -1272,7 +1301,8 @@
 }
 
 .chat-text :where(pre code.markdown-block-art),
-.chat-group.user .chat-text :where(pre code.markdown-block-art) {
+.chat-group.user .chat-text :where(pre code.markdown-block-art),
+.chat-tool-card__block-content code.markdown-block-art {
   display: block;
   min-width: 100%;
   width: max-content;
@@ -1394,16 +1424,21 @@
   margin-block-start: inherit;
 }
 
-.chat-text > * + *,
-.chat-text > * + .markdown-external-image {
+.chat-text > :where(:not(:first-child)),
+.chat-text > .markdown-external-image:where(:not(:first-child)) {
   margin-block-start: var(--chat-block-gap);
 }
 
-.chat-text > * + :where(h1, h2, h3, h4) {
+.chat-text > :where(h1, h2, h3, h4):where(:not(:first-child)) {
   margin-block-start: calc(var(--chat-block-gap) * 1.5);
 }
 
 /* Contain the preview's reserved toolbar space within its message block. */
 .chat-bubble > .chat-tool-card__widget-host {
   display: flow-root;
+}
+
+/* Sticky insets start inside the transcript's top padding. */
+.chat-thread .code-block-wrapper--long :is(.code-block-copy, .code-block-wrap) {
+  top: calc(4px - var(--chat-thread-padding-top));
 }

@@ -6,6 +6,7 @@ import {
   validateSessionsCompanionResetParams,
   validateSessionsCompanionStateParams,
 } from "../../packages/gateway-protocol/src/index.js";
+import { assertOperatorModelAllowed } from "../agents/admitted-run-context.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   releaseSessionSourceAuthorities,
@@ -16,6 +17,7 @@ import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js"
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import { defineValidatedGatewayHandler } from "./server-methods/validation.js";
 import { SessionCompanionAskError } from "./session-companion-errors.js";
+import { resolveSessionCompanionAskSelection } from "./session-companion-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { captureSessionSharingMemoryFacts } from "./session-sharing-incognito.js";
 import {
@@ -87,7 +89,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
     "sessions.companion.ask",
     validateSessionsCompanionAskParams,
     async ({ params, respond, client, context, signal, hasCurrentClientAuthority }) => {
-      const { sessionKey, agentId, question, selectionContext, attachments } = params;
+      const { sessionKey, agentId, question, selectionContext, attachments, model } = params;
       if (!question.trim()) {
         respond(
           false,
@@ -110,6 +112,19 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
         return;
       }
       const sourceCfg = context.getRuntimeConfig();
+      const resolvedSelection = await resolveSessionCompanionAskSelection({
+        cfg: sourceCfg,
+        agentId: target.agentId,
+        model,
+        thinkingLevel: params.thinkingLevel,
+        fastMode: params.fastMode,
+        loadModelCatalog: () => context.loadGatewayModelCatalog({ agentId: target.agentId }),
+      });
+      if (!resolvedSelection.ok) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, resolvedSelection.error));
+        return;
+      }
+      const selection = resolvedSelection.selection;
       const sourceTargetScope = {
         agentId: target.agentId,
         sessionKey: target.sessionKey,
@@ -251,12 +266,32 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
         });
         assertSourceCurrent();
         assertInputCurrent?.();
+        if (selection?.model && capturedOperator) {
+          // A chosen model is refused, never swapped for the role's permitted default.
+          try {
+            assertOperatorModelAllowed(capturedOperator.authority, selection.model);
+          } catch (error) {
+            if (error instanceof SessionMutationAuthorizationChangedError) {
+              throw error;
+            }
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.FORBIDDEN,
+                error instanceof Error ? error.message : "Side chat cannot use this model.",
+              ),
+            );
+            return;
+          }
+        }
         const result = await companion.ask({
           sessionKey: target.sessionKey,
           agentId: target.agentId,
           question,
           ...(selectionContext ? { selectionContext } : {}),
           ...(originalAttachments ? { attachments: originalAttachments } : {}),
+          ...(selection ? { selection } : {}),
           connId,
           assertSourceCurrent,
           ...(assertInputCurrent ? { assertInputCurrent } : {}),
@@ -294,7 +329,9 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
               : {
                   details: { reason: error.reason },
                   retryable:
-                    error.reason === "rate-limited" || error.reason === "context-unavailable",
+                    error.reason === "rate-limited" ||
+                    error.reason === "context-unavailable" ||
+                    error.reason === "timeout",
                   ...(error.retryAfterMs ? { retryAfterMs: error.retryAfterMs } : {}),
                 },
           ),

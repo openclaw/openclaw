@@ -28,9 +28,7 @@ background services, plus the SDK helpers those surfaces depend on. Part of the
 | `api.registerMemoryPromptSupplement(builder)`     | Additive memory-adjacent prompt section                                |
 | `api.registerMemoryPromptPreparation(prepare)`    | Async preparation for a memory-adjacent prompt section                 |
 | `api.registerMemoryCorpusSupplement(adapter)`     | Additive memory search/read corpus                                     |
-| `api.registerHostedMediaResolver(resolver)`       | Resolver for browser-style hosted media URLs                           |
 | `api.registerMcpServerConnectionResolver(...)`    | Per-requester MCP transport (`url`/`headers`) for a static server name |
-| `api.registerTextTransforms(transforms)`          | Plugin-owned prompt/message compatibility text rewrites                |
 | `api.registerConfigMigration(migrate)`            | Lightweight config migration run before plugin runtime loads           |
 | `api.registerMigrationProvider(provider)`         | Importer for `openclaw migrate`                                        |
 | `api.registerAutoEnableProbe(probe)`              | Config check that can auto-enable this plugin                          |
@@ -56,6 +54,25 @@ Only opt in when the method's authorization is fully covered by dispatch; a
 handler that performs additional caller-specific authorization or nested requests
 must remain request-local. Omit these options for mutations, subscriptions, and
 connection-bound providers.
+
+### Bounded directory inventories
+
+`listDirectoryTreeStrict(root, options?)` and `listDirectoryTreeStrictSync(root, options?)` from
+`openclaw/plugin-sdk/file-access-runtime` return `{ relativePath, dirent }` entries
+in lexical relative-path order. They report symlinks without following them and
+reject a symlink root with `ERR_DIRECTORY_WALK_ROOT_SYMLINK`. Missing roots throw `ENOENT`; callers may explicitly treat
+that as an empty inventory. `maxDepth` defaults to 64 (immediate children have
+depth 1), and `maxEntries` defaults to 100,000, counting directories and symlinks.
+An optional `skipDirectory(entry)` predicate retains the directory entry but prunes
+its descendants before they consume depth or entry budgets. Workshop inventories
+use it to exclude hidden metadata and dependency trees.
+Exceeding either throws `DirectoryWalkLimitError` (`ERR_DIRECTORY_WALK_LIMIT`), never a truncated result.
+This strict inventory is distinct from the best-effort `walkDirectory` in
+`@openclaw/fs-safe/walk`, which can return partial results and stop at a requested
+depth. The strict API detects nonempty directories beyond its depth budget instead
+of treating them as a complete inventory.
+These inventories do not authorize later reads or writes against concurrent path
+replacement; use the root-bound file APIs for that boundary.
 
 ### File-watch capacity errors
 
@@ -197,9 +214,12 @@ index maintenance. Callers retain filters, limits, chronology, snippets' display
 bounds, and scoring policy. The adapter's existing capability labels remain
 diagnostic metadata. SQLite retains its L2 candidate selection and cosine
 reranking, with the memory owner's exact fallback when native vectors are
-unavailable. PostgreSQL search capabilities are currently `null` with an admission
-diagnostic; their later implementation will use explicitly documented native
-ranking rather than promise SQLite ranking equivalence.
+unavailable. PostgreSQL uses native full-text and exact vector retrieval.
+`fullText.rank(index, query, { postgres: { normalization: 0 } })` selects
+unnormalized cover density; omitting the option retains document-length
+normalization (`2`). SQLite ignores PostgreSQL rank options. Feature owners
+calibrate native ranks for their scoring policy; the capability does not promise
+SQLite ranking equivalence.
 
 ### Owned stdio processes
 
@@ -455,14 +475,8 @@ Use `close` for terminal cleanup or selected-error diagnostics; it does not prov
 delivery. Keep successful-response activity on `finish`, with the caller's
 success-status check, so an aborted request cannot report healthy activity.
 
-Older Bun HTTP transports use native response completion because their raw socket
-operations do not flush the HTTP response. OpenClaw detects the native HTTP
-`destroySoon` implementation introduced by Bun's Node compatibility rework rather
-than relying on version labels shared by different canary builds. Queued HEAD
-rejections on newer Bun wait for response socket assignment, including builds
-without HTTP response-finish diagnostics. Older Bun can still report client
-connection resets during large outstanding uploads, even after delivering the
-complete error.
+Queued HEAD rejections on supported Bun wait for response socket assignment,
+including builds without HTTP response-finish diagnostics.
 
 Gateway HTTP requests run in order on each connection, including their response
 lifetimes. A closing connection cannot admit later requests or upgrades. Queued

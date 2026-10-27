@@ -1,134 +1,105 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { extractFunctionBody } from "./install-ps1.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
-
 const SCRIPT_PATH = "scripts/install.ps1";
-
-describe("install.ps1 source contracts", () => {
-  const source = readFileSync(SCRIPT_PATH, "utf8");
-
-  it("pipes the SQLite probe to an application Node executable", () => {
-    const checkNodeBody = extractFunctionBody(source, "Check-Node");
-    expect(checkNodeBody).toContain("Get-Command node -CommandType Application");
-    expect(checkNodeBody).toContain("SELECT sqlite_version() AS version");
-    expect(checkNodeBody).toContain("$sqliteProbe | & $nodePath -");
-    expect(checkNodeBody).not.toContain("& $nodePath -e");
-  });
-
-  const harness = createScriptTestHarness();
-  const powershell = process.platform === "win32" ? "powershell" : "pwsh";
-  const available =
-    spawnSync(powershell, ["-NoLogo", "-NoProfile", "-Command", "exit 0"]).status === 0;
-  const runWithPowerShell = available ? it : it.skip;
-
-  runWithPowerShell.each(["valid", "missing-head", "broken-gitfile", "subdirectory"])(
-    "preserves real Git checkout boundaries before package setup: %s",
-    (scenario) => {
-      const root = join(harness.createTempDir("openclaw-install-worktree-"), "fixture");
-      const result = spawnSync(
-        powershell,
-        [
-          "-NoLogo",
-          "-NoProfile",
-          "-NonInteractive",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-File",
-          "test/scripts/install-git-worktree.ps1",
-          "-InstallerPath",
-          join(process.cwd(), SCRIPT_PATH),
-          "-FixtureRoot",
-          root,
-          "-Scenario",
-          scenario,
-        ],
-        { encoding: "utf8" },
-      );
-      expect(result.status, result.stdout + result.stderr).toBe(0);
-    },
+const source = readFileSync(SCRIPT_PATH, "utf8");
+const body = (name: string) => extractFunctionBody(source, name);
+// Runtime, cwd and archive identity are exercised by install-ps1.release.test.ts.
+it("pipes the SQLite probe through stdin instead of Windows command-line quoting", () => {
+  expect(body("Check-Node")).toMatch(
+    /Get-Command node -CommandType Application[^]*\$sqliteProbe \| & \$nodePath -/,
   );
-
-  it("runs Windows command shims from a Windows-local cwd", () => {
-    const commandSafeBody = extractFunctionBody(source, "Invoke-CommandFromWindowsSafeDirectory");
-    const npmCommandBody = extractFunctionBody(source, "Invoke-NpmCommand");
-    const openClawPathBody = extractFunctionBody(source, "Ensure-OpenClawOnPath");
-    const ensurePnpmBody = extractFunctionBody(source, "Ensure-Pnpm");
-    const mainBody = extractFunctionBody(source, "Main");
-
-    expect(commandSafeBody).toContain("Get-WindowsCommandSafeDirectory");
-    expect(commandSafeBody).toContain("$WorkingDirectory");
-    expect(commandSafeBody).toContain("Push-Location -LiteralPath $safeDir");
-    expect(commandSafeBody).toContain("& $CommandPath @Arguments");
-    expect(commandSafeBody).toContain("Pop-Location");
-    expect(npmCommandBody).toContain("Invoke-CommandFromWindowsSafeDirectory");
-    expect(openClawPathBody).toContain('Invoke-NpmCommand -Arguments @("config", "get", "prefix")');
-    expect(ensurePnpmBody).toContain(
-      '@("enable", "--install-directory", $InstallDirectory, "pnpm")',
-    );
-    expect(ensurePnpmBody).toContain(
-      "Invoke-NpmCommand -CommandPath $npmCommand -Arguments $installArgs",
-    );
-    expect(mainBody).toContain("Remove-PreviousNpmOwner");
-    expect(mainBody).toContain("Remove-PreviousGitWrapper");
-    expect(mainBody).toContain("Start-NpmShimBackup");
-    expect(mainBody).toContain("Restore-NpmShimBackup");
-    expect(mainBody).toContain("Complete-NpmShimBackup");
-    expect(mainBody).toContain(
-      'Invoke-NpmCommand -Arguments @("list", "-g", "--depth", "0", "--json")',
-    );
-  });
-
-  it("rejects OpenClaw GitHub source targets for npm installs", () => {
-    const npmInstallBody = extractFunctionBody(source, "Install-OpenClaw");
-    const sourceTargetBody = extractFunctionBody(source, "Test-OpenClawSourcePackageInstallSpec");
-    expect(sourceTargetBody).toContain('$normalizedTag -eq "main"');
-    expect(sourceTargetBody).toContain("^github:openclaw/openclaw");
-    expect(npmInstallBody).toContain("Test-OpenClawSourcePackageInstallSpec -RequestedTag $Tag");
-    expect(npmInstallBody).toContain("npm installs do not support OpenClaw GitHub source targets");
-    expect(npmInstallBody).toContain("-InstallMethod git -Tag main");
-  });
-
-  it("does not read project npmrc when choosing global install freshness args", () => {
-    const rawKeyBody = extractFunctionBody(source, "Test-NpmConfigRawKey");
-    expect(rawKeyBody).not.toContain("Get-Location");
-    expect(rawKeyBody).not.toContain('Join-Path (Get-Location) ".npmrc"');
-  });
-
-  it("preserves the min-release-age probe status before raw npmrc detection", () => {
-    const npmInstallBody = extractFunctionBody(source, "Install-OpenClaw");
-    const probeStatusCapture = npmInstallBody.indexOf("$minReleaseAgeStatus = $LASTEXITCODE");
-    const rawKeyProbe = npmInstallBody.indexOf("Test-NpmConfigRawKey -Key");
-    expect(probeStatusCapture).toBeGreaterThan(-1);
-    expect(rawKeyProbe).toBeGreaterThan(-1);
-    expect(probeStatusCapture).toBeLessThan(rawKeyProbe);
-    expect(npmInstallBody).toContain(
-      "} elseif ($minReleaseAgeStatus -ne 0 -or -not $minReleaseAge",
-    );
-    expect(npmInstallBody).toContain(
-      'Invoke-NpmCommand -CommandPath $npmCommand -WorkingDirectory $npmCwd -Arguments @("config", "get", "min-release-age", "--global")',
-    );
-    expect(npmInstallBody).toContain(
-      'Invoke-NpmCommand -CommandPath $npmCommand -WorkingDirectory $npmCwd -Arguments @("config", "get", "before", "--global")',
-    );
-  });
-
-  it("preserves caller-relative local tarball install specs before safe-cwd npm calls", () => {
-    const resolveSpecBody = extractFunctionBody(source, "Resolve-NpmOpenClawInstallSpec");
-    const localSpecBody = extractFunctionBody(source, "Resolve-LocalNpmPackageInstallSpec");
-    const localPathBody = extractFunctionBody(source, "Resolve-LocalNpmPackagePath");
-
-    expect(resolveSpecBody).toContain(
-      "Resolve-LocalNpmPackageInstallSpec -InstallSpec $trimmedTag",
-    );
-    expect(localSpecBody).toContain("$InstallSpec -match '^file:(?<path>.+)$'");
-    expect(localSpecBody).toContain("Resolve-LocalNpmPackagePath -PackagePath $filePath");
-    expect(localSpecBody).toContain(").AbsoluteUri");
-    expect(localSpecBody).toContain("$InstallSpec -notmatch '^\\.\\.?[\\\\/]'");
-    expect(localSpecBody).toContain("$InstallSpec -notmatch '\\.tgz$'");
-    expect(localPathBody).toContain("Resolve-Path -LiteralPath $PackagePath");
-    expect(localPathBody).toContain("[System.IO.Path]::GetFullPath($PackagePath)");
-  });
 });
+it("rejects source targets before installing an npm package", () => {
+  expect(body("Test-OpenClawSourcePackageInstallSpec")).toMatch(
+    /\$normalizedTag -eq "main"[^]*\^github:openclaw\/openclaw/,
+  );
+  expect(body("Install-OpenClaw")).toMatch(
+    /if \(Test-OpenClawSourcePackageInstallSpec[^]*?return \$false[^]*?\$installSpec =/,
+  );
+});
+it("does not read project npmrc when choosing global install freshness args", () => {
+  const rawKeyBody = body("Test-NpmConfigRawKey");
+  expect(rawKeyBody).not.toContain("Get-Location");
+});
+it("preserves the min-release-age probe status before raw npmrc detection", () => {
+  const npmInstallBody = body("Install-OpenClaw");
+  const probeStatusCapture = npmInstallBody.indexOf("$minReleaseAgeStatus = $LASTEXITCODE");
+  const rawKeyProbe = npmInstallBody.indexOf("Test-NpmConfigRawKey -Key");
+  expect(probeStatusCapture).toBeGreaterThan(-1);
+  expect(probeStatusCapture).toBeLessThan(rawKeyProbe);
+  expect(npmInstallBody).toContain("} elseif ($minReleaseAgeStatus -ne 0 -or -not $minReleaseAge");
+});
+const harness = createScriptTestHarness();
+const powershell = process.platform === "win32" ? "powershell" : "pwsh";
+const powershellArgs = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass".split(" ");
+const runPowerShell = (args: string[]) =>
+  spawnSync(powershell, [...powershellArgs, ...args], { encoding: "utf8" });
+const probe = spawnSync(powershell, ["-NoLogo", "-NoProfile", "-Command", "exit 0"]);
+const runWithPowerShell = probe.status === 0 ? it : it.skip;
+runWithPowerShell("runs the piped installer and validates optional Node versions", () => {
+  const result = runPowerShell([
+    "-File",
+    "test/scripts/install-ps1-entrypoint.ps1",
+    "-InstallerPath",
+    join(process.cwd(), SCRIPT_PATH),
+  ]);
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+});
+runWithPowerShell.each(["file", "streamed"] as const)(
+  "preserves handled failure and caller lifetime through the %s installer entrypoint",
+  (mode) => {
+    const nodePrefix = join(harness.createTempDir("openclaw-install-failure-"), "private-node");
+    const scriptPath = join(process.cwd(), SCRIPT_PATH).replaceAll("'", "''");
+    const result = runPowerShell(
+      mode === "file"
+        ? ["-File", SCRIPT_PATH, "-NodePrefix", nodePrefix, "-DryRun"]
+        : [
+            "-Command",
+            `try {
+  & ([scriptblock]::Create((Get-Content -LiteralPath '${scriptPath}' -Raw))) -NodePrefix '${nodePrefix.replaceAll("'", "''")}' -DryRun
+} catch {
+  if ($_.Exception.Message -ne 'OpenClaw installation failed with exit code 2.') { throw }
+  Write-Output 'caught canonical failure'
+}
+Write-Output 'installer caller survived'`,
+          ],
+    );
+    const output = result.stdout.replace(/\r\n/g, "\n");
+    expect(result.status, result.stdout + result.stderr).toBe(mode === "file" ? 2 : 0);
+    expect(result.stderr).toBe("");
+    expect(output).toContain("Error: -NodePrefix and -NodeVersion require -NodeOnly.");
+    expect(output.match(/Support: https:\/\/community\.openclaw\.ai\//g)).toHaveLength(1);
+    if (mode === "streamed") {
+      expect(output).toContain("caught canonical failure\ninstaller caller survived\n");
+    }
+  },
+);
+runWithPowerShell(
+  "offers support and self-service in Windows installer help without installing",
+  () => {
+    const result = runPowerShell(["-File", SCRIPT_PATH, "-Help"]);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("Support: https://community.openclaw.ai/");
+    expect(result.stdout).toContain("FAQ: https://docs.openclaw.ai/start/faq");
+  },
+);
+runWithPowerShell.each(["valid", "missing-head", "broken-gitfile", "subdirectory"])(
+  "preserves real Git checkout boundaries before package setup: %s",
+  (scenario) => {
+    const result = runPowerShell([
+      "-File",
+      "test/scripts/install-git-worktree.ps1",
+      "-InstallerPath",
+      join(process.cwd(), SCRIPT_PATH),
+      "-FixtureRoot",
+      join(harness.createTempDir("openclaw-install-worktree-"), "fixture"),
+      "-Scenario",
+      scenario,
+    ]);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+  },
+);

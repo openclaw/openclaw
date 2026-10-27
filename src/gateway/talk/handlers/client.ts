@@ -1,23 +1,38 @@
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
   validateTalkClientCloseParams,
+  validateTalkClientSayParams,
   validateTalkClientSteerParams,
   validateTalkClientToolCallParams,
   validateTalkClientTranscriptParams,
+  type ErrorShape,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  getCommandSenderAuthority,
+  withCommandSenderAuthority,
+} from "../../../auto-reply/command-sender-authority.js";
 import {
   prepareSessionSourceAuthority,
   releaseSessionSourceAuthorities,
 } from "../../../config/sessions/session-source-authority.js";
 import { createPluginRuntime } from "../../../plugins/runtime/index.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
+import {
+  getRpcSourceForGateway,
+  getRpcSourceIdentity,
+  isRpcSourceRegistered,
+} from "../../../sessions/session-controller.rpc-sources.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseRuntime } from "../../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../../state/openclaw-agent-write-admission.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   parseRealtimeVoiceAgentConsultArgs,
+  buildRealtimeVoiceAgentConsultChatMessage,
 } from "../../../talk/agent-consult-tool.js";
 import { controlRealtimeVoiceAgentRun } from "../../../talk/agent-run-control.js";
 import {
@@ -27,6 +42,7 @@ import {
 import {
   captureClientVoiceSessionSourceOptions,
   createClientVoiceSessionSource,
+  type ClientVoiceSessionSource,
 } from "../../../talk/client-voice-session-source.js";
 import { ensureClientVoiceAgentSessionEntry } from "../../../talk/client-voice-session-write.js";
 import {
@@ -35,23 +51,36 @@ import {
   createOrResumeClientVoiceSession,
   registerClientVoiceConsultRun,
 } from "../../../talk/client-voice-session.js";
-import { captureGatewayOperatorRunAuthority } from "../../operator-run-authority.js";
+import { abortChatRunById } from "../../chat-abort.js";
+import { transferGatewayLocalUserIngress } from "../../local-user-ingress.js";
+import {
+  captureGatewayOperatorRunAuthority,
+  transferGatewayOperatorSourceIdentity,
+} from "../../operator-run-authority.js";
 import { resolveSandboxedSessionCreation } from "../../operator-session-run.js";
+import { handleTrustedInternalChatSend } from "../../server-methods/chat-send-handler.js";
+import { gatewayClientSessionCreator } from "../../server-methods/gateway-client-identity.js";
 import { readGatewayRequestMutationAuthority } from "../../server-methods/session-mutation-guards.js";
-import type { GatewayRequestHandlers } from "../../server-methods/types.js";
+import type {
+  GatewayRequestHandlers,
+  GatewayRequestHandlerOptions,
+} from "../../server-methods/types.js";
 import { defineValidatedGatewayHandler } from "../../server-methods/validation.js";
 import { formatForLog } from "../../ws-log.js";
-import { startTalkRealtimeAgentConsult } from "../agent-consult.js";
+import { prepareTalkAgentConsultTranscript } from "../agent-consult-transcript.js";
 import { prepareTalkClientControlAuthority } from "../client-agent-consult.js";
 import {
   closeTalkClientGatewayControlSession,
-  resolveTalkAgentConsultAuthority,
+  sendTalkClientGatewayControlSpeech,
 } from "../client-gateway-control.js";
+import { resolveTalkAgentConsultAuthority } from "../client-tool-authority.js";
 import { createTalkRunCancel } from "../realtime-run-control.js";
 import {
   ensureTalkRealtimeRelayVoiceSession,
   flushTalkRealtimeRelayVoiceWrites,
+  registerTalkRealtimeRelayAgentRun,
 } from "../relay/operations.js";
+import type { RelayAgentRunRegistration } from "../relay/state.js";
 import { talkRequestError } from "../request-error.js";
 import { resolveOwnedActiveTalkRunTarget } from "../run-ownership.js";
 import { prepareTalkSessionTarget, requirePreparedTalkSessionTarget } from "../session-target.js";
@@ -63,11 +92,53 @@ import {
   rememberLegacyVoiceBinding,
 } from "./client-legacy-voice-bindings.js";
 
+function terminalTalkChatSendAckError(result: unknown): ErrorShape | undefined {
+  const status = asNullableRecord(result)?.status;
+  const message =
+    status === "timeout"
+      ? "Realtime agent consult ended before the run started."
+      : status === "error"
+        ? "Realtime agent consult failed before the run started."
+        : status === "ok"
+          ? "Realtime agent consult completed before the tool result subscription started."
+          : undefined;
+  return message ? errorShape(ErrorCodes.UNAVAILABLE, message) : undefined;
+}
+
 const clientMutationError = (error: unknown) =>
   errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(error));
 
 export const talkClientHandlers: GatewayRequestHandlers = {
   "talk.client.create": createTalkClient,
+  "talk.client.say": defineValidatedGatewayHandler(
+    "talk.client.say",
+    validateTalkClientSayParams,
+    (request) => {
+      const { params, respond } = request;
+      if (!params.text.trim() || Buffer.byteLength(params.text, "utf8") > 1024) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "text must contain 1–1024 UTF-8 bytes of speech"),
+        );
+        return;
+      }
+      const target = requirePreparedTalkSessionTarget(
+        request.sessionMutationAuthorization?.talkSessionTarget,
+      );
+      request.sessionMutationAuthorization?.assertCurrent();
+      readGatewayRequestMutationAuthority(request).assertCurrent();
+      target.assertCurrent(request.context.getRuntimeConfig());
+      sendTalkClientGatewayControlSpeech({
+        voiceSessionId: params.voiceSessionId,
+        sessionTarget: target,
+        connId: request.client?.connId,
+        text: params.text,
+      });
+      respond(true, { accepted: true }, undefined);
+    },
+    talkRequestError,
+  ),
   "talk.client.toolCall": defineValidatedGatewayHandler(
     "talk.client.toolCall",
     validateTalkClientToolCallParams,
@@ -253,48 +324,234 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       }
       const { voiceSessionId } = preparedVoiceSession;
 
-      const result = await startTalkRealtimeAgentConsult(request, {
-        sessionTarget: target,
-        callId: params.callId,
-        requestedVoiceSessionId: explicitVoiceSessionId ?? relaySessionId,
-        args: params.args ?? {},
-        relaySessionId,
-        connId,
-        onRunStarted: async (
+      const onRunStarted = async (
+        runId: string,
+        {
+          assertWorkAdmissionCurrent,
+          physicalSource,
+          onRegistered,
+        }: {
+          assertWorkAdmissionCurrent: () => void;
+          physicalSource?: ClientVoiceSessionSource;
+          onRegistered?: (release: () => void) => void;
+        },
+      ): Promise<() => void> => {
+        const release = await registerClientVoiceConsultRun({
+          agentId,
+          sessionKey: params.sessionKey,
+          voiceSessionId,
           runId,
-          { assertWorkAdmissionCurrent, physicalSource, onRegistered },
-        ) => {
-          const release = await registerClientVoiceConsultRun({
-            agentId,
-            sessionKey: params.sessionKey,
-            voiceSessionId,
-            runId,
-            config: request.context.getRuntimeConfig(),
-            physicalSource: physicalSource ?? preparedVoiceSession.physicalSource,
-            onRegistered,
-            requester: readGatewayRequestMutationAuthority(request).assertCurrent,
-            source: {
-              storePath: target.storePath,
-              assertCurrent: request.sessionMutationAuthorization?.assertCurrent ?? (() => {}),
-              prepareWorkerGrant: request.sessionMutationAuthorization?.prepareWorkerGrant,
+          config: request.context.getRuntimeConfig(),
+          physicalSource: physicalSource ?? preparedVoiceSession.physicalSource,
+          onRegistered,
+          requester: readGatewayRequestMutationAuthority(request).assertCurrent,
+          source: {
+            storePath: target.storePath,
+            assertCurrent: request.sessionMutationAuthorization?.assertCurrent ?? (() => {}),
+            prepareWorkerGrant: request.sessionMutationAuthorization?.prepareWorkerGrant,
+          },
+          assertCurrent: () => {
+            assertWorkAdmissionCurrent();
+            readGatewayRequestMutationAuthority(request).assertPreparationCurrent();
+          },
+        });
+        try {
+          assertWorkAdmissionCurrent();
+          request.sessionMutationAuthorization?.assertCurrent();
+          return release;
+        } catch (error) {
+          if (!onRegistered) {
+            release();
+          }
+          throw error;
+        }
+      };
+      const result = await (async (): Promise<
+        { ok: true; runId: string; idempotencyKey: string } | { ok: false; error: ErrorShape }
+      > => {
+        let message: string;
+        try {
+          message = buildRealtimeVoiceAgentConsultChatMessage(params.args ?? {});
+        } catch (err) {
+          return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)) };
+        }
+        const normalizedTalk = request.context.getRuntimeConfig().talk;
+        const authority = resolveTalkAgentConsultAuthority(
+          request.client?.connect?.scopes,
+          request.client,
+        );
+        // Only an explicitly requested voice ID scopes replay. An implicit record
+        // may be regenerated after close/reconnect; chat still owns that call's replay.
+        const idempotencyKey =
+          "talk-" +
+          sha256Hex(
+            JSON.stringify([
+              gatewayClientSessionCreator(request.client)?.id ??
+                request.client?.authenticatedUserId,
+              authority.replyCaller?.ApprovalReviewerDeviceId,
+              target.agentId,
+              target.canonicalKey,
+              explicitVoiceSessionId ?? relaySessionId,
+              params.callId,
+            ]),
+          );
+        const unavailable = (errorMessage: string): { ok: false; error: ErrorShape } => ({
+          ok: false,
+          error: errorShape(ErrorCodes.UNAVAILABLE, errorMessage),
+        });
+        let relayRegistration: RelayAgentRunRegistration | undefined;
+        return await new Promise<
+          { ok: true; runId: string; idempotencyKey: string } | { ok: false; error: ErrorShape }
+        >((resolve) => {
+          let acknowledged = false;
+          const chatSendOptions = {
+            ...request,
+            client:
+              request.client && authority.replyCaller
+                ? withCommandSenderAuthority(
+                    {
+                      ...request.client,
+                      connect: {
+                        ...request.client.connect,
+                        caps: authority.replyCaller.GatewayClientCaps,
+                      },
+                    },
+                    getCommandSenderAuthority(authority.replyCaller),
+                  )
+                : request.client,
+            req: {
+              type: "req",
+              id: `${request.req.id}:talk-tool-call`,
+              method: "chat.send",
             },
-            assertCurrent: () => {
-              assertWorkAdmissionCurrent();
-              readGatewayRequestMutationAuthority(request).assertPreparationCurrent();
+            params: {
+              sessionKey: target.canonicalKey,
+              agentId: target.agentId,
+              message,
+              idempotencyKey,
+              suppressCommandInterpretation: true,
+              systemInputProvenance: {
+                kind: "internal_system",
+                sourceTool: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+              },
+              ...(normalizedTalk?.consultThinkingLevel
+                ? { thinking: normalizedTalk.consultThinkingLevel }
+                : {}),
+              ...(typeof normalizedTalk?.consultFastMode === "boolean"
+                ? { fastMode: normalizedTalk.consultFastMode }
+                : {}),
+            },
+            respond: (ok: boolean, chatResult?: unknown, error?: ErrorShape) => {
+              acknowledged = true;
+              const ackError = ok
+                ? terminalTalkChatSendAckError(chatResult)
+                : (error ?? errorShape(ErrorCodes.UNAVAILABLE, "chat.send failed without error"));
+              if (ackError) {
+                resolve({ ok: false, error: ackError });
+                return;
+              }
+              const candidateRunId = asNullableRecord(chatResult)?.runId;
+              const runId = typeof candidateRunId === "string" ? candidateRunId : idempotencyKey;
+              resolve(
+                runId
+                  ? { ok: true, runId, idempotencyKey }
+                  : unavailable("chat.send did not acknowledge an active run"),
+              );
+            },
+          } satisfies GatewayRequestHandlerOptions;
+          if (request.client && chatSendOptions.client) {
+            // Capability projection does not create a new authenticated principal.
+            transferGatewayLocalUserIngress(request.client, chatSendOptions.client);
+            transferGatewayOperatorSourceIdentity(request.client, chatSendOptions.client);
+          }
+          // Speech owns normal history; detached transports leave the accepted answer to Chat.
+          const chatSendResult = handleTrustedInternalChatSend(chatSendOptions, undefined, {
+            toolsAllow: authority.toolsAllow,
+            transcript: { display: false, excludeFromContext: true },
+            prepareAssistantTranscriptMessage: (assistantMessage, sourceText) =>
+              (relayRegistration?.prepareTranscript ?? prepareTalkAgentConsultTranscript)(
+                assistantMessage,
+                sourceText,
+              ),
+            beforeDispatch: async ({ runId, assertCurrent, assertWorkAdmissionCurrent }) => {
+              let releaseClient: void | (() => void);
+              const hasRelay = Boolean(relaySessionId && connId);
+              const chat = getRpcSourceForGateway(
+                runId,
+                request.context.resolveGatewayContext,
+                captureSessionTarget({
+                  storeScope: target.storePath,
+                  sessionKey: target.canonicalKey,
+                  agentId: target.agentId,
+                }),
+              );
+              const release = () => {
+                releaseClient?.();
+                relayRegistration?.release();
+              };
+              try {
+                assertCurrent();
+                if (relaySessionId && connId) {
+                  if (!chat) {
+                    throw new Error("Realtime relay agent run is not registered");
+                  }
+                  relayRegistration = await registerTalkRealtimeRelayAgentRun({
+                    relaySessionId,
+                    connId,
+                    sessionKey: target.canonicalKey,
+                    runId,
+                    callId: params.callId,
+                    transcriptSessionId: getRpcSourceIdentity(chat).sessionId,
+                    assertCurrent: assertWorkAdmissionCurrent,
+                    registerVoice: async (assertRelayCurrent, physicalSource, onRegistered) => {
+                      await onRunStarted(runId, {
+                        assertWorkAdmissionCurrent: assertRelayCurrent,
+                        physicalSource,
+                        onRegistered,
+                      });
+                    },
+                  });
+                } else {
+                  releaseClient = await onRunStarted(runId, { assertWorkAdmissionCurrent });
+                }
+                assertCurrent();
+                if (relayRegistration && !relayRegistration.isCurrent()) {
+                  throw new Error("Realtime relay run registration changed while waiting");
+                }
+                return release;
+              } catch (error) {
+                relayRegistration?.abortIfCurrent();
+                if (!hasRelay && chat && isRpcSourceRegistered(chat)) {
+                  abortChatRunById(request.context, {
+                    runId,
+                    sessionKey: target.canonicalKey,
+                    expectedEntry: chat,
+                    stopReason: "voice session binding failed",
+                  });
+                }
+                release();
+                throw error;
+              }
             },
           });
-          try {
-            assertWorkAdmissionCurrent();
-            request.sessionMutationAuthorization?.assertCurrent();
-            return release;
-          } catch (error) {
-            if (!onRegistered) {
-              release();
-            }
-            throw error;
-          }
-        },
-      });
+          void Promise.resolve(chatSendResult).then(
+            () => {
+              if (!acknowledged) {
+                resolve(unavailable("chat.send did not return a realtime tool result"));
+              }
+            },
+            (error: unknown) => {
+              if (acknowledged) {
+                request.context.logGateway.warn(
+                  `realtime Talk agent consult failed after acknowledgement: ${formatForLog(error)}`,
+                );
+                return;
+              }
+              resolve(unavailable(formatForLog(error)));
+            },
+          );
+        });
+      })();
       if (!result.ok) {
         respond(false, undefined, result.error);
         return;

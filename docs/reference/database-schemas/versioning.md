@@ -23,45 +23,51 @@ Each database records its published schema in two places:
 
 OpenClaw applies forward-only migrations when it opens an older supported database. It refuses a database whose `user_version` is newer than the running build and reports a `newer schema version` error. The Gateway checks all registered databases before startup. [`openclaw update`](/cli/update) also refuses a package or source target whose declared schema support is older than an on-disk database. Known stable releases published before schema metadata was added are checked against their shipped schema-1 contract. Updates driven by the 2026.9.2 release line can temporarily defer publication of a shared-state schema version while the old updater finishes; see [Schema bumps and older updaters](#schema-bumps-and-older-updaters).
 
-Native clients make a narrow exception for their local `device_identities` and
-`device_auth_tokens` tables. Connecting to a remote Gateway must not depend on
-unrelated local backend migrations. A newer shared-state schema is admitted for
-these stores only when its global metadata matches `user_version` and the
-credential table and index definitions still match the complete native contract,
-with no additional indexes or triggers. Missing or incompatible tables remain
-errors; the native client never repairs them or changes either schema-version
-marker. Existing identity keys and gateway-scoped tokens remain in the same
-database, without a migration or a second source of truth.
+### Local client credentials
 
-These table names, definitions, and credential row meanings are a stable native
-storage contract. Future incompatible credential semantics must change the
-table name or definition so existing clients refuse access; bumping only the
-backend version is not a credential compatibility fence. Config, execution
-approvals, port-guardian state, Gateway startup, and updater admission retain
-their backend schema-version checks. Apps predating this exception still need
-an app update when their local backend advances beyond their supported schema.
-
-### Local credential-store preparation
-
-The prepared client credential format is SQLite schema version 1 at
+The client credential format is SQLite schema version 1 at
 `<resolved-client-root>/client/credentials.sqlite`, independent of the selected
 Gateway engine. It contains client identities, device and Gateway-scoped token
-caches, local native socket credentials, and a migration receipt. This stage
-does not switch production clients or import or remove shared-state records.
-The native shared-table contract above remains in use until the later atomic
-cutover.
+caches, local native socket credentials, and a migration receipt. Native bootstrap
+never opens the selected Gateway database. Shared state schema 29 retires
+`device_identities`, `device_auth_tokens`, and `gateway_origin_device_tokens`,
+and removes socket material from `exec_approvals_config`. Approval policy remains
+shared; its meaning and execution authority are unchanged.
+
+The cutover reads socket credentials from the canonical approval JSON, even when
+the legacy SQL path or token-presence projections are stale. It preserves the
+socket path, token, and approval policy; rollback restores the original row,
+including its projections. Invalid socket values in the canonical JSON still
+require repair before migration.
 
 The TypeScript owner and Swift adapter use exclusive SQLite custody in DELETE
-journal mode. A macOS app may retain that custody while serving bounded local
-operations; other clients must use that owner and must not fall back to direct
-access when its IPC fails. App-absent operations release custody at completion.
+journal mode. A running macOS app owns the bounded operation route; other clients
+use its authenticated control socket first. The app closes the physical database
+between operations so existing maintenance custody can capture and restore it.
+A dispatched operation with a lost reply is never replayed offline. When no app
+received the request, clients acquire bounded exclusive custody and release it
+at completion, including when another CLI briefly owns the file. An app released
+before this route refuses it as an unknown operation before dispatch; clients
+treat that app as absent and use the same offline custody, so a newer CLI or
+Gateway still starts while an older app is running.
 iOS app and extension operations use the same Swift owner for a bounded
 operation and close before suspension. No owner selects an identity or token
-by comparing timestamps with another store. Maintenance must drain and close
-an active native owner before capturing or restoring the file.
+by comparing timestamps with another store. The existing maintenance lock blocks
+new native operations while capture, migration, or restore holds custody.
 The TypeScript adapter refuses existing macOS ACL entries instead of removing
 them. A directory with custom deny or mixed ACLs requires explicit permission
 repair before that adapter can use it.
+
+The TypeScript worker handles each offline operation in one request and closes
+the database before replying. It reuses schema and integrity admission facts for
+the same device, inode, birthtime, and `user_version`. Every open still validates
+private paths and modes, checks DELETE journal policy, and takes immediate
+transaction custody with exclusive locking. A single receipt-and-version query
+inside that transaction guards cross-process migration phases before row work;
+even reads retain this transaction so another process cannot migrate between
+the guard and the operation. Replacement or version changes require admission
+again, and lifecycle drainage discards the worker and its cached facts. Initial
+store creation commits separately so cancellation cannot leave an empty store.
 
 Update and Doctor recovery capture the local file exactly, including its
 absence, alongside the shared database. Ordinary backup archives preserve
@@ -69,21 +75,75 @@ client identity and cached-token records, but remove the local socket token,
 matching shared approval backup sanitization. Restoring an ordinary archive
 therefore requires local socket credentials to be initialized again.
 
-This preparation creates no credential store in production. A published SQLite
-updater therefore captures the shared database while it still contains the
-credential tables. If a later cutover candidate fails, rollback restores those
+The preparatory release creates no credential store in production. A published
+SQLite updater therefore captures the shared database while it still contains
+the credential tables. If the cutover candidate fails, rollback restores those
 tables and the old version ignores the orphaned local credential store. Credentials
 issued between upgrade and rollback are lost; affected clients must pair again.
-The next cutover must rebuild an orphan from authoritative shared records unless
-its completed receipt matches the shared database identity, generation, and source
-hash. It must never merge stale local credentials into the restored shared state.
-Shared records remain authoritative until the verified receipt completes and
-their retirement finishes under the same maintenance custody.
+The next cutover rebuilds an orphan from authoritative shared records. A complete
+receipt binds the source identity, generation, and content hash; its
+`destinationVersion` is the local schema version, **1**, independently of the
+shared cutover version. Reappearing shared credential tables make a previous
+canonical copy stale, even when their contents match an earlier capture. Migration
+never merges stale local credentials into restored shared state. Under updater
+or Doctor custody, migration captures the source, copies exact key and token
+bytes, verifies them, and records `copied`. Only then does it retire the shared
+records and publish `complete`. Interrupted work resumes through the same owner;
+normal clients refuse a pending or stale receipt. Shared records stay authoritative
+until this verified retirement finishes in that custody.
+
+Credential copies use bounded insert batches within the same transaction, so
+large stores do not exceed SQLite's statement parameter limit. If an older
+cutover build reports `too many SQL variables`, the shared credentials remain
+authoritative. Install a build with this fix and rerun `openclaw doctor --fix`;
+do not delete credentials or pair clients again to work around the error.
+
+Doctor’s verified offline NOCOW rewrite transfers a matching credential receipt
+to the replacement shared database file. Existing tokens remain usable after
+the rewrite; an unrelated file replacement remains fenced.
+
+Canonical receipt bindings relative to the local store root survive matched archive activation by directory rename; independent native-source bindings remain absolute.
+
+Outside an update, Doctor takes a fresh table-scoped backup in the same source
+transaction immediately before extraction and verifies its copied rows against
+the source. A previous backup never authorizes credential retirement. During an
+update, the installed driver's capture and its held custody supply that authority.
 
 Releases predating this local format do not support PostgreSQL shared state.
 PostgreSQL installations start with an engine-aware updater that includes this local family's capture and
 restore support. Their failed-candidate recovery restores the captured shared and
-local stores together. The later cutover must prove both update paths before use.
+local stores together. PostgreSQL extraction uses the engine-aware owner, verifies
+the local copy, and only then retires server rows.
+
+A canonical native version-zero file created by an older app cannot become a
+PostgreSQL anchor directly. Start the Gateway once with SQLite selected, run
+`openclaw doctor --fix`, then use `openclaw database port` before selecting
+PostgreSQL. The refusal leaves the native source unchanged.
+
+Older native clients require an app update after the shared tables are retired;
+the missing table contract fences them even when they accept newer backend version
+numbers. Do not lower schema markers or recreate those tables. Run
+`openclaw doctor --fix` from the matching new installation and restart the updated
+app. A rolled-back shared file invalidates the local receipt, so the new client
+also requires Doctor before reuse.
+
+Independent client-only native databases are read-only import sources. Import
+does not change their bytes, permissions, journals, or directory contents, and
+does not add a retirement marker or private backup. The local receipt records
+both source file identity and content hash. Reopening the same source preserves
+local token refreshes and consumed-import claims; a changed or restored source
+rebuilds the local copy. Old native clients can still read that untouched source
+after rollback. These historical native sources use DELETE journal mode. A source
+in WAL mode is refused before SQLite opens it, because even a read-only SQLite
+connection can change shared-memory files. Use the previous release's export or
+restore workflow to recover that source; import never silently ignores WAL data.
+Full or unknown native databases require the engine-aware Doctor route.
+
+Legacy JSON identity and token imports target the local store. A consumed import
+is recorded atomically, including an observed absent source; rewriting or restoring
+the JSON cannot reimport a revoked token. The original files remain untouched,
+and their consumed claims survive a native-source rebuild. Exact private keys, token bytes,
+scope strings, and timestamps survive migration.
 
 When Gateway startup encounters a newer database schema, it exits with status 78 so the generated systemd service does not restart it repeatedly. On macOS, it also parks its managed LaunchAgent to stop `KeepAlive` retries. This applies to failures during CLI bootstrap as well as server startup and does not depend on the database-backed crash counter. Start the Gateway with a build that supports the existing schemas. The older install cannot repair them with `openclaw doctor --fix`; run `openclaw doctor --fix` from the compatible install if further migration is required, then restart through the service or deployment owner.
 
@@ -126,6 +186,29 @@ moves memory index revision advancement from six row triggers into the batch
 writer's transaction. SQLite and PostgreSQL drop the triggers without changing
 retained rows or revision values. Older writers require the verified pre-upgrade
 backup because they rely on those triggers to invalidate readers.
+
+Agent [schema 32](/reference/database-schemas/agent-schema-history#agent-schema-32)
+replaces the PostgreSQL vector decoder without rewriting embeddings or indexes.
+SQLite advances metadata only. PostgreSQL stores that have not admitted vector
+search remain unchanged until first use. Older binaries require the verified
+pre-upgrade backup with its matching build for catalog compatibility.
+
+Shared-state [schema 31](/reference/database-schemas/state-schema-history#state-schema-31)
+stores local workspace baselines by path and checkpoints as recoverable deltas.
+The schema migration preserves legacy manifest documents and pending receipts;
+the existing projection owner converts each workspace atomically and resumes
+unfinished conversions from the retained input. Archives and publications keep
+their complete manifest format. This is a shared-state change only: the agent
+schema version is unchanged. Older checkpoint writers require the verified
+pre-upgrade backup for rollback.
+
+State schemas 32–33 and agent schemas 34–35 correct PostgreSQL index ordering;
+agent schema 36 adds indexed memory keyword path candidates. With writers
+stopped, `openclaw doctor --fix` backs up older stores and applies consecutive
+forward migrations before PostgreSQL runtime admission. SQLite advances metadata
+only for these versions. Logbook's service-open owner applies its ordering
+migrations through schema 3. See the [ordering migration contract](/reference/database-schemas/storage-changes#postgresql-index-ordering-migrations)
+and [agent schema 36](/reference/database-schemas/agent-schema-history#agent-schema-36).
 
 Target-release checks distinguish the target's schema support from the running
 inspector's capabilities. When shared state is too new for the target but still
@@ -285,7 +368,7 @@ permissions, and transaction ownership are unchanged. Older same-version
 readers ignore the additional nonunique index, so binary rollback leaves both
 caption rows and the index intact.
 
-Logbook's plugin-local database keeps schema version 1 while replacing the unused
+At Logbook schema 1, its plugin-local database replaced the unused
 batch-day index with a nonunique partial index on `batches(start_ms, id)` where
 `status = 'pending'`. The existing worker-owned schema open installs the index on
 populated databases before dropping the retired index. Batch rows remain the source of truth;
@@ -293,7 +376,10 @@ the index is derived, and retention and recovery are unchanged. Initial construc
 scans batch history once and stores only pending entries. Older same-version builds
 can read and write the database safely, leaving the new index intact and recreating
 their day index; reopening with the current build retires it again. Binary rollback
-requires no row conversion or schema-version change.
+for that index-only change requires no row conversion or schema-version change.
+Subsequent [PostgreSQL ordering migrations](/reference/database-schemas/storage-changes#postgresql-index-ordering-migrations)
+advance Logbook through schema 3; their rollback requires the matching predecessor
+backup and build.
 
 Memory chunk admission retires the nonunique `idx_memory_index_chunks_path`
 index at the same agent schema version. Both schema publishers retain the
@@ -359,6 +445,40 @@ Untagged intermediate builds that used unmarked anchors must drain their workers
 on that original build before replacement. Active modern workers must also drain
 before downgrade or rollback to an older writer, which cannot interpret anchor
 lineage completion.
+
+Persistent sandbox streams use the first-use `sandbox_persistent_execs` companion
+table in shared state, owned by the sandbox registry. The table shape and schema
+version stay unchanged. Cron records desired execution; the companion records
+whole-container cleanup custody, including the original Docker daemon, exact
+dedicated container ID and generation, host process owner, and registry workspace
+binding. The parent sandbox generation remains the reservation relation. Each
+start uses a fresh dedicated container; the receipt does not authorize reusing
+its filesystem or starting execution. Recovery checks the original workspace
+path, kind, and registry generation before settling managed edits. Ordinary
+registry writes, job deletion, and quarantine do not delete these independent
+rows.
+
+Unresolved custody blocks a replacement launch and has no age-based expiry.
+Recovery can claim cleanup after proving the original owner is dead in the same
+host process namespace. Unknown identity retains custody unless the Docker owner
+removes the exact dedicated container and confirms its absence on the original
+daemon; that proof permits only terminal cleanup, never starting
+execution. Container removal and confirmed absence precede workspace settlement
+and custody deletion. No guest helper response authorizes cleanup, and there is
+no autonomous execution lease: after controller loss, the workload may continue
+until recovery. A changed or unavailable Docker target cannot prove that the
+original container disappeared. Reads and installations that never use this
+feature do not create its table.
+
+Persisted sandbox stream jobs use the distinct `sandbox-stream` schedule kind.
+Older readers quarantine this unsupported kind instead of launching its command
+on the Gateway. They ignore the custody companion without erasing its rows.
+Stop and settle these streams on the current build before downgrading; unresolved
+cleanup requires recovery against the original Docker daemon. Older sandbox
+pruning may remove a container, which a later compatible reader can reconcile
+against its exact original identity. Re-upgrade does not automatically
+restore quarantined jobs: recreation or explicit restoration uses current
+authority and approval. Preserve a verified backup before downgrade.
 
 Notification ownership uses bare nullable `TEXT` columns at the same schema
 version: `session_watch_cursors.watcher_store_path`,
@@ -809,6 +929,10 @@ integrity scan; the migration's source integrity admission runs a whole-database
 quick check plus full checks of affected tables, or a whole-database full check
 when `--full-integrity-check` is selected. AUTOINCREMENT, virtual/shadow tables, unsupported SQLite runtimes,
 or sources outside the active state directory fall back to full backups.
+Fresh credential capture also uses Doctor's full image when a legacy
+`sqlite_stat4` table cannot be recreated by the current runtime. The image must
+still contain the tables and rows being retired; a changed retry source preserves
+its original backup and reports a data-risk refusal instead of losing credentials.
 Historical migrations keep their full-file backup when no scoped backup is
 declared, while integrity admission uses the same quick-plus-affected-tables
 policy. Backup eligibility and integrity coverage are separate contracts.

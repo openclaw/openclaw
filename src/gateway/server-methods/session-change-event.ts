@@ -276,7 +276,6 @@ function broadcastSessionsChanged(
         ? {
             ...buildGatewaySessionSnapshot({
               sessionRow,
-              includeSession: true,
               agentId: eventAgentId,
               activeRunState,
               // A send publication is the producer's current running fact; a queued
@@ -480,8 +479,7 @@ export function emitSessionsChanged(
     pending.timer = setTimeout(
       () => finishPendingSessionChange(pending),
       Math.max(0, Math.min(SESSIONS_CHANGED_DEBOUNCE_MS, maxWaitRemaining)),
-    );
-    pending.timer.unref?.();
+    ).unref();
     return;
   }
   try {
@@ -500,8 +498,10 @@ export function emitSessionsChanged(
   };
   owner.pending.set(publicationKey, next);
   pendingSessionChanges.add(next);
-  next.timer = setTimeout(() => finishPendingSessionChange(next), SESSIONS_CHANGED_DEBOUNCE_MS);
-  next.timer.unref?.();
+  next.timer = setTimeout(
+    () => finishPendingSessionChange(next),
+    SESSIONS_CHANGED_DEBOUNCE_MS,
+  ).unref();
   startPendingSessionChange(next, { payload, scope });
 }
 

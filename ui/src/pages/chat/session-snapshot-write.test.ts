@@ -2,6 +2,7 @@
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { requestResult, transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
+import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 import {
   CHAT_SNAPSHOT_METADATA_STORE_NAME,
   CHAT_SNAPSHOT_STORE_NAME,
@@ -9,7 +10,6 @@ import {
   readStoredChatSnapshotRecord,
 } from "./session-snapshot-database.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
-import type { ChatSessionSnapshot } from "./session-snapshot-types.ts";
 
 const sessionKey = 'scope:["wss://cache.example","account-a"]\u0000agent:main:escaped-"\\🦞';
 function snapshot(): ChatSessionSnapshot {
@@ -109,6 +109,27 @@ describe("snapshot write serialization and scheduling", () => {
     const restored = await store.read(sessionKey);
     expect(restored?.messages).toEqual(messages.slice(18));
     expect(restored?.pagination).toEqual({ hasMore: true, nextOffset: 0, totalMessages: 34 });
+  });
+
+  it("bounds saved reaction facts to the retained rows and restores their context window", async () => {
+    const messages = Array.from({ length: 100 }, (_, index) => ({
+      role: "assistant",
+      content: `Saved reply ${index}`,
+      __openclaw: { id: `reply-${index}`, seq: index + 1 },
+    }));
+    const summaries = [{ emoji: "👍", count: 1, identities: [{ id: "peer", label: "Peer" }] }];
+    store.write(sessionKey, {
+      ...snapshot(),
+      messages,
+      pagination: { hasMore: false, totalMessages: 100 },
+      transcriptMetadata: { key: "agent:main:saved", kind: "direct", contextTokens: 200_000 },
+      messageReactions: { "reply-0": summaries, "reply-99": summaries, missing: summaries },
+    });
+    await store.flush();
+    const restored = await store.read(sessionKey);
+    expect(restored?.messageReactions).toEqual({ "reply-99": summaries });
+    expect(restored?.transcriptMetadata?.contextTokens).toBe(200_000);
+    expect(restored?.messages).toEqual(messages.slice(-80));
   });
 
   it.each([false, true])(
@@ -247,7 +268,7 @@ describe("snapshot write serialization and scheduling", () => {
       // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON omission/conversion is the persisted storage contract.
       const sanitized: ChatSessionSnapshot = JSON.parse(JSON.stringify(value));
       const envelope = {
-        projectionVersion: 3,
+        projectionVersion: 5,
         savedAt: Date.now(),
         sessionId: value.sessionId,
         sessionKey,
@@ -328,7 +349,7 @@ describe("snapshot write serialization and scheduling", () => {
       const transaction = database.transaction(CHAT_SNAPSHOT_STORE_NAME, "readwrite");
       const completed = transactionComplete(transaction);
       transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).put({
-        projectionVersion: 3,
+        projectionVersion: 5,
         savedAt: 1,
         sessionId: "session-1",
         sessionKey,

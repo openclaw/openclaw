@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -28,8 +28,14 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
+import {
+  observeAcknowledgedUpdate,
+  proveIncrementalWorkspaceEdits,
+  proveSandboxMutationCheckpoints,
+  proveStagedInputCheckpointOwnership,
+  proveWorkerOwnedIncrementalWorkspace,
+} from "./local-workspace-incremental.test-support.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
-import * as workspaceStore from "./local-workspace-store.js";
 import { withLocalWorkspaceStore } from "./local-workspace-store.js";
 import {
   observeLocalWorkspaceStoreSql,
@@ -59,24 +65,6 @@ async function expectText(directory: string, relative: string, expected: string)
 }
 async function expectMissing(directory: string, ...parts: string[]) {
   await expect(fs.stat(path.join(directory, ...parts))).rejects.toMatchObject({ code: "ENOENT" });
-}
-
-function observeAcknowledgedUpdate(
-  observe: (row: workspaceStore.LocalWorkspaceProjection) => void,
-) {
-  const withStore = workspaceStore.withLocalWorkspaceStore;
-  return vi.spyOn(workspaceStore, "withLocalWorkspaceStore").mockImplementation((params, run) =>
-    withStore(params, (store) =>
-      run({
-        ...store,
-        update: async (row, patch, authority) => {
-          const acknowledged = await store.update(row, patch, authority);
-          observe(acknowledged);
-          return acknowledged;
-        },
-      }),
-    ),
-  );
 }
 
 async function archiveFixture(provisionedPaths: string[] = []) {
@@ -173,6 +161,15 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
+it("checkpoints sandbox file writes once", () => proveSandboxMutationCheckpoints(owner));
+
+it("recovers an explicitly selected oversized artifact before the next sandbox preparation", async () => {
+  await archiveFixture();
+  const { proveOversizedWorkspaceRecovery } =
+    await import("./local-workspace-recovery.test-support.js");
+  await proveOversizedWorkspaceRecovery({ owner, canonical, stateRoot });
+});
+
 it.each([false, true])(
   "settles old runtime-file results (source already copied: %s)",
   async (copied) => {
@@ -237,7 +234,7 @@ it("expires an old runtime-file baseline while preserving unaccepted source", as
   await proveGeneratedWorkspaceExpiry(owner);
 });
 
-it.each([false, true])("settles stopped commands (parent disposed: %s)", async (disposed) => {
+it.each([false, true])("settles command checkpoints (parent disposed: %s)", async (disposed) => {
   const { proveStoppedLocalWorkspaceCheckpoint } =
     await import("./local-workspace-cancellation.test-support.js");
   await proveStoppedLocalWorkspaceCheckpoint(owner, disposed);
@@ -252,32 +249,16 @@ it.each(["operator", "gateway"] as const)(
   },
 );
 
-it("provisions, synchronizes, and retains reconciliation payloads without caller-thread store SQL", async () => {
-  using cleanup = new DisposableStack();
-  const sql = observeLocalWorkspaceStoreSql();
-  cleanup.defer(sql.restore);
-  sql.calibrate();
-  const projection = await prepare();
-  await writeText(projection, "source.txt", "worker-persisted edit\n");
-  await synchronize();
-  await expectText(canonical, "source.txt", "worker-persisted edit\n");
-  const baseline = await withLocalWorkspaceStore(
-    { worktreeId: owner.worktree.id },
-    async (store) => {
-      const row = store.get()!;
-      const value = row.baseline_json + " ".repeat(6 * 1024 * 1024);
-      await store.update(row, {
-        baseline_json: value,
-        baseline_ref: "sha256:" + createHash("sha256").update(value).digest("hex"),
-      });
-      return value;
-    },
-  );
-  await withLocalWorkspaceProjection(owner, async (state) => {
-    expect(state.current().baseline_json).toBe(baseline);
-  });
-  sql.expectIdle();
-});
+it("provisions, synchronizes, and retains reconciliation payloads without caller-thread store SQL", () =>
+  proveWorkerOwnedIncrementalWorkspace(owner));
+
+it.skipIf(process.platform === "win32")(
+  "reconciles metadata-prefilter edits, deletions, renames, modes, and symlinks after restart",
+  () => proveIncrementalWorkspaceEdits(owner),
+);
+
+it("retains staged-input ownership when only a leaf changes in the checkpoint", () =>
+  proveStagedInputCheckpointOwnership(owner));
 
 it.runIf(process.env.OPENCLAW_TEST_LOCAL_PROJECTION_PODMAN === "1")(
   "edits and runs Git in a real required Podman sandbox across turns",
@@ -337,7 +318,7 @@ it("seeds independent source-only Git and reconciles edits without host metadata
   await writeText(canonical, "source.txt", "canonical edit\n");
   await writeText(canonical, "untracked.txt", "admitted source\n");
   const manifests = await import("./workspace-manifest-worker.js");
-  const capture = vi.spyOn(manifests, "captureWorkspaceSnapshot");
+  const capture = vi.spyOn(manifests, "captureWorkspaceManifestDocument");
   const projection = await prepare();
   // The unpublished guest needs one baseline traversal; it cannot have guest edits yet.
   expect(capture.mock.calls.filter(([input]) => input.root !== canonical)).toHaveLength(1);
@@ -536,24 +517,30 @@ it("retains both sides and a durable pending result when edits conflict", async 
   expect((await readProjection())?.pending_ref).toBeNull();
 });
 
-it.each(["acceptance", "accepted-result cleanup"] as const)(
+it.each(["reservation", "acceptance", "accepted-result cleanup"] as const)(
   "recovers durable state when authority closes during %s",
   async (phase) => {
     const projection = await prepare();
-    const edit = "interrupted guest edit\n";
+    let edit = "interrupted guest edit\n";
     const accepted = phase === "accepted-result cleanup";
+    const reserved = phase === "reservation";
     await writeText(projection, "source.txt", edit);
-    const acknowledgement = accepted
-      ? observeAcknowledgedUpdate((row) => {
-          if (row.pending_ref && row.pending_target === null) {
-            revoked = true;
-          }
-        })
-      : undefined;
+    const acknowledgement =
+      accepted || reserved
+        ? observeAcknowledgedUpdate((row) => {
+            if (row.pending_ref && (reserved || row.pending_target === null)) {
+              revoked = true;
+            }
+          })
+        : undefined;
     const interrupted = {
       ...owner,
       assertCurrent: () => {
-        if (!accepted && readFileSync(path.join(canonical, "source.txt"), "utf8") === edit) {
+        if (
+          !accepted &&
+          !reserved &&
+          readFileSync(path.join(canonical, "source.txt"), "utf8") === edit
+        ) {
           revoked = true;
         }
         owner.assertCurrent();
@@ -571,8 +558,16 @@ it.each(["acceptance", "accepted-result cleanup"] as const)(
       });
       await writeText(canonical, "source.txt", "later human edit\n");
     } else {
-      expect((await readProjection())?.journal_json).toBeTruthy();
-      expect((await readProjection())?.pending_ref).toBeTruthy();
+      const pending = await readProjection();
+      expect(pending?.pending_ref).toBeTruthy();
+      expect(pending?.checkpoint_json).toBeTruthy();
+      if (reserved) {
+        expect(pending?.journal_json).toBeNull();
+        edit = "guest edit after interrupted reservation\n";
+        await writeText(projection, "source.txt", edit);
+      } else {
+        expect(pending?.journal_json).toBeTruthy();
+      }
     }
     revoked = false;
     if (accepted) {
@@ -592,6 +587,8 @@ it.each(["acceptance", "accepted-result cleanup"] as const)(
     expect(await readProjection()).toMatchObject({
       journal_json: null,
       pending_ref: null,
+      checkpoint_json: null,
+      baseline_json: null,
     });
   },
 );
@@ -647,6 +644,8 @@ it.for([false, true])(
     }
     const paused = createDeferred();
     const settle = createDeferred();
+    vi.stubEnv("DOCKER_HOST", "unix:///synthetic/checkpoint-docker.sock");
+    vi.stubEnv("DOCKER_CONTEXT", undefined);
     let runtimePaused = false;
     const events: string[] = [];
     const entry = {
@@ -660,6 +659,9 @@ it.for([false, true])(
     };
     await registry.updateRegistry(entry);
     vi.spyOn(engine, "execContainer").mockImplementation(async (_engine, args) => {
+      if (args[0] === "info") {
+        return { code: 0, stdout: "checkpoint-daemon", stderr: "" };
+      }
       if (args[0] === "inspect") {
         if (args.some((arg) => arg.includes("{{json .Mounts}}"))) {
           return { code: 0, stdout: JSON.stringify({ Mounts: [], Tmpfs: {} }), stderr: "" };
@@ -667,7 +669,12 @@ it.for([false, true])(
         if (args.includes("{{json .State}}")) {
           return {
             code: 0,
-            stdout: JSON.stringify({ Running: true, Paused: runtimePaused, Pid: 1 }),
+            stdout: JSON.stringify({
+              Running: true,
+              Paused: runtimePaused,
+              Pid: 1,
+              StartedAt: "2026-01-01T00:00:00.000Z",
+            }),
             stderr: "",
           };
         }
@@ -703,6 +710,15 @@ it.for([false, true])(
     vi.spyOn(docker, "ensureSandboxContainer").mockResolvedValue({
       containerName: entry.containerName,
       containerId: "a".repeat(64),
+      configHash: "checkpoint-fixture-config",
+      mountPlan: {
+        binds: [],
+        protectedTargets: [],
+        skippedBinds: [],
+        readOnlyWorkspaceSkillMounts: [],
+        tmpfs: [],
+      },
+      currentConfig: true,
     });
     vi.spyOn(docker, "execContainerRaw").mockImplementation(async (_engine, args) => {
       if (runtimePaused) {
@@ -794,7 +810,6 @@ it.for([false, true])(
           throw outcome.reason;
         }
       }
-      await acceptedFinalization;
       await expectText(canonical, "term-output.txt", "final descendant output\n");
       expect(events.slice(0, 2)).toEqual(["paused", "resumed"]);
       expect(
@@ -839,7 +854,7 @@ it.each(["legacy decoder", "failed restore retry", "retention"] as const)(
   async (mode) => {
     const { restoreProvisionedFiles } = await import("../../agents/worktrees/provisioned-files.js");
     const { service, registry, retentionMs } = await archiveFixture([".env.allowed"]);
-    const originalInput = ".artifacts/build-cache-inputs/archived.json";
+    const originalInput = ".artifacts/build-cache-inputs/node_modules/archived.json";
     await fs.mkdir(path.dirname(path.join(canonical, originalInput)), { recursive: true });
     await writeText(canonical, originalInput, "original archived input\n");
     await git(canonical, "add", "--force", "--", originalInput);
@@ -977,7 +992,7 @@ it("preserves later inputs from an older archive without admitting new caches", 
   const { service } = await archiveFixture();
   const projection = await prepare();
   const originalAdmission = (await readProjection())!.source_paths_json;
-  const input = ".artifacts/build-cache-inputs/late-original.json";
+  const input = ".artifacts/build-cache-inputs/node_modules/late-original.json";
   expect(JSON.parse(originalAdmission)).not.toContain(input);
   await writeText(canonical, ".gitignore", ".env.local\n.artifacts/\n");
   await fs.mkdir(path.dirname(path.join(canonical, input)), { recursive: true });

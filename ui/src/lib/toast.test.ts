@@ -1,12 +1,12 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import "../components/modal-dialog.ts";
+import "../components/modal-dialog.tsx";
 import { setToastInNavDrawer } from "../app/navigation-surface.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { showToast } from "./toast.ts";
-import "./toast-host.ts";
+import "./toast-host.tsx";
 
 async function settleHost(host: HTMLElementTagNameMap["openclaw-toast-host"]) {
   await host.updateComplete;

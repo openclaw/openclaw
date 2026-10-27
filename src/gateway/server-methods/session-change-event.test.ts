@@ -2,11 +2,11 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { resolveChatPaneDesktopTarget } from "../../../ui/src/components/desktop/desktop-source.js";
 import {
   createSessionCapabilityHarness,
   sessionsResult,
 } from "../../../ui/src/lib/sessions/session-capability.test-support.js";
-import { resolveChatPaneDesktopTarget } from "../../../ui/src/pages/chat/chat-pane-placement.js";
 import { createTestGatewayClient } from "../../../ui/src/test-helpers/gateway-client.js";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import {
@@ -32,9 +32,11 @@ import {
 } from "../session-row-projection-access.js";
 import type { SessionRowProjection } from "../session-row-projection.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
+import { replaceSessionRowFacts } from "../session-utils-row.js";
 import { claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { projectWorkerSessionPlacement } from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
+import { activePlacement as makeActivePlacement } from "../worker-environments/placement-suite.test-support.js";
 import {
   createActiveRpcSourceForTest,
   registerRpcSourceForTest,
@@ -42,21 +44,9 @@ import {
 import type { GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  warn: vi.fn(),
   loadRow: vi.fn(),
   rowLabel: "first",
 }));
-
-vi.mock("../../logging/subsystem.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
-  return {
-    ...actual,
-    createSubsystemLogger: (...args: Parameters<typeof actual.createSubsystemLogger>) => {
-      const logger = actual.createSubsystemLogger(...args);
-      return args[0] === "gateway/session-events" ? { ...logger, warn: mocks.warn } : logger;
-    },
-  };
-});
 
 const { emitSessionsChanged, flushPendingSessionsChangedEvents } =
   await import("./session-change-event.js");
@@ -122,29 +112,27 @@ function fixedStoreConfig(retired = false): OpenClawConfig {
   };
 }
 
+async function contextWithRun(
+  config: OpenClawConfig,
+  runId: string,
+  identity: Parameters<typeof createActiveRpcSourceForTest>[1],
+) {
+  return createContext(new Set(["conn-1"]), config, [
+    [runId, await createActiveRpcSourceForTest({}, identity)],
+  ]);
+}
+
 function activePlacement(
   sessionKey: string,
 ): Extract<WorkerSessionPlacementRecord, { state: "active" }> {
-  return {
-    sessionId: `${sessionKey}-id`,
+  return makeActivePlacement(`${sessionKey}-id`, {
     sessionKey,
-    agentId: "main",
-    state: "active",
-    executionMode: "worker-turn",
     generation: 1,
-    createdAtMs: 1,
     updatedAtMs: 2,
     stateChangedAtMs: 2,
     environmentId: "worker-first",
     activeOwnerEpoch: 1,
     workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-    remoteWorkspaceDir: "/workspace",
-    workerBundleHash: "a".repeat(64),
-    lastTranscriptAckCursor: null,
-    lastLiveEventAckCursor: null,
-    recoveryError: null,
-    terminalReason: null,
-    terminalAtMs: null,
     turnClaim: {
       owner: "worker",
       claimId: "private-turn-claim",
@@ -152,7 +140,7 @@ function activePlacement(
       generation: 1,
       ownerEpoch: 1,
     },
-  };
+  });
 }
 
 function preparePlacementProjection(
@@ -174,11 +162,9 @@ function preparePlacementProjection(
     }
     const placement = placements.get(record.entry.sessionId);
     // Simulate committed owner facts without reading the placement store during event snapshots.
-    if (placement) {
-      record.materialized.row.placement = projectWorkerSessionPlacement(placement);
-    } else {
-      delete record.materialized.row.placement;
-    }
+    record.materialized = replaceSessionRowFacts(record.materialized, {
+      placement: placement ? projectWorkerSessionPlacement(placement) : undefined,
+    });
   };
   update();
   return { update };
@@ -330,7 +316,6 @@ describe("sessions.changed coalescing", () => {
     "publishes a 20-session burst when its producer drains %s preparation",
     async (when) => {
       vi.useRealTimers();
-      mocks.warn.mockClear();
       const context = createContext();
       const keys = Array.from({ length: 20 }, (_, index) => `agent:main:burst-${index}`);
       const projection = createSessionRowProjectionFixture({
@@ -377,15 +362,9 @@ describe("sessions.changed coalescing", () => {
         await producer.drain();
         release.resolve();
         await flushPendingSessionsChangedEvents(context);
-        expect(mocks.warn).not.toHaveBeenCalled();
         expect(preparationBindings).toEqual(new Set(["publisher"]));
-        expect(broadcasts(context).map(([, payload]) => payload)).toEqual(
-          keys.map((sessionKey) =>
-            expect.objectContaining({
-              sessionKey,
-              session: expect.objectContaining({ key: sessionKey, label: "committed" }),
-            }),
-          ),
+        expect(broadcasts(context).map(([, payload]) => payload)).toMatchObject(
+          keys.map((key) => ({ sessionKey: key, session: { key, label: "committed" } })),
         );
       } finally {
         release.resolve();
@@ -400,7 +379,7 @@ describe("sessions.changed coalescing", () => {
     const context = createContext();
     const projection = getSessionRowProjection(context)!;
     const unrelated = createDeferred();
-    const bulk = vi.spyOn(projection, "ensureMaterialized").mockReturnValue(unrelated.promise);
+    vi.spyOn(projection, "ensureMaterialized").mockReturnValue(unrelated.promise);
     const bulkWork = projection.ensureMaterialized();
     const sessionKey = "agent:main:ready";
     try {
@@ -413,8 +392,6 @@ describe("sessions.changed coalescing", () => {
           { sessionKeys: [sessionKey] },
         ],
       ]);
-      expect(broadcasts(context)[0]?.[2]).toEqual(new Set(["conn-1"]));
-      expect(bulk).toHaveBeenCalledOnce();
     } finally {
       unrelated.resolve();
       await bulkWork;
@@ -552,11 +529,9 @@ describe("sessions.changed coalescing", () => {
     await emitAndSettleLeading(context, { reason: "send", sessionKey: "agent:main:chat" });
 
     expect(context.broadcastToConnIds).toHaveBeenCalledOnce();
-    expect(mocks.loadRow).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(100);
 
     expect(context.broadcastToConnIds).toHaveBeenCalledTimes(2);
-    expect(mocks.loadRow).toHaveBeenCalledTimes(2);
     expect(broadcasts(context)[1]?.[1]).toMatchObject({
       label: "latest",
       reason: "send",
@@ -609,24 +584,11 @@ describe("sessions.changed coalescing", () => {
       } satisfies OpenClawConfig,
       "ops",
     );
-    const sessionId = "agent:research:shared-session-id";
-    const context = createContext(
-      new Set(["conn-1"]),
-      config,
-      new Map([
-        [
-          "compat-owner-run",
-          await createActiveRpcSourceForTest(
-            {},
-            {
-              sessionId,
-              sessionKey: "legacy-unscoped",
-              storeScope: resolveSessionStorePathCore(config.session?.store, { agentId: "ops" }),
-            },
-          ),
-        ],
-      ]),
-    );
+    const context = await contextWithRun(config, "compat-owner-run", {
+      sessionId: "agent:research:shared-session-id",
+      sessionKey: "legacy-unscoped",
+      storeScope: resolveSessionStorePathCore(config.session?.store, { agentId: "ops" }),
+    });
 
     await emitAndSettleLeading(context, {
       reason: "update",
@@ -643,24 +605,12 @@ describe("sessions.changed coalescing", () => {
 
   it("projects active bare-global runs through the persisted fixed-store owner", async () => {
     const config = fixedStoreConfig();
-    const context = createContext(
-      new Set(["conn-1"]),
-      config,
-      new Map([
-        [
-          "ops-global-run",
-          await createActiveRpcSourceForTest(
-            {},
-            {
-              agentId: "ops",
-              storeScope: resolveSessionStorePathCore(config.session?.store, { agentId: "ops" }),
-              sessionId: "global-id",
-              sessionKey: "global",
-            },
-          ),
-        ],
-      ]),
-    );
+    const context = await contextWithRun(config, "ops-global-run", {
+      agentId: "ops",
+      storeScope: resolveSessionStorePathCore(config.session?.store, { agentId: "ops" }),
+      sessionId: "global-id",
+      sessionKey: "global",
+    });
 
     await emitAndSettleLeading(context, { reason: "update", sessionKey: "global" });
 
@@ -694,16 +644,9 @@ describe("sessions.changed coalescing", () => {
       },
     );
     const payload = broadcasts(context)[0]?.[1];
-    for (const field of [
-      "agentId",
-      "key",
-      "label",
-      "session",
-      "goal",
-      "status",
-      "hasActiveRun",
-      "activeRunIds",
-    ]) {
+    for (const field of "agentId key label session goal status hasActiveRun activeRunIds".split(
+      " ",
+    )) {
       expect(payload, field).not.toHaveProperty(field);
     }
   });

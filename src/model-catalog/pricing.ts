@@ -11,16 +11,13 @@ import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import {
-  getPluginCache,
-  isPluginCacheFactInvalidatedError,
-  withPluginCache,
-} from "../plugins/plugin-cache.js";
+import { getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import {
   resolvePluginMetadataSnapshot,
   resolvePluginMetadataSnapshotAsync,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
+import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import { planEffectiveModelCatalogRows } from "./index.js";
 import type { RemoteModelCatalogPrice, RemoteModelCatalogUpstreamPrice } from "./remote-bundle.js";
 import { isRemoteModelCatalogRefreshEnabled } from "./remote-config.js";
@@ -240,7 +237,7 @@ export async function prepareModelPricingContext(
         allowWorkspaceScopedCurrent: true,
       });
     } catch (error) {
-      if (isPluginCacheFactInvalidatedError(error)) {
+      if (isStateDatabaseReadAdmissionInvalidatedError(error)) {
         throw error;
       }
       snapshot = undefined;

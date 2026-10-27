@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { onSessionCostUsageUpdated } from "../infra/session-cost-usage-events.js";
+import { sessionCostUsageNotifications } from "../infra/session-cost-usage-events.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isSessionStoreTopologyChange, sessionChanges } from "../sessions/session-row-changes.js";
@@ -12,12 +12,16 @@ import { invalidateSharedReadResponses } from "./shared-read-responses.js";
 
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 
+const USAGE_NOTIFICATION_INTERVAL_MS = 500;
+const AVAILABILITY_REFRESH_INTERVAL_MS = 500;
+
 /** A committed auth change remains successful even if its best-effort UI notification fails. */
 export function broadcastChatMetadataChanged(
   context: Pick<GatewayRequestContext, "broadcast" | "logGateway">,
   payload: Partial<SessionCostUsagePublication> & {
     modelSelectionChanged?: boolean;
     modelCatalogChanged?: boolean;
+    modelCatalogStatusChanged?: true;
     authChanged?: boolean;
     commandsChanged?: false;
   } = {},
@@ -36,6 +40,7 @@ export async function createGatewayChatMetadataLifecycle(params: {
 }) {
   let context: GatewayRequestContext | undefined;
   let preparedModelRuntimeState: "unobserved" | "available" | "unavailable" = "unobserved";
+  let availabilityTimer: ReturnType<typeof setTimeout> | undefined;
   const { createGatewayChatMetadataRuntime } =
     await import("./server-methods/chat-metadata-runtime.js");
   const { ChatMetadataSnapshotUnavailableError } =
@@ -60,13 +65,26 @@ export async function createGatewayChatMetadataLifecycle(params: {
       params.log.warn(`chat metadata refresh failed: ${String(error)}`);
     });
   };
-  const refreshForSubordinateChange = (notifyIfUnchanged = false) => {
+  const refreshForSubordinateChange = (notifyIfUnchanged = false, availabilityOnly = false) => {
     if (context) {
       invalidateSharedReadResponses(context.broadcast, "chat.metadata.changed");
     }
     // Auth and skill facts are subordinate to the prepared model owner. During replacement the
     // publication event owns the one catch-up refresh after every related fact is committed.
     if (preparedModelRuntimeState === "available") {
+      if (availabilityOnly) {
+        // Reads observe the current auth revision immediately; notification bursts share a window.
+        availabilityTimer ??= setTimeout(() => {
+          availabilityTimer = undefined;
+          // A replacement or failure owns the next publication once availability was revoked.
+          if (preparedModelRuntimeState === "available") {
+            refreshLogged();
+          }
+        }, AVAILABILITY_REFRESH_INTERVAL_MS).unref();
+        return;
+      }
+      clearTimeout(availabilityTimer);
+      availabilityTimer = undefined;
       // The metadata owner compares captured facts before fencing changed generations.
       // Unrelated workspace events and repeated catalog statuses must not discard its cache.
       refreshLogged(notifyIfUnchanged);
@@ -139,8 +157,8 @@ export async function createGatewayChatMetadataLifecycle(params: {
       }
     });
     const unregisterRuntimeAuthProfileStoreMutation =
-      registerRuntimeAuthProfileStoreMutationListener(() => {
-        refreshForSubordinateChange();
+      registerRuntimeAuthProfileStoreMutationListener((event) => {
+        refreshForSubordinateChange(false, event.availabilityOnly);
       });
     const unregisterTopology = sessionChanges.subscribe((change) => {
       if (isSessionStoreTopologyChange(change)) {
@@ -148,6 +166,8 @@ export async function createGatewayChatMetadataLifecycle(params: {
       }
     });
     return () => {
+      clearTimeout(availabilityTimer);
+      availabilityTimer = undefined;
       unregisterTopology();
       unregisterRuntimeAuthProfileStoreMutation();
       unregisterPreparedModelRuntimePublication();
@@ -163,14 +183,39 @@ export async function createGatewayChatMetadataLifecycle(params: {
       context = next;
       let selectionConfig = next.getCommittedRuntimeConfig?.() ?? params.getConfig();
       const unregister = await registerRefreshListeners();
-      const unregisterUsage = onSessionCostUsageUpdated((publication) => {
+      const pendingUsage = new Map<string, SessionCostUsagePublication>();
+      let usageTimer: ReturnType<typeof setTimeout> | undefined;
+      const broadcastUsage = (publication: SessionCostUsagePublication) => {
         broadcastChatMetadataChanged(next, {
           ...publication,
           modelCatalogChanged: false,
           authChanged: false,
           commandsChanged: false,
         });
-      });
+      };
+      const flushUsage = () => {
+        clearTimeout(usageTimer);
+        usageTimer = undefined;
+        for (const publication of pendingUsage.values()) {
+          broadcastUsage(publication);
+        }
+        pendingUsage.clear();
+      };
+      sessionCostUsageNotifications.onUpdated = (publication) => {
+        if (publication.usageRefreshFailed) {
+          // Clients retain the last successful commit separately from the latest failure.
+          const pending = pendingUsage.get(publication.agentId);
+          if (pending) {
+            pendingUsage.delete(publication.agentId);
+            broadcastUsage(pending);
+          }
+          broadcastUsage(publication);
+          return;
+        }
+        pendingUsage.set(publication.agentId, publication);
+        // Worker batches settle on different ticks. Keep one bounded window, never a debounce.
+        usageTimer ??= setTimeout(flushUsage, USAGE_NOTIFICATION_INTERVAL_MS).unref();
+      };
       const unregisterRolePolicy = onOperatorRolePolicyChanged((change) => {
         if (change.kind === "config" && change.context === next && context === next) {
           const config = next.getCommittedRuntimeConfig?.() ?? params.getConfig();
@@ -190,7 +235,9 @@ export async function createGatewayChatMetadataLifecycle(params: {
       });
       publishSidecars({
         stop: async () => {
-          unregisterUsage();
+          sessionCostUsageNotifications.onUpdated = () => {};
+          clearTimeout(usageTimer);
+          pendingUsage.clear();
           unregisterRolePolicy();
           unregister();
           await runtime.stop();
@@ -220,14 +267,7 @@ export async function createGatewayChatMetadataLifecycle(params: {
       return await runtime.read(readParams);
     },
     readModelsList: runtime.readModelsList,
-    readStartup: async (readParams: Parameters<typeof runtime.readStartup>[0]) => {
-      if (readParams.readPolicy !== "ready") {
-        const { ensureGatewayPreparedModelRuntimeReady } =
-          await import("../agents/prepared-model-runtime.js");
-        await ensureGatewayPreparedModelRuntimeReady({ agentId: readParams.agentId });
-      }
-      return await runtime.readStartup(readParams);
-    },
+    readStartup: runtime.readStartup,
     refresh: runtime.refresh,
   };
 }

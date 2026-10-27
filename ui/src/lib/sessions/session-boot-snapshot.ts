@@ -11,7 +11,7 @@ import {
   subscribeSidebarBootRetirement,
 } from "../../pages/chat/session-snapshot-prewarm.ts";
 import { listen } from "../reactive/listener.ts";
-import type { SessionGateway, SessionState } from "./session-capability.ts";
+import type { SessionGateway, SessionState } from "./session-types.ts";
 
 export function createSessionBootSnapshot(
   gateway: SessionGateway,

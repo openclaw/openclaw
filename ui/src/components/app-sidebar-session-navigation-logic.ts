@@ -4,10 +4,16 @@ import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui
 import { isIncognitoSessionKey } from "../../../src/shared/incognito-session-key.js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import { parseSidebarEntry, serializeSidebarEntry, SIDEBAR_NAV_ROUTES } from "../app-navigation.ts";
+import {
+  parseSidebarEntry,
+  serializeSidebarEntry,
+  SIDEBAR_NAV_ROUTES,
+  type SidebarZoneEntry,
+} from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { i18n } from "../i18n/index.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { resolveSessionChannelPresentation } from "../lib/session-channel.ts";
 import {
   isSessionTitlePending,
@@ -23,7 +29,7 @@ import {
   filterVisibleSessionRows,
   resolveSessionNavigation,
   sessionMatchesVisibleSessionScope,
-} from "../lib/sessions/index.ts";
+} from "../lib/sessions/navigation.ts";
 import {
   buildAgentMainSessionKey,
   isAcpSessionKey,
@@ -37,8 +43,7 @@ import {
   resolveUiSessionRowAgentId,
   resolveUiSessionNavigationParentKey,
 } from "../lib/sessions/session-key.ts";
-import { reconcileSidebarZone } from "../lib/sidebar-zone.ts";
-import { pluginTabKey } from "../pages/plugin/route.ts";
+import { pluginTabKey } from "../pages/plugin/route.tsx";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.tsx";
 import {
@@ -120,16 +125,6 @@ function compareSidebarSessionRowsByCreatedAt(
     (createdOrder.get(a.key) ?? Number.MAX_SAFE_INTEGER) -
     (createdOrder.get(b.key) ?? Number.MAX_SAFE_INTEGER);
   return byObservedOrder || a.key.localeCompare(b.key);
-}
-
-function isSidebarDraftOwnedBySelf(
-  row: Pick<SessionRow, "createdActor" | "sharingRole" | "visibility">,
-  selfUserId: string | undefined,
-): boolean {
-  return (
-    row.visibility === "draft" &&
-    (row.sharingRole === "owner" || Boolean(selfUserId && row.createdActor?.id === selfUserId))
-  );
 }
 
 export type SidebarSessionNavigationState = {
@@ -258,7 +253,10 @@ export function buildSidebarSessionNavigationState(input: {
           sharingRole: row.sharingRole,
           communication: row.communication,
           effectiveCommunication: row.effectiveCommunication,
-          draftOwnedBySelf: isSidebarDraftOwnedBySelf(row, selfUserId),
+          draftOwnedBySelf:
+            row.visibility === "draft" &&
+            (row.sharingRole === "owner" ||
+              Boolean(selfUserId && row.createdActor?.id === selfUserId)),
           category: normalizeOptionalString(row.category),
           icon: normalizeOptionalString(row.icon),
           color: normalizeOptionalString(row.color),
@@ -334,29 +332,35 @@ export function buildSidebarSessionNavigationState(input: {
   };
 }
 
-export function buildReconciledSidebarZone(input: {
-  sidebarEntries: readonly string[];
-  rows: SidebarRecentSession[];
-  pluginNavigation: readonly ControlUiRegistration<ControlUiNavigationItem>[];
-  pluginTabs: readonly GatewayControlUiPluginTab[] | undefined;
-  snapshot?: { model: SidebarSnapshotModel; selectedKey: string };
-  pendingPlugins?: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null;
-}) {
-  if (input.snapshot) {
-    const { model, selectedKey } = input.snapshot;
-    const restoredRows = [...model.sessions, ...model.pinnedSessions].map((row) =>
-      restoreSnapshotSession(row, selectedKey),
-    );
-    return {
+export function restoreSnapshotNavigation(model: SidebarSnapshotModel, selectedKey: string) {
+  const sections = model.sections.map((section) => ({
+    ...section,
+    rows: section.rows.map((row) => restoreSnapshotSession(row, selectedKey)),
+  }));
+  const visibleRows = sections.flatMap((section) => section.rows);
+  const pins = model.pinnedSessions.map((row) => restoreSnapshotSession(row, selectedKey));
+  return {
+    sections,
+    visibleRows,
+    zone: {
       entries: model.entries.flatMap((entry) => {
         const parsed = parseSidebarEntry(entry);
         return parsed ? [parsed] : [];
       }),
       sidebarEntries: model.entries,
-      sessionRows: new Map(restoredRows.map((row) => [row.key, row])),
+      sessionRows: new Map([...visibleRows, ...pins].map((row) => [row.key, row])),
       pluginTabs: new Map(model.plugins.map(({ key, ...tab }) => [key, tab])),
-    };
-  }
+    },
+  };
+}
+
+export function buildReconciledSidebarZone(input: {
+  sidebarEntries: readonly string[];
+  rows: SidebarRecentSession[];
+  pluginNavigation: readonly ControlUiRegistration<ControlUiNavigationItem>[];
+  pluginTabs: readonly GatewayControlUiPluginTab[] | undefined;
+  pendingPlugins?: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null;
+}) {
   const navigation = input.pluginNavigation;
   const occupiedPlacements = new Set(SIDEBAR_NAV_ROUTES.map((route) => `route:${route}`));
   const pluginTabs = new Map(
@@ -371,14 +375,40 @@ export function buildReconciledSidebarZone(input: {
       .map((tab) => [pluginTabKey(tab), tab]),
   );
   const availableRows = input.rows;
-  const reconciled = reconcileSidebarZone(
-    input.sidebarEntries,
-    availableRows,
-    SIDEBAR_NAV_ROUTES,
-    new Set([...pluginTabs.keys(), ...navigation.map((entry) => entry.key)]),
-  );
+  const sidebarEntries = input.sidebarEntries;
+  const pluginNavigationKeys = new Set([
+    ...pluginTabs.keys(),
+    ...navigation.map((entry) => entry.key),
+  ]);
+  // Personal references are the only pin authority. Catalogs resolve display, never membership.
+  const sessionKeys = new Set(availableRows.map(({ key }) => key));
+  const routes = new Set(SIDEBAR_NAV_ROUTES);
+  const canonical = new Set<string>();
+  const entries: SidebarZoneEntry[] = [];
+  for (const serialized of sidebarEntries) {
+    const entry = parseSidebarEntry(serialized);
+    if (!entry) {
+      continue;
+    }
+    const key = serializeSidebarEntry(entry);
+    if (canonical.has(key)) {
+      continue;
+    }
+    canonical.add(key);
+    // Preserve unresolved references without persisting private labels or treating
+    // a missing paginated row, offline person, or unloaded plugin as an unpin.
+    if (
+      entry.type === "person" ||
+      (entry.type === "route" && routes.has(entry.route)) ||
+      (entry.type === "session" && sessionKeys.has(entry.key)) ||
+      (entry.type === "plugin" && pluginNavigationKeys.has(entry.key))
+    ) {
+      entries.push(entry);
+    }
+  }
   const live = {
-    ...reconciled,
+    entries,
+    sidebarEntries: [...canonical],
     sessionRows: new Map(availableRows.map((row) => [row.key, row])),
     pluginTabs,
   };
@@ -408,6 +438,48 @@ export function buildReconciledSidebarZone(input: {
   return live;
 }
 
+/** Multiple visible placements share one batch target and live-data owner. */
+export function distinctSidebarSessionRows(
+  rows: readonly SidebarRecentSession[],
+): SidebarRecentSession[] {
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    if (seen.has(row.key)) {
+      return false;
+    }
+    seen.add(row.key);
+    return true;
+  });
+}
+
+export function handleSidebarSessionRowClick(
+  event: MouseEvent,
+  session: SidebarRecentSession,
+  selection: ReturnType<typeof createSidebarSessionSelection>,
+  selectSession: (key: string) => void,
+) {
+  if (
+    session.isChild
+      ? !shouldHandleNavigationClick(event)
+      : event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey
+  ) {
+    return;
+  }
+  if (!session.isChild && event.shiftKey) {
+    event.preventDefault();
+    selection.extend(session.key, session.selectionKey);
+    return;
+  }
+  if (!session.isChild && event.altKey) {
+    event.preventDefault();
+    selection.toggle(session.key, session.selectionKey);
+    return;
+  }
+  event.preventDefault();
+  selection.clear(session.selectionKey ?? session.key);
+  selectSession(session.key);
+}
+
 /** Menus read selection synchronously; the sidebar projection owns publication and parking. */
 export function createSidebarSessionSelection(
   readRows: () => readonly SidebarRecentSession[],
@@ -419,7 +491,7 @@ export function createSidebarSessionSelection(
     get selectedKeys() {
       return selectedKeys;
     },
-    toggle(key: string) {
+    toggle(key: string, selectionKey = key) {
       const next = new Set(selectedKeys);
       if (next.has(key)) {
         next.delete(key);
@@ -427,17 +499,18 @@ export function createSidebarSessionSelection(
         next.add(key);
       }
       selectedKeys = next;
-      anchor = next.has(key) ? key : null;
+      anchor = next.has(key) ? selectionKey : null;
       publish();
     },
-    extend(key: string) {
+    extend(key: string, selectionKey = key) {
       const rows = readRows();
-      anchor ??= rows.find((row) => row.visuallyActive || row.active)?.key ?? key;
-      const anchorIndex = rows.findIndex((row) => row.key === anchor);
-      const targetIndex = rows.findIndex((row) => row.key === key);
+      const active = rows.find((row) => row.visuallyActive || row.active);
+      anchor ??= active?.selectionKey ?? active?.key ?? selectionKey;
+      const anchorIndex = rows.findIndex((row) => (row.selectionKey ?? row.key) === anchor);
+      const targetIndex = rows.findIndex((row) => (row.selectionKey ?? row.key) === selectionKey);
       if (anchorIndex === -1 || targetIndex === -1) {
         selectedKeys = new Set([key]);
-        anchor = key;
+        anchor = selectionKey;
       } else {
         const [start, end] =
           anchorIndex <= targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex];
@@ -445,8 +518,8 @@ export function createSidebarSessionSelection(
       }
       publish();
     },
-    clear(this: void) {
-      anchor = null;
+    clear(this: void, selectionKey: string | null = null) {
+      anchor = selectionKey;
       if (selectedKeys.size > 0) {
         selectedKeys = new Set();
         publish();
@@ -569,24 +642,31 @@ export function findSidebarSessionInTree(
   return undefined;
 }
 
-export function findProjectedSidebarSession(input: {
+export function findSidebarSessionRow(input: {
   sessionKey: string;
   navigationState: SidebarSessionNavigationState;
   sessionResultsByAgent: Readonly<Record<string, SessionsListResult>>;
-}): SidebarRecentSession | undefined {
+}): GatewaySessionRow | undefined {
   const active = input.navigationState.visibleSessionRows.find(
     (candidate) => candidate.key === input.sessionKey,
   );
   if (active) {
-    return input.navigationState.toSidebarSession(active);
+    return active;
   }
   for (const result of Object.values(input.sessionResultsByAgent)) {
     const row = result.sessions.find((candidate) => candidate.key === input.sessionKey);
     if (row) {
-      return input.navigationState.toSidebarSession(row);
+      return row;
     }
   }
   return undefined;
+}
+
+export function findProjectedSidebarSession(
+  input: Parameters<typeof findSidebarSessionRow>[0],
+): SidebarRecentSession | undefined {
+  const row = findSidebarSessionRow(input);
+  return row ? input.navigationState.toSidebarSession(row) : undefined;
 }
 
 /** Live canonical requests outlive a paginated row, but never supply its old private metadata. */

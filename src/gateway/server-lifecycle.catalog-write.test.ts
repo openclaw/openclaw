@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { createOAuthManager } from "../agents/auth-profiles/oauth-manager.js";
+import { mockOAuthProviderOperations } from "../agents/auth-profiles/oauth-native-provider.test-support.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import type { OAuthCredential } from "../agents/auth-profiles/types.js";
@@ -183,7 +184,10 @@ it("joins notice cleanup and upstream deletion after close prelude", async ({ si
   const logs = { info() {}, warn() {}, error() {} };
   await installGatewaySubagentModuleLoad(
     async () => {},
-    async () => {},
+    () => {
+      const settled = Promise.resolve();
+      return { initial: settled, pending: new Map(), settled };
+    },
     context.startupModuleRestorers,
   );
   const sentinel = vi
@@ -338,16 +342,14 @@ it.for(["personal", "shared-peer"] as const)(
       refresh: "synthetic-refresh-new",
       expires: Date.now() + 600_000,
     };
-    const manager = createOAuthManager({
-      canRefreshCredential: async () => true,
+    mockOAuthProviderOperations({
       refreshCredential: async () => {
         accepted.resolve();
         await release.promise;
         return replacement;
       },
-      buildApiKey: async (_provider, value) => value.access,
-      readBootstrapCredential: () => null,
     });
+    const manager = createOAuthManager();
     const resolving = context
       .trackConnection(() =>
         manager.resolveOAuthAccess({

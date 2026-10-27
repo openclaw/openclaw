@@ -10,7 +10,6 @@ import type {
   PluginDocumentExtractorEntry,
 } from "./document-extractor-types.js";
 import { sortPluginEntriesForAutoDetect } from "./plugin-entry-order.js";
-import { createPluginIdScopeSet } from "./plugin-scope.js";
 import { loadBundledPublicArtifactEntries } from "./public-artifact-factories.js";
 
 const log = createSubsystemLogger("plugins");
@@ -18,24 +17,14 @@ const log = createSubsystemLogger("plugins");
 /** Returns enabled document extractors in deterministic auto-detect order. */
 export function resolvePluginDocumentExtractors(params?: {
   config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  onlyPluginIds?: readonly string[];
 }): PluginDocumentExtractorEntry[] {
   const extractors: PluginDocumentExtractorEntry[] = [];
   const loadErrors: unknown[] = [];
-  let onlyPluginIds = params?.onlyPluginIds;
+  // Document allowlists stay restrictive when upgrade compatibility broadens activation.
   const allowlist = normalizePluginsConfig(params?.config?.plugins).allow;
-  if (allowlist.length > 0) {
-    // Document allowlists stay restrictive when upgrade compatibility broadens activation.
-    const scope = createPluginIdScopeSet(onlyPluginIds);
-    onlyPluginIds = allowlist.filter((pluginId) => !scope || scope.has(pluginId));
-  }
   for (const plugin of resolveEnabledBundledManifestContractPlugins({
     config: params?.config,
-    workspaceDir: params?.workspaceDir,
-    env: params?.env,
-    onlyPluginIds,
+    onlyPluginIds: allowlist.length > 0 ? allowlist : undefined,
     contract: "documentExtractors",
   })) {
     let loaded: PluginDocumentExtractorEntry[] | null;
@@ -43,7 +32,6 @@ export function resolvePluginDocumentExtractors(params?: {
       loaded = loadBundledPublicArtifactEntries({
         dirName: plugin.id,
         pluginId: plugin.id,
-        env: params?.env,
         owner: plugin,
         artifactCandidates: ["document-extractor.js", "document-extractor-api.js"],
         suffix: "DocumentExtractor",

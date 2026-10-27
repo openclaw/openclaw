@@ -1,3 +1,4 @@
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stripMixedSilentReplyTokens } from "../../auto-reply/reply/mixed-silent-reply-tokens.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { projectAgentToolActivity } from "../../infra/agent-activity-events.js";
@@ -32,6 +33,20 @@ function resolveCliToolSource(name: string, kind?: CliToolUseStartDelta["kind"])
   return kind === "mcp_tool_use" || name.startsWith("mcp__") ? "mcp" : "core";
 }
 
+// Live tool output text is read only from content block arrays; other shapes stay untouched.
+function withBrowserTabDetails(result: unknown, browserTab: unknown): unknown {
+  if (isRecord(result) && Array.isArray(result.content)) {
+    return { ...result, details: { ...asOptionalRecord(result.details), browserTab } };
+  }
+  if (Array.isArray(result)) {
+    return { content: result, details: { browserTab } };
+  }
+  if (typeof result === "string" || typeof result === "number" || typeof result === "boolean") {
+    return { content: [{ type: "text", text: String(result) }], details: { browserTab } };
+  }
+  return result;
+}
+
 export function createCliEventHandlers(params: {
   context: PreparedCliRunContext;
   toolTracking: CliToolTracking;
@@ -63,10 +78,7 @@ export function createCliEventHandlers(params: {
   };
   let commentaryCounter = 0;
   let assistantVisibleText = "";
-  const toolSummaryById = new Map<
-    string,
-    { name: string; failed: boolean; terminalObserved?: boolean }
-  >();
+  const toolSummaryById = new Map<string, { failed: boolean; terminalObserved?: boolean }>();
   // CLI results report an outcome without repeating the request, so the terminal
   // progress event would otherwise describe the output instead of the command.
   const toolArgsByCallId = new Map<
@@ -98,7 +110,11 @@ export function createCliEventHandlers(params: {
     if (data.phase === "start") {
       emitAgentEvent(activity);
     }
-    emitAgentEvent({ runId: runParams.runId, stream: "tool", data });
+    emitAgentEvent({
+      runId: runParams.runId,
+      stream: "tool",
+      data: { ...data, name: stripOpenClawMcpToolPrefix(data.name) },
+    });
     if (data.phase !== "start") {
       emitAgentEvent(activity);
     }
@@ -112,11 +128,8 @@ export function createCliEventHandlers(params: {
     let current = toolSummaryById.get(event.toolCallId);
     if (current) {
       current.failed ||= failed;
-      if (!current.name && event.name) {
-        current.name = event.name;
-      }
     } else {
-      current = { name: event.name, failed };
+      current = { failed };
       toolSummaryById.set(event.toolCallId, current);
     }
     if (event.name) {
@@ -161,6 +174,11 @@ export function createCliEventHandlers(params: {
     const loopbackOutcome = tracked
       ? params.toolTracking.resolveCliLoopbackTerminalOutcome(event.toolCallId)
       : undefined;
+    // Resolve presentation metadata before the result retires loopback correlation.
+    const browserTab =
+      tracked && !event.isError && stripOpenClawMcpToolPrefix(event.name) === "browser"
+        ? params.toolTracking.resolveCliLoopbackBrowserTab(event.toolCallId)
+        : undefined;
     const executedArgs = tracked ? params.toolTracking.handleCliToolResult(event) : undefined;
     const startedCall = toolArgsByCallId.get(event.toolCallId);
     toolArgsByCallId.delete(event.toolCallId);
@@ -221,7 +239,10 @@ export function createCliEventHandlers(params: {
           name: event.name,
           toolCallId: event.toolCallId,
           isError: event.isError,
-          result: readResult(),
+          result:
+            browserTab === undefined
+              ? readResult()
+              : withBrowserTabDetails(readResult(), browserTab),
           ...(tracked && startedArgs ? { args: startedArgs } : {}),
           ...(resultContentSource ? { resultContentSource } : {}),
         },

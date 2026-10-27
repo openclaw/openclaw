@@ -2,6 +2,7 @@ import {
   hasSqliteWorkerOutcomeUnknown,
   type SqliteWorkerCommand,
 } from "../../infra/sqlite-worker-contract.js";
+import type { SqliteWorkerAdmissionFactory } from "../../infra/sqlite-worker-operation-admission.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import type {
@@ -17,6 +18,7 @@ type CronRuntimeMutationParams<Type extends CronRuntimeMutationType> = {
   input: CronRuntimeMutationContracts[Type]["input"];
   snapshot: CronRuntimeMutationContracts[Type]["snapshot"];
   assertCurrent: () => void;
+  createAdmission?: SqliteWorkerAdmissionFactory;
   publish: (outcome: CronRuntimeMutationContracts[Type]["outcome"]) => void;
   onSettled?: (outcome: "committed" | "not-committed" | "unknown") => void;
   onRolledBackMutation?: (refusal: CronJobMutationRefusal) => never;
@@ -31,7 +33,8 @@ export async function runCronRuntimeMutation<Type extends CronRuntimeMutationTyp
     await runOpenClawStateWorkerOperation(
       params.context,
       async (scope) => {
-        // Config or caller authority may change after dispatch; cron accepts that race.
+        // Ordinary cron accepts changes after dispatch. Stream security additionally
+        // checks its current caller and policy at native transaction and commit admission.
         const command = {
           type: params.type,
           input: { ...params.input, snapshot: params.snapshot },
@@ -56,7 +59,7 @@ export async function runCronRuntimeMutation<Type extends CronRuntimeMutationTyp
           throw new Error("Cron mutation returned an unexpected refusal");
         }
       },
-      { assertCurrent: params.assertCurrent },
+      { assertCurrent: params.assertCurrent, createAdmission: params.createAdmission },
     );
   } finally {
     params.onSettled?.(settled);

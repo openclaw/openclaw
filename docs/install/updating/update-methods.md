@@ -97,7 +97,7 @@ Already-running older updaters retain their own activation and finalization beha
 For package installs with an owned managed Bun Gateway at a different root,
 `openclaw update` targets the Gateway's package root and leaves the invoking CLI
 installation unchanged. It validates the service's actual Bun executable for
-Bun 1.4.3+ and WAL-safe `node:sqlite`, and retains its recorded runtime pin through
+Bun 1.4.4+ and WAL-safe `node:sqlite`, and retains its recorded runtime pin through
 service installation and restart. Bun's emulated Node version is never compared
 to the target's `engines.node` requirement. When the updater runs on Node, its
 Node must also pass the target's engine and SQLite checks before package
@@ -162,8 +162,10 @@ for a source-server update: it refuses tracked local changes, including build
 outputs, and prepares the fetched target in a private checkout. It checks that
 `main` can fast-forward, or rebases the local server branch with `--rebase-merges`.
 Dependencies install with a frozen lockfile and the candidate builds before the
-serving checkout changes. A preparation failure leaves the existing service
-running. After preparation, the script stops its selected service and checks for
+serving checkout changes. The built candidate checks the selected profile's
+configuration and migration inputs through `openclaw update admit` before the
+service stops. A refusal or unavailable admission leaves the existing service
+running; resolve the reported conflict and retry. After preparation, the script stops its selected service and checks for
 other observed managed consumers before publishing source, dependencies, and
 generated output together. Stop any shared-install siblings through their own
 service owners first; this script does not stop or restart them for you.
@@ -338,10 +340,11 @@ restarting the Gateway so it picks up canonical config and migrated state. Check
 `openclaw update status` for unfinished plugin upgrades and their repair commands.
 Normal CLI commands and Gateway startup do not apply deferred plugin migrations.
 
-On Windows, the published OpenClaw 2026.9.3 updater can exhaust its fixed
-30-second baseline package-fingerprint budget before replacing any files. It
-then reports `Package rollback verification timed out` and
-`retained package tree changed` even when the installed tree is unchanged.
+On any platform, the published OpenClaw 2026.9.3 and 2026.9.4 updaters can exhaust
+their fixed 30-second baseline package-fingerprint budget before replacing any
+files. They then report `Installation recovery is unverified`,
+`Package rollback verification timed out`, or `retained package tree changed`
+even when the installed tree is unchanged.
 A newer candidate cannot repair the updater already running. After creating a
 [verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup),
 stop the Gateway and use its existing package manager to install the target
@@ -565,11 +568,27 @@ needs attention.
 
     For package updates, the check runs before registry lookups and database-schema validation. Managed update runs retain the warning in update history so it also appears in the Control UI.
 
-    Before staging a replacement, a read-only snapshot check measures the known SQLite database families, including WAL, SHM, and journal files. Its non-warning diagnostic entries in `openclaw update status --json` record each family's size and the existing snapshot budget: twice the total family bytes, three times the largest family, and 64 MiB for metadata. Plugin copies and registered external databases remain unknown until the complete check after staging.
+    Before staging a replacement, a read-only snapshot check measures the known SQLite database families, including WAL, SHM, and journal files. Its non-warning diagnostic entries in `openclaw update status --json` record each family's size, largest first. Current candidate copies need the total family bytes plus the largest family and 64 MiB for metadata. Separately, the activation backup and rollback check uses the same calculation as activation: twice the total family bytes plus three times the largest family and 64 MiB at the backup destination, with total family bytes plus the largest family and 64 MiB on each separate source volume. Plugin copies and registered external databases remain unknown until the complete check after staging.
 
-    Snapshot space is checked at the existing destinations: `TMPDIR`, the capture directory beside the state directory, and the system temporary directory. An update refuses before staging only when every destination has known free space below the snapshot owner's requirement, because its private state copy cannot be taken. Database sizes are inventory for the temporary snapshot, not database-health or growth warnings. A successful check needs no database cleanup. If measurement fails, the updater warns that it will check again after staging. A usable alternative or unknown free-space reading does not itself stop the update. Package and Git targets that are already current need no candidate snapshot. The updater preserves a config copy, not a full-state backup.
+    Snapshot space is checked at the existing destinations: `TMPDIR`, the capture directory beside the state directory, and the system temporary directory. Git and package updates refuse before staging when every candidate destination has known free space below the snapshot requirement, or when the activation backup or a separate rollback volume has known insufficient space. Refusals report the required and free bytes and the database families that dominate the requirement. Free space on the reported backup or source volume; changing `TMPDIR` only helps a candidate-copy shortfall. Database sizes are inventory for the temporary snapshot, not database-health or growth warnings. A successful check needs no database cleanup. If measurement fails, the updater warns that it will check again after staging. A usable candidate alternative or unknown free-space reading does not itself stop the update. This is an early check of known database sizes, not a reservation: builds, retained runtimes, plugin copies, and concurrent disk use can consume space afterward, so activation still checks its complete inventory before migration. Package and Git targets that are already current need no candidate snapshot. The updater preserves a config copy, not a full-state backup.
 
     For a direct CLI update, scratch variables set by the invoking operator (`TMPDIR`, `TMP`, and `TEMP`) take precedence over managed-service defaults. For example, `TMPDIR="$HOME/.cache" openclaw update` checks that directory first and labels it `explicit-tmpdir` in snapshot capacity reports. The service still owns installation, profile, state, and runtime-path selection. This precedence fix belongs to the installed updater and takes effect for updates it performs after installation; a newer candidate cannot change an older updater's environment merge.
+
+    `TMPDIR` is scratch placement, not a relocation of the installation or durable state. Large update writes have these owners:
+
+    | Data | Location |
+    | --- | --- |
+    | Retained updater runtime | Explicit `TMPDIR`, otherwise a sibling of the installation when possible so unchanged files can be hard-linked; system temp is the fallback. |
+    | Disposable candidate state and plugin rehearsal | A capacity-checked directory, preferring explicit `TMPDIR`. |
+    | Plugin source captures during update finalization | Explicit `TMPDIR`; ordinary Gateway captures remain under the state directory. |
+    | SQLite read-only inspection snapshots | Explicit `XDG_CACHE_HOME`, then `TMPDIR` during updates; ordinary inspection retains its platform cache default. |
+    | Original-state captures | `<state-dir>.update-captures`, retained there so later recovery and cleanup can discover them. These are durable recovery artifacts, not disposable temp files. Known payload space is checked before capture; an unavailable optional capture produces a warning. |
+    | Doctor migration backups | Beside the database being migrated, retained for recovery rather than moved with temporary scratch. |
+    | Package candidates and rollback images | Beside the package-manager installation, so activation and rollback can rename on the same filesystem. Database backup admission checks the backup and restore volumes before migration. |
+    | Installed plugin projects | The selected state directory's npm/git roots; these are the installed plugins. |
+    | npm cache | npm's configured cache, independently of `TMPDIR`. Set npm's existing `npm_config_cache` variable to move it. |
+
+    A large temp volume does not supply free space to these durable destinations. Preserve recovery artifacts when freeing space. After a failed update, retry the reported recovery command or `openclaw update repair`; do not delete journals or captures to clear a pending recovery hold.
 
     This check runs in the installed updater; an already-installed 2026.9.3 updater retains its prior behavior for its own first upgrade hop.
 

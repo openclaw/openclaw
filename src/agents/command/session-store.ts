@@ -1,4 +1,7 @@
-import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asNonNegativeFiniteNumber,
+  floorPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   SESSION_TOTAL_TOKENS_VERSION,
@@ -23,13 +26,6 @@ import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
 
-export function normalizeSessionTokenCount(value: number | undefined): number | undefined {
-  if (value === undefined || !Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-  return Math.floor(value);
-}
-
 export async function updateSessionStoreAfterAgentRun(params: {
   agentId: string;
   cfg: OpenClawConfig;
@@ -47,7 +43,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   compactionAccounting?: Extract<CompactionAccountingFact, { kind: "durable" }>;
   touchInteraction?: boolean;
   /**
-   * When false, skip the lastActivityAt bump so heartbeat/internal-event runs
+   * When false, skip the lastActivityAt bump so internal-event runs
    * do not re-flag sessions unread; cron and user-facing runs count as activity.
    */
   touchActivity?: boolean;
@@ -55,7 +51,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
    * When true, preserve the pre-existing runtime model fields (model,
    * modelProvider, contextTokens) on the session entry instead of overwriting
    * them with the model used by this run. Used for turn-local fallback and
-   * heartbeat runs so their model does not bleed into the session selection.
+   * scheduled runs so their model does not bleed into the session selection.
    */
   preserveRuntimeModel?: boolean;
   preserveUserFacingSessionModelState?: boolean;
@@ -84,7 +80,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
   const agentHarnessId = normalizeOptionalString(result.meta.agentMeta?.agentHarnessId);
-  const runtimeContextTokens = normalizeSessionTokenCount(result.meta.agentMeta?.contextTokens);
+  const runtimeContextTokens = floorPositiveFiniteNumber(result.meta.agentMeta?.contextTokens);
   const contextBudgetStatus = result.meta.agentMeta?.contextBudgetStatus;
   const contextTokens =
     runtimeContextTokens !== undefined

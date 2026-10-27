@@ -16,7 +16,10 @@ import {
   GatewayDrainingError,
 } from "../../../process/gateway-work-admission.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
+import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import { createLazyRuntimeModule } from "../../../shared/lazy-runtime.js";
+import type { AgentRecoveryProgress } from "../../../state/agent-database-preparation-recovery.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { decodeRequesterOrigin } from "../../requester-origin.js";
 import { reserveRestoredSubagentControllerSources } from "../announce/subagent-announce-controller-source.js";
@@ -107,7 +110,7 @@ export function createSubagentRegistryRestorer(config: {
   let activationRequested = false;
   let activated = false;
   let restoreInFlight: Promise<void> | undefined;
-  let activationInFlight: Promise<void> | undefined;
+  let activationInFlight: AgentRecoveryProgress | undefined;
   // A later explicit restore must reconcile rows merged before an earlier failure.
   let restoredRowsPending = false;
   const requesterActivator = createRestoredRequesterActivator({
@@ -123,17 +126,24 @@ export function createSubagentRegistryRestorer(config: {
     restoredRowsPending = false;
     restoreState = "succeeded";
     if (activationRequested) {
-      await activateRestoredRuns();
+      await activateRestoredRuns().settled;
     }
   }
 
-  function activateRestoredRuns(startupTrace?: GatewayStartupTrace): Promise<void> {
+  function activateRestoredRuns(startupTrace?: GatewayStartupTrace): AgentRecoveryProgress {
     if (activationInFlight) {
       return activationInFlight;
     }
-    const operation = activateRestoredRunsOnce(startupTrace);
+    let operation: AgentRecoveryProgress;
+    try {
+      operation = activateRestoredRunsOnce(startupTrace);
+    } catch (error) {
+      const failed = createDeferredCore();
+      failed.reject(error);
+      operation = { initial: failed.promise, pending: new Map(), settled: failed.promise };
+    }
     activationInFlight = operation;
-    void operation.then(clearActivation, clearActivation);
+    void operation.settled.then(clearActivation, clearActivation);
     function clearActivation() {
       if (activationInFlight === operation) {
         activationInFlight = undefined;
@@ -142,10 +152,11 @@ export function createSubagentRegistryRestorer(config: {
     return operation;
   }
 
-  async function activateRestoredRunsOnce(startupTrace?: GatewayStartupTrace) {
+  function activateRestoredRunsOnce(startupTrace?: GatewayStartupTrace): AgentRecoveryProgress {
     activationRequested = true;
     if (restoreState !== "succeeded" || !getGatewayContextResolver()?.()) {
-      return;
+      const settled = Promise.resolve();
+      return { initial: settled, pending: new Map(), settled };
     }
     const stateContext = captureOpenClawStateWorkerContext();
     const resolver = getGatewayContextResolver();
@@ -156,23 +167,27 @@ export function createSubagentRegistryRestorer(config: {
         throw new Error("Restored requester transfer lost its Gateway owner");
       }
     };
-    const { resumeNeeded, failures } = await requesterActivator.activate({
+    const progress = requesterActivator.activate({
       cfg: getRuntimeConfig(),
       stateContext,
       assertCurrent,
       startupTrace,
       alreadyActivated: activated,
     });
-    assertCurrent();
-    // Keep the periodic sweep behind restore while healthy groups recover above.
-    if (resumeNeeded && runs.size > 0) {
-      startSweeper();
-    }
-    scheduleSweep();
-    if (failures.length > 0) {
-      throw failures[0];
-    }
-    activated = true;
+    const settled = progress.settled.then(({ resumeNeeded, failures }) => {
+      assertCurrent();
+      // Keep the periodic sweep behind restore while healthy groups recover above.
+      if (resumeNeeded && runs.size > 0) {
+        startSweeper();
+      }
+      scheduleSweep();
+      if (failures.length > 0) {
+        throw failures[0];
+      }
+      activated = true;
+      requesterActivator.reset();
+    });
+    return { ...progress, settled };
   }
 
   async function resumeRestoredRuns(
@@ -181,7 +196,7 @@ export function createSubagentRegistryRestorer(config: {
     startupTrace?: GatewayStartupTrace,
   ) {
     await measureStartup(startupTrace, "sidecars.subagent-reserve", () =>
-      reserveRestoredSubagentControllerSources(capturedRuns),
+      reserveRestoredSubagentControllerSources(capturedRuns, assertCurrent),
     );
     assertCurrent();
     if (runs.size === 0) {
@@ -356,6 +371,20 @@ export function createSubagentRegistryRestorer(config: {
                     throw new Error("Restored collector launch lost its queued owner");
                   }
                 };
+                assertLaunchCurrent();
+                const signal = getAsyncWorkSignal();
+                try {
+                  await gatewayContext.inputRecovery?.waitForAgentInputRecovery(
+                    authority.childAgentId,
+                    { signal },
+                  );
+                } catch (error) {
+                  // Scheduler closure retires this attempt, not its durable queued work.
+                  if (signal?.aborted) {
+                    return;
+                  }
+                  throw error;
+                }
                 assertLaunchCurrent();
                 const request = bindInProcessSessionRun(
                   {

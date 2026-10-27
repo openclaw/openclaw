@@ -206,6 +206,51 @@ describe("readSessionMethodAccess", () => {
     ).toMatchObject({ allowed: false, cause: "method-unavailable" });
   });
 
+  it("admits only opted-in desired-state assignments to a retained offline identity", () => {
+    const offline = snapshot({ methods: ["sessions.patch"], scopes: ["operator.write"] });
+    offline.phase = "offline";
+    const request = {
+      method: "sessions.patch",
+      params: {
+        key: "agent:main:notes",
+        agentId: "main",
+        expectedSessionId: "notes",
+        label: "Notes",
+      },
+      allowDeferred: true,
+    };
+    expect(readSessionMethodAccess(offline, request).allowed).toBe(true);
+    expect(readSessionMethodAccess(offline, { ...request, allowDeferred: false })).toMatchObject({
+      allowed: false,
+      cause: "disconnected",
+    });
+    for (const patch of [
+      { model: "test-model" },
+      { archived: true, pinned: false },
+      { sidebarRoot: true },
+      {},
+    ]) {
+      expect(
+        readSessionMethodAccess(offline, {
+          ...request,
+          params: { key: "agent:main:notes", ...patch },
+        }),
+      ).toMatchObject({ allowed: false, cause: "disconnected" });
+    }
+    expect(readSessionMethodAccess({ ...offline, hello: null }, request).allowed).toBe(false);
+    expect(readSessionMethodAccess({ ...offline, client: null }, request).allowed).toBe(false);
+    expect(readSessionMethodAccess({ ...offline, phase: "stopped" }, request).allowed).toBe(false);
+    Object.assign(offline.client!, { offlineRecoveryRetired: true });
+    expect(readSessionMethodAccess(offline, request).allowed).toBe(false);
+    expect(
+      readSessionMethodAccess(snapshot({ connected: false }), {
+        ...request,
+        method: "sessions.patchMany",
+        params: { patch: { label: "Notes" } },
+      }).allowed,
+    ).toBe(false);
+  });
+
   it("rejects snapshots without method metadata", () => {
     const incomplete = snapshot({});
     incomplete.hello = { auth: incomplete.hello?.auth } as ApplicationGatewaySnapshot["hello"];

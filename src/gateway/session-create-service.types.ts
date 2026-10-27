@@ -14,6 +14,7 @@ import type {
   SessionCreatedVia,
 } from "../config/sessions/session-entry-provenance.js";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import type { SessionTranscriptAssistantMessage } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentRuntimeSpawnModelAutoSelection } from "./agent-runtime-session-spawn-context.js";
 import type {
@@ -112,6 +113,7 @@ export type CreateGatewaySessionParams = {
   label?: string;
   /** Creation-only title seed; never renames an existing session. */
   displayName?: string;
+  displayNameGenerated?: boolean;
   category?: string;
   model?: string;
   agentRuntime?: string;
@@ -120,6 +122,7 @@ export type CreateGatewaySessionParams = {
   personalAccountDefaults?: ModelAccountConnectAction;
   contextWindow?: string;
   thinkingLevel?: string;
+  cyberAccessProgram?: SessionEntry["cyberAccessProgram"] | null;
   fastMode?: FastMode;
   /** Registry identity for a new session or a successfully recovered pending worktree. */
   projectId?: string;
@@ -188,6 +191,8 @@ export type CreateGatewaySessionParams = {
   waitForModelCatalog?: <T>(operation: () => Promise<T>) => Promise<T>;
   /** Trusted in-process initializer; never populated from public Gateway params. */
   initialEntry?: TrustedInitialSessionEntry;
+  /** Trusted prepared assistant reply committed with a new ordinary session, never a wire input. */
+  initialAssistantMessage?: { message: SessionTranscriptAssistantMessage; idempotencyKey?: string };
   /** Keep a new ordinary session unusable until afterCreate succeeds, or roll it back. */
   atomicInitialization?: true;
   /** Public callers need admin before reconfiguring an adopted keyed session. */

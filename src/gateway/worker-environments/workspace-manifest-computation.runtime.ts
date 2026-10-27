@@ -9,7 +9,9 @@ import {
   type WorkspaceHashMetrics,
 } from "./workspace-hash-memo.js";
 import {
+  manifestNodes,
   parseChangedWorkspaceResult,
+  sameEntry,
   type WorkspaceNode,
 } from "./workspace-manifest-comparison.js";
 import type {
@@ -45,7 +47,6 @@ async function withHashes<T>(
 ): Promise<WorkspaceComputationHashResult<T>> {
   const metrics: WorkspaceHashMetrics = {
     contentHashCount: 0,
-    contentHashDurationMs: 0,
     memoHitCount: 0,
   };
   if (!input) {
@@ -75,6 +76,65 @@ export async function executeWorkspaceManifestComputation(
   assertBeforeMutation?: () => void,
 ): Promise<WorkspaceManifestComputationResult> {
   switch (command.type) {
+    case "workspace.manifest.base-refresh": {
+      const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
+      const input = command.input;
+      return await withHashes(input.hashes, async () => {
+        const { manifest: before } = await readActualWorkspaceManifestImpl({
+          root: input.beforeRoot,
+          baseCommit: input.baseCommit,
+        });
+        const { manifest: after } = await readActualWorkspaceManifestImpl({
+          root: input.afterRoot,
+          baseCommit: input.baseCommit,
+        });
+        const accepted = parseWorkerWorkspaceManifest(
+          decodeUtf8(input.baseRaw),
+          input.baseRef,
+          input.buildCacheInputs,
+        );
+        const current = applyWorkspaceSourceOverlay(before, accepted, after);
+        current.buildCacheInputs = [
+          ...new Set([...input.buildCacheInputs, ...after.entries.map((entry) => entry.path)]),
+        ];
+        const priorNodes = manifestNodes(before);
+        const currentNodes = manifestNodes(current);
+        for (const [file, entry] of manifestNodes(accepted)) {
+          if (!priorNodes.has(file) && !sameEntry(entry, currentNodes.get(file))) {
+            throw new Error(
+              `The selected base conflicts with saved workspace data at ${file}; move that saved file before retrying ${input.action}.`,
+            );
+          }
+        }
+        const rawManifest = serializeWorkerWorkspaceManifest(current);
+        return {
+          rawManifest,
+          manifestRef: `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`,
+          buildCacheInputs: current.buildCacheInputs,
+        };
+      });
+    }
+    case "workspace.manifest.equal": {
+      const input = command.input;
+      const left = manifestNodes(
+        parseWorkerWorkspaceManifest(
+          decodeUtf8(input.baseRaw),
+          input.baseRef,
+          input.buildCacheInputs,
+        ),
+      );
+      const right = manifestNodes(
+        parseWorkerWorkspaceManifest(
+          decodeUtf8(input.currentRaw),
+          input.currentRef,
+          input.buildCacheInputs,
+        ),
+      );
+      return (
+        left.size === right.size &&
+        [...left].every(([file, entry]) => sameEntry(entry, right.get(file)))
+      );
+    }
     case "workspace.manifest.remote-capture": {
       const { captureNodeWorkspaceManifestImpl } =
         await import("./workspace-manifest-script.runtime.js");
@@ -121,20 +181,31 @@ export async function executeWorkspaceManifestComputation(
       return ownedWorkerBytes(await readStagedWorkerWorkspaceEntries(command.input));
     }
     case "workspace.manifest.capture":
-    case "workspace.manifest.snapshot": {
+    case "workspace.manifest.snapshot":
+    case "workspace.manifest.document":
+    case "workspace.manifest.reference": {
       const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
       const input = decodeManifestValue(command);
-      return await withHashes(input.hashes, async () => {
-        const snapshot = await readActualWorkspaceManifestImpl({
+      const result = await withHashes(input.hashes, () =>
+        readActualWorkspaceManifestImpl({
           ...input,
           includePaths: input.includePaths && new Set(input.includePaths),
           buildCacheInputs: input.buildCacheInputs && new Set(input.buildCacheInputs),
           preserveDirectories: input.preserveDirectories && new Set(input.preserveDirectories),
-        });
-        return command.type === "workspace.manifest.snapshot"
-          ? snapshot
-          : { manifest: snapshot.manifest, manifestRef: snapshot.manifestRef };
-      });
+        }),
+      );
+      if (command.type === "workspace.manifest.document") {
+        const { manifestRef, rawManifest } = result.value;
+        return { ...result, value: { manifestRef, rawManifest } };
+      }
+      return command.type === "workspace.manifest.reference"
+        ? { ...result, value: result.value.manifestRef }
+        : command.type === "workspace.manifest.snapshot"
+          ? result
+          : {
+              ...result,
+              value: { manifest: result.value.manifest, manifestRef: result.value.manifestRef },
+            };
     }
     case "workspace.manifest.file": {
       const { readWorkspaceFileSnapshotWithLimit } = await import("./workspace-actual-manifest.js");
@@ -147,6 +218,19 @@ export async function executeWorkspaceManifestComputation(
       const { preflightWorkspaceApplyImpl } = await import("./workspace-reconcile-preflight.js");
       const input = decodeManifestValue(command);
       return await withHashes(input.hashes, () => preflightWorkspaceApplyImpl(input));
+    }
+    case "workspace.manifest.paths": {
+      const input = command.input;
+      const manifest = parseWorkerWorkspaceManifest(
+        decodeUtf8(input.raw),
+        input.expectedRef,
+        input.buildCacheInputs,
+      );
+      // Parsing already projects eligible entries; keep the directory-first path order.
+      return new Set([
+        ...(manifest.directories ?? []),
+        ...manifest.entries.map((entry) => entry.path),
+      ]);
     }
     case "workspace.manifest.parse": {
       const raw = decodeUtf8(command.input.raw);

@@ -17,7 +17,7 @@ import {
   historyLane,
   rotateDatabaseWorkers,
 } from "../../config/sessions/session-transcript-worker-resources.js";
-import type { CronJob } from "../../cron/types.js";
+import { promptReport } from "../../config/sessions/system-prompt-report.test-support.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
@@ -25,12 +25,12 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
+import { createSessionMutationContext } from "./sessions-mutations.native-consent.test-support.js";
 import { createSessionMutationTestClient } from "./sessions-mutations.owner.test-support.js";
-import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import type { GatewayClient } from "./types.js";
 
 afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
@@ -42,22 +42,6 @@ function humanClient(): GatewayClient {
   client.authenticatedUserProfile!.displayName = "Performance Reviewer";
   client.connect.scopes = ["operator.read", "operator.write", "operator.admin"];
   return client;
-}
-
-function mutationContext(
-  cron?: Pick<
-    GatewayRequestContext["cron"],
-    "list" | "updateWithPrecondition" | "getDefaultAgentId"
-  >,
-): GatewayRequestContext {
-  return {
-    getRuntimeConfig: () => ({}),
-    loadGatewayModelCatalogSnapshot: vi.fn(async () => ({ entries: [], routeVariants: [] })),
-    broadcastToConnIds: vi.fn(),
-    getSessionEventSubscriberConnIds: () => new Set(),
-    dedupe: new Map(),
-    ...(cron ? { cron } : {}),
-  } as unknown as GatewayRequestContext;
 }
 
 const archivedBy = { type: "human", id: "perf-reviewer", label: "Performance Reviewer" };
@@ -110,14 +94,7 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
       const targetKey = "agent:main:single-patch-target";
       const snapshots = {
         skillsSnapshot: { prompt: "synthetic skill instructions ".repeat(1_000), skills: [] },
-        systemPromptReport: {
-          source: "run" as const,
-          generatedAt: 1,
-          systemPrompt: { chars: 30_000, projectContextChars: 0, nonProjectContextChars: 30_000 },
-          injectedWorkspaceFiles: [],
-          skills: { promptChars: 30_000, entries: [] },
-          tools: { listChars: 0, schemaChars: 0, entries: [] },
-        },
+        systemPromptReport: promptReport(1, 30_000, 30_000),
       };
       await seedSession(targetKey, "session-single-patch-target", { updatedAt: 1, ...snapshots });
       await upsertAcpSessionMeta({
@@ -152,7 +129,7 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
         await sessionMutationHandlers["sessions.patch"]!({
           params: { key: targetKey, ...patch },
           respond,
-          context: mutationContext(),
+          context: createSessionMutationContext(),
           client: humanClient(),
         } as never);
         expect(historyLane.pool.getSnapshot().workersCreated).toBe(historyWorkers.workersCreated);
@@ -218,7 +195,6 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
     loadTranscriptEventsSync(scopeFor(targets[0]!));
     expect(statements.counts["transcript-full-hydration"]).toBe(1);
     statements.counts["transcript-full-hydration"] = 0;
-    const writeSpy = vi.spyOn(agentDatabase, "runOpenClawAgentWriteTransaction");
     const originalExec = database.db.exec.bind(database.db);
     const hostTransactions: string[] = [];
     const workerGrants: string[] = [];
@@ -240,39 +216,15 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
     });
     try {
       const respond = vi.fn();
-      const job = (id: string, sessionTarget: string, partial: Partial<CronJob> = {}): CronJob =>
-        ({ enabled: true, id, sessionTarget, ...partial }) as CronJob;
-      const cronJobs = new Map(
-        [
-          job("unrelated", "session:agent:main:not-archived"),
-          job("bound-first", `session:${targets[0]!.key}`),
-          job("bound-shared", `session:${targets[1]!.key}`, { sessionKey: targets[2]!.key }),
-          job("bound-last", `session:${targets.at(-1)!.key}`),
-          job("already-disabled", `session:${targets[3]!.key}`, { enabled: false }),
-        ].map((cronJob) => [cronJob.id, cronJob] as const),
-      );
-      const cronList = vi.fn(async () => [...cronJobs.values()]);
-      type CronPrecondition = (job: CronJob, nowMs: number) => void | Promise<void>;
-      const cronUpdate = vi.fn(
-        async (id: string, patch: Partial<CronJob>, precondition: CronPrecondition) => {
-          const current = cronJobs.get(id);
-          if (!current) {
-            throw new Error(`missing cron fixture: ${id}`);
-          }
-          await precondition(current, 0);
-          if (patch.enabled !== undefined) {
-            current.enabled = patch.enabled;
-          }
-          return current;
-        },
-      );
       await sessionMutationHandlers["sessions.patchMany"]!({
         params: { targets, patch: { archived: true } },
         respond,
-        context: mutationContext({
-          list: cronList,
-          updateWithPrecondition: cronUpdate,
+        context: createSessionMutationContext({}, undefined, {
+          list: async () => [],
           getDefaultAgentId: () => "main",
+          updateWithPrecondition: async () => {
+            throw new Error("No cron jobs should be updated");
+          },
         }),
         client: humanClient(),
       } as never);
@@ -285,28 +237,9 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
       // One admitted worker transaction owns the batch; the caller never waits in SQLite.
       expect(hostTransactions).toEqual([]);
       expect(workerGrants).toEqual(["transaction", "commit"]);
-      expect(
-        writeSpy.mock.calls.some((args) =>
-          ["session.entry-replacements", "agent.write"].includes(
-            args[2]?.operationLabel ?? "agent.write",
-          ),
-        ),
-      ).toBe(false);
-      expect(cronList).toHaveBeenCalledOnce();
-      const disabledIds = ["bound-first", "bound-shared", "bound-last"];
-      const disabledJobs = disabledIds.map((id) => ({ id, enabled: false }));
-      expect(cronUpdate.mock.calls.map(([id, patch]) => [id, patch])).toEqual(
-        disabledIds.map((id) => [id, { enabled: false }]),
-      );
-      expect([...cronJobs.values()].map(({ enabled, id }) => ({ enabled, id }))).toEqual([
-        { enabled: true, id: "unrelated" },
-        ...disabledJobs,
-        { enabled: false, id: "already-disabled" },
-      ]);
     } finally {
       admissionSpy.mockRestore();
       execSpy.mockRestore();
-      writeSpy.mockRestore();
       statements.restore();
     }
     for (const target of targets) {

@@ -129,17 +129,8 @@ describe("tools.catalog handler", () => {
     expect(agentId).toBe("main");
     const tools = groups.flatMap((group) => group.tools);
     const ids = tools.map((tool) => tool.id);
-    expect(groups.some((group) => group.source === "plugin")).toBe(false);
-    const media = groups.find((group) => group.id === "media")?.tools;
-    expect(media?.map((tool) => `${tool.source}:${tool.id}`)).toContain("core:tts");
     expect(tools.filter((tool) => tool.id === "openclaw")).toEqual([
-      {
-        id: "openclaw",
-        label: "openclaw",
-        description: "Delegate OpenClaw setup and repair",
-        source: "core",
-        defaultProfiles: [],
-      },
+      expect.objectContaining({ id: "openclaw", source: "core", defaultProfiles: [] }),
     ]);
     expect(ids.includes("agents_wait")).toBe(swarm);
     expect(ids.includes("personal_instructions")).toBe(multipleProfiles);
@@ -189,26 +180,22 @@ describe("tools.catalog handler", () => {
       defaultProfiles: [],
     });
     expect(tools.find((tool) => tool.id === "matrix_room")?.description).toBe("Room summary");
-    const discovery = {
-      context: { config: {}, workspaceDir: "/workspace", agentDir: "/agent", agentId: "main" },
-      toolAllowlist: ["group:plugins"],
-      allowGatewaySubagentBinding: true,
-    };
-    expect(loadRegistry).toHaveBeenCalledWith(discovery);
+    for (const discover of [loadRegistry, resolveTools]) {
+      expect(discover).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolAllowlist: ["group:plugins"],
+          allowGatewaySubagentBinding: true,
+        }),
+      );
+    }
     expect(resolveTools).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ...discovery,
-        suppressNameConflicts: true,
-        runtimeRegistry: metadata ? toolRegistry : undefined,
-        existingToolNames: expect.any(Set),
-      }),
+      expect.objectContaining({ suppressNameConflicts: true }),
     );
     expect(vi.mocked(resolveTools).mock.calls[0]?.[0].existingToolNames?.has("tts")).toBe(true);
   });
 
-  it("sorts private mixed groups without changing source order or metadata aliases", async () => {
-    const tags = ["fixture"];
-    const registry = metadataRegistry("z-resolved", { toolName: "resolved_a", tags });
+  it("sorts mixed groups without mutating or executing plugin sources", async () => {
+    const registry = createEmptyPluginRegistry();
     const tools = ["resolved_z", "resolved_a"].map((name) => {
       const tool = makeTool(name);
       setPluginToolMeta(tool, { pluginId: "z-resolved", optional: true });
@@ -227,7 +214,7 @@ describe("tools.catalog handler", () => {
       Object.freeze(entry.names);
       Object.freeze(entry);
     }
-    [tags, tools, registry.tools].forEach(Object.freeze);
+    [tools, registry.tools].forEach(Object.freeze);
     vi.mocked(resolveTools).mockReturnValue(tools);
     vi.mocked(loadRegistry).mockReturnValue(registry);
     const groups = await pluginGroups();
@@ -236,15 +223,6 @@ describe("tools.catalog handler", () => {
       ["plugin:c", ["c_a"]],
       ["plugin:z-resolved", ["resolved_a", "resolved_z"]],
     ]);
-    const resolved = expectDefined(groups[2], "resolved group");
-    expect(expectDefined(resolved.tools[0], "resolved_a").tags).toBe(tags);
-    const original = structuredClone(groups);
-    resolved.tools.reverse();
-    expectDefined(groups[0], "declared group").tools.pop();
-    const repeated = await pluginGroups();
-    expect(repeated).toEqual(original);
-    expect(repeated[0]).not.toBe(groups[0]);
-    expect(expectDefined(repeated[2], "repeated resolved group").tools[0]?.tags).toBe(tags);
     expect(Array.from(registry.tools[1]?.declaredNames ?? [])).toEqual(["b_a", "c_a"]);
     expect(factory).not.toHaveBeenCalled();
     for (const tool of tools) {

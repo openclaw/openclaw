@@ -3,20 +3,14 @@ import type { DiffLine } from "./tool-call-diff.ts";
 /** Per-file render bound; the panel shows a truncation notice past this. */
 const MAX_SESSION_DIFF_FILE_LINES = 600;
 
-export type ParsedFilePatch = {
-  lines: DiffLine[];
-  truncated: boolean;
-};
+export type ParsedFilePatch = ReturnType<typeof parseSessionDiffPatch>;
 
 /**
  * Gaps between hunks become "skip" rows whose text carries the formatted
  * unmodified-line count supplied by the caller (kept out of this lib so the
  * parser stays i18n-free).
  */
-export function parseSessionDiffPatch(
-  patch: string,
-  formatGap: (count: number) => string,
-): ParsedFilePatch {
+export function parseSessionDiffPatch(patch: string, formatGap: (count: number) => string) {
   const lines: DiffLine[] = [];
   let truncated = false;
   let inHunk = false;

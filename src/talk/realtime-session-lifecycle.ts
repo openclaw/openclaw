@@ -1,4 +1,5 @@
 import { createDeferredCore } from "../shared/deferred.js";
+import { copyOwnedBuffer } from "../shared/owned-buffer.js";
 
 const REALTIME_VOICE_MAX_PENDING_AUDIO_CHUNKS = 320;
 const REALTIME_VOICE_MAX_PENDING_AUDIO_BYTES = 1024 * 1024;
@@ -11,7 +12,7 @@ export function createRealtimeVoiceAudioQueue(
   overflowPolicy: RealtimeVoiceAudioOverflowPolicy,
   onOverflow?: () => void,
 ) {
-  let chunks: Buffer[] = [];
+  let chunks: Buffer<ArrayBuffer>[] = [];
   let bytes = 0;
 
   const clear = () => {
@@ -59,7 +60,7 @@ export function createRealtimeVoiceAudioQueue(
       }
       // Capture transports can recycle caller-owned views before provider readiness,
       // so the queue owns an immutable copy of every accepted chunk.
-      const chunk = Buffer.from(audio);
+      const chunk = copyOwnedBuffer(audio);
       chunks.push(chunk);
       bytes += chunk.byteLength;
       return true;

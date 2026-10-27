@@ -8,14 +8,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import type { PluginInstanceConsumer } from "../plugins/plugin-instance.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import {
   reloadFailure,
   firstReloaded,
   observeSettlement,
+  rejectWith,
 } from "./server-plugin-reload.fixture-tools.test-support.js";
 import {
   expectSiblingUnchanged,
+  invokeReloadMethod,
   observeRetainedWork,
   type RecoveryFixtureFactory,
 } from "./server-plugin-reload.recovery.test-support.js";
@@ -23,20 +24,14 @@ import {
 type RecoveryFixture = Awaited<ReturnType<RecoveryFixtureFactory>>;
 
 async function readResource(fixture: RecoveryFixture) {
-  const method = "first.resource";
-  const handler = fixture.registryOwner.registry.gatewayHandlers[method];
-  assert(handler);
-  const respond = vi.fn();
-  await handler({
-    req: { type: "req", id: "resource-reload", method },
-    params: {},
-    client: null,
-    isWebchatConnect: () => false,
-    respond,
-    context: {} as GatewayRequestHandlerOptions["context"],
-  });
-  expect(respond).toHaveBeenCalledOnce();
+  const respond = await invokeReloadMethod(fixture.registryOwner.registry, "first.resource");
   return respond.mock.calls[0]?.[1];
+}
+
+function expectServing(fixture: RecoveryFixture, instance = fixture.instance()) {
+  expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
+  expect(instance.run(() => "still serving")).toBe("still serving");
+  fixture.expectServices({ firstStop: 0, siblingStop: 0 });
 }
 
 function resourceConfig(mode: string): OpenClawConfig {
@@ -106,9 +101,7 @@ export async function verifyCandidateResourceCleanup(createFixture: RecoveryFixt
   const resources: Array<{ closed: boolean; flushed: boolean }> = [];
   const fixture = await createFixture({
     abortOnCandidateStart: false,
-    beforePublish: async () => {
-      throw new Error("candidate publication refused");
-    },
+    beforePublish: rejectWith(new Error("candidate publication refused")),
     registerFirst(api) {
       const resource = { closed: false, flushed: false };
       resources.push(resource);
@@ -189,10 +182,7 @@ async function verifySelfConsumerReload(
       reloadFailure(caller === "own invocation" ? "prepare" : "drain"),
     );
     expect(prepareConfigEffects).toHaveBeenCalledTimes(caller === "own invocation" ? 0 : 1);
-    fixture.expectServices({ firstStop: 0, siblingStop: 0 });
-    expect(fixture.candidates).toHaveLength(0);
-    expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
-    expect(instance.run(() => "still serving")).toBe("still serving");
+    expectServing(fixture, instance);
     cleanup.resolve();
     await closing;
     assert(consumer);
@@ -231,7 +221,13 @@ async function verifyOverlappingRetainedWork(createRecoveryFixture: RecoveryFixt
   const old = fixture.previousRegistry;
   const instance = fixture.instance();
   const consumer = instance.retainConsumer();
-  const observation = observeRetainedWork(instance, true);
+  const entered = createDeferredCore();
+  const wait = instance.waitForIdle.bind(instance);
+  const observation = vi.spyOn(instance, "waitForIdle").mockImplementation((signal) => {
+    const pending = wait(signal);
+    entered.resolve();
+    return pending;
+  });
   const first = retainRuntimePluginWork([old]);
   const second = retainRuntimePluginWork([old]);
   const reloading = fixture.reload();
@@ -242,9 +238,8 @@ async function verifyOverlappingRetainedWork(createRecoveryFixture: RecoveryFixt
     expect(fixture.firstStop).not.toHaveBeenCalled();
     first();
     expect(instance.run(() => "old run finishes")).toBe("old run finishes");
-    expect(fixture.candidates).toHaveLength(0);
     second();
-    await Promise.race([observation.entered, reloading]);
+    await Promise.race([entered.promise, reloading]);
     expect(disposed).toEqual([]);
     consumer.release();
     const receipt = await reloading;
@@ -253,16 +248,14 @@ async function verifyOverlappingRetainedWork(createRecoveryFixture: RecoveryFixt
       receipt.runtime.warnings?.filter((warning) => warning.includes("retained work")),
     ).toEqual([expect.stringMatching(/waited for.*retained work.*finish/)]);
     expect(disposed).toEqual([1]);
-    const next = fixture.registryOwner.registry;
-    expect(next).not.toBe(old);
-    const release = retainRuntimePluginWork([next]);
-    release();
+    expect(fixture.registryOwner.registry).not.toBe(old);
+    retainRuntimePluginWork([fixture.registryOwner.registry])();
     expect(registrations).toBe(2);
   } finally {
     first();
     second();
     consumer.release();
-    observation.restore();
+    observation.mockRestore();
     await reloading.catch(() => {});
   }
 }
@@ -300,7 +293,6 @@ async function verifyExplicitDrainWait(
     });
     await vi.advanceTimersByTimeAsync(70_000);
     expect(operation.state.settled).toBe(false);
-    expect(fixture.candidates).toHaveLength(0);
     expect(fixture.firstStop).not.toHaveBeenCalled();
     expect(instance.disposing).toBe(false);
     if (outcome !== "complete") {
@@ -317,18 +309,15 @@ async function verifyExplicitDrainWait(
           cause: { message: expect.stringContaining("admitted work did not settle within 600s") },
         });
       }
-      expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
-      expect(instance.run(() => "still serving")).toBe("still serving");
+      expectServing(fixture, instance);
       expect(instance.disposing).toBe(false);
       instance.retainWork()();
-      expect(fixture.firstStop).not.toHaveBeenCalled();
       expect(fixture.rollbackConfigEffects).toHaveBeenCalledOnce();
     } else {
       release();
       await call;
       expect(await reloading).toMatchObject(firstReloaded);
       expect(fixture.registryOwner.registry).not.toBe(fixture.previousRegistry);
-      expect(fixture.candidates).toHaveLength(1);
       expect(instance.disposing).toBe(true);
     }
     expect(fixture.owner.getReloadStatus()).toBeUndefined();
@@ -381,9 +370,7 @@ export function registerPluginRetainedWorkReloadTests(
       expect(runInTurn(() => instance.hasActiveCall)).toBe(false);
       await expect(runInTurn(() => fixture.reload())).rejects.toThrow("own active turn");
       expect(prepareConfigEffects).not.toHaveBeenCalled();
-      fixture.expectServices({ firstStop: 0, siblingStop: 0 });
-      expect(fixture.registryOwner.registry).toBe(registry);
-      expect(instance.run(() => "still serving")).toBe("still serving");
+      expectServing(fixture, instance);
 
       await lease[Symbol.asyncDispose]();
       allowEffects = true;

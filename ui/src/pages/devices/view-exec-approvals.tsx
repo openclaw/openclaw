@@ -1,5 +1,6 @@
 import { createMemo, For } from "solid-js";
 import "../../components/agent-select-registration.ts";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   SettingsSection,
   SettingsRow,
@@ -49,10 +50,6 @@ function normalizeSecurity(value?: string): ExecSecurity {
   return SECURITY_OPTIONS.find((option) => option.value === value)?.value ?? "deny";
 }
 
-function normalizeAsk(value?: string): ExecAsk {
-  return ASK_OPTIONS.find((option) => option.value === value)?.value ?? "on-miss";
-}
-
 function resolveExecApprovalsDefaults(
   form: ExecApprovalsFile | null,
   reported: ExecApprovalsResolvedDefaults | undefined,
@@ -60,9 +57,10 @@ function resolveExecApprovalsDefaults(
 ): ExecApprovalsResolvedDefaults {
   const defaults = form?.defaults ?? {};
   const wildcard = includeWildcard ? (form?.agents?.["*"] ?? {}) : {};
+  const ask = wildcard.ask ?? defaults.ask ?? reported?.ask;
   return {
     security: normalizeSecurity(wildcard.security ?? defaults.security ?? reported?.security),
-    ask: normalizeAsk(wildcard.ask ?? defaults.ask ?? reported?.ask),
+    ask: ASK_OPTIONS.find((option) => option.value === ask)?.value ?? "on-miss",
     askFallback: normalizeSecurity(
       wildcard.askFallback ?? defaults.askFallback ?? reported?.askFallback ?? "deny",
     ),
@@ -158,8 +156,8 @@ export function resolveExecApprovalsState(input: DevicesProps) {
 }
 
 export function ExecApprovals(props: ExecApprovalsState) {
-  const ready = createMemo(() => props.ready);
-  const targetReady = createMemo(() => props.target !== "node" || Boolean(props.targetNodeId));
+  const ready = () => props.ready;
+  const targetReady = () => props.target !== "node" || Boolean(props.targetNodeId);
   const saveButton = (
     <button
       class="btn"
@@ -185,7 +183,7 @@ export function ExecApprovals(props: ExecApprovalsState) {
                 <button
                   class="btn"
                   disabled={props.loading || !targetReady()}
-                  onClick={props.onLoad}
+                  onClick={() => props.onLoad()}
                 >
                   {props.loading ? t("common.loading") : t("common.loadApprovals")}
                 </button>
@@ -228,11 +226,6 @@ export function ExecApprovals(props: ExecApprovalsState) {
 
 function NativeExecApprovals(props: { snapshot: NativeExecApprovalsSnapshot }) {
   const rules = createMemo(() => (props.snapshot.enabled ? props.snapshot.rules : []));
-  const defaultAction = createMemo(() =>
-    props.snapshot.enabled
-      ? props.snapshot.defaultAction
-      : (props.snapshot.message ?? "unavailable"),
-  );
   return (
     <>
       <SettingsRow
@@ -242,7 +235,11 @@ function NativeExecApprovals(props: { snapshot: NativeExecApprovalsSnapshot }) {
       />
       <SettingsRow
         title={t("devices.execApprovals.defaultAction")}
-        description={defaultAction()}
+        description={
+          props.snapshot.enabled
+            ? props.snapshot.defaultAction
+            : (props.snapshot.message ?? "unavailable")
+        }
         control={
           <SettingsValue
             value={t(
@@ -288,8 +285,7 @@ function ExecApprovalsTarget(props: ExecApprovalsState) {
         title={t("devices.execApprovals.target")}
         description={t("devices.execApprovals.targetHint")}
         control={
-          <select
-            class="settings-select"
+          <SettingsSelect
             aria-label={t("devices.execApprovals.host")}
             value={props.target}
             disabled={props.disabled}
@@ -304,14 +300,11 @@ function ExecApprovalsTarget(props: ExecApprovalsState) {
               }
               target.value = props.target;
             }}
-          >
-            <option value="gateway" selected={props.target === "gateway"}>
-              {t("devices.execApprovals.gateway")}
-            </option>
-            <option value="node" selected={props.target === "node"}>
-              {t("devices.execApprovals.node")}
-            </option>
-          </select>
+            options={[
+              { value: "gateway", label: t("devices.execApprovals.gateway") },
+              { value: "node", label: t("devices.execApprovals.node") },
+            ]}
+          />
         }
       />
       {props.target === "node" ? (
@@ -319,8 +312,7 @@ function ExecApprovalsTarget(props: ExecApprovalsState) {
           title={t("devices.execApprovals.node")}
           description={hasNodes() ? undefined : t("devices.execApprovals.noNodes")}
           control={
-            <select
-              class="settings-select"
+            <SettingsSelect
               aria-label={t("devices.execApprovals.node")}
               value={nodeValue()}
               disabled={props.disabled || !hasNodes()}
@@ -330,18 +322,11 @@ function ExecApprovalsTarget(props: ExecApprovalsState) {
                 props.onSelectTarget("node", value ? value : null);
                 target.value = nodeValue();
               }}
-            >
-              <option value="" selected={nodeValue() === ""}>
-                {t("devices.execApprovals.selectNode")}
-              </option>
-              <For each={props.targetNodes} keyed={(node) => node.id}>
-                {(node) => (
-                  <option value={node().id} selected={nodeValue() === node().id}>
-                    {node().label}
-                  </option>
-                )}
-              </For>
-            </select>
+              options={[
+                { value: "", label: t("devices.execApprovals.selectNode") },
+                ...props.targetNodes.map((node) => ({ value: node.id, label: node.label })),
+              ]}
+            />
           }
         />
       ) : undefined}
@@ -385,14 +370,12 @@ function ExecApprovalsPolicy(props: ExecApprovalsState) {
   const isDefaults = createMemo(() => props.selectedScope === EXEC_APPROVALS_DEFAULT_SCOPE);
   const defaults = createMemo(() => props.defaults);
   const agent = createMemo(() => props.selectedAgent ?? {});
-  const basePath = createMemo(() =>
-    isDefaults() ? ["defaults"] : ["agents", props.selectedScope],
-  );
+  const basePath = () => (isDefaults() ? ["defaults"] : ["agents", props.selectedScope]);
   const autoOverride = createMemo(() =>
     typeof agent().autoAllowSkills === "boolean" ? agent().autoAllowSkills : undefined,
   );
   const autoEffective = createMemo(() => autoOverride() ?? defaults().autoAllowSkills);
-  const autoIsDefault = createMemo(() => autoOverride() == null);
+  const autoIsDefault = () => autoOverride() == null;
 
   return (
     <>
@@ -437,8 +420,7 @@ function ExecApprovalsPolicy(props: ExecApprovalsState) {
                     : undefined
               }
               control={
-                <select
-                  class="settings-select"
+                <SettingsSelect
                   aria-label={t(field.ariaLabelKey)}
                   value={currentValue()}
                   disabled={props.disabled}
@@ -450,22 +432,23 @@ function ExecApprovalsPolicy(props: ExecApprovalsState) {
                       props.onPatch([...basePath(), field.key], value);
                     }
                   }}
-                >
-                  {!isDefaults() ? (
-                    <option value="__default__" selected={currentValue() === "__default__"}>
-                      {t("devices.execApprovals.useDefaultValue", {
-                        value: defaults()[field.key],
-                      })}
-                    </option>
-                  ) : undefined}
-                  <For each={field.values}>
-                    {(option) => (
-                      <option value={option.value} selected={currentValue() === option.value}>
-                        {t(option.labelKey)}
-                      </option>
-                    )}
-                  </For>
-                </select>
+                  options={[
+                    ...(!isDefaults()
+                      ? [
+                          {
+                            value: "__default__",
+                            label: t("devices.execApprovals.useDefaultValue", {
+                              value: defaults()[field.key],
+                            }),
+                          },
+                        ]
+                      : []),
+                    ...field.values.map((option) => ({
+                      value: option.value,
+                      label: t(option.labelKey),
+                    })),
+                  ]}
+                />
               }
             />
           );
@@ -509,7 +492,7 @@ function ExecApprovalsPolicy(props: ExecApprovalsState) {
 }
 
 function ExecApprovalsAllowlist(props: ExecApprovalsState) {
-  const allowlistPath = createMemo(() => ["agents", props.selectedScope, "allowlist"]);
+  const allowlistPath = () => ["agents", props.selectedScope, "allowlist"];
   const entries = createMemo(() => props.allowlist);
   return (
     <SettingsSection

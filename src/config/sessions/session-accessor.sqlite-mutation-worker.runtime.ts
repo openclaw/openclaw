@@ -30,6 +30,10 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
 import type { CanonicalSessionValidationResult } from "./session-accessor.sqlite-contract.js";
+import {
+  readStagedConversationPublications,
+  type ConversationPublication,
+} from "./session-accessor.sqlite-conversation-publication.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   markSqliteReclamationSettled,
@@ -51,10 +55,6 @@ import {
 } from "./session-accessor.sqlite-worker-coordination.js";
 import type { SqliteMutationWorkerMessage } from "./session-accessor.sqlite-worker-request.js";
 import type { ValidatedCanonicalSessionValidationBatch } from "./session-canonical-validation.js";
-import {
-  prepareSessionColdSourceGuard,
-  SessionColdSourceRefusedError,
-} from "./session-cold-storage-source-guard.worker.js";
 import type { SessionColdWorkerData } from "./session-cold-storage-worker.js";
 import type { SessionColdMutationResult } from "./session-cold-storage.types.js";
 
@@ -88,6 +88,7 @@ function throwReclamationFailure(
 export async function runColdMutationWorkerPort(
   port: MessagePort,
   data: SessionColdWorkerData,
+  operationId: number,
 ): Promise<void> {
   // SAFETY: the typed parent installs its outcome owner before sending this private request.
   const [request] = (await once(port, "message")) as [
@@ -99,19 +100,43 @@ export async function runColdMutationWorkerPort(
   const response = await runWithSqliteMutationWorkerCoordination(
     request.coordination,
     data.plan.databaseOptions,
-    (databaseOptions) =>
-      runColdMutationWorker(port, {
-        ...data,
-        plan: { ...data.plan, databaseOptions },
-      }),
+    async (databaseOptions) => {
+      const result = await runColdMutationWorker(
+        port,
+        {
+          ...data,
+          plan: { ...data.plan, databaseOptions },
+        },
+        operationId,
+      );
+      if (result.result.cleanupIncomplete) {
+        throw new Error(
+          "Cold transcript worker cleanup is incomplete; restart OpenClaw before another maintenance operation",
+        );
+      }
+      // Source readers and the agent lease have settled before closing this task's shared state.
+      closeOpenClawStateDatabaseByPath(request.coordination.databasePath);
+      return result;
+    },
   );
   port.postMessage(response);
+  port.postMessage({
+    type: "closed",
+    settled: true,
+    cleanupWarnings: response.result.cleanupWarnings ?? [],
+  });
   port.close();
 }
 
-async function runColdMutationWorker(port: MessagePort, data: SessionColdWorkerData) {
+async function runColdMutationWorker(
+  port: MessagePort,
+  data: SessionColdWorkerData,
+  operationId: number,
+) {
   const { mutateSessionColdTranscriptInWorker, prepareSessionColdRestoreInWorker } =
     await import("./session-cold-storage-worker.js");
+  const { prepareSessionColdSourceGuard, SessionColdSourceRefusedError } =
+    await import("./session-cold-storage-source-guard.worker.js");
   // Restore materialization must finish before requesting any write admission.
   const coldRecords =
     data.plan.kind === "cold-restore"
@@ -128,7 +153,7 @@ async function runColdMutationWorker(port: MessagePort, data: SessionColdWorkerD
   try {
     result = await withWorkerWriteAdmission(
       port,
-      0,
+      operationId,
       data.plan.databaseOptions,
       async (openedDatabase) => {
         let transactionDatabase: EngineConnection | undefined;
@@ -152,7 +177,7 @@ async function runColdMutationWorker(port: MessagePort, data: SessionColdWorkerD
                 Atomics.store(matches, 0, 1);
               }
               waitForSqliteReclamationCommit(commitGate, () =>
-                port.postMessage({ type: "commit-request", operationId: 0 }),
+                port.postMessage({ type: "commit-request", operationId }),
               );
             },
             sourceGuard,
@@ -191,7 +216,7 @@ async function runColdMutationWorker(port: MessagePort, data: SessionColdWorkerD
   };
   return {
     type: "reclaimed",
-    operationId: 0,
+    operationId,
     result: workerResult,
     settled: true,
     validation: cleanup.settled ? validation : undefined,
@@ -357,6 +382,7 @@ export async function runReclamationWorkerPort(
                   // Deferred periodic work outside this synchronous page unit still needs its relay.
                   checkpointResultOwnedByRequest =
                     request.type === "reclaim" && request.plan.kind === "maintenance-pages";
+                  const conversationPublication: ConversationPublication[] = [];
                   const reclaimed =
                     request.type === "canonical-validation"
                       ? runOpenClawAgentWriteTransaction(
@@ -403,13 +429,19 @@ export async function runReclamationWorkerPort(
                           { ...request.plan, databaseOptions: options },
                           {
                             beforeMutation: currentClaim.assertCurrent,
+                            onCommit: (committedDatabase) =>
+                              conversationPublication.push(
+                                ...readStagedConversationPublications(committedDatabase),
+                              ),
                           },
                         );
                   // Warm results must not revive proof invalidated by the parent between requests.
                   if (openedForRequest) {
                     validation = getOpenClawAgentDatabaseValidation(database);
                   }
-                  return reclaimed;
+                  return conversationPublication.length
+                    ? { ...reclaimed, conversationPublication }
+                    : reclaimed;
                 } finally {
                   checkpointResultOwnedByRequest = false;
                   clearNodeSqliteKyselyCacheForDatabase(sqlPublicationAnchor(database.db));

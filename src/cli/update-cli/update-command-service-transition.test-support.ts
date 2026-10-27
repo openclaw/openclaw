@@ -6,8 +6,8 @@ import { gatewayHealthResponse } from "../../gateway/health-response.test-suppor
 import * as commandRunner from "../../process/exec.js";
 import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { VERSION } from "../../version.js";
-import type { UpdateCommandOptions } from "./shared.js";
 import { runUpdateFinalizationDoctorInFreshProcess } from "./update-command-fresh-doctor.js";
+import type { InstallRootTransitionFixture } from "./update-command-service-fixtures.test-support.js";
 import {
   readyRecoveryHealth,
   serviceUpdateResult,
@@ -26,22 +26,6 @@ export const preservedActivationCases = [
   { phase: "late", mode: "npm", denial: "sealed", outcome: "stale retry", json: false },
   { phase: "late", mode: "git", denial: "sealed", outcome: "missing build", json: false },
 ] as const;
-
-export type InstallRootTransitionFixture = {
-  root: string;
-  run: NonNullable<UpdateCommandOptions["run"]>;
-  mocks: {
-    running: boolean;
-    events: string[];
-    command: Mock<typeof import("../../daemon/systemd.js").readSystemdServiceExecStart>;
-    capability: Mock<
-      typeof import("../../daemon/systemd-definition-mutation.js").readSystemdDefinitionMutationCapability
-    >;
-    child: Mock<typeof import("../../process/exec.js").runCommandWithTimeout>;
-    health: Mock<typeof import("../daemon-cli/restart-health.js").waitForGatewayHealthyRestart>;
-    configSnapshot: Mock;
-  };
-};
 
 const stopOptions = { shouldRestart: true, jsonMode: true };
 const restartOptions = {
@@ -249,6 +233,8 @@ export function registerPluginMaintenanceTests(getFixture: () => PluginMaintenan
   it.each(["git", "npm"] as const)(
     "delegates %s activation and post-handoff Doctor after newer config is stamped",
     async (mode) => {
+      // These cases test version guards, not host I/O against the readiness deadline.
+      vi.spyOn(performance, "now").mockReturnValue(0);
       const { root, run, mocks, writeConfig } = getFixture();
       const entry = path.join(root, "dist", "index.js");
       const before = await maybeStopManagedServiceBeforeMutableUpdate({

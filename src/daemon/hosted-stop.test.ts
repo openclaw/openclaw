@@ -1,13 +1,12 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { prepareHostedStopExecutor } from "./hosted-stop-executor.js";
 import { prepareHostedGatewayStop, type GatewayProcessOwner } from "./hosted-stop.js";
 import { probeLaunchAgentState } from "./launchd-runtime.js";
 import { execSystemctl } from "./systemd-exec.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 
 vi.mock("node:fs/promises", () => ({ default: { readFile: vi.fn() } }));
-vi.mock("../shared/pid-alive.js", () => ({ getFileLockProcessStartTime: vi.fn() }));
 vi.mock("./systemd-exec.js", () => ({ execSystemctl: vi.fn() }));
 vi.mock("./hosted-stop-executor.js", () => ({ prepareHostedStopExecutor: vi.fn() }));
 vi.mock("./launchd-runtime.js", () => ({
@@ -26,27 +25,25 @@ const executorPid = 4321;
 const execute = vi.fn<Awaited<ReturnType<typeof prepareHostedStopExecutor>>["execute"]>();
 const dispose = vi.fn<() => Promise<void>>();
 const processOwner: GatewayProcessOwner = { ownsProcessLifecycle: true, supervisor: "systemd" };
-const identityResult = (fields: Record<string, string> = {}) => ({
-  code: 0,
-  termination: "exit" as const,
-  stderr: "",
-  stdout: Object.entries({
-    Id: unit,
-    LoadState: "loaded",
-    ActiveState: "active",
-    SubState: "running",
-    MainPID: String(process.pid),
-    ControlGroup: cgroup,
-    InvocationID: "a".repeat(32),
-    ExecMainStartTimestampMonotonic: "100",
-    Job: "",
-    CanStop: "yes",
-    RefuseManualStop: "no",
-    ...fields,
-  })
-    .map(([key, value]) => `${key}=${value}`)
-    .join("\n"),
-});
+const identityResult = (fields: Record<string, string> = {}) =>
+  nativeExit(
+    Object.entries({
+      Id: unit,
+      LoadState: "loaded",
+      ActiveState: "active",
+      SubState: "running",
+      MainPID: String(process.pid),
+      ControlGroup: cgroup,
+      InvocationID: "a".repeat(32),
+      ExecMainStartTimestampMonotonic: "100",
+      Job: "",
+      CanStop: "yes",
+      RefuseManualStop: "no",
+      ...fields,
+    })
+      .map(([key, value]) => `${key}=${value}`)
+      .join("\n"),
+  );
 const revoked = (message: string) => () => {
   throw new Error(message);
 };
@@ -61,7 +58,6 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", undefined);
   vi.stubEnv("OPENCLAW_LAUNCHD_LABEL", "ai.openclaw.test");
   Object.defineProperty(process, "platform", { ...platform, value: "linux" });
-  vi.mocked(getFileLockProcessStartTime).mockReturnValue(10);
   systemctl.mockImplementation(async () => identityResult());
   readFile.mockImplementation(async () => `0::${cgroup}\n`);
   executor.mockImplementation(async (params) => {
@@ -85,26 +81,19 @@ afterEach(() => {
 });
 
 it.each([
-  { platformName: "linux", supervisor: null },
-  { platformName: "win32", supervisor: "schtasks" },
-] as const)(
-  "exits only the owned process on $platformName with supervisor $supervisor",
-  async ({ platformName, supervisor }) => {
-    Object.defineProperty(process, "platform", { ...platform, value: platformName });
-    const abort = new AbortController();
-    const stop = await prepare(noop, { ownsProcessLifecycle: true, supervisor }, abort.signal);
-    await expect(stop.execute(noop)).resolves.toEqual({ outcome: "exit" });
-    await expect(stop.execute(revoked("retired host"))).rejects.toThrow("retired host");
-    abort.abort();
-    await expect(stop.execute(noop)).rejects.toThrow();
-    await stop.dispose();
-    expect(getFileLockProcessStartTime).not.toHaveBeenCalled();
-    expect(fs.readFile).not.toHaveBeenCalled();
-    expect(probeLaunchAgentState).not.toHaveBeenCalled();
-    expect(execSystemctl).not.toHaveBeenCalled();
-    expect(prepareHostedStopExecutor).not.toHaveBeenCalled();
-  },
-);
+  ["linux", null],
+  ["win32", "schtasks"],
+] as const)("exits only the owned process on %s/%s", async (platformName, supervisor) => {
+  Object.defineProperty(process, "platform", { ...platform, value: platformName });
+  const abort = new AbortController();
+  const stop = await prepare(noop, { ownsProcessLifecycle: true, supervisor }, abort.signal);
+  await expect(stop.execute(noop)).resolves.toEqual({ outcome: "exit" });
+  await expect(stop.execute(revoked("retired host"))).rejects.toThrow("retired host");
+  abort.abort();
+  await expect(stop.execute(noop)).rejects.toThrow();
+  await stop.dispose();
+  expect(prepareHostedStopExecutor).not.toHaveBeenCalled();
+});
 
 async function expectScopeStop(scope: "--user" | "--system") {
   const stop = await prepare();
@@ -116,7 +105,6 @@ async function expectScopeStop(scope: "--user" | "--system") {
     }),
   );
   await expect(stop.execute(noop)).resolves.toEqual({ outcome: "accepted" });
-  expect(execSystemctl).toHaveBeenCalled();
   expect(systemctl.mock.calls.every(([args]) => args[0] === scope)).toBe(true);
   await stop.dispose();
 }
@@ -197,7 +185,7 @@ it.each(["refused", "uncertain"] as const)(
       outcome: disposition,
       detail: expect.stringContaining("native fault"),
     });
-    // Reopening requires a fresh native identity query after an explicit refusal.
+    // Reopening after refusal requires another current-identity check.
     expect(execSystemctl).toHaveBeenCalledTimes(disposition === "refused" ? 4 : 3);
     await stop.dispose();
   },

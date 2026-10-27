@@ -6,10 +6,9 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { PostgresSyncConnection } from "../postgres-sync/connection.js";
 import { publishSqliteDatabaseSchemaChange } from "../sqlite-database-admission.js";
-import { admitSqliteSchema } from "../sqlite-schema-facts.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import type { StoreSchema } from "./contract.js";
-import { openEngineStore, readEngineAnchor } from "./open.js";
+import { openPostgresEngineTestStore } from "./engine-store.test-support.js";
 import { bindStoreSearch } from "./search.js";
 import type { TextQuery } from "./text-contract.js";
 
@@ -20,6 +19,7 @@ const schema: StoreSchema = {
   id: "search",
   version: 1,
   sqlite: "",
+  postgresVectorSearchVersion: 2,
   postgres: `CREATE TABLE notes (
     id TEXT PRIMARY KEY, ordinal BIGINT NOT NULL UNIQUE, text TEXT NOT NULL,
     model TEXT NOT NULL, source TEXT NOT NULL, embedding BYTEA
@@ -77,18 +77,10 @@ async function fixture(
   const anchor = openNodeSqliteDatabase(path.join(dirs.make("pg-search-"), "anchor.sqlite"));
   const connections: PostgresSyncConnection[] = [];
   const open = () => {
-    const db = openEngineStore({
+    const db = openPostgresEngineTestStore({
       anchor,
       schema,
       input: { connection: connection!, schemaPrefix: "search_test" },
-      openSqlite: () => {
-        throw new Error("Unexpected SQLite bootstrap");
-      },
-      prepareAnchor: () => {},
-      inspectSqlite: () => {
-        admitSqliteSchema(anchor);
-        return { hasExistingData: false, hasEngineAnchor: Boolean(readEngineAnchor(anchor)) };
-      },
     });
     if (!(db instanceof PostgresSyncConnection)) {
       throw new Error("Expected PostgreSQL");
@@ -121,7 +113,7 @@ async function fixture(
   }
 }
 
-function searchFixture(db: PostgresSyncConnection, corpus = "six-notes") {
+function searchFixture(db: PostgresSyncConnection) {
   const k = getNodeSqliteKysely<SearchDB>(db);
   const search = bindStoreSearch(db, schema.search!);
   const index = search.text.notes!;
@@ -159,20 +151,16 @@ function searchFixture(db: PostgresSyncConnection, corpus = "six-notes") {
       ])
       .orderBy("rank", rank.order)
       .orderBy("id");
-    const started = performance.now();
-    const result = executeSqliteQuerySync(db, queryWithSnippet).rows;
-    console.info(
-      JSON.stringify({
-        search: query.kind,
-        corpus,
-        latencyMs: performance.now() - started,
-      }),
-    );
-    return result;
+    return executeSqliteQuerySync(db, queryWithSnippet).rows;
   };
   const nearest = (vector: readonly number[], model = "model-a", source = "memory", limit = 1) => {
     const vectorIndex = search.vectors.notes!;
-    const started = performance.now();
+    const scoped = () =>
+      k
+        .selectFrom("notes_vec as v")
+        .innerJoin("notes as n", "n.id", "v.id")
+        .where("n.model", "=", model)
+        .where("n.source", "=", source);
     const { pending } = withEngineStoreAdmission(() => ({
       pending: search.vector!.nearest({
         index: vectorIndex,
@@ -180,31 +168,28 @@ function searchFixture(db: PostgresSyncConnection, corpus = "six-notes") {
         limit,
         isRow: isVectorRow,
         scopeCount: k.selectFrom("notes").select(k.fn.countAll<number>().as("count")),
+        candidates: ({ match, distance, limit: candidateLimit }) =>
+          scoped()
+            .select("v.id")
+            .where(match)
+            .orderBy(distance)
+            .orderBy("v.id")
+            .limit(candidateLimit),
         query: ({ match, distance }) =>
-          k
-            .selectFrom("notes_vec as v")
-            .innerJoin("notes as n", "n.id", "v.id")
+          scoped()
             .select(["n.id", distance.as("distance")])
             .where(match)
-            .where("n.model", "=", model)
-            .where("n.source", "=", source)
             .orderBy(distance)
             .orderBy("n.id")
             .limit(limit),
       }),
     }));
-    return pending.then((result) => {
-      console.info(
-        JSON.stringify({
-          search: "vector",
-          corpus,
-          latencyMs: performance.now() - started,
-        }),
-      );
-      return result;
-    });
+    return pending;
   };
-  return { add, text, nearest, search };
+  const ids = (query: TextQuery) => text(query).map((row) => row.id);
+  const storedVector = (id: string) =>
+    db.prepare("SELECT embedding FROM notes WHERE id = ?").get(id)!.embedding;
+  return { add, text, ids, nearest, search, storedVector };
 }
 
 const populateText = (add: ReturnType<typeof searchFixture>["add"]) => {
@@ -215,52 +200,55 @@ const populateText = (add: ReturnType<typeof searchFixture>["add"]) => {
   add("other", 5, "green turtle decoy 50xxoff and backslash");
   add("literal", 6, "literal 50%_off and back\\slash café2026 préfixe2026-étape2");
 };
+const term = (text: string): TextQuery => ({ kind: "term", text });
+const terms = (kind: "any" | "all", ...texts: string[]): TextQuery => ({
+  kind,
+  clauses: texts.map(term),
+});
 
 describe.skipIf(!connection)("PostgreSQL engine search conformance", () => {
+  it("keeps cover-density ranking by default and supports a frequency opt-in", async () => {
+    await fixture(({ db }) => {
+      const { add, search } = searchFixture(db);
+      add("adjacent", 1, "red fox");
+      const fullText = search.fullText!;
+      const index = search.text.notes!;
+      const query = terms("all", "red", "fox");
+      const row = executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<SearchDB>(db)
+          .selectFrom("notes")
+          .select([
+            fullText.rank(index, query).value.as("default_rank"),
+            fullText
+              .rank(index, query, { postgres: { normalization: 0 } })
+              .value.as("cover_density"),
+            fullText
+              .rank(index, query, { postgres: { normalization: 0, rank: "frequency" } })
+              .value.as("frequency"),
+          ]),
+      ).rows[0]!;
+      expect(row.default_rank).toBeCloseTo(0.05, 6);
+      expect(row.cover_density).toBeCloseTo(0.1, 6);
+      expect(row.frequency).toBeCloseTo(0.09910322, 6);
+    });
+  });
+
   it("composes literal terms, phrases, final-lexeme prefixes and OR with bounded ranked snippets", async () => {
     await fixture(({ db }) => {
-      const { add, text, search } = searchFixture(db);
+      const { add, text, ids, search } = searchFixture(db);
       db.runTransaction(() => populateText(add));
-      expect(
-        text({ kind: "term", text: "cafe" })
-          .map((row) => row.id)
-          .toSorted(),
-      ).toEqual(["long", "reverse", "short"]);
-      expect(text({ kind: "term", text: "cafe2026" }).map((row) => row.id)).toEqual(["literal"]);
-      expect(text({ kind: "term", text: "prefixe2026-etape2" }).map((row) => row.id)).toEqual([
-        "literal",
-      ]);
-      expect(text({ kind: "phrase", text: "blue fox" }).map((row) => row.id)).toEqual([
-        "short",
+      expect(ids({ kind: "term", text: "cafe" }).toSorted()).toEqual(["long", "reverse", "short"]);
+      expect(ids({ kind: "term", text: "cafe2026" })).toEqual(["literal"]);
+      expect(ids({ kind: "term", text: "prefixe2026-etape2" })).toEqual(["literal"]);
+      expect(ids({ kind: "phrase", text: "blue fox" })).toEqual(["short", "long"]);
+      expect(ids({ kind: "phrase", text: "blue fox", prefix: true }).toSorted()).toEqual([
         "long",
+        "prefix",
+        "short",
       ]);
-      expect(
-        text({ kind: "phrase", text: "blue fox", prefix: true })
-          .map((row) => row.id)
-          .toSorted(),
-      ).toEqual(["long", "prefix", "short"]);
-      expect(
-        text({
-          kind: "any",
-          clauses: [
-            { kind: "term", text: "turtle" },
-            { kind: "term", text: "foxtrot" },
-          ],
-        })
-          .map((row) => row.id)
-          .toSorted(),
-      ).toEqual(["other", "prefix"]);
-      expect(
-        text({
-          kind: "all",
-          clauses: [
-            { kind: "term", text: "cafe" },
-            { kind: "term", text: "fox" },
-          ],
-        })
-          .map((row) => row.id)
-          .toSorted(),
-      ).toEqual(["long", "reverse", "short"]);
+      expect(ids(terms("any", "turtle", "foxtrot")).toSorted()).toEqual(["other", "prefix"]);
+      expect(ids(terms("all", "cafe", "fox")).toSorted()).toEqual(["long", "reverse", "short"]);
       expect(text({ kind: "term", text: "blue | turtle" })).toEqual([]);
       expect(() =>
         search.fullText!.snippet(search.text.notes!, "text", 1, { kind: "term", text: "blue" }),
@@ -280,11 +268,9 @@ describe.skipIf(!connection)("PostgreSQL engine search conformance", () => {
     await fixture(({ db }) => {
       const { add, text } = searchFixture(db);
       db.runTransaction(() => populateText(add));
-      // Contains has no tsquery ranking: compose its filter with the caller's stable identity.
       const { fullText, text: indexes } = bindStoreSearch(db, schema.search!);
       const k = getNodeSqliteKysely<SearchDB>(db);
       for (const needle of ["50%_off", "back\\slash", "BLUE FOX"]) {
-        const started = performance.now();
         const rows = executeSqliteQuerySync(
           db,
           k
@@ -293,13 +279,6 @@ describe.skipIf(!connection)("PostgreSQL engine search conformance", () => {
             .where(fullText!.match(indexes.notes!, { kind: "contains", text: needle }))
             .orderBy("id"),
         ).rows;
-        console.info(
-          JSON.stringify({
-            search: "trigram",
-            corpus: "six-notes",
-            latencyMs: performance.now() - started,
-          }),
-        );
         expect(rows.map((row) => row.id)).toEqual(
           needle === "BLUE FOX" ? ["long", "prefix", "short"] : ["literal"],
         );
@@ -310,7 +289,7 @@ describe.skipIf(!connection)("PostgreSQL engine search conformance", () => {
 
   it("computes exact float32 cosine after model/source eligibility and preserves binary64 source", async () => {
     await fixture(async ({ db }) => {
-      const { add, nearest } = searchFixture(db, "eight-vector-notes");
+      const { add, nearest, storedVector } = searchFixture(db);
       const precise = [0.12345678912345678, 0.9876543219876543, 0.3333333333333333];
       db.runTransaction(() => {
         add("wrong-model", 1, "excluded exact", [1, 0, 0], "model-b");
@@ -331,11 +310,8 @@ describe.skipIf(!connection)("PostgreSQL engine search conformance", () => {
         expect(() => db.runTransaction(() => add("invalid", 9, "invalid", invalid))).toThrow();
       }
       expect(db.prepare("SELECT id FROM notes WHERE id = 'invalid'").get()).toBeUndefined();
-      const bytes = db.prepare("SELECT embedding FROM notes WHERE id = 'precise'").get()!.embedding;
-      expect(bytes).toEqual(new Uint8Array(embedding(precise)));
-      expect(
-        db.prepare("SELECT embedding FROM notes WHERE id = 'underflow'").get()!.embedding,
-      ).toEqual(new Uint8Array(embedding([2 ** -150, 1, 0])));
+      expect(storedVector("precise")).toEqual(new Uint8Array(embedding(precise)));
+      expect(storedVector("underflow")).toEqual(new Uint8Array(embedding([2 ** -150, 1, 0])));
       const result = await nearest([1, 0, 0], "model-a", "memory", 3);
       expect(result.fallbackScanRequired).toBe(false);
       expect(result.rows.map((row) => row.id)).toEqual(["eligible", "orthogonal", "opposite"]);
@@ -355,9 +331,41 @@ describe.skipIf(!connection)("PostgreSQL engine search conformance", () => {
     });
   });
 
+  it("prefilters within model/source scope and distinguishes negative vectors from zero", async () => {
+    await fixture(async ({ db }) => {
+      const { add, nearest } = searchFixture(db);
+      db.runTransaction(() => {
+        for (let i = 0; i < 20; i++) {
+          add(`decoy-${i}`, i + 1, "excluded", [-1, -0.01, 0], "other-model");
+          add(`source-${i}`, i + 21, "excluded", [-1, -0.01, 0], "model-a", "sessions");
+        }
+        add("a-far", 41, "negative", [-1, -5, -1]);
+        add("b-close", 42, "negative", [-1, -0.1, -0.1]);
+        add("c-orthogonal", 43, "orthogonal", [0, 1, 0]);
+        add("zero", 44, "ineligible", [0, 0, 0]);
+      });
+      expect(
+        db
+          .prepare(
+            "SELECT id, embedding_bits::text AS bits FROM notes_vec WHERE id IN ('b-close', 'zero') ORDER BY id",
+          )
+          .all(),
+      ).toEqual([
+        { id: "b-close", bits: "000" },
+        { id: "zero", bits: null },
+      ]);
+      const result = await nearest([-1, -0.01, 0], "model-a", "memory", 2);
+      expect(result.rows.map((row) => row.id)).toEqual(["b-close", "a-far"]);
+      expect(result.rows[0]!.distance).toBeCloseTo(
+        1 - 1.001 / (Math.hypot(1, 0.01) * Math.hypot(1, 0.1, 0.1)),
+        6,
+      );
+    });
+  });
+
   it("projects fresh and replacement vectors without deleting their projection first", async () => {
     await fixture(({ db }) => {
-      const { add } = searchFixture(db, "one-note");
+      const { add } = searchFixture(db);
       db.exec(`CREATE FUNCTION reject_projection_delete() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN RAISE EXCEPTION 'unnecessary projection DELETE'; END $$;
 CREATE TRIGGER reject_projection_delete BEFORE DELETE ON notes_vec
@@ -374,9 +382,9 @@ FOR EACH STATEMENT EXECUTE FUNCTION reject_projection_delete();`);
 
   it("synchronizes source writes and deletes transactionally and rebuilds only derived projections", async () => {
     await fixture(async ({ db }) => {
-      const { add, text, nearest, search } = searchFixture(db, "one-note");
+      const { add, text, ids, nearest, search, storedVector } = searchFixture(db);
       db.runTransaction(() => add("kept", 1, "firstword", [1, 0, 0]));
-      expect(text({ kind: "term", text: "firstword" }).map((row) => row.id)).toEqual(["kept"]);
+      expect(ids({ kind: "term", text: "firstword" })).toEqual(["kept"]);
       expect(() =>
         db.runTransaction(() => {
           db.prepare("UPDATE notes SET text = ?, embedding = ? WHERE id = ?").run(
@@ -393,7 +401,7 @@ FOR EACH STATEMENT EXECUTE FUNCTION reject_projection_delete();`);
         db.prepare("SELECT embedding::text AS embedding FROM notes_vec WHERE id = 'kept'").get(),
       ).toEqual({ embedding: "[1,0,0]" });
       expect(db.prepare("SELECT id FROM notes_vec WHERE id = 'rolled'").get()).toBeUndefined();
-      const before = db.prepare("SELECT embedding FROM notes WHERE id = 'kept'").get()!.embedding;
+      const before = storedVector("kept");
       db.runTransaction(() => {
         db.prepare("UPDATE notes SET text = ?, embedding = ? WHERE id = ?").run(
           "secondword",
@@ -405,22 +413,16 @@ FOR EACH STATEMENT EXECUTE FUNCTION reject_projection_delete();`);
         add("text-only", 4, "keywordonly", []);
       });
       expect(text({ kind: "term", text: "firstword" })).toEqual([]);
-      expect(text({ kind: "term", text: "secondword" }).map((row) => row.id)).toEqual(["kept"]);
+      expect(ids({ kind: "term", text: "secondword" })).toEqual(["kept"]);
       expect(db.prepare("SELECT id FROM notes_vec ORDER BY id").all()).toEqual([{ id: "kept" }]);
-      expect(text({ kind: "term", text: "keywordonly" }).map((row) => row.id)).toEqual([
-        "text-only",
-      ]);
-      expect(
-        db.prepare("SELECT embedding FROM notes WHERE id = 'kept'").get()!.embedding,
-      ).not.toEqual(before);
-      const updated = db.prepare("SELECT embedding FROM notes WHERE id = 'kept'").get()!.embedding;
+      expect(ids({ kind: "term", text: "keywordonly" })).toEqual(["text-only"]);
+      expect(storedVector("kept")).not.toEqual(before);
+      const updated = storedVector("kept");
       db.runTransaction(() => {
         db.exec("DELETE FROM notes_vec");
         search.rebuild!();
       });
-      expect(db.prepare("SELECT embedding FROM notes WHERE id = 'kept'").get()!.embedding).toEqual(
-        updated,
-      );
+      expect(storedVector("kept")).toEqual(updated);
       const result = await nearest([0, 1, 0]);
       expect(result.rows).toEqual([{ id: "kept", distance: 0 }]);
       withEngineStoreAdmission(() => {
@@ -428,13 +430,14 @@ FOR EACH STATEMENT EXECUTE FUNCTION reject_projection_delete();`);
           db.prepare("UPDATE notes SET embedding = ? WHERE id = ?").run(embedding([]), "kept");
         });
         expect(db.prepare("SELECT id FROM notes_vec").all()).toEqual([]);
-        expect(text({ kind: "term", text: "secondword" }).map((row) => row.id)).toEqual(["kept"]);
+        expect(ids({ kind: "term", text: "secondword" })).toEqual(["kept"]);
       });
     });
   });
 
   it.each([
     ["GIN index", "DROP INDEX notes_search_gin"],
+    ["binary projection", "ALTER TABLE notes_vec DROP COLUMN embedding_bits"],
     [
       "text configuration",
       "ALTER TEXT SEARCH CONFIGURATION openclaw_simple_unaccent ALTER MAPPING FOR word WITH pg_catalog.simple",

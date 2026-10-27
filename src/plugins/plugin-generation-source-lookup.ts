@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { hasErrnoCode } from "../infra/errno.js";
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { isPathInside, relativePluginPathInsideRootSync } from "./path-safety.js";
 import { getPluginCache } from "./plugin-cache.js";
 import { PluginSourceRecoveryUnavailableError } from "./plugin-instance-error.js";
@@ -68,12 +69,7 @@ function createPluginGenerationSourceCustody() {
       const results = await Promise.allSettled(
         [...this.sources.values()].map(({ source }) => source.disposeAsync()),
       );
-      const errors = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (errors.length) {
-        throw new AggregateError(errors, "Plugin source custody cleanup failed");
-      }
+      throwSettledAggregate(results, "Plugin source custody cleanup failed");
       this.sources.clear();
     },
   };
@@ -178,19 +174,18 @@ function getCapturedSource(
   return sources.get(lexical) ?? sources.get(canonicalSource(rootDir, sourceRoot, lexical));
 }
 
-export type PluginRecoverySourceResolverSnapshot = {
+export type PluginRecoverySourceResolverSnapshot = Readonly<{
   rootDir: string;
   sourceRoot: string;
   sources: ReadonlyMap<string, string>;
-};
+}>;
 const recoverySourceResolvers = new WeakMap<object, PluginRecoverySourceResolverSnapshot>();
 
 /** Transfer only immutable lookup facts, never a call back into a retired source owner. */
 export function snapshotPluginRecoverySourceResolver(
   resolve: object,
 ): PluginRecoverySourceResolverSnapshot | undefined {
-  const snapshot = recoverySourceResolvers.get(resolve);
-  return snapshot && { ...snapshot, sources: new Map(snapshot.sources) };
+  return recoverySourceResolvers.get(resolve);
 }
 
 export function restorePluginRecoverySourceResolver(
@@ -247,14 +242,34 @@ function copyRecoverySource({
   let recovery: ReturnType<typeof createPluginSourceCapture> | undefined;
   try {
     recovery = createPluginSourceCapture();
+    const directory = recovery.directory;
+    const relocate = (filename: string) =>
+      path.join(directory, path.relative(boundaryRoot, filename));
     const hardlinkedTargets = new Map<string, PluginNativeArtifactFact>();
-    // Preserve relative dependency links without reopening an updated package.
+    // Keep dependency links within the new capture without reopening installed packages.
     fs.cpSync(boundaryRoot, recovery.directory, {
       recursive: true,
       verbatimSymlinks: true,
       filter: (from, to) => {
         const fact = native?.references.get(from);
         if (!fact) {
+          if (fs.lstatSync(from).isSymbolicLink()) {
+            const target = fs.readlinkSync(from);
+            const relative = path.isAbsolute(target)
+              ? relativePluginPathInsideRootSync(boundaryRoot, target)
+              : undefined;
+            if (relative !== undefined) {
+              // Windows junctions store absolute targets. A verbatim copy would
+              // point at the seed after custody disposes it, then fail on fork.
+              fs.mkdirSync(path.dirname(to), { recursive: true, mode: 0o700 });
+              fs.symlinkSync(
+                path.relative(path.dirname(to), path.join(directory, relative)),
+                to,
+                fs.statSync(from).isDirectory() ? "junction" : "file",
+              );
+              return false;
+            }
+          }
           return true;
         }
         const retained = { ...fact, sourceIdentity: fact.capturedIdentity };
@@ -269,9 +284,6 @@ function copyRecoverySource({
     for (const [target, fact] of hardlinkedTargets) {
       assertReference(target, fact, native!.namespaces.get(fact.namespace)!);
     }
-    const directory = recovery.directory;
-    const relocate = (filename: string) =>
-      path.join(directory, path.relative(boundaryRoot, filename));
     const copiedSources = new Map(
       Array.from(sources, ([source, captured]) => [source, relocate(captured)]),
     );

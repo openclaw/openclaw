@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
 import { withDaemonRuntimePinStore } from "../daemon/runtime-pin-store.js";
@@ -15,16 +17,17 @@ import { createMockGatewayService, mockSystemAccountHome } from "../daemon/servi
 import { readLoadedSystemdServiceRuntime } from "../daemon/systemd-loaded-runtime.js";
 import { writeDoctorGatewayConfig } from "../flows/doctor-health-contribution-runners.gateway.js";
 import { callGatewayCli } from "../gateway/call.js";
+import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
 import { storeDeviceAuthToken } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { tryAcquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import * as processAncestry from "../infra/restart-stale-pids.js";
 import * as sqliteSnapshotSource from "../infra/sqlite-snapshot-source.js";
-import * as sqliteWorkerStores from "../infra/sqlite-worker-store.js";
 import { migrateDaemonRuntimePins } from "../infra/state-migrations.daemon-runtime-pins.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
+import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import { readSecretStoreValue } from "../secrets/store/secret-store.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
@@ -36,6 +39,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { withEnvAsync } from "../test-utils/env.js";
 import { maybeRepairGatewayServiceConfig } from "./doctor-gateway-services.js";
 import { prepareWriterContext } from "./doctor-gateway-services.writer-order.test-support.js";
+import { doctorMaintenanceTestEnv } from "./doctor-maintenance.admission.test-support.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import { mockDoctorServicePlatform } from "./doctor-maintenance.state-owner.test-support.js";
 import {
@@ -55,8 +59,10 @@ const mocks = vi.hoisted(() => ({
   confirm: vi.fn(),
   note: vi.fn(),
   health: vi.fn(async () => ({ outcome: "ready", healthy: true })),
-  suspend: vi.fn<typeof import("../daemon/schtasks.js").suspendScheduledTaskAutoStartForUpdate>(),
-  resume: vi.fn<typeof import("../daemon/schtasks.js").resumeScheduledTaskAutoStartAfterUpdate>(),
+  suspend:
+    vi.fn<typeof import("../daemon/schtasks-control.js").suspendScheduledTaskAutoStartForUpdate>(),
+  resume:
+    vi.fn<typeof import("../daemon/schtasks-control.js").resumeScheduledTaskAutoStartAfterUpdate>(),
 }));
 vi.mock("../daemon/service-process-membership.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/service-process-membership.js")>()),
@@ -85,8 +91,8 @@ vi.mock("@clack/prompts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@clack/prompts")>()),
   confirm: mocks.confirm,
 }));
-vi.mock("../daemon/schtasks.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../daemon/schtasks.js")>()),
+vi.mock("../daemon/schtasks-control.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/schtasks-control.js")>()),
   suspendScheduledTaskAutoStartForUpdate: mocks.suspend,
   resumeScheduledTaskAutoStartAfterUpdate: mocks.resume,
 }));
@@ -149,7 +155,7 @@ useDoctorMaintenanceRuntimeDirectory(() => {
   );
   return runtimeDirectory;
 });
-const originalStdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+const ttyMock = createCliTtyMock([process.stdin]);
 beforeEach(() => {
   handoffBinding.assertPath(resolveManagedUpdateLeaseDatabasePath());
   vi.clearAllMocks();
@@ -171,11 +177,7 @@ beforeEach(() => {
   }
 });
 afterEach(() => {
-  if (originalStdinIsTTY) {
-    Object.defineProperty(process.stdin, "isTTY", originalStdinIsTTY);
-  } else {
-    Reflect.deleteProperty(process.stdin, "isTTY");
-  }
+  ttyMock.restore();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -190,6 +192,12 @@ async function runInstallationCase(params: {
   tokenRecovery?: "success" | "writer-unavailable" | "no-consent";
   revoked?: "unchanged" | "restored" | "unclassified";
   initiallyStopped?: boolean;
+  nativePolicy?:
+    | "disabled-before"
+    | "disabled-during"
+    | "disabled-before-activation"
+    | "disabled-before-install"
+    | "unavailable-before";
   releaseStateBeforeFinish?: boolean;
   pendingRuntimePinMigration?: boolean;
   inspectionFailure?: "lost-before-install";
@@ -212,16 +220,10 @@ async function runInstallationCase(params: {
     >("../daemon/service-audit.js");
     mocks.audit.mockImplementation(auditGatewayServiceConfig);
     mocks.confirm.mockResolvedValue(params.consent.approved);
-    Object.defineProperty(process.stdin, "isTTY", {
-      value: params.consent.interactive,
-      configurable: true,
-    });
+    ttyMock.set(params.consent.interactive);
   }
   if (params.tokenRecovery) {
-    Object.defineProperty(process.stdin, "isTTY", {
-      value: params.tokenRecovery !== "no-consent",
-      configurable: true,
-    });
+    ttyMock.set(params.tokenRecovery !== "no-consent");
     mocks.confirm.mockResolvedValue(true);
   }
   const home = await fs.realpath(tempDirs.make("openclaw-doctor-installation-"));
@@ -238,31 +240,18 @@ async function runInstallationCase(params: {
     [mocks.activeRoot, "2026.9.17"],
   ] as const) {
     await fs.mkdir(path.join(root, "dist"), { recursive: true });
-    await fs.writeFile(
-      path.join(root, "package.json"),
-      JSON.stringify({ name: "openclaw", version }),
-    );
+    await writeFixtureJson(path.join(root, "package.json"), { name: "openclaw", version });
     await fs.writeFile(path.join(root, "dist/index.js"), "export {};\n");
   }
   await withEnvAsync(
     {
+      ...doctorMaintenanceTestEnv,
       HOME: home,
       USERPROFILE: home,
-      OPENCLAW_HOME: undefined,
-      OPENCLAW_STATE_DIR: undefined,
-      OPENCLAW_CONFIG_PATH: undefined,
-      OPENCLAW_PROFILE: undefined,
-      OPENCLAW_SUPERVISOR_MODE: undefined,
-      OPENCLAW_SERVICE_REPAIR_POLICY: undefined,
-      OPENCLAW_SERVICE_MARKER: undefined,
-      OPENCLAW_SERVICE_KIND: undefined,
-      OPENCLAW_SYSTEMD_UNIT: undefined,
       OPENCLAW_GATEWAY_PORT: params.invocationPort,
       OPENCLAW_GATEWAY_TOKEN: undefined,
       OPENCLAW_GATEWAY_PASSWORD: undefined,
-      OPENCLAW_UPDATE_RUN_ID: undefined,
       OPENCLAW_UPDATE_IN_PROGRESS: params.updateInProgress ? "1" : undefined,
-      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: undefined,
     },
     async () => {
       if (params.pendingRuntimePinMigration) {
@@ -302,8 +291,19 @@ async function runInstallationCase(params: {
         },
       };
       const originalCommand = structuredClone(command);
+      const expectOriginal = (expectedEvents: string[], expectedRunning: boolean) =>
+        expect({ events, running, command }).toEqual({
+          events: expectedEvents,
+          running: expectedRunning,
+          command: originalCommand,
+        });
+      const expectInstallation = (expectedEvents: string[], root = oldRoot) =>
+        expect([events, command.programArguments[1]]).toEqual([
+          expectedEvents,
+          path.join(root, "dist/index.js"),
+        ]);
       if (params.definitionRepair && params.definitionRepair !== "not-needed") {
-        Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+        ttyMock.set(true);
         mocks.confirm.mockResolvedValue(true);
         mocks.audit.mockImplementation(async () => ({
           ok: !command.environment?.NODE_EXTRA_CA_CERTS,
@@ -313,6 +313,7 @@ async function runInstallationCase(params: {
         }));
       }
       let running = !initiallyStopped;
+      let enabled = params.nativePolicy !== "disabled-before";
       const pid = mocks.gatewayPid;
       mocks.resident.mockImplementation(() => (running ? { pid } : undefined));
       let nativeInspectionReads = 0;
@@ -326,6 +327,7 @@ async function runInstallationCase(params: {
       let originalConfig: string | undefined;
       const service = createMockGatewayService({
         isAbsent: async () => false,
+        isEnabled: params.nativePolicy === "unavailable-before" ? undefined : async () => enabled,
         isLoaded: async () => true,
         readCommand: async () => command,
         readRuntime: async (env, opts) => {
@@ -388,6 +390,10 @@ async function runInstallationCase(params: {
           running = true;
         },
         install: async (plan) => {
+          if (params.nativePolicy === "disabled-before-install") {
+            enabled = false;
+          }
+          await plan.beforeMutation?.();
           return await captureGatewayServiceRebind(
             async () => command,
             () => plan.assertCurrent?.(),
@@ -434,7 +440,14 @@ async function runInstallationCase(params: {
             },
           );
         },
-        restart: async () => {
+        restart: async (args) => {
+          if (params.nativePolicy === "disabled-before-activation") {
+            enabled = false;
+          }
+          await args.beforeMutation?.();
+          if (params.nativePolicy === "disabled-before") {
+            expect(args.preserveAutoStart).toBe(true);
+          }
           events.push("restart");
           running = true;
           return { outcome: "completed" };
@@ -463,16 +476,13 @@ async function runInstallationCase(params: {
         expect(notes).toContain("openclaw doctor --fix");
         expect(notes).toContain("openclaw gateway install --force");
         if (params.bun) {
-          expect(events).toEqual([]);
-          expect(running).toBe(true);
-          expect(command).toEqual(originalCommand);
+          expectOriginal([], true);
           expect(notes).toContain("automatic installation repair was skipped");
           return;
         }
         if (params.updateInProgress) {
           expect(notes).toContain("deferred to update finalization");
-          expect(events).toEqual([]);
-          expect(command.programArguments[1]).toBe(path.join(oldRoot, "dist/index.js"));
+          expectInstallation([]);
           expect(mocks.confirm).not.toHaveBeenCalled();
           return;
         }
@@ -491,13 +501,12 @@ async function runInstallationCase(params: {
           params.inspectionFailure ||
           ((params.consent?.aggressive || params.consent?.mixed) && !params.consent.approved)
         ) {
-          expect(events).toEqual([]);
-          expect(command.programArguments[1]).toBe(path.join(oldRoot, "dist/index.js"));
+          expectInstallation([]);
         } else {
-          expect(events).toEqual(
+          expectInstallation(
             params.platform === "win32" ? ["install", "restart"] : ["install"],
+            mocks.activeRoot,
           );
-          expect(command.programArguments[1]).toBe(path.join(mocks.activeRoot, "dist/index.js"));
           expect(command.programArguments).toContain(params.invocationPort ?? "19989");
           expect(notes).toContain("reconciled with the active CLI");
         }
@@ -512,9 +521,11 @@ async function runInstallationCase(params: {
         writerContext = await prepareWriterContext(configPath);
       }
       let pairedDeviceDatabasePath: string | undefined;
+      let pairedDeviceCredentialPath: string | undefined;
       if (params.stopFailsWithPairedDevice) {
         const identity = loadOrCreateDeviceIdentity();
         pairedDeviceDatabasePath = openOpenClawStateDatabase().path;
+        pairedDeviceCredentialPath = resolveClientCredentialStorePath(process.env);
         await storeDeviceAuthToken({
           deviceId: identity.deviceId,
           role: "operator",
@@ -523,8 +534,8 @@ async function runInstallationCase(params: {
         });
         await closeOpenClawStateDatabaseAsync();
       }
-      const authWorkerOpen = pairedDeviceDatabasePath
-        ? vi.spyOn(sqliteWorkerStores, "openSharedStateSqliteWorkerStore")
+      const authWorkerRun = pairedDeviceDatabasePath
+        ? vi.spyOn(WorkerTaskPool.prototype, "run")
         : undefined;
       const admission = beginDoctorMaintenance({
         root: mocks.activeRoot,
@@ -536,10 +547,21 @@ async function runInstallationCase(params: {
         },
         runtime,
       });
-      if (pairedDeviceDatabasePath && authWorkerOpen) {
-        const openedAuthWorkers = () =>
-          authWorkerOpen.mock.settledResults.flatMap((result) =>
-            result.type === "fulfilled" && result.value ? [result.value] : [],
+      if (pairedDeviceDatabasePath && authWorkerRun) {
+        const usedAuthPools = () =>
+          authWorkerRun.mock.contexts.filter(
+            (pool, index): pool is WorkerTaskPool<unknown, unknown> => {
+              const input = authWorkerRun.mock.calls[index]?.[0];
+              return (
+                pool instanceof WorkerTaskPool &&
+                typeof input === "object" &&
+                input !== null &&
+                "root" in input &&
+                typeof input.root === "string" &&
+                resolveClientCredentialStorePath({ OPENCLAW_STATE_DIR: input.root }) ===
+                  pairedDeviceCredentialPath
+              );
+            },
           );
         try {
           await expect(admission).rejects.toThrow("Synthetic native stop failure");
@@ -554,21 +576,26 @@ async function runInstallationCase(params: {
                   request.preparedDeviceAuth?.token === "synthetic-maintenance-device-token",
               ),
           ).toBe(true);
-          const authWorkers = openedAuthWorkers();
-          expect(authWorkers.length).toBeGreaterThan(0);
-          expect(
-            authWorkers.every((worker) => !sqliteWorkerStores.isSqliteWorkerStoreAvailable(worker)),
-          ).toBe(true);
+          const authPools = usedAuthPools();
+          expect(authPools.length).toBeGreaterThan(0);
+          expect(authPools.every((pool) => pool.isClosed)).toBe(true);
           const nextOwner = tryAcquireGatewayStateOwner(pairedDeviceDatabasePath);
           expect(nextOwner).not.toBeNull();
           nextOwner?.release();
         } finally {
           try {
-            await Promise.all(openedAuthWorkers().map((worker) => worker.close()));
+            await Promise.all(usedAuthPools().map((pool) => pool.close()));
           } finally {
             await closeOpenClawStateDatabaseAsync();
           }
         }
+        return;
+      }
+      if (params.nativePolicy === "unavailable-before") {
+        await expect(admission).rejects.toThrow(
+          "autostart policy could not be verified before stopping",
+        );
+        expectOriginal([], true);
         return;
       }
       const maintenance = await admission;
@@ -602,6 +629,9 @@ async function runInstallationCase(params: {
         maintenance?.run(() => {
           expect(running).toBe(false);
           events.push("repair-state");
+          if (params.nativePolicy === "disabled-during") {
+            enabled = false;
+          }
         });
         if (params.releaseStateBeforeFinish) {
           await maintenance?.releaseState();
@@ -627,6 +657,18 @@ async function runInstallationCase(params: {
         } catch (error) {
           finishError = error;
         }
+        if (params.nativePolicy) {
+          if (params.nativePolicy === "disabled-before") {
+            expect(finishError).toBeUndefined();
+            expectOriginal(["stop", "repair-state", "restart"], true);
+          } else {
+            expect(String(finishError)).toContain("autostart policy changed");
+            expectOriginal(["stop", "repair-state"], false);
+            expect(mocks.health).not.toHaveBeenCalled();
+          }
+          expect(enabled).toBe(false);
+          return;
+        }
         if (params.tokenRecovery) {
           expect(finishError).toBeUndefined();
           const bytes = await fs.readFile(configPath!, "utf8");
@@ -635,17 +677,12 @@ async function runInstallationCase(params: {
           expect(events).toEqual([
             "stop",
             "repair-state",
-            ...(params.tokenRecovery === "writer-unavailable" ||
-            params.tokenRecovery === "no-consent"
-              ? []
-              : ["write-config"]),
-            ...(refused ? [] : ["install"]),
+            ...(refused ? [] : ["write-config", "install"]),
           ]);
           if (refused) {
             expect(bytes).toBe(originalConfig);
             expect(writerContext?.cfg.gateway?.auth?.token).toBeUndefined();
-            expect(running).toBe(false);
-            expect(command).toEqual(originalCommand);
+            expectOriginal(["stop", "repair-state"], false);
             expect(mocks.health).not.toHaveBeenCalled();
             if (params.tokenRecovery === "no-consent") {
               expect(
@@ -691,18 +728,16 @@ async function runInstallationCase(params: {
           expect(finishError).toMatchObject({
             message: expect.stringContaining("remains recorded as running"),
           });
-          expect(events).toEqual(["stop", "repair-state"]);
+          expectInstallation(["stop", "repair-state"]);
           expect(running).toBe(false);
-          expect(command.programArguments[1]).toBe(path.join(oldRoot, "dist/index.js"));
           expect(mocks.health).not.toHaveBeenCalled();
           return;
         }
         if (params.revoked) {
           const outcome = params.revoked === "unclassified" ? "recovery-pending" : params.revoked;
           const code = `service-authority-revoked-${outcome}`;
-          expect(events).toEqual(["stop", "repair-state", "install"]);
+          expectInstallation(["stop", "repair-state", "install"]);
           expect(running).toBe(false);
-          expect(command.programArguments[1]).toBe(path.join(oldRoot, "dist/index.js"));
           expect(maintenance?.failureFacts).toEqual([
             expect.objectContaining({ check: "gateway-restoration", code }),
           ]);
@@ -722,9 +757,7 @@ async function runInstallationCase(params: {
         }
         expect(finishError).toBeUndefined();
         if (params.restorationInspectionFailure) {
-          expect(events).toEqual(["stop", "repair-state"]);
-          expect(running).toBe(false);
-          expect(command).toEqual(originalCommand);
+          expectOriginal(["stop", "repair-state"], false);
           expect(maintenance?.warnings).toEqual([expect.stringContaining("could not reconcile")]);
           expect(maintenance?.warnings?.[0]).toContain("state compatibility is unverified");
           expect(runtime.log).toHaveBeenCalledWith(maintenance?.warnings?.[0]);
@@ -742,9 +775,8 @@ async function runInstallationCase(params: {
           }
         }
         if (initiallyStopped) {
-          expect(events).toEqual(["repair-state"]);
+          expectInstallation(["repair-state"]);
           expect(running).toBe(false);
-          expect(command.programArguments[1]).toBe(path.join(oldRoot, "dist/index.js"));
           expect(maintenance?.warnings).toEqual([
             expect.stringContaining(
               "Stopped service definitions are preserved; run `openclaw gateway install --force --port 19989` from the active CLI.",
@@ -760,12 +792,12 @@ async function runInstallationCase(params: {
           expect(mocks.health).not.toHaveBeenCalled();
           return;
         }
-        expect(events).toEqual(["stop", "repair-state", "install"]);
-        expect(command.programArguments[1]).toBe(
-          path.join(installFails ? oldRoot : mocks.activeRoot, "dist/index.js"),
+        expectInstallation(
+          ["stop", "repair-state", "install"],
+          installFails ? oldRoot : mocks.activeRoot,
         );
-        expect(command.programArguments).toContain(params.invocationPort ?? "19989");
         expect(running).toBe(!installFails);
+        expect(command.programArguments).toContain(params.invocationPort ?? "19989");
         expect(maintenance?.warnings).toEqual(
           installFails ? [expect.stringContaining("could not reconcile")] : [],
         );
@@ -846,4 +878,21 @@ it.each<InstallationCase>([
   { platform: "linux", bun: true },
 ])("repairs installation drift with doctor --fix (%j)", async (scenario) =>
   runInstallationCase({ ...scenario, mode: "direct" }),
+);
+
+it.each([
+  "disabled-before",
+  "disabled-during",
+  "disabled-before-activation",
+  "disabled-before-install",
+  "unavailable-before",
+] as const)(
+  "preserves native autostart policy during Doctor restoration (%s)",
+  async (nativePolicy) =>
+    runInstallationCase({
+      platform: "darwin",
+      mode: "maintenance",
+      definitionRepair: nativePolicy === "disabled-before-install" ? "repaired" : "not-needed",
+      nativePolicy,
+    }),
 );

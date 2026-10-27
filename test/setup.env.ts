@@ -29,3 +29,8 @@ if (!globalState[ENV_ISOLATION_SETUP]) {
   process.once("exit", handle.cleanup);
   globalState[ENV_ISOLATION_SETUP] = handle;
 }
+
+const { declarePostgresTestRoot, installPostgresTestRootGuard } =
+  await import("./helpers/postgres-pool-roots.js");
+declarePostgresTestRoot();
+installPostgresTestRootGuard();

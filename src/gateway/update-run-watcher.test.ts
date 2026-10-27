@@ -6,6 +6,7 @@ import {
   type UpdateCheckLifecycle,
 } from "../infra/update-check-lifecycle.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
+import { createUpdateRunRecordFixture } from "../infra/update-run-record.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { StateSchemaPublicationBlocker } from "../state/openclaw-state-schema-publication.js";
 import {
@@ -74,25 +75,12 @@ afterEach(async () => {
 });
 
 function beginRun(runId = "b7150827-8222-4c12-bd20-9bfd6ae8e852"): UpdateRunRecord {
-  ledger.run = {
-    runId,
-    createdAtMs: 1,
-    trigger: "cli",
-    reason: null,
-    target: {},
-    before: {},
-    after: {},
-    verification: {},
-    repair: [],
-    confirmedAtMs: null,
+  ledger.run = createUpdateRunRecordFixture(runId, {
     finishedAtMs: null,
-    downtimeMs: null,
     phase: "requested",
     status: "running",
     updatedAtMs: 1,
-    steps: [],
-    origin: {},
-  };
+  });
   return ledger.run;
 }
 

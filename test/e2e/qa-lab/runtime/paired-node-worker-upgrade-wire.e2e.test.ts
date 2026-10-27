@@ -38,6 +38,9 @@ const runtimeFiles = collectRuntimeImportClosure(process.cwd(), [
   "cli-invocation.mjs",
   "node-version.mjs",
   "node-sqlite.mjs",
+  "node-sqlite-capabilities.mjs",
+  "runtime-process-bootstrap.generated.mjs",
+  "runtime-process-scripts.generated.mjs",
   "node-runtime-update.mjs",
 ]);
 

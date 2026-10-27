@@ -76,8 +76,7 @@ type ContextWindowGuardResult = ContextWindowInfo & {
 };
 
 /** Derive warning/block floors from the resolved model context window. */
-function resolveContextWindowGuardThresholds(contextWindowTokens: number) {
-  const tokens = normalizePositiveInt(contextWindowTokens) ?? 0;
+function resolveContextWindowGuardThresholds(tokens: number) {
   return {
     hardMinTokens: Math.max(
       CONTEXT_WINDOW_HARD_MIN_TOKENS,
@@ -140,22 +139,16 @@ export function formatContextWindowBlockMessage(params: {
 /** Evaluate whether the resolved context window should warn or block. */
 export function evaluateContextWindowGuard(params: {
   info: ContextWindowInfo;
-  warnBelowTokens?: number;
-  hardMinTokens?: number;
 }): ContextWindowGuardResult {
   const normalizedTokens = normalizePositiveInt(params.info.tokens);
   const tokens = normalizedTokens ?? 0;
   const referenceTokens = normalizePositiveInt(params.info.referenceTokens) ?? tokens;
   const resolvedThresholds = resolveContextWindowGuardThresholds(referenceTokens);
-  const warnBelow = Math.max(
-    1,
-    Math.floor(params.warnBelowTokens ?? resolvedThresholds.warnBelowTokens),
-  );
-  const defaultHardMin = Math.min(
+  const warnBelow = resolvedThresholds.warnBelowTokens;
+  const hardMin = Math.min(
     resolvedThresholds.hardMinTokens,
     Math.max(tokens, CONTEXT_WINDOW_HARD_MIN_TOKENS),
   );
-  const hardMin = Math.max(1, Math.floor(params.hardMinTokens ?? defaultHardMin));
   return {
     ...params.info,
     tokens,

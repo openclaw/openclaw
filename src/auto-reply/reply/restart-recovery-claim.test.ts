@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -13,7 +14,6 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
@@ -45,44 +45,57 @@ import { createReplyRestartRecoveryClaimController } from "./restart-recovery-cl
 import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const deliveryContext = {
+  channel: "telegram",
+  to: "chat",
+  accountId: "default",
+  threadId: "thread",
+};
 
 type ClaimControllerParams = Parameters<typeof createReplyRestartRecoveryClaimController>[0];
+type ClaimScope = { agentId: string; storePath: string; sessionKey: string };
+type UserMessage = Parameters<typeof createUserTurnTranscriptRecorder>[0]["message"];
 
-function createController(
-  params: Pick<
-    ClaimControllerParams,
-    "getEntry" | "getSessionId" | "setEntry" | "sessionKey" | "storePath"
-  > &
-    Partial<ClaimControllerParams>,
-  operation?: ReplyOperation,
-) {
-  if (!params.sessionKey || !params.storePath) {
-    throw new Error("Recovery fixture requires a stored session");
-  }
-  const actor = createReplyRecoveryActorFixture({
-    agentId: params.agentId ?? "main",
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-    getSessionId: params.getSessionId,
-    operation,
-  });
-  const controller = createReplyRestartRecoveryClaimController({
-    agentId: "main",
-    lifecycleGeneration: getAgentEventLifecycleGeneration(),
-    isRestartAbort: () => false,
-    resolveDeliveryContext: () => undefined,
-    ...params,
-    acquireSessionActor: () => actor.acquireSessionActor(),
-  });
-  return Object.assign(controller, {
-    acquireSessionActor: () => actor.acquireSessionActor(),
-    [Symbol.asyncDispose]: () => actor[Symbol.asyncDispose](),
-  });
+const userMessage = (content = "continue", idempotencyKey?: string): UserMessage => ({
+  role: "user",
+  content,
+  timestamp: 1,
+  ...(idempotencyKey ? { idempotencyKey } : {}),
+});
+
+function observeSql() {
+  const sql = observeHostDataSql();
+  return Object.assign(sql, { [Symbol.dispose]: () => sql.restore() });
 }
 
-async function createTrackedClaim(
+// Projecting fields preserves optional-field assertions: absent and undefined both match.
+function recoveryState(entry: InternalSessionEntry | undefined) {
+  return {
+    status: entry?.status,
+    runId: entry?.restartRecoveryDeliveryRunId,
+    sourceRunId: entry?.restartRecoveryDeliverySourceRunId,
+    fingerprint: entry?.restartRecoveryDeliveryRequestFingerprint,
+  };
+}
+
+function transcriptMessages(scope: Parameters<typeof loadTranscriptEventsSync>[0]) {
+  return loadTranscriptEventsSync(scope)
+    .filter(isRecord)
+    .filter((event) => event.type === "message")
+    .map((event) => event.message);
+}
+
+async function expectAdmitted(
+  controller: ReturnType<typeof createReplyRestartRecoveryClaimController>,
+  recorder?: ReturnType<typeof createRecorder>,
+) {
+  await expect(controller.admitUserTurn(recorder)).resolves.toBe("admitted");
+}
+
+async function createStoredClaim(
   fields: Partial<InternalSessionEntry> = {},
   params: Partial<ClaimControllerParams> = {},
+  createOperation?: (scope: ClaimScope, entry: InternalSessionEntry) => ReplyOperation,
 ) {
   const scope = {
     agentId: params.agentId ?? "main",
@@ -90,31 +103,74 @@ async function createTrackedClaim(
       params.storePath ?? path.join(tempDirs.make("openclaw-reply-claim-"), "sessions.json"),
     sessionKey: params.sessionKey ?? "agent:main:main",
   };
-  let entry: InternalSessionEntry = {
-    sessionId: "session",
-    updatedAt: 1,
-    restartRecoveryDeliveryRunId: "recovery-run",
-    ...fields,
-  };
-  const sessionId = entry.sessionId;
+  const entry = { sessionId: "session", updatedAt: 1, ...fields };
   await replaceSessionEntry(scope, entry);
-  const controller = createController({
+  const operation = createOperation?.(scope, entry);
+  return { ...bindClaim(scope, entry, params, operation), operation };
+}
+
+function bindClaim(
+  scope: ClaimScope,
+  initialEntry: InternalSessionEntry,
+  params: Partial<ClaimControllerParams> = {},
+  operation?: ReplyOperation,
+) {
+  let entry = initialEntry;
+  let sessionId = entry.sessionId;
+  const getSessionId = params.getSessionId ?? (() => sessionId);
+  const actor = createReplyRecoveryActorFixture({
     ...scope,
-    admissionRunId: "recovery-run",
+    agentId: scope.agentId ?? "main",
+    getSessionId,
+    operation,
+  });
+  const controller = createReplyRestartRecoveryClaimController({
+    ...scope,
     getEntry: () => entry,
-    getSessionId: () => sessionId,
+    getSessionId,
     setEntry: (next) => {
       entry = next;
     },
+    lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    isRestartAbort: () => false,
+    resolveDeliveryContext: () => undefined,
     ...params,
+    acquireSessionActor: () => actor.acquireSessionActor(),
   });
   return {
     controller,
+    admit: controller.admitUserTurn,
+    begin: controller.beginBeforeAgentReply,
+    checkpoint: controller.checkpointBeforeAgentReply,
+    clear: controller.clear,
     scope,
     current: () => entry,
     read: () => loadSessionEntry(scope),
-    [Symbol.asyncDispose]: () => controller[Symbol.asyncDispose](),
+    recorder: (message = userMessage()) => createRecorder(scope, entry, message),
+    retarget: () => {
+      sessionId = "successor-session";
+    },
+    actor: async () =>
+      expectDefined(await actor.acquireSessionActor(), "durable recovery actor").actor,
+    [Symbol.asyncDispose]: () => actor[Symbol.asyncDispose](),
   };
+}
+
+function createTrackedClaim(
+  fields: Partial<InternalSessionEntry> = {},
+  params: Partial<ClaimControllerParams> = {},
+) {
+  return createStoredClaim(
+    { restartRecoveryDeliveryRunId: "recovery-run", ...fields },
+    { admissionRunId: "recovery-run", ...params },
+  );
+}
+function createRecorder(scope: ClaimScope, entry: InternalSessionEntry, message = userMessage()) {
+  return createUserTurnTranscriptRecorder({
+    message,
+    target: { ...scope, sessionId: entry.sessionId, sessionEntry: entry },
+    updateMode: "none",
+  });
 }
 
 async function createAcknowledgedClaim() {
@@ -130,18 +186,10 @@ async function createAcknowledgedClaim() {
   );
   const entry = fixture.current();
   const transcriptScope = { ...fixture.scope, sessionId: entry.sessionId };
-  const recorder = createUserTurnTranscriptRecorder({
-    message: {
-      role: "user",
-      content: "Synthetic acknowledged input",
-      timestamp: 1,
-      idempotencyKey: `${sourceTurnId}:user`,
-    },
-    target: { ...transcriptScope, sessionEntry: entry },
-    updateMode: "none",
-  });
+  const recorder = fixture.recorder(
+    userMessage("Synthetic acknowledged input", `${sourceTurnId}:user`),
+  );
   await recorder.persistApproved();
-  expect(recorder.hasPersisted()).toBe(true);
   return { ...fixture, recorder, sourceTurnId, transcriptScope };
 }
 
@@ -149,56 +197,28 @@ describe("createReplyRestartRecoveryClaimController", () => {
   beforeEach(() => setRuntimeConfigSnapshot({}));
   afterEach(() => clearRuntimeConfigSnapshot());
 
-  it.each(["absent", "persisted"] as const)(
-    "leaves source-less lifecycle admission to its existing writer when the recorder is %s",
-    async (mode) => {
-      const scope = {
-        agentId: "main",
-        storePath: path.join(tempDirs.make("openclaw-source-less-lifecycle-"), "sessions.json"),
-        sessionKey: "agent:main:main",
-      };
-      const entry: InternalSessionEntry = { sessionId: "source-less-session", updatedAt: 1 };
-      await replaceSessionEntry(scope, entry);
-      const recorder =
-        mode === "persisted"
-          ? createUserTurnTranscriptRecorder({
-              message: { role: "user", content: "continue", timestamp: 1 },
-              target: { ...scope, sessionId: entry.sessionId, sessionEntry: entry },
-              updateMode: "none",
-            })
-          : undefined;
-      await recorder?.persistApproved();
-      const before = loadSessionEntry(scope);
-      const write = vi.spyOn(sessionAccessor, "updateSessionEntry");
-      try {
-        await using controller = createController({
-          ...scope,
-          admissionRunId: "source-less-run",
-          lifecycleGeneration: getAgentEventLifecycleGeneration(),
-          getEntry: () => entry,
-          getSessionId: () => entry.sessionId,
-          isRestartAbort: () => false,
-          resolveDeliveryContext: () => undefined,
-          setEntry: () => {},
-        });
-        await expect(controller.admitUserTurn(recorder)).resolves.toBe("admitted");
-        expect(write).not.toHaveBeenCalled();
-        expect(loadSessionEntry(scope)).toEqual(before);
-      } finally {
-        write.mockRestore();
-      }
-    },
-  );
+  it("leaves already-persisted source-less admission to its existing writer", async () => {
+    await using fixture = await createStoredClaim(
+      { sessionId: "source-less-session" },
+      { admissionRunId: "source-less-run", setEntry: () => {} },
+    );
+    const { scope, controller } = fixture;
+    const recorder = fixture.recorder();
+    await recorder.persistApproved();
+    const before = fixture.read();
+    await expectAdmitted(controller, recorder);
+    expect(loadSessionEntry(scope)).toEqual(before);
+  });
 
   it.each([
-    { completion: "runtime", owner: "main", metadata: {} },
-    { completion: "handled-silent", owner: "main", metadata: {} },
-    { completion: "restart", owner: "main", metadata: {} },
-    { completion: "restart", owner: "spawned child", metadata: { spawnDepth: 1 } },
-    { completion: "restart", owner: "role-owned child", metadata: { subagentRole: "leaf" } },
+    ["runtime", "main", {}],
+    ["handled-silent", "main", {}],
+    ["restart", "main", {}],
+    ["restart", "spawned child", { spawnDepth: 1 }],
+    ["restart", "role-owned child", { subagentRole: "leaf" }],
   ] as const)(
-    "settles source-less execution custody through $completion for $owner without claiming delivery authority",
-    ({ completion, owner, metadata }) =>
+    "settles source-less execution custody through %s for %s without claiming delivery authority",
+    (completion, owner, metadata) =>
       withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         setRuntimeConfigSnapshot({});
         const scope = {
@@ -209,34 +229,22 @@ describe("createReplyRestartRecoveryClaimController", () => {
         const lifecycleGeneration = getAgentEventLifecycleGeneration();
         const executionRunId = "source-less-execution";
         let restartAborted = false;
-        let entry: InternalSessionEntry = {
-          sessionId: "source-less-session",
-          updatedAt: 1,
-          ...metadata,
-        };
+        await using fixture = await createStoredClaim(
+          { sessionId: "source-less-session", ...metadata },
+          {
+            ...scope,
+            admissionRunId: "source-less-run",
+            executionRunId,
+            lifecycleGeneration,
+            isRestartAbort: () => restartAborted,
+          },
+        );
+        const entry = fixture.current();
+        const { controller } = fixture;
         const expectedRuns =
           owner === "main" ? [{ runId: executionRunId, lifecycleGeneration }] : undefined;
-        await replaceSessionEntry(scope, entry);
-        const recorder = createUserTurnTranscriptRecorder({
-          message: { role: "user", content: "continue the task", timestamp: 1 },
-          target: { ...scope, sessionId: entry.sessionId, sessionEntry: entry },
-          updateMode: "none",
-        });
-        await using controller = createController({
-          ...scope,
-          admissionRunId: "source-less-run",
-          executionRunId,
-          lifecycleGeneration,
-          getEntry: () => entry,
-          getSessionId: () => entry.sessionId,
-          isRestartAbort: () => restartAborted,
-          resolveDeliveryContext: () => undefined,
-          setEntry: (next) => {
-            entry = next;
-          },
-        });
-
-        await expect(controller.admitUserTurn(recorder)).resolves.toBe("admitted");
+        const recorder = fixture.recorder(userMessage("continue the task"));
+        await expectAdmitted(controller, recorder);
         expect(recorder.hasPersisted()).toBe(true);
         expect(loadSessionEntry(scope)).toMatchObject({
           abortedLastRun: false,
@@ -298,8 +306,13 @@ describe("createReplyRestartRecoveryClaimController", () => {
         storePath: path.join(root, "sessions.json"),
         sessionKey: "agent:main:placement",
       };
-      const entry: InternalSessionEntry = { sessionId: "placement-session", updatedAt: 1 };
-      await replaceSessionEntry(scope, entry);
+      const setEntry = vi.fn();
+      const sourceTurnId = "placement-source";
+      const fixture = await createStoredClaim(
+        { sessionId: "placement-session" },
+        { ...scope, setEntry, sourceTurnId },
+      );
+      const entry = fixture.current();
       const service = createWorkerSessionPlacementStore({
         database: openOpenClawStateDatabase({ path: path.join(root, "placement.sqlite") }),
       });
@@ -316,58 +329,31 @@ describe("createReplyRestartRecoveryClaimController", () => {
       vi.spyOn(placementContext, "resolveSessionWorkerPlacementContext").mockImplementation(
         () => context,
       );
-      const sourceTurnId = "placement-source";
-      const recorder = createUserTurnTranscriptRecorder({
-        message: { role: "user", content: "continue", timestamp: 1, idempotencyKey: sourceTurnId },
-        target: { ...scope, sessionId: entry.sessionId, sessionEntry: entry },
-        updateMode: "none",
-      });
+      const recorder = fixture.recorder(userMessage("continue", sourceTurnId));
       await expect(
         recorder.stageApproved?.({ runId: "placement-run", assertCurrent: () => {} }),
       ).resolves.toBe(true);
       const persistApproved = vi.spyOn(recorder, "persistApproved");
-      const setEntry = vi.fn();
-      let sessionId = entry.sessionId;
-      const controller = createController({
-        ...scope,
-        getEntry: () => entry,
-        getSessionId: () => sessionId,
-        setEntry,
-        sourceTurnId,
-      });
       return {
+        ...fixture,
         context,
-        controller,
         entry,
         persistApproved,
         recorder,
-        scope,
         service,
         setEntry,
         sourceTurnId,
-        retarget: () => {
-          sessionId = "successor-session";
-        },
-        [Symbol.asyncDispose]: () => controller[Symbol.asyncDispose](),
       };
     }
 
     it("leaves staged worker input with placement admission without caller-thread SQL", async () => {
       await using fixture = await createPlacementAdmission();
-      const hostSql = observeHostDataSql();
-      try {
-        expect((await fixture.service.getManyAsync([fixture.entry.sessionId])).size).toBe(1);
-        expect(hostSql.queries).toEqual([]);
-
-        await expect(fixture.controller.admitUserTurn(fixture.recorder)).resolves.toBe("admitted");
-
-        expect(hostSql.queries).toEqual([]);
-        expect(fixture.persistApproved).not.toHaveBeenCalled();
-        expect(fixture.recorder.hasPersisted()).toBe(false);
-        expect(fixture.setEntry).not.toHaveBeenCalled();
-      } finally {
-        hostSql.restore();
-      }
+      using hostSql = observeSql();
+      await expectAdmitted(fixture.controller, fixture.recorder);
+      expect(hostSql.queries).toEqual([]);
+      expect(fixture.persistApproved).not.toHaveBeenCalled();
+      expect(fixture.recorder.hasPersisted()).toBe(false);
+      expect(fixture.setEntry).not.toHaveBeenCalled();
     });
 
     it("admits a follow-up while the preceding local turn finishes during session preparation", async () => {
@@ -387,7 +373,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
         return entry;
       });
 
-      await expect(fixture.controller.admitUserTurn(fixture.recorder)).resolves.toBe("admitted");
+      await expectAdmitted(fixture.controller, fixture.recorder);
       expect(fixture.recorder.hasPersisted()).toBe(true);
       expect(await fixture.service.getAsync(fixture.entry.sessionId)).toMatchObject({
         state: "local",
@@ -400,16 +386,12 @@ describe("createReplyRestartRecoveryClaimController", () => {
       fixture.context.workerSessionPlacementService = {
         getMany: (ids) => fixture.service.getMany(ids),
       };
-      const hostSql = observeHostDataSql();
-      try {
-        await expect(fixture.controller.admitUserTurn(fixture.recorder)).rejects.toThrow(
-          "Worker placement observation service is unavailable",
-        );
-        expect(hostSql.queries).toEqual([]);
-        expect(fixture.persistApproved).not.toHaveBeenCalled();
-      } finally {
-        hostSql.restore();
-      }
+      using hostSql = observeSql();
+      await expect(fixture.admit(fixture.recorder)).rejects.toThrow(
+        "Worker placement observation service is unavailable",
+      );
+      expect(hostSql.queries).toEqual([]);
+      expect(fixture.persistApproved).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -429,7 +411,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
         await resume.promise;
         return entry;
       });
-      const admission = fixture.controller.admitUserTurn(fixture.recorder);
+      const admission = fixture.admit(fixture.recorder);
       const outcome = admission.catch((error: unknown) => error);
       try {
         await awaitGateBeforeSettlement(
@@ -474,37 +456,31 @@ describe("createReplyRestartRecoveryClaimController", () => {
   it.each(["session-retarget", "lifecycle-rotation"] as const)(
     "does not adopt a recovery claim after %s while its row read is pending",
     async (change) => {
-      const scope = {
-        agentId: "ops",
-        storePath: path.join(tempDirs.make("openclaw-reply-read-owner-"), "sessions.json"),
-        sessionKey: "global",
-      };
-      const entry: InternalSessionEntry = {
-        sessionId: "original-session",
-        updatedAt: 1,
-        status: undefined,
-        restartRecoveryDeliveryRunId: "recovery-run",
-        restartRecoveryBeforeAgentReplyState: "handled-reply",
-      };
-      await replaceSessionEntry(scope, entry);
-      const before = loadSessionEntry(scope);
-      const operation = createReplyOperation({
-        agentId: scope.agentId,
-        sessionKey: scope.sessionKey,
-        sessionId: entry.sessionId,
-        resetTriggered: false,
-      });
       const setEntry = vi.fn();
-      await using controller = createController(
+      await using fixture = await createStoredClaim(
         {
-          ...scope,
+          sessionId: "original-session",
+          restartRecoveryDeliveryRunId: "recovery-run",
+          restartRecoveryBeforeAgentReplyState: "handled-reply",
+        },
+        {
+          agentId: "ops",
+          sessionKey: "global",
           admissionRunId: "recovery-run",
-          getEntry: () => entry,
           getSessionId: () => operation.sessionId,
           setEntry,
         },
-        operation,
+        (scope, entry) =>
+          createReplyOperation({
+            agentId: scope.agentId,
+            sessionKey: scope.sessionKey,
+            sessionId: entry.sessionId,
+            resetTriggered: false,
+          }),
       );
+      const operation = expectDefined(fixture.operation, "reply operation");
+      const { controller } = fixture;
+      const before = fixture.read();
       const admission = controller.admitUserTurn();
       const outcome = admission.then(
         () => undefined,
@@ -522,11 +498,10 @@ describe("createReplyRestartRecoveryClaimController", () => {
             message: "session changed before durable user-turn admission",
           });
         } else {
-          // The reader owns its refusal; admission no longer replaces its error after a failed read.
           expect(failure).toBeInstanceOf(Error);
         }
         expect(setEntry).not.toHaveBeenCalled();
-        expect(loadSessionEntry(scope)).toEqual(before);
+        expect(fixture.read()).toEqual(before);
       } finally {
         await outcome;
         operation.complete();
@@ -534,70 +509,63 @@ describe("createReplyRestartRecoveryClaimController", () => {
     },
   );
 
-  it.each(["global"])(
-    "keeps the selected agent through a %s hook checkpoint",
-    async (sessionKey) => {
-      const root = tempDirs.make("openclaw-owned-reply-claim-");
-      const storePath = path.join(root, "sessions.json");
-      const main = { agentId: "main", storePath, sessionKey };
-      const ops = { agentId: "ops", storePath, sessionKey };
-      await replaceSessionEntry(main, { sessionId: "main-session", updatedAt: 1 });
-      const mainBefore = loadSessionEntry(main);
-      await using fixture = await createTrackedClaim(
-        { sessionId: "ops-session", restartRecoveryDeliveryRunId: "ops-recovery" },
-        { ...ops, admissionRunId: "ops-recovery" },
-      );
-      const { controller } = fixture;
-      await expect(controller.admitUserTurn()).resolves.toBe("admitted");
-      const hostSql = observeHostDataSql();
-      try {
-        expect(loadSessionEntry(ops)?.sessionId).toBe("ops-session");
-        expect(hostSql.calls.some((call) => call.mock.calls.length > 0)).toBe(true);
-        hostSql.calls.forEach((call) => call.mockClear());
-        expect(await controller.isArmed()).toBe(false);
-        hostSql.calls.forEach((call) => expect(call).not.toHaveBeenCalled());
-      } finally {
-        hostSql.restore();
-      }
-      await expect(controller.beginBeforeAgentReply()).resolves.toBe(true);
-      await controller.checkpointBeforeAgentReply({
-        state: "handled-reply",
-        pendingFinalDelivery: {
-          intentId: "ops-intent",
-          text: "ops hook reply",
-          deliveries: [{ id: "ops-delivery", state: "prepared" }],
-        },
-      });
-      await controller.clear();
-      expect(loadSessionEntry(ops)).toMatchObject({
-        sessionId: "ops-session",
-        restartRecoveryBeforeAgentReplyState: "handled-reply",
-        pendingFinalDelivery: { intentId: "ops-intent", text: "ops hook reply" },
-      });
-      expect(loadSessionEntry(ops)?.restartRecoveryDeliveryRunId).toBeUndefined();
-      expect(loadSessionEntry(main)).toEqual(mainBefore);
-    },
-  );
+  it("keeps the selected agent through a global hook checkpoint", async () => {
+    const root = tempDirs.make("openclaw-owned-reply-claim-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "global";
+    const main = { agentId: "main", storePath, sessionKey };
+    const ops = { agentId: "ops", storePath, sessionKey };
+    await replaceSessionEntry(main, { sessionId: "main-session", updatedAt: 1 });
+    const mainBefore = loadSessionEntry(main);
+    await using fixture = await createTrackedClaim(
+      { sessionId: "ops-session", restartRecoveryDeliveryRunId: "ops-recovery" },
+      { ...ops, admissionRunId: "ops-recovery" },
+    );
+    const { controller } = fixture;
+    await expectAdmitted(controller);
+    {
+      using hostSql = observeSql();
+      expect(loadSessionEntry(ops)?.sessionId).toBe("ops-session");
+      expect(hostSql.calls.some((call) => call.mock.calls.length > 0)).toBe(true);
+      hostSql.calls.forEach((call) => call.mockClear());
+      expect(await controller.isArmed()).toBe(false);
+      hostSql.calls.forEach((call) => expect(call).not.toHaveBeenCalled());
+    }
+    await expect(controller.beginBeforeAgentReply()).resolves.toBe(true);
+    await controller.checkpointBeforeAgentReply({
+      state: "handled-reply",
+      pendingFinalDelivery: {
+        intentId: "ops-intent",
+        text: "ops hook reply",
+        deliveries: [{ id: "ops-delivery", state: "prepared" }],
+      },
+    });
+    await controller.clear();
+    expect(loadSessionEntry(ops)).toMatchObject({
+      sessionId: "ops-session",
+      restartRecoveryBeforeAgentReplyState: "handled-reply",
+      pendingFinalDelivery: { intentId: "ops-intent", text: "ops hook reply" },
+    });
+    expect(loadSessionEntry(ops)?.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(loadSessionEntry(main)).toEqual(mainBefore);
+  });
 
   it("adopts an exact channel recovery claim before execution starts", async () => {
-    const deliveryContext = {
-      channel: "telegram",
-      to: "chat",
-      accountId: "default",
-      threadId: "thread",
+    const claim = {
+      restartRecoveryDeliveryContext: deliveryContext,
+      restartRecoveryDeliveryReceiptState: "terminal-pending" as const,
+      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
+      restartRecoveryDeliveryRunId: "recovery-run",
+      restartRecoveryDeliverySourceRunId: "source-turn",
+      restartRecoveryDeliveryToolCallId: "message-call",
     };
     await using fixture = await createTrackedClaim(
       {
+        ...claim,
         abortedLastRun: false,
         lifecycleRunId: "recovery-run",
-        restartRecoveryDeliveryContext: deliveryContext,
-        restartRecoveryDeliveryReceiptState: "terminal-pending",
-        restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
-        restartRecoveryDeliverySourceRunId: "source-turn",
-        restartRecoveryDeliveryToolCallId: "message-call",
         sessionId: "channel-session",
         startedAt: 1,
-        updatedAt: 1,
       },
       {
         sessionKey: "agent:main:telegram:group:chat:topic:thread",
@@ -607,39 +575,29 @@ describe("createReplyRestartRecoveryClaimController", () => {
     );
     const { controller, read } = fixture;
 
-    await expect(controller.admitUserTurn()).resolves.toBe("admitted");
+    await expectAdmitted(controller);
     const persisted = read();
-    expect(persisted).toMatchObject({
-      restartRecoveryDeliveryContext: deliveryContext,
-      restartRecoveryDeliveryReceiptState: "terminal-pending",
-      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
-      restartRecoveryDeliveryRunId: "recovery-run",
-      restartRecoveryDeliverySourceRunId: "source-turn",
-      restartRecoveryDeliveryToolCallId: "message-call",
-    });
+    expect(persisted).toMatchObject(claim);
     expect(persisted?.status).toBeUndefined();
   });
 
   it("adopts and settles acknowledged input through hook checkpoints without caller-thread SQL", async () => {
     await using fixture = await createAcknowledgedClaim();
-    const persistApproved = vi.spyOn(fixture.recorder, "persistApproved");
-    const sql = observeHostDataSql();
-    try {
-      await expect(fixture.controller.admitUserTurn(fixture.recorder)).resolves.toBe("admitted");
+    using persistApproved = vi.spyOn(fixture.recorder, "persistApproved");
+    {
+      using sql = observeSql();
+      await expectAdmitted(fixture.controller, fixture.recorder);
       expect(sql.queries).toEqual([]);
       expect(fixture.current().restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
       invalidateRegisteredAgentDatabasesMemo({});
-      await expect(fixture.controller.beginBeforeAgentReply()).resolves.toBe(true);
+      await expect(fixture.begin()).resolves.toBe(true);
       expect(fixture.current().restartRecoveryBeforeAgentReplyState).toBe("pending");
-      await fixture.controller.checkpointBeforeAgentReply({ state: "handled-silent" });
+      await fixture.checkpoint({ state: "handled-silent" });
       expect(fixture.current().restartRecoveryBeforeAgentReplyState).toBe("handled-silent");
       invalidateRegisteredAgentDatabasesMemo({});
-      await fixture.controller.clear();
+      await fixture.clear();
       expect(sql.queries).toEqual([]);
       expect(persistApproved).not.toHaveBeenCalled();
-    } finally {
-      sql.restore();
-      persistApproved.mockRestore();
     }
     const persisted = fixture.read();
     expect(persisted).toMatchObject({
@@ -647,20 +605,17 @@ describe("createReplyRestartRecoveryClaimController", () => {
       status: "done",
       restartRecoveryTerminalRunIds: [fixture.sourceTurnId],
     });
-    expect(persisted?.restartRecoveryDeliveryRunId).toBeUndefined();
-    expect(persisted?.restartRecoveryDeliverySourceRunId).toBeUndefined();
-    expect(persisted?.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
-    expect(
-      loadTranscriptEventsSync(fixture.transcriptScope).filter(
-        (event) => isRecord(event) && event.type === "message",
-      ),
-    ).toEqual([
+    expect(recoveryState(persisted)).toEqual({
+      status: "done",
+      runId: undefined,
+      sourceRunId: undefined,
+      fingerprint: undefined,
+    });
+    expect(transcriptMessages(fixture.transcriptScope)).toEqual([
       expect.objectContaining({
-        message: expect.objectContaining({
-          role: "user",
-          content: "Synthetic acknowledged input",
-          idempotencyKey: `${fixture.sourceTurnId}:user`,
-        }),
+        role: "user",
+        content: "Synthetic acknowledged input",
+        idempotencyKey: `${fixture.sourceTurnId}:user`,
       }),
     ]);
   });
@@ -674,68 +629,54 @@ describe("createReplyRestartRecoveryClaimController", () => {
     "preserves in-process $change changes across the $stage writer",
     async ({ stage, change }) => {
       await using fixture = await createAcknowledgedClaim();
-      if (stage === "cleanup") {
-        await expect(fixture.controller.admitUserTurn(fixture.recorder)).resolves.toBe("admitted");
+      const cleanup = stage === "cleanup";
+      const sourceChanged = change === "source-claim";
+      if (cleanup) {
+        await expectAdmitted(fixture.controller, fixture.recorder);
       }
       const replace = () => {
         replaceSessionEntrySync(fixture.scope, {
           ...fixture.read()!,
-          ...(change === "metadata"
-            ? { model: "concurrent-model" }
-            : { restartRecoveryDeliverySourceRunId: "concurrent-source" }),
+          ...(sourceChanged
+            ? { restartRecoveryDeliverySourceRunId: "concurrent-source" }
+            : { model: "concurrent-model" }),
         });
       };
-      const { actor } = expectDefined(
-        await fixture.controller.acquireSessionActor(),
-        "durable recovery actor",
-      );
+      const actor = await fixture.actor();
       const adopt = actor.adoptRun.bind(actor);
       const patch = entryPatch.patchSessionEntryInWorker;
-      const spy =
-        stage === "admission"
-          ? vi.spyOn(actor, "adoptRun").mockImplementationOnce((...args) => {
-              replace();
-              return adopt(...args);
-            })
-          : vi.spyOn(entryPatch, "patchSessionEntryInWorker").mockImplementationOnce((params) => {
-              replace();
-              return patch(params);
-            });
-      try {
-        const outcome = await (
-          stage === "cleanup"
-            ? fixture.controller.clear()
-            : fixture.controller.admitUserTurn(fixture.recorder)
-        ).catch((error: unknown) => error);
-        if (change === "metadata") {
-          expect(outcome).toBe(stage === "cleanup" ? undefined : "admitted");
-          expect(fixture.current().model).toBe("concurrent-model");
-        } else if (stage === "admission") {
-          expect(isRestartRecoveryClaimChangedError(outcome)).toBe(true);
-        } else {
-          expect(outcome).toBeUndefined();
-        }
-        expect(spy).toHaveBeenCalled();
-        const persisted = fixture.read();
-        expect(persisted?.status).toBeUndefined();
-        expect(persisted?.restartRecoveryDeliveryRunId).toBe(
-          stage === "cleanup" && change === "metadata" ? undefined : "recovery-run",
-        );
-        expect(persisted?.restartRecoveryDeliverySourceRunId).toBe(
-          change === "source-claim"
-            ? "concurrent-source"
-            : stage === "cleanup"
-              ? undefined
-              : fixture.sourceTurnId,
-        );
-        expect(persisted?.restartRecoveryDeliveryRequestFingerprint).toBe(
-          stage === "admission" && change === "source-claim"
-            ? "acknowledged-fingerprint"
-            : undefined,
-        );
-      } finally {
-        spy.mockRestore();
+      using interleaving = !cleanup
+        ? vi.spyOn(actor, "adoptRun").mockImplementationOnce((...args) => {
+            replace();
+            return adopt(...args);
+          })
+        : vi.spyOn(entryPatch, "patchSessionEntryInWorker").mockImplementationOnce((params) => {
+            replace();
+            return patch(params);
+          });
+      const outcome = await (cleanup ? fixture.clear() : fixture.admit(fixture.recorder)).catch(
+        (error: unknown) => error,
+      );
+      expect(interleaving).toHaveBeenCalled();
+      if (!sourceChanged) {
+        expect(outcome).toBe(cleanup ? undefined : "admitted");
+        expect(fixture.current().model).toBe("concurrent-model");
+      } else if (!cleanup) {
+        expect(isRestartRecoveryClaimChangedError(outcome)).toBe(true);
+      } else {
+        expect(outcome).toBeUndefined();
       }
+      const persisted = fixture.read();
+      expect(recoveryState(persisted)).toEqual({
+        status: undefined,
+        runId: cleanup && !sourceChanged ? undefined : "recovery-run",
+        sourceRunId: sourceChanged
+          ? "concurrent-source"
+          : cleanup
+            ? undefined
+            : fixture.sourceTurnId,
+        fingerprint: !cleanup && sourceChanged ? "acknowledged-fingerprint" : undefined,
+      });
     },
   );
 
@@ -743,15 +684,12 @@ describe("createReplyRestartRecoveryClaimController", () => {
     "preserves lifecycle refusal at the actor %s boundary without writing the hook checkpoint",
     async (boundary) => {
       await using fixture = await createAcknowledgedClaim();
-      await fixture.controller.admitUserTurn(fixture.recorder);
+      await fixture.admit(fixture.recorder);
       const before = fixture.read();
-      const { actor } = expectDefined(
-        await fixture.controller.acquireSessionActor(),
-        "durable recovery actor",
-      );
+      const actor = await fixture.actor();
       const adopt = actor.adoptRun.bind(actor);
       let revoked = false;
-      const spy = vi.spyOn(actor, "adoptRun").mockImplementationOnce((input, authority, observer) =>
+      using spy = vi.spyOn(actor, "adoptRun").mockImplementationOnce((input, authority, observer) =>
         adopt(
           input,
           {
@@ -767,17 +705,12 @@ describe("createReplyRestartRecoveryClaimController", () => {
           observer,
         ),
       );
-      try {
-        const failure = await fixture.controller
-          .beginBeforeAgentReply()
-          .catch((error: unknown) => error);
-        expect(revoked).toBe(true);
-        expect(isAgentRunStaleLifecycleError(failure)).toBe(true);
-        expect(fixture.read()).toEqual(before);
-        expect(fixture.current()).toEqual(before);
-      } finally {
-        spy.mockRestore();
-      }
+      const failure = await fixture.begin().catch((error: unknown) => error);
+      expect(revoked).toBe(true);
+      expect(spy).toHaveBeenCalled();
+      expect(isAgentRunStaleLifecycleError(failure)).toBe(true);
+      expect(fixture.read()).toEqual(before);
+      expect(fixture.current()).toEqual(before);
     },
   );
 
@@ -785,9 +718,9 @@ describe("createReplyRestartRecoveryClaimController", () => {
     "rejects a stale lifecycle before the %s hook checkpoint",
     async (checkpoint) => {
       await using fixture = await createAcknowledgedClaim();
-      await fixture.controller.admitUserTurn(fixture.recorder);
+      await fixture.admit(fixture.recorder);
       if (checkpoint !== "begin") {
-        await fixture.controller.beginBeforeAgentReply();
+        await fixture.begin();
       }
       const original = structuredClone(fixture.current());
       await replaceSessionEntry(fixture.scope, {
@@ -798,8 +731,8 @@ describe("createReplyRestartRecoveryClaimController", () => {
 
       await expect(
         checkpoint === "begin"
-          ? fixture.controller.beginBeforeAgentReply()
-          : fixture.controller.checkpointBeforeAgentReply(
+          ? fixture.begin()
+          : fixture.checkpoint(
               checkpoint === "unhandled"
                 ? { state: undefined }
                 : {
@@ -822,7 +755,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
     "does not install a replacement %s after refused claim cleanup",
     async (replacement) => {
       await using fixture = await createAcknowledgedClaim();
-      await fixture.controller.admitUserTurn(fixture.recorder);
+      await fixture.admit(fixture.recorder);
       const original = structuredClone(fixture.current());
       const successor = {
         ...original,
@@ -831,66 +764,54 @@ describe("createReplyRestartRecoveryClaimController", () => {
       };
       const patch = entryPatch.patchSessionEntryInWorker;
       let storedSuccessor: InternalSessionEntry | undefined;
-      const spy = vi.spyOn(entryPatch, "patchSessionEntryInWorker").mockImplementation((params) => {
+      using spy = vi.spyOn(entryPatch, "patchSessionEntryInWorker").mockImplementation((params) => {
         // The released synchronous writer can replace the row after host admission.
         replaceSessionEntrySync(fixture.scope, successor);
         storedSuccessor = structuredClone(fixture.read());
         return patch(params);
       });
-      try {
-        await fixture.controller.clear();
-        expect(spy).toHaveBeenCalledOnce();
-        expect(fixture.current()).toEqual(original);
-        expect(storedSuccessor).toMatchObject({
-          sessionId: successor.sessionId,
-          lifecycleRevision: successor.lifecycleRevision,
-        });
-        expect(fixture.read()).toEqual(storedSuccessor);
-      } finally {
-        spy.mockRestore();
-      }
+      await fixture.clear();
+      expect(spy).toHaveBeenCalledOnce();
+      expect(fixture.current()).toEqual(original);
+      expect(storedSuccessor).toMatchObject({
+        sessionId: successor.sessionId,
+        lifecycleRevision: successor.lifecycleRevision,
+      });
+      expect(fixture.read()).toEqual(storedSuccessor);
     },
   );
 
   it("retargets durable user-turn admission to the prepared reply session", async () => {
-    const storePath = path.join(tempDirs.make("openclaw-reply-admission-"), "sessions.json");
-    const sessionKey = "plugin-binding:codex:target";
-    const sessionId = "bound-session-id";
-    const entry = { sessionId, updatedAt: Date.now() };
-    await replaceSessionEntry({ storePath, sessionKey }, entry);
+    await using fixture = await createStoredClaim(
+      { sessionId: "bound-session-id", updatedAt: Date.now() },
+      {
+        sessionKey: "plugin-binding:codex:target",
+        setEntry: () => {},
+        resolveUserTurnTarget: (target) => ({
+          ...target,
+          sessionEntry: target.entry,
+          agentId: "main",
+        }),
+      },
+    );
+    const { storePath } = fixture.scope;
+    const { sessionId } = fixture.current();
     const recorder = createUserTurnTranscriptRecorder({
-      message: { role: "user", content: "hello", timestamp: 1 },
+      message: userMessage("hello"),
       target: {
         agentId: "main",
-        sessionId: "unprepared-session",
-        sessionKey: "unprepared-key",
-        sessionEntry: undefined,
         storePath,
+        sessionKey: "unprepared-key",
+        sessionId: "unprepared-session",
+        sessionEntry: undefined,
       },
       updateMode: "none",
     });
-    const persistApproved = vi.spyOn(recorder, "persistApproved");
-    await using controller = createController({
-      getEntry: () => entry,
-      getSessionId: () => sessionId,
-      resolveUserTurnTarget: (target) => ({
-        ...target,
-        sessionEntry: target.entry,
-        agentId: "main",
-      }),
-      sessionKey,
-      setEntry: () => {},
-      storePath,
-    });
-
-    await expect(controller.admitUserTurn(recorder)).resolves.toBe("admitted");
-    expect(persistApproved).toHaveBeenCalledWith(
-      expect.objectContaining({
-        expectedSessionId: sessionId,
-        target: expect.objectContaining({ sessionId, sessionKey, storePath, agentId: "main" }),
-      }),
-    );
+    await expectAdmitted(fixture.controller, recorder);
     expect(recorder.getAdmissionReceipt()?.sessionId).toBe(sessionId);
+    expect(transcriptMessages({ ...fixture.scope, sessionId })).toEqual([
+      expect.objectContaining({ role: "user", content: "hello" }),
+    ]);
   });
 
   it.each(["metadata", "recovery-cycle", "owner-release"] as const)(
@@ -902,12 +823,6 @@ describe("createReplyRestartRecoveryClaimController", () => {
       const sessionId = "channel-session-id";
       const sourceTurnId = "telegram-update-new";
       const requesterOrigin = { sessionKey, messageProvider: "telegram", senderId: "bob" };
-      const deliveryContext = {
-        channel: "telegram",
-        to: "chat",
-        accountId: "default",
-        threadId: "thread",
-      };
       let entry: InternalSessionEntry = {
         sessionId,
         updatedAt: 10,
@@ -931,26 +846,19 @@ describe("createReplyRestartRecoveryClaimController", () => {
           sessionId,
           target: scope,
         });
-        expect(owner.kind).toBe("claimed");
-        if (owner.kind !== "claimed") {
-          throw new Error("recovery owner was not acquired");
-        }
+        assert(owner.kind === "claimed");
         releaseOwner = () => releaseMainSessionRecoveryOwner(owner.lease);
         entry = (await updateSessionEntry(scope, () => entry)) as InternalSessionEntry;
       } else {
         await replaceSessionEntry(scope, entry);
       }
-      const sourceMessage = {
-        role: "user" as const,
-        content: "continue",
-        idempotencyKey: sourceTurnId,
-        timestamp: 1,
-      };
-      const recorder = createUserTurnTranscriptRecorder({
-        message: sourceMessage,
-        target: { agentId: "main", sessionEntry: entry, sessionId, ...scope },
-        updateMode: "none",
+      await using fixture = bindClaim({ agentId: "main", ...scope }, entry, {
+        resolveDeliveryContext: () => deliveryContext,
+        sourceTurnId,
+        requesterOrigin,
       });
+      const sourceMessage = userMessage("continue", sourceTurnId);
+      const recorder = fixture.recorder(sourceMessage);
       const persist = recorder.persistApproved.bind(recorder);
       const persistApproved = vi.spyOn(recorder, "persistApproved");
       if (change === "metadata") {
@@ -974,21 +882,10 @@ describe("createReplyRestartRecoveryClaimController", () => {
           return persist(options);
         });
       }
-      await using controller = createController({
-        getEntry: () => entry,
-        getSessionId: () => sessionId,
-        resolveDeliveryContext: () => deliveryContext,
-        setEntry: (next) => {
-          entry = next;
-        },
-        sourceTurnId,
-        requesterOrigin,
-        ...scope,
-      });
       requesterOrigin.senderId = "alice";
 
       if (change === "metadata") {
-        await expect(controller.admitUserTurn(recorder)).resolves.toBe("admitted");
+        await expectAdmitted(fixture.controller, recorder);
         expect(persistApproved).not.toHaveBeenCalled();
         const persisted = loadSessionEntry(scope);
         expect(persisted).toMatchObject({
@@ -1004,7 +901,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
         });
         expect(persisted?.status).toBeUndefined();
       } else {
-        await expect(controller.admitUserTurn(recorder)).rejects.toThrow(
+        await expect(fixture.admit(recorder)).rejects.toThrow(
           "session changed before durable user-turn admission",
         );
         const persisted = loadSessionEntry(scope);

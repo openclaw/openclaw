@@ -81,6 +81,24 @@ export function createVisibleAssistantResultEventMatcher(
 
 export type { SessionTranscriptEventMatch } from "../config/sessions/session-history-read.types.js";
 
+/** Reads a successful inline widget result from either transcript tool representation. */
+export function readInlineWidgetReceipt(message: unknown): Record<string, unknown> | undefined {
+  const record = asOptionalRecord(message);
+  if (!record) {
+    return undefined;
+  }
+  const activity = readNestedToolActivity(record);
+  const tool = activity?.details ?? (record.role === "toolResult" ? record : undefined);
+  const details = asOptionalRecord(activity ? activity.details.result.details : record.details);
+  return tool?.toolName === "show_widget" &&
+    tool.isError !== true &&
+    details?.kind === "canvas" &&
+    typeof asOptionalRecord(details.view)?.id === "string" &&
+    asOptionalRecord(details.presentation)?.target === "assistant_message"
+    ? details
+    : undefined;
+}
+
 /** Navigation only filters candidates; canonical content and active identity remain authoritative. */
 export function matchesTranscriptEvent(
   event: unknown,
@@ -101,16 +119,8 @@ export function matchesTranscriptEvent(
     if (projection === "navigation") {
       return message.role === "toolResult" || message.role === "custom";
     }
-    const activity = readNestedToolActivity(message);
-    const tool = activity?.details ?? (message.role === "toolResult" ? message : undefined);
-    const details = asOptionalRecord(activity ? activity.details.result.details : message.details);
-    return (
-      tool?.toolName === "show_widget" &&
-      tool.isError !== true &&
-      details?.kind === "canvas" &&
-      asOptionalRecord(details.view)?.id === match.docId &&
-      asOptionalRecord(details.presentation)?.target === "assistant_message"
-    );
+    const receipt = readInlineWidgetReceipt(message);
+    return Boolean(receipt && asOptionalRecord(receipt.view)?.id === match.docId);
   }
   if (match.kind === "idempotency") {
     return (

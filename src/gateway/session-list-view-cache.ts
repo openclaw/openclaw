@@ -79,7 +79,7 @@ export class SessionListViewCache {
   private readonly lists = new Map<string, SessionListView>();
   private rowEncodings = new WeakMap<
     GatewaySessionRow,
-    { refs: number; bytes: number; extraBytes: number }
+    { refs: number; bytes: number; extraBytes: number; factBytes: number }
   >();
   private bytes = 0;
   private refs = 0;
@@ -163,12 +163,13 @@ export class SessionListViewCache {
         this.bytes -= encoding.bytes;
         retainedBytes -= encoding.bytes;
       } else {
-        encoding = { refs: 1, bytes: sessionRowEncodingBytes(row), extraBytes: 0 };
+        encoding = { refs: 1, bytes: sessionRowEncodingBytes(row), extraBytes: 0, factBytes: 0 };
         this.rowEncodings.set(row, encoding);
       }
-      // Fact encodings can appear when a legacy view opts in while another view
-      // retains the row. Charge their growth once for that row's shared lifetime.
-      const extra = extraBytes?.(row) ?? encoding.extraBytes;
+      // Keep the per-view charge fixed. Later row/fact encodings belong to the
+      // shared lifetime, including after the view that prepared them retires.
+      encoding.factBytes = extraBytes?.(row) ?? encoding.factBytes;
+      const extra = encoding.factBytes + sessionRowEncodingBytes(row) - encoding.bytes;
       const added = extra - encoding.extraBytes;
       this.bytes += added;
       retainedBytes += added;

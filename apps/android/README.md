@@ -5,8 +5,9 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 ### App features
 
 - Pair with a Gateway using a QR code, setup code, or manual connection. Gateway credentials are stored encrypted.
-- Stream chat replies, choose models and reasoning effort, manage session permissions, and expand task progress. The draft has its own full-width row above one control row: **+**, model, and reasoning on the left; microphone and Talk/send on the right. Session permissions are inside the **+** menu, with the current access mode shown. The model name opens a compact searchable provider menu above the composer; the configured default is marked on its model row, without settings buttons in the picker. The top-right **Chat actions** menu includes **Context** with its live usage ring, which opens context usage, latest tokens, and the cost breakdown. Tap the microphone for dictation. While listening, a Stop icon replaces the microphone; tap it to finish listening. While starting or transcribing, a Close icon cancels that attempt. Long-press for voice messages or Talk, or use the Talk button beside the microphone when the draft is empty. The effort dial opens the live-preview slider and Fast mode.
+- Stream chat replies, choose models and reasoning effort, manage session permissions, and expand task progress. The draft has its own full-width row above one control row: **+**, model, and reasoning on the left; microphone and Talk/send on the right. Session permissions are inside the **+** menu, with the current access mode shown. The model name opens a compact searchable provider menu above the composer; the configured default is marked on its model row, without settings buttons in the picker. The top-right **Chat actions** menu includes **Context** with its live usage ring, which opens context usage, latest tokens, and the cost breakdown. Tap the microphone for dictation. While listening, a Stop icon replaces the microphone; tap it to finish listening. While starting or transcribing, a Close icon cancels that attempt. Long-press for voice messages or Talk, or use the Talk button beside the microphone when the draft is empty. The effort dial opens the live-preview slider and Fast mode. Both controls require Gateway write access; read-only connections cannot change them.
 - Select agents, pin sessions, and browse available native session catalogs from the sidebar. Connecting creates or adopts a dedicated Android session without resetting its history. Native sessions keep their runtime-owned model: Android shows that ownership instead of offering a model change. New session starts independently of the current native thread. Generic child-session forks and new worktrees are unavailable for those sessions; supported message-level forks remain available.
+- The sidebar reads Gateway folders and section order, including empty folders. Show more expands each section; Load more sessions fetches the next roster page without losing previously loaded members. Folder editing and migration of device-local folder names are separate from this display step.
 - Session group renames and deletions stay on the Gateway where they started. Switching Gateways never carries unfinished group changes or their error messages to the replacement Gateway.
 - Search from Overview or Settings to find settings by their displayed name or category, alongside quick actions and recent threads. Local destinations such as Appearance, Profile, and Licenses work without connecting a Gateway. Back from a settings detail returns to the screen that opened search; Desktop appears only when the connected Gateway supports it.
 - Choose a theme family, color mode, accent, and app language in **Settings → Appearance**. Theme and accent edits sync with a connected writable profile. Read-only or unknown-profile edits, including new edits after restarting offline, stay on the device; choose them again after connecting to sync. Already profile-bound edits wait for that profile to reconnect, without discarding or replacing newer device-local choices.
@@ -19,6 +20,14 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - View the phone's memory and disk meters on the Control UI Devices page. Connected Android nodes report host resource stats immediately and every 60 seconds; disk meters require an available storage sample and a Gateway that supports host stats.
 - Manage installed skills and Gateway-verified ClawHub releases, and inspect or edit automations with the required Gateway access.
 - Use the Wear OS companion for sessions, replies, aborts, and realtime Talk through the paired phone without storing Gateway credentials on the watch.
+
+## Certificate-pinned Gateways
+
+Use the app's native screens when a Gateway connection uses a stored TLS
+certificate fingerprint. Embedded Control UI pages, including terminal, desktop,
+dashboard, and browser previews, are unavailable on that connection because
+Android WebView cannot enforce the same pin for every page and WebSocket
+connection. The native Gateway connection and native chat retain their pin.
 
 ## Open in Android Studio
 
@@ -64,6 +73,13 @@ show the current percentage (tap to reset), and zoom in. Close with **X**,
 Android Back, or a stationary tap on empty background. Image taps, drags,
 and two-finger gestures do not dismiss the preview. Rotation or recreation
 refits the image rather than restoring offsets from the old viewport.
+
+Photo and voice-note messages keep their attachments after history refresh. Queued
+photos use their stored attachment bytes for previews. The default Gateway transcript
+echo appears beneath its transcribed voice note, and Copy, Share, and Reply include the
+visible transcript. Custom transcript formats remain ordinary message text. Cached
+history keeps media references and transcription state; loading an uncached photo
+still requires reconnecting to its Gateway.
 
 ## Completed work in Chat
 
@@ -592,7 +608,10 @@ pnpm android:release:validate -- \
 The harness builds the Play Debug phone app, Debug Wear app, and their
 instrumentation APKs once, then uses fresh
 API 36 phone and API 34 round Wear emulators. It owns their temporary state,
-processes, and cleanup.
+processes, and cleanup. Both emulators boot with a 16 KiB VSOCK packet limit to
+avoid large contiguous kernel allocations that can disconnect ADB during
+transfers. The harness verifies each guest's limit before installing its app and
+records it in the qualification proof.
 
 The **Android Release E2E** workflow runs this command directly, during eligible
 full manual CI at the workflow's exact source SHA, and before a manual Android
@@ -696,4 +715,4 @@ Common failure quick-fixes:
 
 ## Contributions
 
-Maintainer: @obviyus. For issues/questions/contributions, please open an issue or reach out on Discord.
+Maintainer: @obviyus. For official OpenClaw support, visit [community.openclaw.ai](https://community.openclaw.ai/). For reproducible bugs, use the [issue chooser](https://github.com/openclaw/openclaw/issues/new/choose). For contribution coordination, reach out on Discord.

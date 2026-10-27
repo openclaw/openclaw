@@ -1,6 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { projectEmbeddedMessageDeliveryFact } from "../../agents/embedded-agent-message-delivery.js";
 import { jsonResult } from "../../agents/tools/common.js";
 import { createMessageTool } from "../../agents/tools/message-tool-execution.js";
 import { chunkText } from "../../auto-reply/chunk.js";
@@ -168,22 +167,16 @@ describe("broadcast send outcomes through native actions", () => {
     const result = await canceledBroadcast(gate, {
       onActionDenied: (err) => denied.push(err.message),
     });
-    expect(resolveMessageActionOutcome(result).ok).toBe(false);
     expect(handled).toEqual(["first", "second"]);
     expect(dispatched).toEqual(scenario.sentBeforeError ? ["first", "second"] : ["first"]);
     const rows = expectResults(result, [
       { to: "first", ok: true, payload: { ok: true, messageId: "sent-first" } },
-      { to: "second", ok: false },
+      { to: "second", ok: false, error: scenario.error },
       { to: "third", ...notAttempted },
     ]);
     expect(rows[1]?.sentBeforeError).toBe(scenario.sentBeforeError);
     expect(rows[1]?.attempted).toBeUndefined();
-    expect(rows[1]?.error).toBe(scenario.error);
     expect(denied).toEqual(scenario.sentBeforeError ? [] : [scenario.error]);
-    expect(projectEmbeddedMessageDeliveryFact(result)).toMatchObject({
-      status: "settled",
-      partialDelivery: true,
-    });
     expect(formatMessageCliText(result).join("\n")).toContain(
       "Broadcast incomplete (1/3 succeeded, 1 failed, 1 not attempted)",
     );

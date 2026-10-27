@@ -1,15 +1,63 @@
+import { projectProviderError } from "@openclaw/ai/internal/shared";
 import { Value } from "typebox/value";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { ChatEventSchema } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { buildEmbeddedRunPayloads } from "../agents/embedded-agent-runner/run/payloads.js";
 import { handleAgentEnd } from "../agents/embedded-agent-subscribe.handlers.lifecycle.js";
 import { createContext } from "../agents/embedded-agent-subscribe.handlers.lifecycle.test-helpers.js";
-import { createAgentHarnessAttemptLifecycle } from "../agents/harness/attempt-events.js";
 import { makeAssistantMessageFixture } from "../agents/test-helpers/assistant-message-fixtures.js";
+import { createAgentLifecycleTerminalBackstop } from "../auto-reply/reply/agent-lifecycle-terminal.js";
+import { createAgentHarnessAttemptLifecycle } from "../plugin-sdk/agent-harness-attempt-runtime.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { createAgentEventTestHarness } from "./server-chat.agent-events.test-harness.js";
 
 afterEach(() => vi.useRealTimers());
+
+it("preserves opaque provider codes through deferred terminal chat publication", async () => {
+  const code = "subscription_sharing_workplace_individual_usage_limit_exceeded";
+  vi.useFakeTimers();
+  const assistant = makeAssistantMessageFixture({
+    ...projectProviderError({ status: 429, code, message: "Usage limit reached" }),
+    content: [],
+  });
+  const ctx = createContext(assistant);
+  ctx.params.terminalLifecyclePhase = "finishing";
+  const runId = ctx.params.runId;
+  const sessionKey = "agent:main:main";
+  const h = createAgentEventTestHarness({ lifecycleErrorRetryGraceMs: 0 });
+  onTestFinished(() => h.handler.dispose());
+  h.register(runId, sessionKey, runId);
+  const deliveries: Promise<void>[] = [];
+  const terminal = createAgentLifecycleTerminalBackstop({
+    runId,
+    sessionKey,
+    getLifecycleGeneration: () => "test-generation",
+    resolveTerminationFields: () => ({}),
+    onTerminalEvent: (event) => {
+      deliveries.push(Promise.resolve(h.emit(runId, event.stream, event.data)));
+    },
+  });
+  ctx.params.onAgentEvent = (event) => terminal.note(event);
+  await handleAgentEnd(ctx);
+  expect(h.chat()).toHaveLength(0);
+  terminal.emit("error", terminal.getDeferredError());
+  await Promise.all(deliveries);
+
+  const terminals = h.chat().filter(([, event]) => event.state !== "delta");
+  expect(terminals).toHaveLength(1);
+  const payload = terminals[0]?.[1];
+  expect(Value.Check(ChatEventSchema, payload)).toBe(true);
+  expect(payload).toMatchObject({
+    state: "error",
+    errorDetail: {
+      provider: "openai",
+      providerErrorCode: code,
+      httpStatus: 429,
+      failoverReason: "rate_limit",
+    },
+  });
+  expect(payload?.errorMessage).not.toContain(code);
+});
 
 it("preserves exhausted context-budget guidance in live chat, Details, history, and channel replies", async () => {
   vi.useFakeTimers();
