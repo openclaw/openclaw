@@ -996,12 +996,13 @@ a visible timeout. Stored state and recovery backups retain their existing
 durability guarantees. An older installed updater keeps
 its initial snapshot behavior until you launch an update from the newer version.
 
-The complete validating phase, including snapshot progress recording, has a
-30-minute default deadline even when `--timeout` is omitted. This uses the normal
-update-step allowance so slow storage has time to finish; an explicit `--timeout`
-sets the phase's allowance instead. Progress does not extend that deadline.
-Cancellation may use up to the same allowance to settle accepted work before
-releasing its ownership.
+Candidate validation uses separate size-aware allowances for snapshots and each
+runtime check. Slow snapshots and Doctor no longer consume the next check's
+allowance or trigger an additional 30-minute limit for the whole validation.
+An explicit `--timeout` still bounds the overall update from admission; phases
+do not reset it. Cancellation settles accepted child processes and writers before
+recovery. This correction must be present in the installed updater; staging a
+newer candidate cannot change the older driver's validation deadline.
 Update-history writes retry a timed-out commit admission at most three times,
 releasing the SQLite writer between attempts. Ordinary progress that still cannot
 be recorded, including a worker queue-capacity refusal before dispatch, produces

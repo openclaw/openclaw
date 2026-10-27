@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi, type Mock } from "vitest";
+import { createGatewayRestartDeadline } from "../cli/daemon-cli/restart-health-deadline.js";
 import type { UpdateCommandOptions } from "../cli/update-cli/shared.js";
 import { validateUpdateCandidateWithProgress } from "../cli/update-cli/update-command-candidate-validation.js";
 import { createUpdateCommandExecutionGuards } from "../cli/update-cli/update-command-execution-guards.js";
@@ -90,6 +91,7 @@ export function registerCanaryProgressWorkerTests(
     "reopened",
     "source-replaced",
     "interrupted-after-acceptance",
+    "deadline-after-acceptance",
     "uncertain",
   ] as const)(
     "persists streamed candidate progress through its admitted worker (%s)",
@@ -184,11 +186,27 @@ export function registerCanaryProgressWorkerTests(
       if (outcome === "uncertain") {
         worker.mockImplementationOnce(runWorker).mockRejectedValueOnce(unknown);
       }
+      const expired = new Error("operator update deadline expired");
+      const clock = performance.now.bind(performance);
+      let elapsed = 0;
+      const deadline =
+        outcome === "deadline-after-acceptance"
+          ? createGatewayRestartDeadline({ timeoutMs: 60_000, timeoutError: expired })
+          : undefined;
+      if (deadline) {
+        run.deadline = deadline;
+        vi.spyOn(performance, "now").mockImplementation(() => clock() + elapsed);
+      }
       let commits = 0;
       admission.beforeGrant = (stage) => {
         // Initial admission warms the writer before streamed snapshot receipts.
-        if (stage === "commit" && ++commits === 2 && outcome === "interrupted-after-acceptance") {
-          run.interrupted = true;
+        if (stage === "commit" && ++commits === 2) {
+          if (outcome === "interrupted-after-acceptance") {
+            run.interrupted = true;
+          } else if (deadline) {
+            elapsed += 60_001;
+            deadline.remainingMs();
+          }
         }
       };
       const onStepComplete = vi.fn();
@@ -223,8 +241,12 @@ export function registerCanaryProgressWorkerTests(
           expect(mocks.spawn).not.toHaveBeenCalled();
           return;
         }
-        if (outcome === "interrupted-after-acceptance") {
-          await expect(pending).rejects.toBeInstanceOf(UpdateRequesterRevokedError);
+        if (outcome === "interrupted-after-acceptance" || deadline) {
+          if (deadline) {
+            await expect(pending).rejects.toBe(expired);
+          } else {
+            await expect(pending).rejects.toBeInstanceOf(UpdateRequesterRevokedError);
+          }
           expect(commits).toBe(2);
           const saved = await getUpdateRunAsync(run.runId, { env });
           expect(saved?.steps).toContainEqual(
@@ -239,7 +261,9 @@ export function registerCanaryProgressWorkerTests(
               exitCode: 1,
               failureFacts: expect.arrayContaining([
                 expect.objectContaining({
-                  message: expect.stringContaining("requester-revoked"),
+                  message: expect.stringContaining(
+                    deadline ? expired.message : "requester-revoked",
+                  ),
                 }),
               ]),
             }),
@@ -289,6 +313,7 @@ export function registerCanaryProgressWorkerTests(
         );
       } finally {
         admission.beforeGrant = undefined;
+        deadline?.dispose();
         await pending.catch(() => undefined);
         for (const mock of [prepare, exec, worker, stdout, stderr]) {
           mock.mockRestore();
