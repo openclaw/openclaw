@@ -4,7 +4,9 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { withSessionActor } from "../config/sessions/session-actor-scope.js";
+import * as entryReads from "../config/sessions/session-entry-read-runtime.js";
 import { buildRestartRecoveryExpectedState } from "../config/sessions/session-transcript-turn-state.js";
+import { promptReport } from "../config/sessions/system-prompt-report.test-support.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
@@ -94,7 +96,18 @@ describe("live model switch worker persistence", () => {
     "%s consumes only the applied selection",
     async (operation) => {
       const { scope, params } = fixture();
-      const initial = { ...initialSelection, label: "keep this label" };
+      const initial = {
+        ...initialSelection,
+        label: "keep this label",
+        skillsSnapshot: { prompt: "synthetic skill instructions".repeat(1200), skills: [] },
+        systemPromptReport: promptReport(1, 1, 0),
+        sessionDiffBaseline: {
+          version: 1 as const,
+          sessionId: initialSelection.sessionId,
+          root: "/synthetic",
+          files: [],
+        },
+      };
       await replaceSessionEntry(scope, initial);
       const apply = async () => {
         if (operation === "clear") {
@@ -118,6 +131,13 @@ describe("live model switch worker persistence", () => {
         modelOverride: initial.modelOverride,
       });
       expect(loadSessionEntry(scope)?.liveModelSwitchPending).toBeUndefined();
+      expect(
+        await shouldSwitchToLiveModel({
+          ...params,
+          currentProvider: selection.provider,
+          currentModel: "gpt-5.5",
+        }),
+      ).toBeUndefined();
 
       const withoutPendingSwitch = loadSessionEntry(scope);
       await apply();
@@ -131,6 +151,7 @@ describe("live model switch worker persistence", () => {
       });
       const reads = observeHostDataSql();
       using _ = { [Symbol.dispose]: reads.restore };
+      const transported = vi.spyOn(entryReads, "readSessionEntryReadOnlyInWorker");
       expect(
         await shouldSwitchToLiveModel({
           ...params,
@@ -138,11 +159,18 @@ describe("live model switch worker persistence", () => {
           currentModel: selection.model,
         }),
       ).toMatchObject({ provider: "openai", model: "gpt-5.5" });
+      expect(transported).toHaveBeenCalledOnce();
+      const entry = await transported.mock.results[0]?.value;
+      expect(entry).not.toHaveProperty("skillsSnapshot");
+      expect(entry).not.toHaveProperty("systemPromptReport");
+      expect(entry).not.toHaveProperty("sessionDiffBaseline");
       expect(
         reads.queries.filter((sql) =>
           /session_nodes|session_entry_snapshots|session_participants|session_windows/i.test(sql),
         ),
       ).toEqual([]);
+      reads.restore();
+      expect(loadSessionEntry(scope)?.skillsSnapshot).toEqual(initial.skillsSnapshot);
     },
   );
 

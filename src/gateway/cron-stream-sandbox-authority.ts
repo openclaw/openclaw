@@ -466,6 +466,7 @@ export async function prepareCronStreamSandboxAuthority(params: {
                   sessionAccessCap: originalRole.sessions.others,
                   sandboxRequired: originalRole.sandbox === "required",
                   agents: originalRole.agents,
+                  accessPrograms: originalRole.accessPrograms,
                 },
               }
             : {}),

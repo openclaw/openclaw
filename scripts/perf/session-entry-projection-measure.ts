@@ -4,6 +4,8 @@
  *   --reply-file <capture.bin> [--iterations 2000] [--resident-entries 10000] \
  *   [--list-reply-file <actual-projected-worker-reply.bin>] \
  *   [--state-database <stopped-synthetic-gateway-agent.sqlite>]
+ * Or use --synthetic instead of --reply-file to prepare both replies through the
+ * real entry read worker using one ~30 KiB skills/report fixture (no Gateway boot).
  * Prefer an actual projected reply when available; its complete result must match
  * the full reply with snapshots omitted. Otherwise its wire encoding is reconstructed.
  * Compares full replies with the existing list projection. Five alternating AB/BA
@@ -32,6 +34,7 @@ import {
 const { values } = parseArgs({
   options: {
     "reply-file": { type: "string" },
+    synthetic: { type: "boolean", default: false },
     "list-reply-file": { type: "string" },
     iterations: { type: "string", default: "2000" },
     "resident-entries": { type: "string", default: "10000" },
@@ -42,7 +45,10 @@ const iterations = Number(values.iterations);
 const residentCount = Number(values["resident-entries"]);
 assert(Number.isSafeInteger(iterations) && iterations > 0, "Invalid iterations");
 assert(Number.isSafeInteger(residentCount) && residentCount > 0, "Invalid resident count");
-assert(values["reply-file"], "Provide --reply-file from a synthetic Gateway capture");
+assert(
+  Boolean(values["reply-file"]) !== values.synthetic,
+  "Provide --reply-file from a synthetic Gateway capture or --synthetic",
+);
 const gc = global.gc;
 assert(gc, "Run with --expose-gc");
 function census(databasePath: string) {
@@ -93,7 +99,77 @@ function census(databasePath: string) {
     database.close();
   }
 }
-const captured = readFileSync(values["reply-file"]);
+async function syntheticReplies() {
+  const { withOpenClawTestState } = await import("../../src/test-utils/openclaw-test-state.js");
+  const { resolveOpenClawAgentSqlitePath } =
+    await import("../../src/state/openclaw-agent-db.paths.js");
+  const { replaceSessionEntrySync } =
+    await import("../../src/config/sessions/session-accessor.sqlite-entry.js");
+  const { withSessionHistoryWorkerDatabase } =
+    await import("../../src/config/sessions/session-transcript-worker-runtime.js");
+  return withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const sessionKey = "agent:main:projection-measure";
+    const scope = { agentId: "main", env, sessionKey };
+    const storePath = resolveOpenClawAgentSqlitePath(scope);
+    const skills = Array.from({ length: 40 }, (_, index) => ({ name: `synthetic-skill-${index}` }));
+    replaceSessionEntrySync(scope, {
+      sessionId: "synthetic-session",
+      updatedAt: 1,
+      lifecycleRevision: "synthetic-lifecycle",
+      label: "Synthetic completed task",
+      model: "mock-model",
+      modelProvider: "mock-provider",
+      liveModelSwitchPending: true,
+      providerOverride: "mock-provider",
+      modelOverride: "mock-next",
+      observerDigest: {
+        sessionKey,
+        runId: "synthetic-run",
+        revision: 1,
+        updatedAt: 1,
+        headline: "Synthetic progress",
+        health: "on-track",
+      },
+      skillsSnapshot: { prompt: "Synthetic skill instructions. ".repeat(800), skills },
+      systemPromptReport: {
+        source: "run",
+        generatedAt: 1,
+        systemPrompt: { chars: 30000, projectContextChars: 0, nonProjectContextChars: 30000 },
+        injectedWorkspaceFiles: [],
+        skills: {
+          promptChars: 24000,
+          entries: skills.map(({ name }) => ({ name, blockChars: 600 })),
+        },
+        tools: {
+          listChars: 2000,
+          schemaChars: 4000,
+          entries: skills.map(({ name }) => ({ name, summaryChars: 50, schemaChars: 100 })),
+        },
+      },
+      sessionDiffBaseline: {
+        version: 1,
+        sessionId: "synthetic-session",
+        root: "/synthetic",
+        files: [],
+      },
+    });
+    return withSessionHistoryWorkerDatabase(
+      { agentId: "main", path: storePath, env },
+      async (owner) => {
+        const read = (snapshotFields?: readonly []) =>
+          owner.readExactEntries({
+            env,
+            sessionKeys: [sessionKey],
+            projection: "full",
+            snapshotFields,
+          });
+        return { full: serialize(await read()), list: serialize(await read([])) };
+      },
+    );
+  });
+}
+const synthetic = values.synthetic ? await syntheticReplies() : undefined;
+const captured = synthetic?.full ?? readFileSync(values["reply-file"]!);
 const full: unknown = deserialize(captured);
 assert(isRecord(full) && Array.isArray(full.entries), "Expected an entry cohort reply");
 const rows = full.entries.map((row: unknown) => {
@@ -114,7 +190,7 @@ const listRows = rows.map((row) => ({
 const expectedList = { ...full, entries: listRows };
 const listBytes = values["list-reply-file"]
   ? readFileSync(values["list-reply-file"])
-  : serialize(expectedList);
+  : (synthetic?.list ?? serialize(expectedList));
 const list: unknown = deserialize(listBytes);
 assert.deepEqual(list, expectedList, "Projected reply differs beyond the selected snapshots");
 assert(isRecord(list) && Array.isArray(list.entries));
@@ -228,9 +304,11 @@ console.log(
       census: values["state-database"] ? census(values["state-database"]) : undefined,
       captureBytes: captured.byteLength,
       capturedEntries: rows.length,
-      listReplySource: values["list-reply-file"]
-        ? "captured-worker-reply"
-        : "reconstructed-projection",
+      listReplySource: synthetic
+        ? "synthetic-worker-reply"
+        : values["list-reply-file"]
+          ? "captured-worker-reply"
+          : "reconstructed-projection",
       fields: [...fieldBytes]
         .map(([field, totals]) => ({
           field,

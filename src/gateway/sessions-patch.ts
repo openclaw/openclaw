@@ -77,6 +77,7 @@ import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import type { UserModelAccountSelection } from "./model-account-authority.js";
 import { isSessionUnreadAckOnlyPatch } from "./server-methods/session-unread-ack.js";
 import {
+  createSessionAccessProgramValidation,
   prepareSessionPatchModelSelection,
   resolveSessionPatchModelSelection,
 } from "./server-methods/sessions-patch-model-selection.js";
@@ -723,5 +724,19 @@ function* projectSessionPatchSteps(
     delete next.liveModelSwitchPending;
   }
 
+  if (
+    params.operatorAuthority &&
+    (patch.cyberAccessProgram !== undefined || "model" in patch || "agentRuntime" in patch)
+  ) {
+    validateModelSelection = createSessionAccessProgramValidation({
+      operatorAuthority: params.operatorAuthority,
+      entry: next,
+      validateModelSelection,
+    });
+    const error = validateModelSelection();
+    if (error) {
+      return { ok: false, error };
+    }
+  }
   return { ok: true, entry: next, ...(validateModelSelection ? { validateModelSelection } : {}) };
 }

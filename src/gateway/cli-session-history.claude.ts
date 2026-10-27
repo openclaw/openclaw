@@ -16,8 +16,6 @@ import { stripCliSessionDriftNote } from "../agents/cli-session-drift.js";
 import { resolveClaudeCliProjectsDir } from "../agents/command/claude-cli-project-dir.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { sanitizeTranscriptMessage } from "../agents/transcript-sanitize.js";
-import { isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
-import { HEARTBEAT_PROMPT, HEARTBEAT_RESPONSE_TOOL_PROMPT } from "../auto-reply/heartbeat.js";
 import { isToolCallBlock, isToolResultBlock, resolveToolUseId } from "../chat/tool-content.js";
 import type { CliSessionReseedReceipt, SessionEntry } from "../config/sessions.js";
 import {
@@ -28,7 +26,6 @@ import {
   type InputProvenance,
   readInterSessionPromptEnvelope,
 } from "../sessions/input-provenance.js";
-import { formatSystemTurnPrompt } from "../sessions/system-turn-prompt.js";
 import { stripCliPromptDecorations } from "./cli-session-history.prompt-text.js";
 import { attachOpenClawTranscriptMeta } from "./session-transcript-entry-message.js";
 
@@ -316,17 +313,6 @@ export function resolveClaudeCliPromptTextCandidates(
   );
 }
 
-// Queued system events as drainFormattedSystemEvents writes them: the block opens with
-// a timestamped line. A plain `System:` line a person typed does not match.
-// Untimestamped channel-summary lines on a session's first turn are not matched.
-const SYSTEM_EVENT_BLOCK =
-  /System: \[(?:\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[^\]\n]*|unknown-time)\] [^\n]*\n+(?:System: [^\n]*\n+)*/u
-    .source;
-const INTERNAL_PROMPT_PREFIX = new RegExp(
-  `^(?:${SYSTEM_EVENT_BLOCK})?${/(?:Note: The previous agent run was interrupted\. [^\n]*\n\n)?/u.source}`,
-  "u",
-);
-
 /**
  * Display copy of an imported user row that survived the history merge. The merge
  * matches on the original text first, so this must not run before it.
@@ -365,49 +351,16 @@ export function cleanClaudeCliImportedUserDisplay(message: unknown): unknown {
 }
 
 function resolveClaudeCliInternalSourceTool(text: string): string | undefined {
-  // Claude records Gateway SDK input and native commands as ordinary user rows,
-  // without OpenClaw provenance. Recover only complete producer-owned frames at
-  // this adapter; a matching canonical human row still wins during history merge.
+  // OpenClaw sends its own turns as synthetic input, which Claude stores as meta rows.
+  // What remains are Claude's own command frames and a resume note sent without a prompt.
   if (stripCliSessionDriftNote(`${text}\n\n`) === "") {
     return "cli_session_resume";
   }
-  // A wake drains queued system events (for example Control UI reactions) and
-  // the interrupted-run hint ahead of its prompt; neither makes it a user turn.
-  const body = stripCliSessionDriftNote(text).replace(INTERNAL_PROMPT_PREFIX, "");
-  if (
-    body.startsWith(
-      "An async command you ran earlier has completed. The command completion details are:\n\n",
-    ) &&
-    body.includes("\n\nTreat this completion as an internal continuation, not a new user request. ")
-  ) {
-    return "exec";
-  }
-  // Default prompts only; a configured heartbeat prompt is not recognized here.
-  if (
-    body.startsWith(HEARTBEAT_PROMPT) ||
-    body.startsWith(HEARTBEAT_RESPONSE_TOOL_PROMPT) ||
-    isHeartbeatUserMessage({ role: "user", content: body }, undefined, { claudeImport: true })
-  ) {
-    return "heartbeat";
-  }
-  // Restart recovery only, by its full opening sentence behind the CLI timestamp envelope;
-  // the bare system-turn tag is too easy for a person to type.
-  if (
-    body
-      .replace(/^\[[A-Z][a-z]{2} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]\n]*\] /u, "")
-      .startsWith(
-        formatSystemTurnPrompt(
-          "Your previous turn was interrupted by a gateway restart while OpenClaw was waiting on tool/model work. ",
-        ),
-      )
-  ) {
-    return "restart_recovery";
-  }
   if (
     /^<command-name>\/compact<\/command-name>\s*<command-message>compact<\/command-message>\s*<command-args>[\s\S]*<\/command-args>$/u.test(
-      body,
+      text,
     ) ||
-    /^<local-command-stdout>Compacted\s*<\/local-command-stdout>$/u.test(body)
+    /^<local-command-stdout>Compacted\s*<\/local-command-stdout>$/u.test(text)
   ) {
     return "claude_cli_command";
   }
