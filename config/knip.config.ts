@@ -589,6 +589,7 @@ const repositoryScriptEntries = [
   "scripts/perf/shell-extract-bench.ts!",
   "scripts/perf/subagent-active-read-measure.ts!",
   "scripts/perf/subagent-descendant-count-measure.ts!",
+  "scripts/perf/subagent-liveness-measure.ts!",
   "scripts/perf/trusted-snapshot-freeze-measure.mjs!",
   "scripts/perf/session-skill-snapshot-intern.ts!",
   "scripts/perf/session-skill-snapshot-intern.preload.mjs!",
