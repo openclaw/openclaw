@@ -7,7 +7,7 @@ import { isResponsesOutputLimitToolCallError } from "../providers/openai-respons
 import type { SdkResponse } from "./openai-responses-sdk.test-support.js";
 
 const sseState = vi.hoisted(() => ({
-  outcomes: [] as SdkResponse[],
+  outcomes: [] as Array<Error | SdkResponse>,
   signal: undefined as AbortSignal | undefined,
 }));
 
