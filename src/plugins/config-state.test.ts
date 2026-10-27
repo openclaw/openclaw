@@ -361,7 +361,10 @@ describe("resolveEnableState", () => {
       activation(false, false, "disabled", "bundled (disabled by default)"),
     );
   });
-  it.each([true, false])("resolves selected memory slot with enabled=%s", (enabled) => {
+  it.each([
+    [true, "explicit", "selected memory slot"],
+    [false, "disabled", "disabled in config"],
+  ] as const)("resolves selected memory slot with enabled=%s", (enabled, source, reason) => {
     checkEnable(
       "memory-core",
       "bundled",
@@ -370,41 +373,34 @@ describe("resolveEnableState", () => {
         slots: { memory: "memory-core" },
         ...(enabled ? {} : entry("memory-core", false)),
       },
-      activation(
-        enabled,
-        true,
-        enabled ? "explicit" : "disabled",
-        enabled ? "selected memory slot" : "disabled in config",
-      ),
+      activation(enabled, true, source, reason),
     );
   });
-  it.each([
-    [{ allow: ["workspace-helper"] }, "selected in allowlist"],
-    [entry("workspace-helper"), "enabled in config"],
-  ] as const)("resolves workspace-helper enable state for %o", (config, reason) => {
-    checkEnable(
+  it.each<[string, OpenClawConfig["plugins"], boolean, Activation["source"], string]>([
+    [
       "workspace-helper",
-      "workspace",
-      config,
-      activation(true, true, "explicit", reason),
-    );
-  });
-  it("does not let the default memory slot auto-enable an untrusted workspace plugin", () => {
-    const reason = "workspace plugin (disabled by default)";
-    checkEnable(
+      { allow: ["workspace-helper"] },
+      true,
+      "explicit",
+      "selected in allowlist",
+    ],
+    ["workspace-helper", entry("workspace-helper"), true, "explicit", "enabled in config"],
+    [
       "memory-core",
-      "workspace",
       { slots: { memory: "memory-core" } },
-      activation(false, true, "disabled", reason),
-    );
-  });
-  it("keeps an explicitly selected workspace context engine enabled when omitted from plugins.allow", () => {
-    checkEnable(
+      false,
+      "disabled",
+      "workspace plugin (disabled by default)",
+    ],
+    [
       "lossless-claw",
-      "workspace",
       { allow: ["telegram"], slots: { contextEngine: "lossless-claw" } },
-      activation(true, true, "explicit", "selected context engine slot"),
-    );
+      true,
+      "explicit",
+      "selected context engine slot",
+    ],
+  ])("resolves workspace %s policy %j", (id, config, enabled, source, reason) => {
+    checkEnable(id, "workspace", config ?? {}, activation(enabled, true, source, reason));
   });
 });
 
@@ -427,16 +423,18 @@ describe("resolveMemorySlotDecision", () => {
 });
 
 describe("context engine ownership", () => {
+  const engine = "Canonical-Engine";
+  const owner = "vendor-plugin";
+  const approved = { allow: [owner] };
   const records = [
-    { id: "vendor-plugin", contextEngineIds: ["Canonical-Engine", "second-engine"] },
+    { id: owner, contextEngineIds: [engine, "second-engine"] },
     { id: "legacy-plugin" },
   ];
-  const engineConfig = (
-    contextEngine = "Canonical-Engine",
-    policy: OpenClawConfig["plugins"] = {},
-  ) => ({ plugins: { ...policy, slots: { contextEngine } } });
+  const engineConfig = (contextEngine = engine, policy: OpenClawConfig["plugins"] = {}) => ({
+    plugins: { ...policy, slots: { contextEngine } },
+  });
   const resolve = (policy: OpenClawConfig["plugins"] = {}, owners = records) =>
-    resolveSelectedContextEnginePluginId(engineConfig("Canonical-Engine", policy), owners);
+    resolveSelectedContextEnginePluginId(engineConfig(engine, policy), owners);
   const own = (contextEngine: string, policy: OpenClawConfig["plugins"], owners = records) =>
     withContextEngineOwner(
       normalizePluginsConfig(engineConfig(contextEngine, policy).plugins),
@@ -447,22 +445,19 @@ describe("context engine ownership", () => {
   it("resolves exact declared engine IDs and preserves legacy equal-ID selection", () => {
     const resolveEngine = (contextEngine: string) =>
       resolveSelectedContextEnginePluginId(
-        engineConfig(
-          contextEngine,
-          contextEngine !== "legacy-plugin" ? { allow: ["vendor-plugin"] } : {},
-        ),
+        engineConfig(contextEngine, contextEngine !== "legacy-plugin" ? approved : {}),
         records,
       );
-    expect(resolveEngine("Canonical-Engine")).toBe("vendor-plugin");
-    expect(resolveEngine("second-engine")).toBe("vendor-plugin");
+    expect(resolveEngine(engine)).toBe(owner);
+    expect(resolveEngine("second-engine")).toBe(owner);
     expect(resolveEngine("legacy-plugin")).toBe("legacy-plugin");
-    expect(resolveEngine("vendor-plugin")).toBeUndefined();
+    expect(resolveEngine(owner)).toBeUndefined();
   });
   it("carries ownership into activation without changing the engine slot", () => {
-    const config = own("Canonical-Engine", { allow: ["vendor-plugin"] });
-    expect(config.slots.contextEngine).toBe("Canonical-Engine");
-    expect(activate("vendor-plugin", config).explicitlyEnabled).toBe(true);
-    expect(activate("Canonical-Engine", config).enabled).toBe(false);
+    const config = own(engine, approved);
+    expect(config.slots.contextEngine).toBe(engine);
+    expect(activate(owner, config).explicitlyEnabled).toBe(true);
+    expect(activate(engine, config).enabled).toBe(false);
   });
   it("activates a mixed-case equal-ID owner from its canonical policy identity", () => {
     const config = own("MiXeD-demo", { allow: ["unrelated"] }, [
@@ -479,15 +474,12 @@ describe("context engine ownership", () => {
     { name: "default", normalizeId: undefined },
     { name: "exact supplied", normalizeId: (id: string) => id.trim() },
   ])("keeps exact selected owner with $name normalizer", ({ normalizeId }) => {
-    const plugins = normalizePluginsConfig({
-      allow: ["mixed-demo"],
-      slots: { contextEngine: "canonical-engine" },
-    });
-    const mixedCaseRecords = [{ id: "MiXeD-demo", contextEngineIds: ["canonical-engine"] }];
+    const plugins = normalizePluginsConfig(engineConfig(engine, { allow: ["mixed-demo"] }).plugins);
+    const mixedCaseRecords = [{ id: "MiXeD-demo", contextEngineIds: [engine] }];
     expect(
       resolveSelectedContextEnginePluginIdFromConfig(
         plugins,
-        "canonical-engine",
+        engine,
         mixedCaseRecords,
         normalizeId,
       ),
@@ -514,12 +506,10 @@ describe("context engine ownership", () => {
     },
   );
   it("does not choose a first owner or a same-named plugin over declared ownership", () => {
-    const collision = [...records, { id: "other", contextEngineIds: ["Canonical-Engine"] }];
-    expect(resolve({ allow: ["vendor-plugin"] }, [...records, { id: "canonical-engine" }])).toBe(
-      "vendor-plugin",
-    );
-    expect(resolve({ allow: ["vendor-plugin"] }, collision)).toBe("vendor-plugin");
-    expect(resolve({ allow: ["vendor-plugin", "other"] }, collision)).toBeUndefined();
+    const collision = [...records, { id: "other", contextEngineIds: [engine] }];
+    expect(resolve(approved, [...records, { id: "canonical-engine" }])).toBe(owner);
+    expect(resolve(approved, collision)).toBe(owner);
+    expect(resolve({ allow: [owner, "other"] }, collision)).toBeUndefined();
   });
   it("does not fall back to an incidental equal-ID plugin when declared owners are ineligible", () => {
     expect(resolve({}, [...records, { id: "canonical-engine" }])).toBeUndefined();
@@ -546,8 +536,8 @@ describe("context engine ownership", () => {
   );
   it("requires independent trust for a differently named declared owner", () => {
     expect(resolve()).toBeUndefined();
-    expect(resolve(entry("vendor-plugin"))).toBe("vendor-plugin");
-    expect(resolve({ allow: ["vendor-plugin"] })).toBe("vendor-plugin");
+    expect(resolve(entry(owner))).toBe(owner);
+    expect(resolve(approved)).toBe(owner);
   });
   it.each([false, true])(
     "preserves equal-ID slot authorization outside an unrelated allowlist: declared=%s",
@@ -561,12 +551,10 @@ describe("context engine ownership", () => {
       expect(activate("legacy-plugin", config).enabled).toBe(true);
     },
   );
-  it.each([
-    { enabled: false },
-    { deny: ["vendor-plugin"] },
-    { entries: { "vendor-plugin": { enabled: false } } },
-    { allow: ["Canonical-Engine"] },
-  ])("applies owner policy %j", (policy) => {
-    expect(resolve(policy)).toBeUndefined();
-  });
+  it.each([{ enabled: false }, { deny: [owner] }, entry(owner, false), { allow: [engine] }])(
+    "applies owner policy %j",
+    (policy) => {
+      expect(resolve(policy)).toBeUndefined();
+    },
+  );
 });

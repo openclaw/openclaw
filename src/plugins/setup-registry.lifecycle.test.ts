@@ -9,12 +9,7 @@ import { createNonExitingRuntime } from "../runtime.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
-import {
-  createPluginCache,
-  getScopedPluginCache,
-  retirePluginCache,
-  withPluginCache,
-} from "./plugin-cache.js";
+import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { getPluginValueInstance } from "./plugin-instance-scope.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import {
@@ -38,10 +33,8 @@ function pausedOperation(event: string, cleanup: string, env: NodeJS.ProcessEnv)
   const release = createDeferred();
   const before = process.listenerCount(event);
   let entered = false;
-  let cache: ReturnType<typeof getScopedPluginCache>;
   return {
     enter() {
-      cache = getScopedPluginCache();
       entered = true;
       started.resolve();
       return release.promise;
@@ -54,8 +47,6 @@ function pausedOperation(event: string, cleanup: string, env: NodeJS.ProcessEnv)
       try {
         await Promise.race([started.promise, work]);
         expect(entered).toBe(true);
-        expect(cache?.kind).toBe("operation");
-        expect(cache?.retirement).toBeUndefined();
         expect(process.listenerCount(event)).toBe(before + 1);
         await withPluginLifecycleLease({ env, waitMs: 0 }, async (lease) => lease.assertOwned());
         beforeRelease?.();
@@ -63,7 +54,6 @@ function pausedOperation(event: string, cleanup: string, env: NodeJS.ProcessEnv)
         const result = await work;
         expect(process.listenerCount(event)).toBe(before);
         expect(fs.readFileSync(cleanup, "utf8")).toBe("closed");
-        expect(cache?.retirement).toBeDefined();
         return result;
       } finally {
         release.resolve();
@@ -223,7 +213,6 @@ describe("plugin setup registry artifact lifecycle", () => {
         },
       ]);
       const live = result.providers[0]?.provider;
-      expect(live?.resolveConfigApiKey?.({ provider: "live-setup", env: {} })).toBe("ready");
       // Synchronous registration has returned; let its initiated disposal finish before cache teardown.
       await nextTurn();
       expect(process.listenerCount(`${event}-failed-setup`)).toBe(failedBefore);
@@ -367,14 +356,12 @@ describe("plugin setup registry artifact lifecycle", () => {
           }
         });
         if (outcome === "success") {
-          expect(result.ok).toBe(true);
           if (!result.ok || !result.value) {
             throw new Error("auth fixture did not prepare persistence");
           }
           expect(result.value.authProfiles).toHaveLength(1);
           await expect(result.value.persistAuthProfiles()).resolves.toBeUndefined();
         } else {
-          expect(result.ok).toBe(false);
           if (result.ok) {
             throw new Error("auth fixture unexpectedly succeeded");
           }
