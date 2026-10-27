@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
@@ -21,8 +22,10 @@ import {
   writeToolCall,
 } from "./gateway-provider-fixture.test-support.js";
 import {
+  normalizeRecoveryDiagnosticMarker,
   printRecoveryFailureDiagnostics,
   RECOVERY_PROBE_ID,
+  type RecoveryDiagnosticMarker,
   writeRecoveryDiagnosticProbe,
 } from "./gateway.sessions-send-recovery.diagnostics.test-support.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
@@ -61,6 +64,45 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
       let recoveredResponse: ServerResponse | undefined;
       const recoveredResponseReady = createDeferred();
       const parallelResponsesReady = createDeferred();
+      type ProviderObservation = {
+        ordinal: number;
+        elapsedMs: number;
+        marker: RecoveryDiagnosticMarker;
+        branch: "label" | "parallel" | "send" | "hold" | "current-marker" | "default";
+        recoveredGate: boolean;
+      };
+      const providerObservations: ProviderObservation[] = [];
+      let providerObservationCount = 0;
+      let omittedProviderObservations = 0;
+      let restartObservedAt: number | undefined;
+      let restartLogOffset = 0;
+      let startupAwaitCompleted = false;
+      const recoveryMarker = (value: string | undefined): RecoveryDiagnosticMarker =>
+        normalizeRecoveryDiagnosticMarker(value);
+      const beginProviderObservation = () => {
+        if (restartObservedAt === undefined) {
+          return undefined;
+        }
+        return {
+          ordinal: ++providerObservationCount,
+          elapsedMs: Math.max(0, Math.round(performance.now() - restartObservedAt)),
+        };
+      };
+      const observeProvider = (
+        observation: ReturnType<typeof beginProviderObservation>,
+        branch: ProviderObservation["branch"],
+        marker: RecoveryDiagnosticMarker,
+        recoveredGate = false,
+      ) => {
+        if (!observation) {
+          return;
+        }
+        if (providerObservations.length >= 64) {
+          omittedProviderObservations++;
+          return;
+        }
+        providerObservations.push({ ...observation, marker, branch, recoveredGate });
+      };
       const reply = (response: ServerResponse, text = "RECEIVED") =>
         writeOpenAiResponsesText(response, {
           text,
@@ -100,6 +142,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
             input?: Array<{ role?: string; content?: unknown; type?: string; output?: string }>;
             tools?: Array<{ name?: string }>;
           };
+          const providerObservation = beginProviderObservation();
           const input = body.input ?? [];
           // Runtime context is another user-role block, not a submitted turn.
           const userIndex = input.findLastIndex(
@@ -121,6 +164,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
             if (labelMarker) {
               parallelLabels.add(labelMarker);
             }
+            observeProvider(providerObservation, "label", recoveryMarker(labelMarker));
             reply(response, "Recovery test");
             return;
           }
@@ -129,6 +173,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           const parallelHold = text.match(/HOLD_PARALLEL_([0-9]+)/u);
           if (hold && parallelHold) {
             parallelHeld.add(Number(parallelHold[1]));
+            observeProvider(providerObservation, "parallel", recoveryMarker(parallelHold[0]));
             return;
           }
           const parallelInput = text.match(/PARALLEL_INPUT_([0-9]+)_([0-9]+)/u);
@@ -140,6 +185,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
               if (parallelResponses.size === parallelTargets.length) {
                 parallelResponsesReady.resolve();
               }
+              observeProvider(providerObservation, "parallel", recoveryMarker(parallelInput[0]));
               return;
             }
           }
@@ -147,6 +193,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
             /SEND_(STEER_UPDATE|PEER_UPDATE_[0-9]+|CANCELLED_UPDATE|RESET_SOURCE_UPDATE|REVOKED_UPDATE|ARCHIVED_SOURCE_UPDATE)/u,
           )?.[1];
           if (sendMarker) {
+            observeProvider(providerObservation, "send", recoveryMarker(`SEND_${sendMarker}`));
             if (outputIndex > userIndex) {
               const output = JSON.parse(input[outputIndex]!.output!) as {
                 status?: string;
@@ -172,6 +219,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
             return;
           }
           if (text.includes("HOLD_STEER")) {
+            observeProvider(providerObservation, "hold", "HOLD_STEER");
             if (steerReleased) {
               continueSteer(response);
             } else {
@@ -181,6 +229,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           }
           if (hold && text.includes("HOLD_TARGET")) {
             held = true;
+            observeProvider(providerObservation, "hold", "HOLD_TARGET");
             return;
           }
           const marker = text
@@ -188,6 +237,15 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
               /PEER_UPDATE_[0-9]+|CHAT_UPDATE_[0-9]+|CANCELLED_CHAT|CANCELLED_UPDATE|RESET_SOURCE_UPDATE|REVOKED_UPDATE|ARCHIVED_SOURCE_UPDATE/gu,
             )
             ?.at(-1);
+          const opensRecoveredGate = !hold && marker === "CHAT_UPDATE_1" && !recoveredResponse;
+          if (marker) {
+            observeProvider(
+              providerObservation,
+              "current-marker",
+              recoveryMarker(marker),
+              opensRecoveredGate,
+            );
+          }
           if (marker === "PEER_UPDATE_1") {
             if (outputIndex > userIndex) {
               const output: unknown = JSON.parse(input[outputIndex]!.output!);
@@ -210,6 +268,13 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
             recoveredResponse = response;
             recoveredResponseReady.resolve();
             return;
+          }
+          if (!marker) {
+            observeProvider(
+              providerObservation,
+              parallelInput ? "parallel" : "default",
+              recoveryMarker(parallelInput?.[0]),
+            );
           }
           reply(response);
         })().catch((error: unknown) => {
@@ -331,6 +396,41 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         });
       const archivedSource = "agent:main:dashboard:archived-source";
       let restarting: Promise<void> | undefined;
+      const printProviderDiagnostics = () => {
+        const restartedLogs = gateway.logs().slice(restartLogOffset);
+        console.error(
+          `[session-recovery-provider] ${JSON.stringify({
+            shutdownSignal,
+            restartStarted: restartObservedAt !== undefined,
+            entries: providerObservations,
+            omittedEntries: omittedProviderObservations,
+            settlement: {
+              sessionLifecycleQueueWaits: Math.max(
+                0,
+                restartedLogs.split("session lifecycle queue waiting").length - 1,
+              ),
+              deliveryNotices: restartedLogs.includes("startup trace: sidecars.delivery-notices"),
+              deliveryRecovery: restartedLogs.includes("startup trace: sidecars.delivery-recovery"),
+              startupAwaitCompleted,
+            },
+          })}`,
+        );
+      };
+      const recoveryDiagnosticMarkers = () => {
+        const markers: Record<string, RecoveryDiagnosticMarker> = {
+          [cancelledChatId]: "CANCELLED_CHAT",
+        };
+        for (const input of chatRequests) {
+          markers[input.idempotencyKey] = recoveryMarker(input.message.trim());
+        }
+        for (const [marker, runId] of accepted) {
+          const knownMarker = recoveryMarker(marker);
+          if (runId && knownMarker !== "none") {
+            markers[runId] = knownMarker;
+          }
+        }
+        return markers;
+      };
       try {
         const diagnosticPlugin = gateway.state.path("recovery-proof");
         await writeRecoveryDiagnosticProbe(diagnosticPlugin);
@@ -496,7 +596,8 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           expect(oldProcess?.signalCode).not.toBe("SIGKILL");
         }
         hold = false;
-        const beforeRestartLogs = gateway.logs().length;
+        restartLogOffset = gateway.logs().length;
+        restartObservedAt = performance.now();
         const startup = (restarting = gateway.startGateway());
         const awaitRecovery = <T>(gate: PromiseLike<T>) =>
           withinTest(Promise.race([gate, startup.then(() => gate)]), signal);
@@ -514,7 +615,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         const recoveryTrace = () =>
           gateway
             .logs()
-            .slice(beforeRestartLogs)
+            .slice(restartLogOffset)
             .match(/startup (?:trace|phase): sidecars\.subagent-recovery ([0-9.]+)ms/u);
         await awaitRecovery(waitFor(() => expect(recoveryTrace()).not.toBeNull(), 10_000));
         for (const response of parallelResponses.values()) {
@@ -522,6 +623,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         }
         releaseHeldResponse(recoveredResponse);
         await startup;
+        startupAwaitCompleted = true;
         expect(gateway.child?.pid).not.toBe(firstPid);
         client = await connect();
         await expectPersistedSteer();
@@ -614,10 +716,11 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           restartedLogs: gateway.logs(),
           startupSnapshot: undefined,
           logPath: gateway.state.path("gateway.log"),
-          markers: {},
+          markers: recoveryDiagnosticMarkers(),
         }).catch(() => console.error("[session-recovery-failure] diagnostics unavailable"));
         throw error;
       } finally {
+        printProviderDiagnostics();
         for (const response of parallelResponses.values()) {
           releaseHeldResponse(response);
         }
