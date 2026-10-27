@@ -51,6 +51,9 @@ it.skipIf(!enabled)(
         ...(process.env.OPENCLAW_TEST_CORPORATE_XDG_RUNTIME_DIR
           ? { XDG_RUNTIME_DIR: process.env.OPENCLAW_TEST_CORPORATE_XDG_RUNTIME_DIR }
           : {}),
+        // Keep the enforced proxy for external traffic; only fixture loopback is direct.
+        NO_PROXY: [process.env.NO_PROXY, "127.0.0.1", "localhost", "::1"].filter(Boolean).join(","),
+        no_proxy: [process.env.no_proxy, "127.0.0.1", "localhost", "::1"].filter(Boolean).join(","),
         OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
         OPENCLAW_SKIP_PROVIDERS: undefined,
         OPENCLAW_AGENT_RUNTIME: undefined,
@@ -239,6 +242,7 @@ it.skipIf(!enabled)(
       "corporate-effects",
     );
     const cfg = {
+      logging: { level: "debug", consoleLevel: "debug", file: state.path("gateway.log") },
       gateway: {
         mode: "local",
         port: instance.port,
@@ -322,7 +326,14 @@ it.skipIf(!enabled)(
       runId: accepted.runId,
       timeoutMs: 90_000,
     });
-    expect(completed, JSON.stringify({ completed, issued, errors })).toMatchObject({
+    const diagnostics = instance
+      .logs()
+      .split("\n")
+      .filter((line) => /error|failed|ECONN|EINVAL/i.test(line))
+      .join("\n")
+      .replaceAll(instance.gatewayToken, "[synthetic gateway token]")
+      .slice(-8_000);
+    expect(completed, JSON.stringify({ completed, issued, errors, diagnostics })).toMatchObject({
       status: "ok",
     });
     expect(errors).toEqual([]);
@@ -344,7 +355,10 @@ it.skipIf(!enabled)(
     expect(outputs[4]).toMatch(/outside|escape|workspace|sandbox/i);
     expect(outputs[4]).not.toContain(originalSentinel);
     expect(outputs[5]).toMatch(/outside|escape|workspace|sandbox/i);
-    expect(outputs[6]).toMatch(/host not allowed|requires a sandbox/i);
+    // The public exec schema removes unavailable host choices before backend execution.
+    expect(outputs[6], JSON.stringify({ host: outputs[6], elevated: outputs[7] })).toMatch(
+      /host: must be equal to one of the allowed values/,
+    );
     expect(outputs[7]).toMatch(/elevated.*(?:not available|unavailable)/i);
     expect(await fs.readFile(sentinel, "utf8")).toBe(originalSentinel);
     expect(await fs.stat(escalated).catch(() => null)).toBeNull();
