@@ -261,6 +261,10 @@ function finalize(flow: FinalizeArgs["flow"], overrides: FinalizeArgsOverrides =
   return finalizeSetupWizard(createFinalizeArgs(flow, overrides));
 }
 
+function expectCall(mock: unknown, fields: object) {
+  expect(mock).toHaveBeenCalledWith(expect.objectContaining(fields));
+}
+
 describe("finalizeSetupWizard", () => {
   beforeEach(() => {
     readPin.mockReset().mockReturnValue({ revision: "empty", stored: false });
@@ -289,14 +293,12 @@ describe("finalizeSetupWizard", () => {
     const runtime = createRuntime();
 
     await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "resolved-gateway-password" }, async () => {
-      await finalizeSetupWizard(
-        createFinalizeArgs("quickstart", {
-          settings: { authMode: "password" },
-          nextConfig: createGatewayPasswordRefConfig(),
-          prompter,
-          runtime,
-        }),
-      );
+      await finalize("quickstart", {
+        settings: { authMode: "password" },
+        nextConfig: createGatewayPasswordRefConfig(),
+        prompter,
+        runtime,
+      });
     });
 
     const probeParams = mockCall(probeGatewayReachable)[0] as {
@@ -327,7 +329,7 @@ describe("finalizeSetupWizard", () => {
       });
     });
 
-    const finalizing = finalizeSetupWizard(createFinalizeArgs("quickstart", { prompter }));
+    const finalizing = finalize("quickstart", { prompter });
     await vi.waitFor(() => expect(waitForControlUiDocument).toHaveBeenCalledOnce());
     expectNoteTitleNotCalled(prompter, "Control UI");
     expect(prompter.outro).not.toHaveBeenCalled();
@@ -369,15 +371,13 @@ describe("finalizeSetupWizard", () => {
     expect(prompter.outro).toHaveBeenCalledWith(
       "OpenClaw is ready. When you're ready: openclaw dashboard",
     );
-    expect(runTui).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: args.nextConfig,
-        boundGateway: {
-          url: "ws://127.0.0.1:18789",
-          token: gatewayToken,
-        },
-      }),
-    );
+    expectCall(runTui, {
+      config: args.nextConfig,
+      boundGateway: {
+        url: "ws://127.0.0.1:18789",
+        token: gatewayToken,
+      },
+    });
     const tuiOptions = runTui.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(tuiOptions).not.toHaveProperty("url");
     expect(tuiOptions).not.toHaveProperty("token");
@@ -425,26 +425,22 @@ describe("finalizeSetupWizard", () => {
       },
     });
 
-    expect(resolveControlUiHandoffTarget).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          gateway: expect.objectContaining({
-            port: 19876,
-            bind: "custom",
-            customBindHost: "10.0.0.5",
-            controlUi: { basePath: "/dashboard" },
-            tls: tlsConfig,
-          }),
+    expectCall(resolveControlUiHandoffTarget, {
+      config: expect.objectContaining({
+        gateway: expect.objectContaining({
+          port: 19876,
+          bind: "custom",
+          customBindHost: "10.0.0.5",
+          controlUi: { basePath: "/dashboard" },
+          tls: tlsConfig,
         }),
-        env: expect.objectContaining({ OPENCLAW_GATEWAY_PORT: "19876" }),
       }),
-    );
-    expect(waitForControlUiDocument).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://127.0.0.1:19876/dashboard/",
-        tlsConfig,
-      }),
-    );
+      env: expect.objectContaining({ OPENCLAW_GATEWAY_PORT: "19876" }),
+    });
+    expectCall(waitForControlUiDocument, {
+      url: "https://127.0.0.1:19876/dashboard/",
+      tlsConfig,
+    });
   });
 
   it("advertises LAN Control UI links while probing the local gateway", async () => {
@@ -465,12 +461,8 @@ describe("finalizeSetupWizard", () => {
       prompter,
     });
 
-    expect(resolveAdvertisedControlUiLinks).toHaveBeenCalledWith(
-      expect.objectContaining({ bind: "lan", port: 18789 }),
-    );
-    expect(probeGatewayReachable).toHaveBeenCalledWith(
-      expect.objectContaining({ url: "ws://127.0.0.1:18789" }),
-    );
+    expectCall(resolveAdvertisedControlUiLinks, { bind: "lan", port: 18789 });
+    expectCall(probeGatewayReachable, { url: "ws://127.0.0.1:18789" });
     expectNoteContains(prompter, "http://10.211.55.3:18789/", "Control UI");
     expectNoteContains(prompter, "ws://10.211.55.3:18789", "Control UI");
     expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
@@ -488,15 +480,11 @@ describe("finalizeSetupWizard", () => {
     );
     const prompter = createLaterPrompter();
 
-    await expect(
-      finalizeSetupWizard(createFinalizeArgs("quickstart", { prompter })),
-    ).resolves.toEqual({ launchedTui: true });
+    await expect(finalize("quickstart", { prompter })).resolves.toEqual({ launchedTui: true });
 
-    expect(runTui).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: undefined,
-      }),
-    );
+    expectCall(runTui, {
+      message: undefined,
+    });
     expect(resolveDefaultModelCatalogFacts).not.toHaveBeenCalled();
     expect(resolveDefaultModelAuthStatus).not.toHaveBeenCalled();
   });
@@ -505,7 +493,7 @@ describe("finalizeSetupWizard", () => {
     const error = new Error("catalog read failed");
     loadModelCatalog.mockRejectedValueOnce(error);
 
-    await expect(finalizeSetupWizard(createFinalizeArgs("quickstart"))).rejects.toBe(error);
+    await expect(finalize("quickstart")).rejects.toBe(error);
 
     expect(runTui).not.toHaveBeenCalled();
   });
@@ -536,7 +524,7 @@ describe("finalizeSetupWizard", () => {
       },
     } satisfies OpenClawConfig;
 
-    await finalizeSetupWizard(createFinalizeArgs("quickstart", { prompter, nextConfig }));
+    await finalize("quickstart", { prompter, nextConfig });
 
     expect(loadModelCatalog).toHaveBeenCalledWith({ config: nextConfig, readOnly: true });
     expect(resolveDefaultModelCatalogFacts).toHaveBeenCalledWith(nextConfig, catalog, {
@@ -598,7 +586,7 @@ describe("finalizeSetupWizard", () => {
     });
     const prompter = buildWizardPrompter();
 
-    await finalizeSetupWizard(createFinalizeArgs("quickstart", { prompter }));
+    await finalize("quickstart", { prompter });
 
     expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ message: undefined }));
     expectNoteTitleNotCalled(prompter, "Model auth missing");
@@ -610,9 +598,7 @@ describe("finalizeSetupWizard", () => {
     vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
     const prompter = buildWizardPrompter();
 
-    await finalizeSetupWizard(
-      createFinalizeArgs("quickstart", { hadExistingConfig: true, prompter }),
-    );
+    await finalize("quickstart", { hadExistingConfig: true, prompter });
 
     expect(runTui).toHaveBeenCalledWith({
       local: true,
@@ -627,13 +613,11 @@ describe("finalizeSetupWizard", () => {
     const prompter = createLaterPrompter();
 
     await expect(
-      finalizeSetupWizard(
-        createFinalizeArgs("advanced", {
-          opts: { skipUi: false },
-          settings: { gatewayToken: "test-token" },
-          prompter,
-        }),
-      ),
+      finalize("advanced", {
+        opts: { skipUi: false },
+        settings: { gatewayToken: "test-token" },
+        prompter,
+      }),
     ).rejects.toThrow("TUI exited with code 1");
 
     expect(restoreTerminalState).toHaveBeenCalledWith("pre-setup tui", {
@@ -681,13 +665,11 @@ describe("finalizeSetupWizard", () => {
     expect(resolveGatewayInstallToken).toHaveBeenCalledTimes(1);
     expect(buildGatewayInstallPlan).toHaveBeenCalledTimes(1);
     expect(buildGatewayInstallPlan.mock.calls[0]?.[0]).not.toHaveProperty("token");
-    expect(gatewayServiceInstall).toHaveBeenCalledWith(
-      expect.objectContaining({
-        environmentValueSources: {
-          DISCORD_BOT_TOKEN: "file",
-        },
-      }),
-    );
+    expectCall(gatewayServiceInstall, {
+      environmentValueSources: {
+        DISCORD_BOT_TOKEN: "file",
+      },
+    });
   });
 
   it("reports Bun for a Bun-only QuickStart install", async () => {
@@ -716,9 +698,7 @@ describe("finalizeSetupWizard", () => {
         createServiceSetupArgs({ flow: "quickstart", opts: { installDaemon: true }, prompter }),
       );
       expect(result.gateway).toEqual({ status: "ready", action: "installed" });
-      expect(resolveArguments).toHaveBeenCalledWith(
-        expect.objectContaining({ runtime: "bun", runtimePath: process.execPath }),
-      );
+      expectCall(resolveArguments, { runtime: "bun", runtimePath: process.execPath });
       expectNoteContains(prompter, "QuickStart uses Bun", "Gateway service runtime");
       expectNoteNotContains(prompter, "QuickStart uses Node");
       expect(gatewayServiceInstall).toHaveBeenCalledOnce();
@@ -756,9 +736,7 @@ describe("finalizeSetupWizard", () => {
       };
     });
 
-    const finalizePromise = finalizeSetupWizard(
-      createFinalizeArgs("advanced", { opts: { installDaemon: true }, prompter }),
-    );
+    const finalizePromise = finalize("advanced", { opts: { installDaemon: true }, prompter });
     await vi.waitFor(() => {
       expect(prompter.note).toHaveBeenCalledWith("Gateway install warning", "Gateway service");
     });
@@ -777,9 +755,7 @@ describe("finalizeSetupWizard", () => {
       throw new Error("plan failed");
     });
 
-    await finalizeSetupWizard(
-      createFinalizeArgs("advanced", { opts: { installDaemon: true }, prompter }),
-    );
+    await finalize("advanced", { opts: { installDaemon: true }, prompter });
 
     expect(prompter.note).toHaveBeenCalledWith("Gateway install warning", "Gateway service");
     expectNoteContains(prompter, "plan failed", "Gateway");
@@ -799,12 +775,10 @@ describe("finalizeSetupWizard", () => {
         const choice = action === "reused" ? "skip" : "restart";
         const prompter = buildWizardPrompter(undefined, { defaultSelect: choice });
 
-        await finalizeSetupWizard(
-          createFinalizeArgs("quickstart", {
-            opts: { installDaemon: action !== "skipped", skipHealth: false, skipUi: true },
-            prompter,
-          }),
-        );
+        await finalize("quickstart", {
+          opts: { installDaemon: action !== "skipped", skipHealth: false, skipUi: true },
+          prompter,
+        });
 
         if (action === "skipped") {
           expect(waitForGatewayReachable).not.toHaveBeenCalled();
@@ -839,21 +813,17 @@ describe("finalizeSetupWizard", () => {
         select: vi.fn().mockResolvedValueOnce("reinstall").mockResolvedValueOnce("tui"),
       });
 
-      await finalizeSetupWizard(
-        createFinalizeArgs("quickstart", {
-          opts: { installDaemon: true, skipHealth },
-          prompter,
-        }),
-      );
+      await finalize("quickstart", {
+        opts: { installDaemon: true, skipHealth },
+        prompter,
+      });
 
       expect(gatewayServiceUninstall).not.toHaveBeenCalled();
       expect(gatewayServiceInstall).not.toHaveBeenCalled();
       expect(waitForGatewayReachable).not.toHaveBeenCalled();
       expect(probeGatewayReachable).toHaveBeenCalledOnce();
       expect(healthCommand).toHaveBeenCalledTimes(skipHealth ? 0 : 1);
-      expect(runTui).toHaveBeenCalledWith(
-        expect.objectContaining({ boundGateway: { url: "ws://127.0.0.1:18789" } }),
-      );
+      expectCall(runTui, { boundGateway: { url: "ws://127.0.0.1:18789" } });
       expectNoteContains(prompter, "replacement plan failed", "Gateway");
       expectNoteNotContains(prompter, "Gateway: not detected");
       expect(prompter.outro).toHaveBeenCalledWith(expect.stringContaining("setup failed"));
@@ -931,12 +901,10 @@ describe("finalizeSetupWizard", () => {
           detail: "external gateway is offline",
         });
         const prompter = createLaterPrompter();
-        await finalizeSetupWizard(
-          createFinalizeArgs("advanced", {
-            opts: { skipHealth: false, skipUi: false },
-            prompter,
-          }),
-        );
+        await finalize("advanced", {
+          opts: { skipHealth: false, skipUi: false },
+          prompter,
+        });
 
         expect(isSystemdUserServiceAvailable).not.toHaveBeenCalled();
         expect(isContainerEnvironment).not.toHaveBeenCalled();
@@ -976,9 +944,12 @@ describe("finalizeSetupWizard", () => {
     expect(gatewayServiceRestart).not.toHaveBeenCalled();
   });
 
-  it("reuses a running gateway while resuming without restarting it", async () => {
+  it.each([
+    ["already-running", "reused"],
+    ["started", "started"],
+  ])("resumes a %s gateway without reinstalling or restarting it", async (outcome, action) => {
     startGatewayService.mockResolvedValueOnce({
-      outcome: "already-running",
+      outcome,
       state: {
         installed: true,
         loaded: true,
@@ -986,39 +957,15 @@ describe("finalizeSetupWizard", () => {
         env: process.env,
         command: { programArguments: ["openclaw", "gateway"] },
       },
-      issues: [],
+      ...(outcome === "already-running" ? { issues: [] } : {}),
     });
-
     const result = await ensureGatewayServiceForOnboarding(
       createServiceSetupArgs({ loadedAction: "resume" }),
     );
-
-    expect(result.gateway).toEqual({ status: "ready", action: "reused" });
+    expect(result.gateway).toEqual({ status: "ready", action });
     expect(gatewayServiceRestart).not.toHaveBeenCalled();
     expect(gatewayServiceInstall).not.toHaveBeenCalled();
     expect(startGatewayService).toHaveBeenCalledOnce();
-  });
-
-  it("starts an installed but stopped gateway while resuming", async () => {
-    const stopped = {
-      installed: true,
-      loaded: true,
-      running: false,
-      env: process.env,
-      command: { programArguments: ["openclaw", "gateway"] },
-    };
-    startGatewayService.mockResolvedValueOnce({
-      outcome: "started",
-      state: { ...stopped, running: true },
-    });
-
-    const result = await ensureGatewayServiceForOnboarding(
-      createServiceSetupArgs({ loadedAction: "resume" }),
-    );
-
-    expect(result.gateway).toEqual({ status: "ready", action: "started" });
-    expect(gatewayServiceRestart).not.toHaveBeenCalled();
-    expect(gatewayServiceInstall).not.toHaveBeenCalled();
   });
 
   it("reports service definition repair failures without restarting on resume", async () => {
@@ -1093,9 +1040,7 @@ describe("finalizeSetupWizard", () => {
       progress: vi.fn(() => ({ update: progressUpdate, stop: progressStop })),
     });
 
-    await finalizeSetupWizard(
-      createFinalizeArgs("advanced", { opts: { installDaemon: true }, prompter }),
-    );
+    await finalize("advanced", { opts: { installDaemon: true }, prompter });
 
     expect(gatewayServiceRestart).toHaveBeenCalledTimes(1);
     expect(gatewayServiceInstall).not.toHaveBeenCalled();
@@ -1166,24 +1111,18 @@ describe("finalizeSetupWizard", () => {
       );
 
       expect(result.gateway).toEqual({ status: "ready", action: "installed" });
-      expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
-        expect.objectContaining({
-          existingCommand,
-        }),
-      );
+      expectCall(buildGatewayInstallPlan, {
+        existingCommand,
+      });
       expect(buildGatewayInstallPlan.mock.calls[0]?.[0]).not.toHaveProperty("existingEnvironment");
       expect(gatewayServiceInstall).toHaveBeenCalledOnce();
-      expect(gatewayServiceInstall).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runtimePinUpdate: { expected, pin: daemonRuntime ? undefined : pin },
-        }),
-      );
-      expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runtime: daemonRuntime ?? "bun",
-          pinnedRuntimePath: daemonRuntime ? undefined : pin.path,
-        }),
-      );
+      expectCall(gatewayServiceInstall, {
+        runtimePinUpdate: { expected, pin: daemonRuntime ? undefined : pin },
+      });
+      expectCall(buildGatewayInstallPlan, {
+        runtime: daemonRuntime ?? "bun",
+        pinnedRuntimePath: daemonRuntime ? undefined : pin.path,
+      });
       expect(gatewayServiceUninstall).not.toHaveBeenCalled();
     },
   );
@@ -1216,9 +1155,7 @@ describe("finalizeSetupWizard", () => {
 
       expect(result.gateway).toEqual({ status: "ready", action: "installed" });
       if (flow === "advanced") {
-        expect(selectRuntime).toHaveBeenCalledWith(
-          expect.objectContaining({ initialValue: "bun" }),
-        );
+        expectCall(selectRuntime, { initialValue: "bun" });
       }
       expect(selectRuntime).toHaveBeenCalledTimes(flow === "advanced" ? 2 : 1);
       expect(mockCall(buildGatewayInstallPlan)[0]).toMatchObject({
@@ -1247,147 +1184,76 @@ describe("finalizeSetupWizard", () => {
     expect(gatewayServiceRestart).toHaveBeenCalledTimes(action === "restart" ? 1 : 0);
   });
 
-  it("reports selected providers blocked by plugin policy as unavailable", async () => {
+  it.each([
+    ["firecrawl", "Firecrawl Search", "unavailable"],
+    ["perplexity", "Perplexity Search", "legacy"],
+    ["firecrawl", "Firecrawl Search", "key"],
+    ["grok", "Grok (xAI)", "oauth"],
+    ["parallel-free", "Parallel Search (Free)", "keyless"],
+  ] as const)("reports %s web search with %s (%s)", async (id, label, mode) => {
+    if (mode !== "unavailable") {
+      listConfiguredWebSearchProviders.mockReturnValue([
+        createWebSearchProviderEntry({
+          id,
+          label,
+          envVars:
+            mode === "keyless"
+              ? []
+              : [mode === "oauth" ? "XAI_API_KEY" : `${id.toUpperCase()}_API_KEY`],
+          ...(mode === "oauth" ? { authProviderId: "xai" } : {}),
+          ...(mode === "keyless" ? { requiresCredential: false } : {}),
+        }),
+      ]);
+    }
+    if (mode === "key" || mode === "legacy") {
+      hasExistingKey.mockImplementation((_config, provider) => provider === id);
+    }
+    if (mode === "oauth") {
+      hasAuthProfileForProvider.mockImplementation(
+        ({ provider, type }) => provider === "xai" && (!type || type === "oauth"),
+      );
+    }
     const prompter = createLaterPrompter();
-
     await finalize("advanced", {
-      nextConfig: createSearchConfig(),
+      nextConfig: mode === "legacy" ? {} : createSearchConfig(id),
       prompter,
     });
 
-    expectNoteContains(
-      prompter,
-      "selected but unavailable under the current plugin policy",
-      "Web search",
-    );
-    expect(resolveExistingKey).not.toHaveBeenCalled();
-    expect(hasExistingKey).not.toHaveBeenCalled();
-  });
-
-  it("only reports legacy auto-detect for runtime-visible providers", async () => {
-    listConfiguredWebSearchProviders.mockReturnValue([
-      createWebSearchProviderEntry({
-        id: "perplexity",
-        label: "Perplexity Search",
-        envVars: ["PERPLEXITY_API_KEY"],
-      }),
-    ]);
-    hasExistingKey.mockImplementation((configForTest, provider) => provider === "perplexity");
-
-    const prompter = createLaterPrompter();
-
-    await finalizeSetupWizard(createFinalizeArgs("advanced", { prompter }));
-
-    expectNoteContains(
-      prompter,
-      "Web search is available via Perplexity Search (auto-detected).",
-      "Web search",
-    );
-  });
-
-  it("uses configured provider resolution instead of the active runtime registry", async () => {
-    listConfiguredWebSearchProviders.mockReturnValue([
-      createWebSearchProviderEntry({
-        id: "firecrawl",
-        label: "Firecrawl Search",
-        envVars: ["FIRECRAWL_API_KEY"],
-      }),
-    ]);
-    hasExistingKey.mockImplementation((configForTest, provider) => provider === "firecrawl");
-
-    const prompter = createLaterPrompter();
-
-    await finalize("advanced", {
-      nextConfig: createSearchConfig(),
-      prompter,
-    });
-
-    expectNoteContains(
-      prompter,
-      "Web search is enabled, so your agent can look things up online when needed.",
-      "Web search",
-    );
-  });
-
-  it("reports OAuth-backed web search as enabled without an API key", async () => {
-    listConfiguredWebSearchProviders.mockReturnValue([
-      createWebSearchProviderEntry({
-        id: "grok",
-        label: "Grok (xAI)",
-        envVars: ["XAI_API_KEY"],
-        authProviderId: "xai",
-      }),
-    ]);
-    hasAuthProfileForProvider.mockImplementation(
-      ({ provider, type }) => provider === "xai" && (!type || type === "oauth"),
-    );
-
-    const prompter = createLaterPrompter();
-
-    await finalize("advanced", {
-      nextConfig: createSearchConfig("grok"),
-      prompter,
-    });
-
-    expectNoteContains(
-      prompter,
-      "Web search is enabled, so your agent can look things up online when needed.",
-      "Web search",
-    );
-    expectNoteContains(prompter, "Credential: existing xAI OAuth sign-in.", "Web search");
-    expect(
-      vi
-        .mocked(prompter.note)
-        .mock.calls.some(
-          ([message, title]) => title === "Web search" && message.includes("no API key"),
-        ),
-    ).toBe(false);
-    expect(hasAuthProfileForProvider).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "xai",
-      }),
-    );
-    expect(hasAuthProfileForProvider).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "xai",
-        type: "oauth",
-      }),
-    );
-  });
-
-  it("reports a keyless provider as ready without prompting for an API key", async () => {
-    listConfiguredWebSearchProviders.mockReturnValue([
-      createWebSearchProviderEntry({
-        id: "parallel-free",
-        label: "Parallel Search (Free)",
-        envVars: [],
-        requiresCredential: false,
-      }),
-    ]);
-
-    const prompter = createLaterPrompter();
-
-    await finalize("advanced", {
-      nextConfig: createSearchConfig("parallel-free"),
-      prompter,
-    });
-
-    expectNoteContains(
-      prompter,
-      "Web search is ready — this provider works with no API key.",
-      "Web search",
-    );
-    // The credential-required warning must NOT appear for a keyless provider.
-    expect(
-      vi
-        .mocked(prompter.note)
-        .mock.calls.some(
-          ([message, title]) =>
-            title === "Web search" &&
-            (message.includes("no API key was found") ||
-              message.includes("will not work until a key is added")),
-        ),
-    ).toBe(false);
+    if (mode === "unavailable") {
+      expectNoteContains(
+        prompter,
+        "selected but unavailable under the current plugin policy",
+        "Web search",
+      );
+      expect(resolveExistingKey).not.toHaveBeenCalled();
+      expect(hasExistingKey).not.toHaveBeenCalled();
+    } else if (mode === "legacy") {
+      expectNoteContains(
+        prompter,
+        "Web search is available via Perplexity Search (auto-detected).",
+        "Web search",
+      );
+    } else if (mode === "keyless") {
+      expectNoteContains(
+        prompter,
+        "Web search is ready — this provider works with no API key.",
+        "Web search",
+      );
+      expectNoteNotContains(prompter, "no API key was found");
+      expectNoteNotContains(prompter, "will not work until a key is added");
+    } else {
+      expectNoteContains(
+        prompter,
+        "Web search is enabled, so your agent can look things up online when needed.",
+        "Web search",
+      );
+      if (mode === "oauth") {
+        expectNoteContains(prompter, "Credential: existing xAI OAuth sign-in.", "Web search");
+        expectNoteNotContains(prompter, "no API key");
+        expectCall(hasAuthProfileForProvider, { provider: "xai" });
+        expectCall(hasAuthProfileForProvider, { provider: "xai", type: "oauth" });
+      }
+    }
   });
 
   it("uses the setup token for health checks to avoid local env token drift", async () => {
@@ -1461,13 +1327,11 @@ describe("finalizeSetupWizard", () => {
         startOnboardingGatewayProcess.mockResolvedValueOnce(sessionGateway);
         const prompter = createLaterPrompter();
 
-        const finalizing = finalizeSetupWizard(
-          createFinalizeArgs("quickstart", {
-            opts: { installDaemon: undefined, skipHealth },
-            settings: { gatewayToken: "test-token" },
-            prompter,
-          }),
-        );
+        const finalizing = finalize("quickstart", {
+          opts: { installDaemon: undefined, skipHealth },
+          settings: { gatewayToken: "test-token" },
+          prompter,
+        });
         await awaitGateBeforeSettlement(
           probeStarted.promise,
           closeStarted.promise,
@@ -1502,14 +1366,12 @@ describe("finalizeSetupWizard", () => {
         }
 
         expect(startOnboardingGatewayProcess).toHaveBeenCalledOnce();
-        expect(runTui).toHaveBeenCalledWith(
-          expect.objectContaining({
-            ...(gatewayReady ? sessionGatewayTuiTarget : { local: true }),
-            deliver: false,
-            message: undefined,
-            initialMessageTimeoutMs: 300_000,
-          }),
-        );
+        expectCall(runTui, {
+          ...(gatewayReady ? sessionGatewayTuiTarget : { local: true }),
+          deliver: false,
+          message: undefined,
+          initialMessageTimeoutMs: 300_000,
+        });
         expect(runTui.mock.calls.at(-1)?.[0]).not.toHaveProperty("timeoutMs");
 
         expect(sessionGateway.close).toHaveBeenCalledOnce();
@@ -1545,12 +1407,10 @@ describe("finalizeSetupWizard", () => {
         const prompter = createLaterPrompter();
 
         await expect(
-          finalizeSetupWizard(
-            createFinalizeArgs("quickstart", {
-              opts: { installDaemon: undefined, skipHealth: false },
-              prompter,
-            }),
-          ),
+          finalize("quickstart", {
+            opts: { installDaemon: undefined, skipHealth: false },
+            prompter,
+          }),
         ).rejects.toBe(failure);
 
         expect(runTui).not.toHaveBeenCalled();
@@ -1600,14 +1460,12 @@ describe("finalizeSetupWizard", () => {
       const prompter = createLaterPrompter();
       const runtime = createRuntime();
 
-      await finalizeSetupWizard(
-        createFinalizeArgs("quickstart", {
-          opts: { skipHealth: false },
-          settings: { gatewayToken: "test-token" },
-          prompter,
-          runtime,
-        }),
-      );
+      await finalize("quickstart", {
+        opts: { skipHealth: false },
+        settings: { gatewayToken: "test-token" },
+        prompter,
+        runtime,
+      });
 
       expect(runtime.error).not.toHaveBeenCalledWith("health failed");
       expectNoteContains(prompter, "Setup was run without Gateway service install", "Gateway");
