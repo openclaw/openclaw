@@ -358,11 +358,6 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       for (const line of lines.slice(0, 12)) {
         defaultRuntime.error(`  ${errorText(line)}`);
       }
-      if (status.port?.status === "busy" && status.lastError) {
-        defaultRuntime.error(
-          `${errorText("Recent Gateway log error (may be from an earlier run):")} ${status.lastError}`,
-        );
-      }
     }
     if (rpc.authWarning) {
       defaultRuntime.error(`${label("Check auth:")} ${warnText(rpc.authWarning)}`);
@@ -560,6 +555,11 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   for (const line of renderPortDiagnosticsForCli(status, rpc?.ok)) {
     printError(line);
   }
+  if (status.lastError) {
+    defaultRuntime.error(
+      `${errorText("Recent Gateway log error (may be from an earlier run):")} ${status.lastError}`,
+    );
+  }
 
   if (status.port) {
     const addrs = resolvePortListeningAddresses(status);
@@ -583,11 +583,6 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   ) {
     printError(`Gateway port ${status.port.port} is not listening (service appears running).`);
     const serviceEnv = { ...process.env, ...service.command?.environment };
-    if (status.lastError) {
-      defaultRuntime.error(
-        `${errorText("Recent Gateway log error (may be from an earlier run):")} ${status.lastError}`,
-      );
-    }
     if (process.platform === "linux") {
       const unit =
         service.runtime?.systemd?.unit ??

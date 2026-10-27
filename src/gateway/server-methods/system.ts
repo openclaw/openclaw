@@ -8,7 +8,6 @@ import {
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
-  errorShape,
   type SystemInfoResult,
   validateSystemInfoParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -59,6 +58,7 @@ import { readGatewayProcessVitals } from "../server/process-vitals.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
+import { respondError } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayMethod } from "./validation.js";
@@ -214,13 +214,10 @@ export const systemHandlers: GatewayRequestHandlers = {
     const { params, respond, context } = options;
     const enabled = params.enabled;
     if (typeof enabled !== "boolean") {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "invalid set-heartbeats params: enabled (boolean) required",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "invalid set-heartbeats params: enabled (boolean) required",
       );
       return;
     }
@@ -234,7 +231,7 @@ export const systemHandlers: GatewayRequestHandlers = {
       );
       respond(true, { ok: true, enabled }, undefined);
     } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(error)));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, String(error));
     }
   },
   "presence.activity": defineValidatedGatewayMethod(
@@ -281,7 +278,7 @@ export const systemHandlers: GatewayRequestHandlers = {
     // Payload classification below selects behavior and is never an authorization boundary.
     const text = normalizeOptionalString(params.text) ?? "";
     if (!text) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "text required"));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "text required");
       return;
     }
     const requestedSessionKey = normalizeOptionalString(params.sessionKey);
@@ -301,10 +298,10 @@ export const systemHandlers: GatewayRequestHandlers = {
     const authority = readGatewayRequestMutationAuthority(options);
     const isNodePresenceLine = text.startsWith("Node:");
     if (wake && isNodePresenceLine) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "wake is not supported for node presence events"),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "wake is not supported for node presence events",
       );
       return;
     }
@@ -314,11 +311,7 @@ export const systemHandlers: GatewayRequestHandlers = {
       );
       const configuredAgentIds = listAgentIds(cfg).map(normalizeAgentId);
       if (!configuredAgentIds.includes(requestedAgentId)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${requestedAgentId}"`),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, `Unknown agent id "${requestedAgentId}"`);
         return;
       }
       // A targeted wake starts a model run. Require a live session
@@ -339,13 +332,10 @@ export const systemHandlers: GatewayRequestHandlers = {
             })
           ).entry;
       if (!targetSession || targetSession.archivedAt !== undefined) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `Unknown or archived session "${requestedSessionKey}"`,
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          `Unknown or archived session "${requestedSessionKey}"`,
         );
         return;
       }

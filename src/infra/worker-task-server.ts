@@ -15,6 +15,7 @@ import {
 } from "./agent-database-readers.js";
 import { withDatabaseEngineSelection } from "./database-engine/context.js";
 import type { DiagnosticWorkerRetainedData } from "./diagnostic-process-types.js";
+import { bindPostgresPool, postgresPoolWorkerFailure } from "./postgres-sync/pool-state.js";
 import { withSqliteDatabaseAdmissionExchange } from "./sqlite-database-admission-context.js";
 import {
   bindSqliteDatabaseAdmissionUpstream,
@@ -91,10 +92,23 @@ export function serveOwnedWorkerTasks<Output, Input = unknown>(
           deadlineAtMs: databaseAdmissionDeadlineAtMs,
           assertActive: () => control.throwIfCancelled(),
         },
-        () => runWithTaskContext(() => handler(input, channel, control)),
+        () =>
+          runWithTaskContext(async () => {
+            const result = await handler(input, channel, control);
+            // Some handlers encode database failures as results; their dead endpoints
+            // still require the same retirement as a thrown transport failure.
+            const failure = postgresPoolWorkerFailure();
+            if (failure) {
+              throw failure;
+            }
+            return result;
+          }),
       ),
     {
       ...options,
+      get retireOnError() {
+        return options.retireOnError || postgresPoolWorkerFailure() !== undefined;
+      },
       closeResource: (key) =>
         runWithTaskContext(async () => {
           const request = decodeAgentDatabaseReaderRequest(key);
@@ -139,6 +153,9 @@ export function serveOwnedWorkerTasks<Output, Input = unknown>(
         memorySamples?.setTaskMetrics(context.collectWorkerMetrics === true);
         databaseAdmissionDeadlineAtMs = context.databaseAdmissionDeadlineAtMs;
         databaseEngineSelection = context.databaseEngineSelection;
+        if (context.postgresPool) {
+          bindPostgresPool(context.postgresPool);
+        }
         installDeletedAgentDatabaseFences(context.deletedAgentDatabaseFences);
         if (context.databaseAdmissionPort) {
           bindSqliteDatabaseAdmissionUpstream(context.databaseAdmissionPort);

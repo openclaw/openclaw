@@ -1,8 +1,8 @@
-import { withTimeout } from "@openclaw/fs-safe/advanced";
+import { readFileSync, readdirSync } from "node:fs";
+import path from "node:path";
 import type { BrowserContext, Page } from "playwright/test";
-import { assert, expect, it } from "vitest";
+import { assert, expect, inject, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
@@ -70,7 +70,7 @@ const duplicateTab = async (context: BrowserContext, page: Page) => {
 };
 
 suite.define(() => {
-  it("sends and explicitly retries an attachment after a non-local plain HTTP reload", () =>
+  it("automatically retries an attachment with its original key after a non-local plain HTTP reload", () =>
     suite.withPage({ ...pageOptions, locale: "en-US" }, async ({ context, page }) => {
       const url = await chatUrl(context, suite.server.baseUrl, "plain HTTP");
       const gateway = await installGateway(page, true);
@@ -95,10 +95,11 @@ suite.define(() => {
       const releasePreviewReads = await holdOutboxPreviewReads(page);
       await page.reload();
       await waitForControlUiGatewayReady(page);
-      await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).waitFor();
+      const retainedTurn = paneFor(page).locator(".chat-group.user", { hasText: message });
+      await retainedTurn.locator("time.chat-group-timestamp").waitFor();
+      expect(await retainedTurn.locator(".chat-send-status").count()).toBe(0);
       await expectRequestCountStable(gateway, "chat.send", 0);
-      // Reconnect parks the captured row while its real Blob read is pending.
-      // Adoption must preserve that newer delivery state and the original bytes.
+      // Automatic replay waits for a private copy of the complete Blob payload.
       expect(await releasePreviewReads()).toBeGreaterThan(0);
       await expect
         .poll(async () => (await readQueue(page))[0]?.attachmentPayload?.key)
@@ -110,12 +111,6 @@ suite.define(() => {
       expect(recovered.attachmentPayload.key).not.toBe(original.attachmentPayload.key);
       await expectPayload(page, original.attachmentPayload.key);
       await expectPayload(page, recovered.attachmentPayload.key);
-      await expectRequestCountStable(gateway, "chat.send", 0);
-
-      await paneFor(page)
-        .locator(".chat-group.user")
-        .getByRole("button", { name: /Retry/i })
-        .click();
       const retried = await gateway.waitForRequest("chat.send");
       expect(retried.params).toEqual(sent.params);
       await gateway.resolveDeferred("chat.send");
@@ -124,34 +119,23 @@ suite.define(() => {
       await expectPayload(page, original.attachmentPayload.key);
     }));
 
-  it("reloads an offline Blob queue with exact bytes and idempotency, and never replays a lost ACK", () =>
-    suite.withPage(pageOptions, async ({ page }) => {
-      const gateway = await installGateway(page, true);
-      await openChat(page);
-      await disconnect(page, gateway);
-      const queued = await queueAttachment(page, "Mock Gateway: offline binary submission");
-      expect(queued.attachmentPayload).toBeDefined();
-      expect(queued.sendAttempts).toBe(0);
-      await expect.poll(() => composerFor(page).inputValue()).toBe("");
-      await expectRequestCountStable(gateway, "chat.send", 0);
-      await page.reload();
-      await expect.poll(async () => (await readQueue(page))[0]?.sendRunId).toBe(queued.sendRunId);
-      await gateway.setOnline(true);
-      const sent = await gateway.waitForRequest("chat.send");
-      expectAttachmentSend(sent.params, { idempotencyKey: queued.sendRunId });
-      await expect.poll(() => payloadCount(page)).toBe(1);
-      // Reload destroys the pending ACK. The restored attempted row must require review.
-      await page.reload();
-      await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).waitFor();
-      await expectRequestCountStable(gateway, "chat.send", 0);
-      expect((await readQueue(page))[0]?.sendRunId).toBe(queued.sendRunId);
-    }));
-
   it("retains offline attachment bytes through cold queue recovery and reconnect", () =>
     suite.withPage({ serviceWorkers: "block" }, async ({ context, page }) => {
       const queueModule = controlUiE2eBuiltModuleRequest(
         "ui/src/pages/chat/components/chat-composer-queue.tsx",
       );
+      const buildRoot = inject("controlUiE2eBuildRoot");
+      assert(buildRoot);
+      const assetsDir = path.join(buildRoot, "assets");
+      const queueStyles = readdirSync(assetsDir).filter(
+        (file) =>
+          file.endsWith(".css") &&
+          /(?:^|\})\s*\.chat-queue\s*\{/u.test(readFileSync(path.join(assetsDir, file), "utf8")),
+      );
+      expect(queueStyles).toHaveLength(1);
+      // Vite can reject the queue's CSS preload before requesting its JavaScript.
+      const isQueueAsset = (text: string) =>
+        queueModule.test(text) || text.includes(`/assets/${queueStyles[0]}`);
       await page.addInitScript(() => {
         window.addEventListener("vite:preloadError", (event) => {
           console.debug(
@@ -167,12 +151,12 @@ suite.define(() => {
       await context.setOffline(true);
       await disconnect(page, gateway);
       const [failedQueueRequest] = await Promise.all([
-        page.waitForEvent("requestfailed", (request) => queueModule.test(request.url())),
+        page.waitForEvent("requestfailed", (request) => isQueueAsset(request.url())),
         page.waitForEvent(
           "console",
           (consoleMessage) =>
             consoleMessage.text().startsWith("outbox-preload-error: ") &&
-            queueModule.test(consoleMessage.text()),
+            isQueueAsset(consoleMessage.text()),
         ),
         send(page),
       ]);
@@ -188,44 +172,7 @@ suite.define(() => {
       await context.setOffline(false);
       await reloaded;
       await gateway.setOnline(true);
-      const recordReconnectFacts = (afterWait: boolean) =>
-        withTimeout(
-          Promise.all([
-            readQueue(page),
-            evaluateControlUiContext(page, (app) => ({
-              browserOnline: navigator.onLine,
-              gatewayConnected: app.gateway.snapshot.phase === "connected",
-              clientConnected: app.gateway.snapshot.client?.connected ?? false,
-              recoveryScopeReady: app.gateway.snapshot.client?.recoveryScopeReady ?? false,
-              identityResolved: app.gateway.snapshot.selfUser !== undefined,
-              foregroundReady: app.connectionBootstrap.foregroundReady,
-            })),
-          ]),
-          1_000,
-          "offline attachment reconnect facts",
-        )
-          .then(([queue, connection]) =>
-            recordControlUiE2eFailureFacts(page, {
-              ...connection,
-              reconnectFactsAfterWait: afterWait,
-              queueCount: queue.length,
-              sendAttempts: queue.reduce((count, item) => count + (item.sendAttempts ?? 0), 0),
-              payloadCount: queue.filter((item) => item.attachmentPayload).length,
-              waitingReconnect: queue.filter((item) => item.sendState === "waiting-reconnect")
-                .length,
-              waitingIdle: queue.filter((item) => item.sendState === "waiting-idle").length,
-              waitingModel: queue.filter((item) => item.sendState === "waiting-model").length,
-              unconfirmed: queue.filter((item) => item.sendState === "unconfirmed").length,
-              failed: queue.filter((item) => item.sendState === "failed").length,
-            }),
-          )
-          .catch(() => undefined);
-      await recordReconnectFacts(false);
-      const sent = await gateway.waitForRequest("chat.send").catch(async (error: unknown) => {
-        recordControlUiE2eFailureFacts(page, { reconnectSendWaitFailed: true });
-        await recordReconnectFacts(true);
-        throw error;
-      });
+      const sent = await gateway.waitForRequest("chat.send");
       expectAttachmentSend(sent.params, { message, idempotencyKey: queued.sendRunId });
       await expectRequestCountStable(gateway, "chat.send", 1);
     }));
@@ -268,7 +215,7 @@ suite.define(() => {
     }));
 
   it.each(["localhost", "plain HTTP"] as const)(
-    "isolates independent and copied tabs on %s without replay or foreign deletion",
+    "isolates independent and copied tabs on %s during automatic replay without foreign deletion",
     (origin) =>
       suite.withPage({ serviceWorkers: "block" }, async ({ context, page }) => {
         const url = await chatUrl(context, suite.server.baseUrl, origin);
@@ -284,13 +231,16 @@ suite.define(() => {
         expect(await readQueue(independent)).toEqual([]);
         await expectRequestCountStable(independentGateway, "chat.send", 0);
         const duplicate = await duplicateTab(context, page);
-        const duplicateGateway = await installGateway(duplicate);
+        const duplicateGateway = await installGateway(duplicate, true);
         await duplicate.goto(url, { waitUntil: "domcontentloaded" });
         await duplicateGateway.setOnline(true);
+        expect((await duplicateGateway.waitForRequest("chat.send")).params).toMatchObject({
+          idempotencyKey: original.sendRunId,
+        });
         await expect
-          .poll(async () => (await readQueue(duplicate))[0]?.sendState)
-          .toBe("unconfirmed");
-        await expectRequestCountStable(duplicateGateway, "chat.send", 0);
+          .poll(async () => (await readQueue(duplicate))[0]?.attachmentPayload?.key)
+          .not.toBe(original.attachmentPayload?.key);
+        await expectRequestCountStable(duplicateGateway, "chat.send", 1);
         const copied = (await readQueue(duplicate))[0]!;
         expect(copied).toMatchObject({ id: original.id, sendRunId: original.sendRunId });
         expect(copied.attachmentPayload?.key).not.toBe(original.attachmentPayload?.key);
@@ -299,19 +249,25 @@ suite.define(() => {
         assert(copied.attachmentPayload);
         await expectPayload(duplicate, copied.attachmentPayload.key);
         const removedDuplicate = await duplicateTab(context, page);
-        const removalGateway = await installGateway(removedDuplicate);
+        const removalGateway = await installGateway(removedDuplicate, true);
         await removedDuplicate.goto(url, { waitUntil: "domcontentloaded" });
         await removalGateway.setOnline(true);
+        expect((await removalGateway.waitForRequest("chat.send")).params).toMatchObject({
+          idempotencyKey: original.sendRunId,
+        });
         await expect
-          .poll(async () => (await readQueue(removedDuplicate))[0]?.sendState)
-          .toBe("unconfirmed");
+          .poll(async () => (await readQueue(removedDuplicate))[0]?.attachmentPayload?.key)
+          .not.toBe(original.attachmentPayload?.key);
         await expect.poll(() => payloadCount(page)).toBe(3);
+        // Routine replay is quiet; discard remains available when delivery needs reconnecting.
+        await disconnect(removedDuplicate, removalGateway);
         await paneFor(removedDuplicate)
-          .getByRole("button", { name: /Remove queued message/ })
+          .locator('.chat-send-status[data-send-state="waiting-reconnect"]')
+          .getByRole("button", { name: "Discard", exact: true })
           .click();
         await expect.poll(() => payloadCount(page)).toBe(2);
         await expectPayload(page, original.attachmentPayload.key);
-        await expectRequestCountStable(removalGateway, "chat.send", 0);
+        await expectRequestCountStable(removalGateway, "chat.send", 1);
         const lateDuplicate = await duplicateTab(context, page);
         // Retiring the source releases only its own bundle, preserving the live copy.
         await paneFor(page)
@@ -360,11 +316,8 @@ suite.define(() => {
       await duplicate.addInitScript((eventName) => {
         const manager = navigator.locks;
         const nativeRequest = manager.request.bind(manager);
-        let release!: () => void;
         let released = false;
-        const latch = new Promise<void>((resolve) => {
-          release = resolve;
-        });
+        const { promise: latch, resolve: release } = Promise.withResolvers<void>();
         window.addEventListener(
           eventName,
           () => {

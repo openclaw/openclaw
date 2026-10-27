@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeFixtureJsonSync } from "../cli/cli-fixtures.test-support.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import { recordLegacyMigrationReceipt } from "../infra/state-migrations.receipts.js";
 import {
@@ -12,7 +13,6 @@ import {
 import type { HeldAgentDatabase } from "../state/agent-deletion-journal.types.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
-import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -25,6 +25,7 @@ import { restoreDoctorMissingJournalStores } from "./doctor-agent-deletion-journ
 import { repairDoctorAgentDeletionJournal } from "./doctor-agent-deletion-journal.js";
 import { prepareDoctorDatabasePreflight } from "./doctor-database-preflight.js";
 import * as migrationBackup from "./doctor-migration-backup.js";
+import { withMaintenance } from "./doctor-schema-migrations.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
@@ -48,6 +49,7 @@ async function withFixture(
     sharedPath: string;
   }) => Promise<void>,
   agentId = "main",
+  schemaVersion = 24,
 ) {
   const root = fs.realpathSync.native(dirs.make("doctor-published-journal-"));
   const env = {
@@ -58,13 +60,10 @@ async function withFixture(
     PI_CODING_AGENT_DIR: undefined,
   };
   await withEnvAsync(env, async () => {
-    fs.writeFileSync(
-      env.OPENCLAW_CONFIG_PATH,
-      JSON.stringify({
-        agents: { entries: { main: { workspace: path.join(root, "workspace") } } },
-        plugins: { enabled: false },
-      }),
-    );
+    writeFixtureJsonSync(env.OPENCLAW_CONFIG_PATH, {
+      agents: { entries: { main: { workspace: path.join(root, "workspace") } } },
+      plugins: { enabled: false },
+    });
     const sharedPath = openOpenClawStateDatabase({ env }).path;
     closeOpenClawStateDatabaseForTest();
     const agentPath = path.join(root, "agents", agentId, "agent", "openclaw-agent.sqlite");
@@ -72,16 +71,17 @@ async function withFixture(
     using agent = new DatabaseSync(agentPath);
     agent.exec(
       fs.readFileSync(
-        new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v24.sql", import.meta.url),
+        new URL(
+          `../../test/fixtures/sqlite/openclaw-agent-schema-v${schemaVersion}.sql`,
+          import.meta.url,
+        ),
         "utf8",
       ),
     );
-    agent.exec("PRAGMA user_version = 24");
+    agent.exec(`PRAGMA user_version = ${schemaVersion}`);
     agent
-      .prepare(
-        "INSERT INTO schema_meta VALUES ('primary', 'agent', 24, ?, '2026.10.4', 1000, 1000)",
-      )
-      .run(agentId);
+      .prepare("INSERT INTO schema_meta VALUES ('primary', 'agent', ?, ?, '2026.10.4', 1000, 1000)")
+      .run(schemaVersion, agentId);
     agent
       .prepare(
         "INSERT INTO cache_entries(scope, key, value_json, updated_at) VALUES ('user', 'preserved', ?, 1000)",
@@ -90,18 +90,6 @@ async function withFixture(
     agent.close();
     await run({ env, agentPath, sharedPath, root, configPath: env.OPENCLAW_CONFIG_PATH });
   });
-}
-
-async function withMaintenance<T>(run: () => Promise<T>) {
-  const maintenance = createOpenClawDatabaseMaintenanceScope({
-    schemaMaintenance: true,
-    assertOwnerCurrent: () => {},
-  });
-  try {
-    return await maintenance.run(run);
-  } finally {
-    await maintenance.close();
-  }
 }
 
 const repair = (env: NodeJS.ProcessEnv) =>
@@ -255,116 +243,123 @@ it.each(["different-agent", "noncanonical-path"])(
     }, "openclaw"),
 );
 
-it.each(["first-upgrade", "already-held"])(
+it.each(["first-upgrade", "already-held", "upgraded-producer"])(
   "restores a populated published store with verified backups on %s",
   (phase) =>
-    withFixture(async ({ env, agentPath, sharedPath, root, configPath }) => {
-      exec(sharedPath, "DROP TABLE agent_deletion_journal");
-      const agentPaths = [agentPath];
-      if (phase === "first-upgrade") {
-        const otherPath = path.join(root, "agents/ops/agent/openclaw-agent.sqlite");
-        copyAgent(agentPath, otherPath, "ops");
-        const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-        config.agents.ownership = "explicit";
-        config.agents.entries.ops = {
-          workspace: path.join(root, "workspace-ops"),
-        };
-        fs.writeFileSync(configPath, JSON.stringify(config));
-        agentPaths.push(otherPath);
-        const preview = await repairDoctorAgentDeletionJournal({
-          preflight: await prepareDoctorDatabasePreflight(),
-          shouldRepair: false,
-          env,
+    withFixture(
+      async ({ env, agentPath, sharedPath, root, configPath }) => {
+        exec(sharedPath, "DROP TABLE agent_deletion_journal");
+        if (phase === "upgraded-producer") {
+          exec(agentPath, "UPDATE schema_meta SET app_version = '2026.10.6', updated_at = 2000");
+        }
+        const agentPaths = [agentPath];
+        if (phase === "first-upgrade") {
+          const otherPath = path.join(root, "agents/ops/agent/openclaw-agent.sqlite");
+          copyAgent(agentPath, otherPath, "ops");
+          const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+          config.agents.ownership = "explicit";
+          config.agents.entries.ops = {
+            workspace: path.join(root, "workspace-ops"),
+          };
+          writeFixtureJsonSync(configPath, config);
+          agentPaths.push(otherPath);
+          const preview = await repairDoctorAgentDeletionJournal({
+            preflight: await prepareDoctorDatabasePreflight(),
+            shouldRepair: false,
+            env,
+          });
+          expect(preview.warnings.join("\n")).toContain("automatically after verified backups");
+          expect(preview.warnings.join("\n")).not.toContain("without activating held stores");
+        }
+        const bytes = agentPaths.map((pathname) => fs.readFileSync(pathname));
+        if (phase === "already-held") {
+          // The old Doctor owner produces a real reconstruction receipt; remove only
+          // the new optional observation field to exercise the published format.
+          await repairDoctorAgentDeletionJournal({
+            preflight: await prepareDoctorDatabasePreflight(),
+            shouldRepair: true,
+            env,
+          });
+          const state = openOpenClawStateDatabase({ env });
+          const report = JSON.parse(
+            String(sourceReport(requireNativeSqliteDatabase(state.db), reconstructionKey)),
+          );
+          delete report.missingJournal;
+          state.db
+            .prepare("UPDATE migration_sources SET report_json = ? WHERE source_key = ?")
+            .run(JSON.stringify(report), reconstructionKey);
+        }
+        const result = await repair(env);
+        expect(result.warnings.join("\n")).toContain("Automatically restored agent main");
+        expect(result.warnings.join("\n")).toContain("Verified backup:");
+        if (phase === "first-upgrade") {
+          expect(result.warnings.join("\n")).toContain("Automatically restored agent ops");
+        }
+        expect(recoveryHolds(env)).toEqual([]);
+        expect(agentPaths.map((pathname) => fs.readFileSync(pathname))).toEqual(bytes);
+        verifyBackups(result.changes, agentPaths, (database) => {
+          expect(sourceReport(database, reconstructionKey)).toContain('"agentId":"main"');
+          expect(row(database, "SELECT count(*) AS n FROM migration_runs")?.n).toBeGreaterThan(0);
         });
-        expect(preview.warnings.join("\n")).toContain("automatically after verified backups");
-        expect(preview.warnings.join("\n")).not.toContain("without activating held stores");
-      }
-      const bytes = agentPaths.map((pathname) => fs.readFileSync(pathname));
-      if (phase === "already-held") {
-        // The old Doctor owner produces a real reconstruction receipt; remove only
-        // the new optional observation field to exercise the published format.
-        await repairDoctorAgentDeletionJournal({
-          preflight: await prepareDoctorDatabasePreflight(),
-          shouldRepair: true,
-          env,
-        });
-        const state = openOpenClawStateDatabase({ env });
-        const report = JSON.parse(
-          String(sourceReport(requireNativeSqliteDatabase(state.db), reconstructionKey)),
-        );
-        delete report.missingJournal;
-        state.db
-          .prepare("UPDATE migration_sources SET report_json = ? WHERE source_key = ?")
-          .run(JSON.stringify(report), reconstructionKey);
-      }
-      const result = await repair(env);
-      expect(result.warnings.join("\n")).toContain("Automatically restored agent main");
-      expect(result.warnings.join("\n")).toContain("Verified backup:");
-      if (phase === "first-upgrade") {
-        expect(result.warnings.join("\n")).toContain("Automatically restored agent ops");
-      }
-      expect(recoveryHolds(env)).toEqual([]);
-      expect(agentPaths.map((pathname) => fs.readFileSync(pathname))).toEqual(bytes);
-      verifyBackups(result.changes, agentPaths, (database) => {
-        expect(sourceReport(database, reconstructionKey)).toContain('"agentId":"main"');
-        expect(row(database, "SELECT count(*) AS n FROM migration_runs")?.n).toBeGreaterThan(0);
-      });
-      expect(await repair(env)).toEqual({ changes: [], warnings: [] });
-    }),
+        expect(await repair(env)).toEqual({ changes: [], warnings: [] });
+      },
+      "main",
+      phase === "upgraded-producer" ? 26 : 24,
+    ),
 );
 
-it.each(["present-incomplete", "other-version", "rewritten-stamp"])(
-  "keeps %s stores held",
-  (kind) =>
-    withFixture(async ({ env, agentPath, sharedPath, root }) => {
-      using shared = new DatabaseSync(sharedPath);
-      if (kind === "present-incomplete") {
-        beginAgentDeletionJournal(
-          {
-            agentId: "main",
-            operationId: "lost-history",
-            agentDir: path.dirname(agentPath),
-            workspaceDir: path.join(root, "workspace"),
-            sessionsDir: path.join(root, "agents/main/sessions"),
-            databasePaths: [agentPath],
-            deleteFiles: false,
-          },
-          { env },
-        );
-        shared.exec(
-          "UPDATE agent_deletion_journal SET database_paths_json = '[' WHERE agent_id = 'main'",
-        );
-      } else {
-        shared.exec("DROP TABLE agent_deletion_journal");
-      }
-      shared.close();
-      if (kind !== "present-incomplete") {
-        using agent = new DatabaseSync(agentPath);
-        agent.exec(
-          kind === "other-version"
-            ? "UPDATE schema_meta SET app_version = '2026.9.6'"
-            : "UPDATE schema_meta SET updated_at = 2000",
-        );
-      }
-      const bytes = fs.readFileSync(agentPath);
-      const result = await repair(env);
-      expect(result.warnings.join("\n")).not.toContain("Automatically restored");
-      expect(result.warnings.join("\n")).toContain("held back");
-      expect(result.warnings.join("\n")).toContain("agents add");
-      expect(recoveryHolds(env)).toContainEqual({
-        agentId: "main",
-        path: agentPath,
+it.each(["present-incomplete", "different-owner", "unconfigured"])("keeps %s stores held", (kind) =>
+  withFixture(async ({ env, agentPath, sharedPath, root }) => {
+    using shared = new DatabaseSync(sharedPath);
+    if (kind === "present-incomplete") {
+      beginAgentDeletionJournal(
+        {
+          agentId: "main",
+          operationId: "lost-history",
+          agentDir: path.dirname(agentPath),
+          workspaceDir: path.join(root, "workspace"),
+          sessionsDir: path.join(root, "agents/main/sessions"),
+          databasePaths: [agentPath],
+          deleteFiles: false,
+        },
+        { env },
+      );
+      shared.exec(
+        "UPDATE agent_deletion_journal SET database_paths_json = '[' WHERE agent_id = 'main'",
+      );
+    } else {
+      shared.exec("DROP TABLE agent_deletion_journal");
+    }
+    shared.close();
+    if (kind === "different-owner") {
+      exec(agentPath, "UPDATE schema_meta SET agent_id = 'other'");
+    } else if (kind === "unconfigured") {
+      writeFixtureJsonSync(env.OPENCLAW_CONFIG_PATH!, {
+        agents: { ownership: "explicit", entries: { other: {} } },
+        plugins: { enabled: false },
       });
-      expect(fs.readFileSync(agentPath)).toEqual(bytes);
-      await expect(
-        assertOpenClawDatabasesReady({
-          env,
-          operation: "doctor",
-          config: { agents: { entries: { main: {} } } },
-          configuredAgentDatabaseTargets: [{ agentId: "main", path: agentPath }],
-        }),
-      ).rejects.toThrow("Doctor could not complete repair");
-    }),
+    }
+    const bytes = fs.readFileSync(agentPath);
+    const result = await repair(env);
+    expect(result.warnings.join("\n")).not.toContain("Automatically restored");
+    expect(result.warnings.join("\n")).toContain("held back");
+    expect(result.warnings.join("\n")).toContain("agents add");
+    expect(recoveryHolds(env)).toContainEqual({
+      agentId: "main",
+      path: agentPath,
+    });
+    expect(fs.readFileSync(agentPath)).toEqual(bytes);
+    await expect(
+      assertOpenClawDatabasesReady({
+        env,
+        operation: "doctor",
+        config: { agents: { entries: { main: {} } } },
+        configuredAgentDatabaseTargets: [{ agentId: "main", path: agentPath }],
+      }),
+    ).rejects.toThrow(
+      kind === "different-owner" ? "belongs to agent other" : "Doctor could not complete repair",
+    );
+  }),
 );
 
 it.each(["root", "included"])(
@@ -376,7 +371,7 @@ it.each(["root", "included"])(
       const changedPath = source === "root" ? configPath : path.join(root, "roster.json");
       if (source === "included") {
         fs.writeFileSync(changedPath, originalConfig);
-        fs.writeFileSync(configPath, JSON.stringify({ $include: "./roster.json" }));
+        writeFixtureJsonSync(configPath, { $include: "./roster.json" });
       }
       const newerConfig = JSON.stringify({
         agents: { entries: { ops: {} } },

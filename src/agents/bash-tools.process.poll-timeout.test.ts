@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import {
   resetDiagnosticSessionStateForTest,
   type SessionState,
@@ -18,7 +19,6 @@ import {
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
-import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import {
   detectToolCallLoop,
   recordToolCall,
@@ -308,7 +308,9 @@ test("capped stream output stays ordered, compact, and frozen through terminal d
   appendOutput(session, "stderr", "late".repeat(1_000));
   expect(text(await poll())).toBe(discarded + "(no new output)\n\nProcess exited with code 0.");
   expect(session).toMatchObject({ totalOutputChars: 8_000, pendingOutput: "" });
-  expect(text(await call("log"))).toBe(discarded + "oe".repeat(1_500));
+  expect(text(await call("log"))).toBe(
+    discarded + "oe".repeat(1_500) + "\n\nProcess exited with code 0.",
+  );
 });
 
 test.each([

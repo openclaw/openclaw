@@ -13,6 +13,7 @@ import {
   captureControlUiE2eFailureDiagnostics,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { scrollChatThreadToTop } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Chat responsive app behavior" });
@@ -99,7 +100,7 @@ function messageContextState(group: Element) {
   const target = document.elementFromPoint(rect.left + 8, rect.top + rect.height / 2);
   const summaryStyle = getComputedStyle(summary);
   return {
-    rowContainment: getComputedStyle(group.closest(".chat-virtual-row")!).contentVisibility,
+    rowContainment: getComputedStyle(group.closest(".chat-virtual-row")!).contain,
     topLayer: popup?.matches(":popover-open") ?? false,
     painted: target !== null && details.contains(target),
     footerOpacity: getComputedStyle(footer).opacity,
@@ -290,6 +291,7 @@ suite.define(() => {
       const page = await getSharedAppPage();
       try {
         await page.setViewportSize(DESKTOP_VIEWPORT);
+        await scrollChatThreadToTop(page);
         const group = page.locator(".chat-group").filter({ hasText: SHARED_APP_CONTEXT_TEXT });
         const tooltip = group.locator("openclaw-tooltip.msg-meta");
         const context = tooltip.locator(".msg-meta__details");
@@ -312,7 +314,7 @@ suite.define(() => {
         // Hit-test rendered content, not just the popup's open flag.
         await expect
           .poll(() => group.evaluate(messageContextState))
-          .toMatchObject({ rowContainment: "auto", topLayer: true, painted: true });
+          .toMatchObject({ rowContainment: "content", topLayer: true, painted: true });
 
         await page.mouse.move(0, 0);
         await context.waitFor({ state: "hidden", timeout: 10_000 });
@@ -365,6 +367,7 @@ suite.define(() => {
 
   it("renders delivered playback media inline", FULL_APP_TEST_OPTIONS, async () => {
     const page = await getSharedAppPage();
+    await scrollChatThreadToTop(page);
     const image = page.locator(`img.chat-message-image[src="${SHARED_APP_IMAGE_URL}"]`);
     await image.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
     expect(await image.getAttribute("src")).toBe(SHARED_APP_IMAGE_URL);

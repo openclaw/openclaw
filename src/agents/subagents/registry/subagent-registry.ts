@@ -9,6 +9,7 @@ import {
 } from "../../../process/gateway-work-admission.js";
 import { findSessionControllerOperationByRunId } from "../../../sessions/session-controller.queries.js";
 import { runInDetachedAsyncContext } from "../../../shared/detached-async-context.js";
+import type { AgentRecoveryProgress } from "../../../state/agent-database-preparation-recovery.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { reconcileRetiredSubagentCancellation } from "../completion/subagent-completion-admission.store.js";
 import { terminateAcceptedCollectorRun } from "../spawn/subagent-spawn-cleanup.js";
@@ -711,6 +712,8 @@ export function initSubagentRegistry() {
   return subagentRestorer.restoreOnce();
 }
 
+export { getPrivateRequesterSettleRecoveryOwner } from "./subagent-registry-read.js";
+
 export async function prepareRequesterSettleWakeRecoverySource(
   params: Omit<Parameters<typeof captureRequesterSettleWakeRecoverySource>[0], "context">,
 ) {
@@ -724,7 +727,7 @@ export async function prepareRequesterSettleWakeRecoverySource(
 export function activateSubagentRegistry(
   resolveGatewayContext: GatewayContextResolver,
   startupTrace?: GatewayStartupTrace,
-) {
+): AgentRecoveryProgress {
   // Reuse the instance's own fenced closure so late-restored siblings share one
   // authority across repeated activation; the raw holder can outlive that instance.
   activeGatewayContextResolver = resolveGatewayContext()?.resolveGatewayContext;

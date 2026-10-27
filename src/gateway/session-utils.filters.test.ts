@@ -2,16 +2,20 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/schema/sessions-list.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { runSynchronousWork } from "../shared/synchronous-work.js";
 import {
   requestContext,
   sessionReadHandlers,
 } from "./server-methods/sessions-read-cache.test-support.js";
+import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import * as sessionIdentity from "./session-identity-projection.js";
 import { filterSessionEntries } from "./session-list-filters.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
-import { prepareSessionRowSelection, selectSessionEntries } from "./session-utils-list.js";
+import {
+  prepareProjectedSessionList,
+  prepareSessionRowSelection,
+  selectSessionEntries,
+} from "./session-utils-list.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 
 vi.mock("../state/user-profile-list.js", async (importOriginal) => ({
@@ -61,8 +65,36 @@ function projectionFixture(
   return projection;
 }
 function filteredKeys(params: Parameters<typeof filterSessionEntries>[0]) {
-  return runSynchronousWork(filterSessionEntries(params)).entries.map(([key]) => key);
+  return filterSessionEntries(params).entries.map(([key]) => key);
 }
+
+it("skips visibility memo work for unrestricted lists and retains request filters", () => {
+  const projection = projectionFixture({
+    store: rows({
+      own: { createdActor: actor(adaId), visibility: "draft" },
+      other: { createdActor: actor(bobId), visibility: "draft" },
+    }),
+  });
+  const client = createOperatorClient({ profileId: adaId, scopes: ["operator.admin"] });
+  client.preparedSessionProfile = { profileId: adaId, aliases: new Set([adaId]), role: null };
+  const visibility = new WeakMap<object, boolean>();
+  const reads = vi.spyOn(visibility, "get");
+  const select = (opts: SessionsListParams = {}) =>
+    selectSessionEntries(
+      prepareProjectedSessionList({ projection, opts, client, now, visibility }).filters,
+    );
+  expect(select().entries.map(([key]) => key)).toEqual([sessionKey("own"), sessionKey("other")]);
+  expect(reads).not.toHaveBeenCalled();
+  expect(select({ hasBoard: true }).entries).toEqual([]);
+  expect(select({ activeOnly: true }).entries).toEqual([]);
+
+  client.connect.scopes = ["operator.read"];
+  // Authority epochs own their memo; a changed caller receives a fresh one.
+  const restricted = prepareProjectedSessionList({ projection, opts: {}, client, now });
+  expect(selectSessionEntries(restricted.filters).entries.map(([key]) => key)).toEqual([
+    sessionKey("own"),
+  ]);
+});
 
 it.each([true, false])("pages owner-first rows with full-roster facets (ordered=%s)", (ordered) => {
   const store = rows(
@@ -85,9 +117,11 @@ it.each([true, false])("pages owner-first rows with full-roster facets (ordered=
   ] as const) {
     const opts = { limit: 2, offset, includePeople: true };
     const prepared = prepareSessionRowSelection(projection, opts, { ordered });
-    const selected = runSynchronousWork(
-      selectSessionEntries({ ...prepared, entriesSorted: ordered, ownerFirstActorId: adaId }),
-    );
+    const selected = selectSessionEntries({
+      ...prepared,
+      entriesSorted: ordered,
+      ownerFirstActorId: adaId,
+    });
     expect({
       ...selected,
       entries: selected.entries.map(([key]) => key),
@@ -174,8 +208,8 @@ it("reuses involvement facts until session replacement or profile publication", 
   expect(select(mergedAdaId)).toEqual([]);
 });
 
-it("expires cached child owners without a session or registry publication", () => {
-  const key = "agent:main:subagent:child";
+it("expires bounded non-native child owners without a session or registry publication", () => {
+  const key = "agent:main:legacy-child";
   const parent = "agent:main:dashboard:parent";
   const projection = projectionFixture({
     store: { [key]: entry({ updatedAt: now, spawnedBy: parent }) },

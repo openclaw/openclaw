@@ -28,6 +28,7 @@ import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import {
   buildChildCompletionFindings,
   readSubagentRunAnnounceResultUsing,
+  readSubagentRunFinalAnswerUsing,
   SubagentAnnouncePreparationConflictError,
   type ChildCompletionRow,
   type PreparedAnnounceResult,
@@ -210,7 +211,7 @@ export async function readSubagentOutput(
   const collectorTurn = options?.completedCollectorTurn;
   if (
     collectorTurn &&
-    (!options?.sessionTarget ||
+    (!options.sessionTarget ||
       !Number.isFinite(collectorTurn.startedAt) ||
       !Number.isFinite(collectorTurn.endedAt) ||
       collectorTurn.endedAt < collectorTurn.startedAt)
@@ -357,6 +358,19 @@ export async function readSubagentRunAnnounceResult(
 ): Promise<PreparedAnnounceResult> {
   return await readSubagentRunAnnounceResultUsing(child, {
     readSubagentRun: readSubagentRun ?? (await prepareAnnounceRunReader([child.runId])),
+    findTranscriptEvent,
+    findSessionTranscriptArchiveEventReadOnly,
+    getRuntimeConfig,
+    readSubagentSessionEntry,
+    resolveSessionStorePathCore,
+  });
+}
+
+/** The complete final answer recorded by this run, or undefined when retention removed it. */
+export async function readSubagentRunFinalAnswer(
+  child: SubagentRunRecord,
+): Promise<string | undefined> {
+  return await readSubagentRunFinalAnswerUsing(child, {
     findTranscriptEvent,
     findSessionTranscriptArchiveEventReadOnly,
     getRuntimeConfig,

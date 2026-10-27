@@ -30,6 +30,7 @@ import {
   authButton,
   authOption,
   waitForModelSetupDetection,
+  nativeModel,
 } from "./model-setup-first-run.test-support.ts";
 import { MODEL_SETUP_VERIFY_TIMEOUT_MS } from "./state.ts";
 import { unmountModelSetupPage } from "./test-helpers/solid-page.test-support.tsx";
@@ -56,15 +57,7 @@ describe("ModelSetupPage first-run inference", () => {
       const refresh = vi.spyOn(agents, "refreshList");
       mockRequests(request, {
         "models.list": () => ({
-          models: [
-            {
-              provider: "acp-opencode",
-              id: "fixture-model",
-              name: "Fixture model",
-              available: true,
-              agentRuntime: { id: "acp-opencode", source: "implicit" },
-            },
-          ],
+          models: [nativeModel()],
         }),
         "openclaw.setup.detect": () => detection,
         "agents.update": () => ({ ok: true, agentId: "main" }),

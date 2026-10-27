@@ -43,6 +43,10 @@ Runtime discovery uses the environment inherited when the CLI starts, before
 OpenClaw loads any `.env` file. Configure version-manager roots in your shell environment;
 workspace `.env` values cannot select a Node executable for recovery.
 
+On Windows, Node discovery accepts double-quoted absolute PATH directories such
+as `"C:\Program Files\nodejs"`, including a trailing semicolon. You do not need
+to remove those quotes to recover the CLI or discover Node when running under Bun.
+
 Home-relative service and version-manager paths expand `~` against inherited
 `HOME` or `USERPROFILE`. Service paths use that home even when `OPENCLAW_HOME`
 selects a different private-runtime home. Bare relative paths and service or

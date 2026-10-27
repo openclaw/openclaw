@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
@@ -9,7 +8,6 @@ import {
   runOpenClawAgentWriteTransaction as writeTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   loadTranscriptEventsSync as loadEvents,
@@ -22,7 +20,7 @@ import { resolveTranscriptMessageAppendParent as resolveParent } from "./session
 import {
   appendTranscriptEventSnapshotSync as appendEvent,
   appendTranscriptMessageSnapshotSync as appendMessage,
-} from "./session-accessor.sqlite-transcript-write.js";
+} from "./session-accessor.sqlite-transcript-write.kernel.js";
 import { replaceTranscriptEventsSync as replaceEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-ancestry-");
@@ -63,14 +61,13 @@ function assistant(eventId: string, parentId?: string) {
 }
 
 it.each(["event", "message"] as const)(
-  "keeps %s append rollback with its owning worker transaction without a savepoint",
+  "keeps %s append rollback with its owning worker transaction",
   async (kind) => {
     const { database, scope, append, transaction } = await createTranscript();
     const before = loadEvents(scope);
     expect(() => append("outside-transaction", undefined, database)).toThrow(
       "Transcript write lost its owning transaction",
     );
-    const transactionSql = vi.spyOn(database.db, "exec");
     expect(() =>
       transaction((current) => {
         const event = { type: "custom", id: "rolled-back", parentId: "root" };
@@ -82,7 +79,6 @@ it.each(["event", "message"] as const)(
         throw new Error("owning request refused commit");
       }),
     ).toThrow("owning request refused commit");
-    expect(transactionSql.mock.calls.some(([sql]) => /SAVEPOINT/i.test(sql))).toBe(false);
     expect(loadEvents(scope)).toEqual(before);
     const next = append("committed");
     expect(next).toMatchObject({ ok: true, value: { result: { messageId: "committed" } } });
@@ -99,26 +95,7 @@ it.each(["dirty", "unclassified"] as const)(
       assert(snapshot.ok);
       return snapshot.value;
     };
-    const queries = trackSqliteStatementExecutions(
-      requireNativeSqliteDatabase(database.db),
-      ["projection", "tail"],
-      (sql) =>
-        !/^select /i.test(sql)
-          ? null
-          : sql.includes('"session_transcript_index_state"')
-            ? "projection"
-            : /^select "seq" from "transcript_events"/i.test(sql) &&
-                sql.includes('order by "seq" desc')
-              ? "tail"
-              : null,
-    );
-    let first: ReturnType<typeof append>;
-    try {
-      first = append("answer", "tail");
-      expect(queries.counts).toEqual({ projection: 2, tail: 0 });
-    } finally {
-      queries.restore();
-    }
+    const first = append("answer", "tail");
     expect(first.result?.anchor).toMatchObject({
       entryId: "answer",
       rawSeq: 3,

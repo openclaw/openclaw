@@ -5,7 +5,7 @@ import {
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
 import type { SessionTranscriptBoundedMessageTailOptions } from "../config/sessions/session-accessor.sqlite-projection-read.js";
 import { bindSessionTranscriptStoreScope } from "../config/sessions/session-accessor.transcript-target.js";
-import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import { captureSessionActorTranscriptRead } from "../config/sessions/session-actor-transcript-read.js";
 import type { SessionTranscriptAccountingOptions } from "../config/sessions/session-transcript-accounting.types.js";
 import type { ReadRecentSessionConversationTextOptions } from "../config/sessions/transcript-recent-text.js";
@@ -29,7 +29,6 @@ import type {
 
 export type { SessionTranscriptReadScope } from "./session-transcript-read.types.js";
 export { capArrayByJsonBytes } from "./session-utils.fs.js";
-export { attachOpenClawTranscriptMeta } from "./session-transcript-entry-message.js";
 
 function captureHistoryReadScope(scope: SessionTranscriptReadScope): SessionTranscriptReadScope {
   const target = bindSessionTranscriptStoreScope(scope);
@@ -74,11 +73,11 @@ function createHistoryPageReader<Options, Result>(
     signal?: AbortSignal,
   ): Promise<Result> => {
     signal?.throwIfAborted();
-    const options = structuredClone(inputOptions);
     const memory = captureSessionActorTranscriptRead(scope, signal);
     if (memory) {
-      return readActor(createSessionActorTranscriptReader(memory), scope, options, signal);
+      return readActor(createSessionActorTranscriptReader(memory), scope, inputOptions, signal);
     }
+    const options = structuredClone(inputOptions);
     const target = captureHistoryReadScope(scope);
     const { readSessionHistoryPageInWorker } =
       await import("../config/sessions/session-history-worker-runtime.js");
@@ -105,7 +104,16 @@ export async function readSessionTranscriptAccountingAsync(
   options: SessionTranscriptAccountingOptions,
   signal?: AbortSignal,
 ) {
-  const captured = structuredClone(options);
+  const captured: SessionTranscriptAccountingOptions = {
+    includeByteSize: options.includeByteSize,
+    includeUsage: options.includeUsage,
+    ...(Object.hasOwn(options, "includeTurnTaint")
+      ? { includeTurnTaint: options.includeTurnTaint }
+      : {}),
+    ...(Object.hasOwn(options, "usageEventLimit")
+      ? { usageEventLimit: options.usageEventLimit }
+      : {}),
+  };
   const memory = captureSessionActorTranscriptRead(scope, signal);
   if (memory) {
     return memory.read("session.history.accounting", { options: captured });
@@ -273,16 +281,16 @@ export async function readSessionMessageByIdAsync(
   signal?: AbortSignal,
 ) {
   signal?.throwIfAborted();
-  const capturedOptions = options ? structuredClone(options) : undefined;
   const memory = captureSessionActorTranscriptRead(scope, signal);
   if (memory) {
     return createSessionActorTranscriptReader(memory).readSessionMessageByIdAsync(
       scope,
       messageId,
-      capturedOptions,
+      options,
       signal,
     );
   }
+  const capturedOptions = options ? structuredClone(options) : undefined;
   const target = captureHistoryReadScope(scope);
   const { readSessionHistoryPageInWorker } =
     await import("../config/sessions/session-history-worker-runtime.js");

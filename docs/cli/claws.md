@@ -25,6 +25,9 @@ Enable **Claws** in **Settings → Labs** before adding one. On a headless insta
 Authoring and inspecting local Claw packages do not require the Labs toggle.
 
 The CLI accepts a local package directory, `CLAW.md`, or grouped JSON manifest.
+JSON manifests, `package.json`, and OpenClaw YAML profiles must contain valid UTF-8.
+If inspection reports an encoding error, re-encode the source file as UTF-8 and retry;
+Add refuses it before creating an agent or workspace.
 Publishing and searching Claws through ClawHub use the separate registry
 surface. The Control UI can browse official and community Claws from **Pages → Claws** at `/claws`
 when **Claws** is enabled in **Settings → Labs**.

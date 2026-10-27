@@ -1,6 +1,8 @@
+import assert from "node:assert/strict";
 import { vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
+import { REQUEST as DISPATCH_REQUEST } from "./placement-dispatch-test-fixtures.js";
 import type { WorkerPlacementDispatchService as DispatchService } from "./placement-dispatch.js";
 import { localPlacement, sessionIdentity } from "./placement-suite.test-support.js";
 import type {
@@ -8,36 +10,24 @@ import type {
   WorkerPlacementMoveRequest,
 } from "./service-contract.js";
 
-export function admittedRecovery(
-  run: (
-    placement: Parameters<DispatchService["resumeProvisioning"]>[0],
-    core: Parameters<DispatchService["resumeProvisioning"]>[1],
-  ) => Promise<void>,
-): DispatchService["resumeProvisioning"] {
-  return async (placement, core, _onTransition, admit) => {
-    if (!admit) {
-      throw new Error("Recovery fixture requires the coordinator admission owner");
-    }
+type Recovery = DispatchService["resumeProvisioning"];
+export const admittedRecovery =
+  (
+    run: (placement: Parameters<Recovery>[0], core: Parameters<Recovery>[1]) => Promise<void>,
+  ): Recovery =>
+  async (placement, core, _onTransition, admit) => {
+    assert(admit, "Recovery fixture requires the coordinator admission owner");
     return await admit((signal) => run(placement, () => core(signal)).then(() => undefined));
   };
-}
 
-export function preparedReclaim(
-  run: () => ReturnType<DispatchService["reclaim"]>,
-): DispatchService["reclaim"] {
-  return async (_request, _authorize, _beforeDrain, serialize) => {
-    if (!serialize) {
-      throw new Error("Reclaim fixture requires session admission");
-    }
+export const preparedReclaim =
+  (run: () => ReturnType<DispatchService["reclaim"]>): DispatchService["reclaim"] =>
+  async (_request, _authorize, _beforeDrain, serialize) => {
+    assert(serialize, "Reclaim fixture requires session admission");
     return await serialize(run);
   };
-}
 
-export const REQUEST: WorkerPlacementDispatchRequest = {
-  ...sessionIdentity("session-1"),
-  profileId: "test",
-  executionMode: "worker-turn",
-};
+export const REQUEST: WorkerPlacementDispatchRequest = { ...DISPATCH_REQUEST, profileId: "test" };
 
 export const MOVE_REQUEST: WorkerPlacementMoveRequest = {
   ...sessionIdentity(REQUEST.sessionId),
@@ -75,6 +65,7 @@ export function createCoordinatorTestService(overrides: Partial<DispatchService>
     forceDestroyEnvironment: unexpected,
     getEnvironmentAttachedSessionIds: () => [],
     readEnvironmentSessionIds: async () => [],
+    subscribeOrphanWorkspaceChanges: () => () => {},
     reconcile: unexpected,
     reconcileActive: unexpected,
     isInterruptedTurn: () => false,

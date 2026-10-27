@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import {
@@ -18,9 +18,13 @@ import {
   readSessionEntrySelectionSnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
+import * as entryStore from "./session-accessor.sqlite-entry-store.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { readSessionEntryReplacementState } from "./session-accessor.sqlite-replacement-read.js";
-import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import {
+  commitSessionEntryReplacementsInDatabase,
+  prepareSessionEntryReplacementPublication,
+} from "./session-accessor.sqlite-replacement-state.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 
 describe("session entry replacement compare-and-swap", () => {
@@ -103,6 +107,78 @@ describe("session entry replacement compare-and-swap", () => {
     ).rejects.toThrow("changed before replacement");
     expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toBeUndefined();
   });
+
+  it.each(["ordinary", "self-alias"] as const)(
+    "does not revisit unrelated validated entries during %s replacements",
+    (mode) => {
+      const options = { agentId: "main", path: storePath };
+      const unrelatedKeys = Array.from(
+        { length: 4 },
+        (_, index) => `agent:main:unrelated-${index}`,
+      );
+      let unrelatedReads = 0;
+      runOpenClawAgentWriteTransaction((database) => {
+        for (const [index, sessionKey] of unrelatedKeys.entries()) {
+          writeSessionEntry(database, sessionKey, {
+            sessionId: `unrelated-${index}`,
+            updatedAt: 10,
+          });
+        }
+        const validationKeys = [scope.sessionKey, ...unrelatedKeys];
+        const expectedRows = new Map(
+          validationKeys.map((key) => [key, entryStore.readExactSessionEntryRow(database, key)!]),
+        );
+        const previous = expectedRows.get(scope.sessionKey)!.entry;
+        const read = entryStore.readExactSessionEntryRow;
+        const observe = vi
+          .spyOn(entryStore, "readExactSessionEntryRow")
+          .mockImplementation((...args) => {
+            const selected = read(...args);
+            if (selected && unrelatedKeys.includes(args[1])) {
+              const entry = selected.entry;
+              Object.defineProperty(selected, "entry", {
+                get() {
+                  unrelatedReads++;
+                  return entry;
+                },
+              });
+            }
+            return selected;
+          });
+        try {
+          commitSessionEntryReplacementsInDatabase(
+            database,
+            {
+              expectedRows,
+              validationKeys,
+              labelOwnerKeys: [],
+              replacements: ["first", "second"].map((label) => ({
+                sessionKey: scope.sessionKey,
+                entry: { ...previous, label },
+                previousSessionKeys: mode === "self-alias" ? [scope.sessionKey] : undefined,
+              })),
+            },
+            () => {
+              unrelatedReads = 0;
+            },
+          );
+        } finally {
+          observe.mockRestore();
+        }
+      }, options);
+      expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toMatchObject({
+        label: "second",
+        model: "base",
+      });
+      for (const [index, sessionKey] of unrelatedKeys.entries()) {
+        expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+          sessionId: `unrelated-${index}`,
+          updatedAt: 10,
+        });
+      }
+      expect(unrelatedReads).toBe(0);
+    },
+  );
 
   it("publishes detached persisted bytes and participant facts without rereading the writer", () => {
     recordSessionParticipant(scope, {

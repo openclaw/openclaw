@@ -6,6 +6,7 @@ import {
   Loading,
   Show,
   action,
+  createDeferred,
   createMemo,
   createOptimistic,
   createSignal,
@@ -53,14 +54,29 @@ export function AgentSkills(params: AgentSkillsProps) {
       ? params.readData().agentSkillsReport
       : null,
   );
-  const report = createMemo(async () => {
-    const read = issued();
-    return read?.agentId === params.agentId ? read.result : cached();
-  });
   const scope = createMemo(() => `${params.agentId}:${params.readData().requestGeneration}`);
   return (
     <Show when={scope()} keyed>
       {(capturedScope) => {
+        // Keep one list mounted; JSX reads this scope's cached report until the first result.
+        const report = createDeferred<
+          { report: SkillStatusReport | null; error?: string } | undefined
+        >(
+          async () => {
+            const read = issued();
+            const fallback = cached();
+            try {
+              return {
+                report:
+                  read?.agentId === params.agentId ? ((await read.result) ?? fallback) : fallback,
+              };
+            } catch (error) {
+              return { report: fallback, error: formatUiError(error) };
+            }
+          },
+          { loadingValue: undefined },
+        );
+        const pending = createMemo(() => report() === undefined || isPending(report));
         const config = createMemo(() => resolveAgentConfig(params.configForm, params.agentId));
         const [explicit, setExplicit] = createOptimistic(() =>
           Array.isArray(config().entry?.skills),
@@ -90,11 +106,7 @@ export function AgentSkills(params: AgentSkillsProps) {
             void reset(completion).catch(() => undefined);
           });
         };
-        const Content = (props: {
-          report: SkillStatusReport | null;
-          pending: boolean;
-          readError?: string;
-        }) => (
+        return (
           <AgentSkillsContent
             {...params}
             explicit={explicit()}
@@ -102,25 +114,10 @@ export function AgentSkills(params: AgentSkillsProps) {
             resetting={resetting()}
             command={command()}
             onClear={onClear}
-            report={props.report}
-            pending={props.pending}
-            readError={props.readError}
+            report={report()?.report ?? cached()}
+            pending={pending()}
+            readError={pending() ? undefined : report()?.error}
           />
-        );
-        return (
-          <Show when={issued() ?? scope()} keyed>
-            {(_receipt) => (
-              <Errored
-                fallback={(error) => (
-                  <Content report={cached()} pending={false} readError={formatUiError(error())} />
-                )}
-              >
-                <Loading fallback={<Content report={cached()} pending />}>
-                  <Content report={report() ?? cached()} pending={isPending(report)} />
-                </Loading>
-              </Errored>
-            )}
-          </Show>
         );
       }}
     </Show>
@@ -282,14 +279,15 @@ function AgentSkillsContent(
                                     ["agents.skillsPanel.reason", computeSkillReasons(skill())],
                                   ] as const
                                 }
+                                keyed={(entry) => entry[0]}
                               >
-                                {(entry) =>
-                                  entry[1].length > 0 ? (
+                                {(entry) => (
+                                  <Show when={entry()[1].length > 0}>
                                     <span class="settings-row__desc">
-                                      {t(entry[0], { items: entry[1].join(", ") })}
+                                      {t(entry()[0], { items: entry()[1].join(", ") })}
                                     </span>
-                                  ) : undefined
-                                }
+                                  </Show>
+                                )}
                               </For>
                               {learned() ? (
                                 <span class="settings-row__desc">

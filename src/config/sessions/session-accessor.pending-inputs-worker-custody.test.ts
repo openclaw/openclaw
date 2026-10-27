@@ -32,6 +32,7 @@ import {
 } from "./session-accessor.js";
 import {
   bindSessionPendingInputSources as bindInputs,
+  prepareForeignLiveSessionPendingInputEntries,
   listSessionPendingInputs as listInputs,
   stageSessionPendingInput as stageInput,
   type SessionPendingInputReceipt,
@@ -116,12 +117,21 @@ describe("accepted input worker custody", () => {
     expect(custody.facts.databasePath).toBe(fs.realpathSync(database.path));
 
     const workerScope = { ...scope, storePath: custody.facts.databasePath };
+    const readAlias = await prepareForeignLiveSessionPendingInputEntries(scope);
+    const readCanonical = await prepareForeignLiveSessionPendingInputEntries(workerScope);
+    expect(readAlias()).toEqual(new Map([[receipt.inputId, input.idempotencyKey]]));
+    expect(readCanonical()).toEqual(readAlias());
+    expect(
+      await receipt.run(async () => (await prepareForeignLiveSessionPendingInputEntries(scope))()),
+    ).toEqual(new Map());
     const result = runWithCustody(custody.facts, custody.relocation, custody.assertCurrent, () =>
       appendSync(workerScope, { message: receipt!.message }),
     );
     expect(result.value).toMatchObject({ ok: true, value: { appended: true } });
     custody.publish(result.receipt);
+    expect(readAlias()).toEqual(new Map([[receipt.inputId, input.idempotencyKey]]));
     receipt.finish("cancelled");
+    expect(readAlias()).toEqual(new Map());
     await receipt.settled?.();
     receipt = undefined;
 
@@ -152,6 +162,10 @@ describe("accepted input worker custody", () => {
           receipt = await stageInput(scope, input);
           const admitted = receipt;
           assert(admitted?.runAsync, "Expected incognito pending input custody");
+          const readForeign = await prepareForeignLiveSessionPendingInputEntries(scope);
+          expect(readForeign()).toEqual(
+            new Map([[admitted.inputId, input.message.idempotencyKey]]),
+          );
           await upsertEntry(scope, { sessionId: scope.sessionId, updatedAt: 2 });
           let effects = 0;
           await expect(
@@ -160,6 +174,9 @@ describe("accepted input worker custody", () => {
               return appendMessage(scope, { message: admitted.message });
             }),
           ).resolves.toMatchObject({ appended: true });
+          expect(readForeign()).toEqual(
+            new Map([[admitted.inputId, input.message.idempotencyKey]]),
+          );
           client.connect.scopes = ["operator.read", "operator.write"];
           await expect(
             admitted.runAsync(() => {
@@ -167,7 +184,12 @@ describe("accepted input worker custody", () => {
             }),
           ).rejects.toThrow("was not found");
           expect(effects).toBe(1);
+          // Revoked execution does not let another turn take still-held input.
+          expect(readForeign()).toEqual(
+            new Map([[admitted.inputId, input.message.idempotencyKey]]),
+          );
           admitted.finish("cancelled");
+          expect(readForeign()).toEqual(new Map());
           await admitted.settled?.();
           receipt = undefined;
 

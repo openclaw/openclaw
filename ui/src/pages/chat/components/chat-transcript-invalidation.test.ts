@@ -16,12 +16,11 @@ import { createApplicationContextProvider } from "../../../test-helpers/applicat
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
-  activePlacementSession,
   createInitializationContext,
   createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
-  createTestChatPane,
-} from "../chat-pane.test-support.ts";
+} from "../chat-application-context.test-support.ts";
+import { activePlacementSession, createTestChatPane } from "../chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "../chat-session-capability.test-support.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
 import {
   buildCachedChatItems,
@@ -498,6 +497,7 @@ describe("chat transcript invalidation", () => {
   });
 
   it("keeps message rows prepared and refreshes failure actions when a retained transcript returns", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(60_000);
     const owner = new EventTarget();
     let visible = true;
     const props = {
@@ -519,6 +519,7 @@ describe("chat transcript invalidation", () => {
       rerender();
       transcript.start();
       await flushDeferredRowPrune();
+      await waitForSolid(() => expect(find(container, ".chat-run-failure__retry")).not.toBeNull());
       const bubble = required(container, ".chat-bubble");
       expect(prepare).toHaveBeenCalled();
       prepare.mockClear();
@@ -600,15 +601,23 @@ describe("chat transcript invalidation", () => {
         await session.load;
       }
       const { transcript, container, rerender } = updatingThread(props);
+      const project = () =>
+        transcript.renderSession(props.sessionKey, (session) =>
+          projectChatTranscript({ ...props }, session),
+        );
       try {
         rerender();
         transcript.start();
         await flushDeferredRowPrune();
         expect(required(container, ".chat-question-summary button").textContent).toBe("Answer");
 
+        const previous = project();
         resetTranscriptSession(props.paneId, container);
         presentQuestions();
-        rerender();
+        const current = project();
+        render(previous.renderRows(), container);
+        flush();
+        render(current.renderRows(), container);
         await flushDeferredRowPrune();
         click(container, ".chat-question-summary button");
 
@@ -641,7 +650,9 @@ describe("chat transcript invalidation", () => {
       rerender();
       transcript.start();
       await flushDeferredRowPrune();
-      expect(container.textContent).toContain("Received · waiting for worker setup");
+      await waitForSolid(() =>
+        expect(container.textContent).toContain("Received · waiting for worker setup"),
+      );
       expect(container.querySelectorAll('[data-message-text="Queued follow-up"]')).toHaveLength(1);
       expect(buildSpy).toHaveBeenCalledOnce();
 
@@ -675,6 +686,7 @@ describe("chat transcript invalidation", () => {
     const { container, rerender } = threadFixture(props);
     const prepareFrame = vi.spyOn(chatMessage, "prepareMessageGroupFrame");
     rerender();
+    await flushDeferredRowPrune();
     const userRow = required(container, ".chat-group.user");
     expect(userRow.querySelector(".chat-avatar")).toBeNull();
     expect(prepareFrame.mock.calls.some(([group]) => group.role === "user")).toBe(true);
@@ -915,7 +927,10 @@ describe("chat transcript invalidation", () => {
     };
     const controller = createTestTranscript();
     const retainedPane = transcriptContainer();
+    controller.start();
     render(renderChatThread(props, controller), retainedPane);
+    controller.update();
+    await flushDeferredRowPrune();
     await settleToolBridges(retainedPane);
     const staleTools = getExpandedToolCards(sessionKey);
     const staleUsers = getExpandedUserMessages(sessionKey);

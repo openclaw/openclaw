@@ -486,7 +486,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
         : await SessionManager.openAsync(
             owner.session.target,
             params.workspaceDir,
-            resolveEmbeddedSessionContextLimits(contextTokenBudget),
+            resolveEmbeddedSessionContextLimits({ contextTokenBudget }),
           ));
     owner.assertActive();
     return {

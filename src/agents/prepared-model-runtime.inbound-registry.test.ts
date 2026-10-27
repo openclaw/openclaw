@@ -6,7 +6,7 @@ import {
 } from "./prepared-model-runtime.test-harness.js";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { applyAgentConfig, pruneAgentConfig } from "../commands/agents.config.js";
 import {
   createPluginMetadataSnapshot,
@@ -48,6 +48,7 @@ import {
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
 import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
+import { loadSubagentRegistryPluginRuntimeHandle } from "./subagents/registry/subagent-registry-deps.js";
 
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime" });
 const { mocks } = fixture;
@@ -139,6 +140,48 @@ async function useDiscoveryCredentials() {
 }
 
 describe("prepared reply dispatch runtime", () => {
+  it("reuses the published workspace registry for repeated subagent cleanup", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const config = {};
+    await publishGateway(config, { allowGatewaySubagentBinding: true });
+    const published = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
+    const input = {
+      config,
+      agentId: published.agentId,
+      agentDir: published.agentDir,
+      workspaceDir: published.workspaceDir,
+      allowGatewaySubagentBinding: true,
+    };
+    mocks.loadAgentRuntimePluginRegistryHandle.mockClear();
+    expect(await loadSubagentRegistryPluginRuntimeHandle(input)).toBe(
+      published.inboundPluginRegistry,
+    );
+    expect(await loadSubagentRegistryPluginRuntimeHandle(input)).toBe(
+      published.inboundPluginRegistry,
+    );
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
+
+    const replacementConfig = { plugins: { enabled: false } };
+    await publishGateway(replacementConfig, { allowGatewaySubagentBinding: true });
+    const replacement = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
+    mocks.loadAgentRuntimePluginRegistryHandle.mockClear();
+    expect(
+      await loadSubagentRegistryPluginRuntimeHandle({ ...input, config: replacementConfig }),
+    ).toBe(replacement.inboundPluginRegistry);
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
+
+    // Historical workspaces and changed policy cannot borrow the current publication.
+    for (const unmatched of [
+      input,
+      { ...input, config: replacementConfig, workspaceDir: fixture.state.path("old-workspace") },
+    ]) {
+      expect(await loadSubagentRegistryPluginRuntimeHandle(unmatched)).not.toBe(
+        replacement.inboundPluginRegistry,
+      );
+    }
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(2);
+  });
+
   it("holds inspected input through accepted preparation and refuses a retired result", async () => {
     const database = new DatabaseSync(fixture.state.path("prepared-registration.sqlite"));
     database.exec(
@@ -177,12 +220,11 @@ describe("prepared reply dispatch runtime", () => {
     );
     const outcome = preparation.catch((error: unknown) => error);
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         gate.started,
-        preparation.then(() => {
-          throw new Error("Preparation completed before its static catalog dependency");
-        }),
-      ]);
+        preparation,
+        "Preparation completed before its static catalog dependency",
+      );
       await resources.release();
       expect(database.isOpen).toBe(true);
       expect(dispose).not.toHaveBeenCalled();
@@ -757,7 +799,10 @@ describe("catalog-worker replacement demand", () => {
     async (outcome) => {
       const { input, failure } = await failReplacement();
       mocks.resolveAmbientCredentials.mockClear();
-      await expect(prepareModelRuntimeSnapshot(input)).rejects.toBe(failure);
+      await expect(prepareModelRuntimeSnapshot(input)).rejects.toMatchObject({
+        message: failure.message,
+        stack: failure.stack,
+      });
       expect(mocks.resolveAmbientCredentials).not.toHaveBeenCalled();
       const started = createDeferred();
       const finish = createDeferred();

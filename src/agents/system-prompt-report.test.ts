@@ -63,6 +63,33 @@ function expectSkills(systemPrompt: string, rendered: string, skillsPrompt = cat
 }
 
 describe("buildSystemPromptReport", () => {
+  it("resolves catalog provenance with linear work and preserves first visible matches", () => {
+    const tools = Array.from({ length: 400 }, (_, index) => makeTool(`tool_${index}`));
+    let nameReads = 0;
+    const catalogEntries = tools.map((tool, index) =>
+      catalogEntry(tool, {
+        sourceName: `plugin_${index % 40}`,
+        directVisible: true,
+      }),
+    );
+    for (const [index, entry] of catalogEntries.entries()) {
+      Object.defineProperty(entry, "name", {
+        get: () => {
+          nameReads++;
+          return tools[index]!.name;
+        },
+      });
+    }
+    catalogEntries.unshift(catalogEntry(tools[0]!, { sourceName: "hidden" }));
+    catalogEntries.push(catalogEntry(tools[0]!, { sourceName: "later", directVisible: true }));
+    const report = makeReport({ tools, catalogEntries });
+    expect(report.tools.entries.map(({ name, sourceName }) => ({ name, sourceName }))).toEqual(
+      tools.map((tool, index) => ({ name: tool.name, sourceName: `plugin_${index % 40}` })),
+    );
+    expect(report.tools.deferred?.entries[0]?.sourceName).toBe("hidden");
+    expect(nameReads).toBeLessThanOrEqual(3 * catalogEntries.length);
+  });
+
   it("separates catalog availability from consumed schemas using owner provenance", () => {
     const visible = makeTool("visible");
     const deferred = makeTool("deferred");
@@ -142,17 +169,27 @@ describe("buildSystemPromptReport", () => {
     });
   });
 
-  it("reports unnamed complete skill blocks in order", () => {
-    const skillsPrompt = "<skill></skill><skill><name> </name></skill>";
-    const report = makeReport({
-      systemPrompt: `## Skills\n${skillsPrompt.trim()}`,
-      skillsPrompt,
-    });
-    expect(report.skills.promptChars).toBe(skillsPrompt.trim().length);
-    expect(report.skills.entries).toEqual([
-      { name: "(unknown)", blockChars: "<skill></skill>".length },
-      { name: "(unknown)", blockChars: "<skill><name> </name></skill>".length },
-    ]);
+  it.each([
+    [
+      ["<skill></skill>", "<skill><name> </name></skill>"],
+      ["(unknown)", "(unknown)"],
+    ],
+    ...["long-synthetic-skill-name", "技能🦞-long-skill-name", "lone-\ud800-surrogate-name"].map(
+      (name) => [[`<skill><name>  ${name}\n</name></skill>`], [name]] as const,
+    ),
+    [
+      [
+        "<skill><name><invalid/></name><NAME> valid-skill-name-after-markup </NAME><name>later</name></skill>",
+      ],
+      ["valid-skill-name-after-markup"],
+    ],
+  ] as const)("reports complete skill blocks in order: %s", (blocks, names) => {
+    const skillsPrompt = blocks.join("");
+    const report = makeReport({ systemPrompt: `## Skills\n${skillsPrompt}`, skillsPrompt }).skills;
+    expect(report.promptChars).toBe(skillsPrompt.length);
+    expect(report.entries).toEqual(
+      names.map((name, index) => ({ name, blockChars: blocks[index]!.length })),
+    );
   });
 
   it("keeps reporting when a tool schema cannot be stringified", () => {

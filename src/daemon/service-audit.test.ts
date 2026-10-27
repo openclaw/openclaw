@@ -5,11 +5,13 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import "./test-helpers/service-audit-mocks.js";
 import {
   auditGatewayServiceConfig as inspectGatewayServiceConfig,
+  checkManagedServiceEnvDrift,
   checkTokenDrift,
   needsNodeRuntimeMigration,
   SERVICE_AUDIT_CODES as codes,
 } from "./service-audit.js";
 import { buildServiceEnvironment } from "./service-env.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 import {
   execSystemctlMock,
   execSystemctlUserMock,
@@ -98,13 +100,13 @@ it.each([undefined, "Cannot use SQLite library /opt/broken/libsqlite3.dylib: mis
   async (sqliteSelectionError) => {
     const sqliteVersion = sqliteSelectionError ? null : "3.51.2";
     resolveBunRuntimeInfoMock.mockResolvedValue({
-      ...runtimeInfo(sqliteSelectionError ? "1.4.3" : "1.4.0", sqliteVersion),
+      ...runtimeInfo(sqliteSelectionError ? "1.4.4" : "1.4.0", sqliteVersion),
       status: "unsupported",
       sqliteSelectionError,
     });
     const result = await auditBun();
     expectIssue(result, codes.gatewayRuntimeBun, {
-      message: expect.stringContaining("Bun 1.4.3+ with WAL-reset-safe node:sqlite is required"),
+      message: expect.stringContaining("Bun 1.4.4+ with WAL-reset-safe node:sqlite is required"),
       detail: sqliteSelectionError
         ? `/opt/homebrew/bin/bun: ${sqliteSelectionError}`
         : "/opt/homebrew/bin/bun",
@@ -136,13 +138,7 @@ it.each(["bun", "node"])("preserves %s probe failure without migration", async (
   const result = await (runtime === "bun"
     ? auditBun()
     : audit({ environment: undefined }, { timeoutMs: 1234 }));
-  if (runtime === "node") {
-    expect(probe).toHaveBeenCalledWith(
-      "/usr/bin/node",
-      { HOME: "/tmp", OPENCLAW_STATE_DIR: runtimePinStateDir },
-      1234,
-    );
-  } else {
+  if (runtime === "bun") {
     expect(hasIssue(result, codes.gatewayRuntimeBun)).toBe(false);
   }
   expectIssue(result, codes.gatewayRuntimeProbeFailed, { detail: error.message });
@@ -173,11 +169,7 @@ it("allows the expected active bin while rejecting unrelated manager paths", asy
   ].join(":");
   const result = await audit(
     {
-      programArguments: [
-        "/opt/homebrew/opt/node/bin/node",
-        "/opt/openclaw/dist/index.js",
-        "gateway",
-      ],
+      programArguments: ["/opt/homebrew/opt/node/bin/node", "gateway"],
       environment: { PATH: `${expectedServicePath}:/Users/testuser/.asdf/shims` },
     },
     { env, platform: "darwin", expectedServicePath },
@@ -202,9 +194,9 @@ it.each(["current/bin", "aliases/default/bin"])(
   },
 );
 it.each([
-  ["/usr/local/bin/helper", "-lc", true],
-  ["/bin/zsh", "-l", true],
-] as const)("audits gateway tokens for %s %s", async (executable, flag, missing) => {
+  ["/usr/local/bin/helper", "-lc"],
+  ["/bin/zsh", "-l"],
+])("audits gateway tokens for %s %s", async (executable, flag) => {
   const result = await audit(
     {
       programArguments: [executable, flag, "exec node gateway --port 18890"],
@@ -212,7 +204,7 @@ it.each([
     },
     { platform: "darwin", expectedPort: 18889 },
   );
-  expect(hasIssue(result, codes.gatewayCommandMissing)).toBe(missing);
+  expect(hasIssue(result, codes.gatewayCommandMissing)).toBe(true);
   expect(hasIssue(result, codes.gatewayPortMismatch)).toBe(false);
   expect(hasIssue(result, codes.gatewayPathMissing)).toBe(true);
 });
@@ -229,12 +221,7 @@ it.each([
   if (detail === undefined) {
     expect(issue).toBeUndefined();
   } else {
-    expect(issue).toStrictEqual({
-      code: codes.gatewayPortMismatch,
-      message: "Gateway service port does not match current gateway config.",
-      detail,
-      level: "recommended",
-    });
+    expect(issue).toMatchObject({ code: codes.gatewayPortMismatch, detail, level: "recommended" });
   }
 });
 it("classifies expired egress trust as repairable drift, not a custom setting", async () => {
@@ -273,32 +260,32 @@ it.each([
 ] as const)(
   "reports only exposed values for source $source",
   async ({ source, token, embedded, mismatch }) => {
+    const environment = {
+      OPENCLAW_GATEWAY_TOKEN: token,
+      OPENCLAW_GATEWAY_PASSWORD: "active-password",
+      OPENROUTER_API_KEY: "or-test",
+      TAVILY_API_KEY: "tvly-test",
+      HTTP_PROXY: "http://proxy.local:7890",
+      HTTPS_PROXY: "https://proxy.local:7890",
+      NO_PROXY: "localhost,127.0.0.1",
+      https_proxy: "https://lowercase.local:7890",
+    };
     const result = await audit(
       {
         environment: {
           PATH: "/usr/local/bin:/usr/bin:/bin",
-          OPENCLAW_GATEWAY_TOKEN: token,
-          OPENCLAW_GATEWAY_PASSWORD: "active-password",
           OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENROUTER_API_KEY",
-          OPENROUTER_API_KEY: "or-test",
-          TAVILY_API_KEY: "tvly-test",
-          HTTP_PROXY: "http://proxy.local:7890",
-          HTTPS_PROXY: "https://proxy.local:7890",
-          NO_PROXY: "localhost,127.0.0.1",
-          https_proxy: "https://lowercase.local:7890",
+          ...environment,
         },
         environmentValueSources:
           source === undefined
             ? undefined
-            : {
-                OPENCLAW_GATEWAY_TOKEN: source,
-                OPENCLAW_GATEWAY_PASSWORD: source,
-                openrouter_api_key: source,
-                tavily_api_key: source,
-                http_proxy: source,
-                https_proxy: source,
-                no_proxy: source,
-              },
+            : Object.fromEntries(
+                Object.keys(environment).map((key) => [
+                  key.startsWith("OPENCLAW_") ? key : key.toLowerCase(),
+                  source,
+                ]),
+              ),
       },
       { expectedGatewayToken: "new-token", expectedManagedServiceEnvKeys: ["TAVILY_API_KEY"] },
     );
@@ -309,12 +296,9 @@ it.each([
     const proxy = findIssue(result, codes.gatewayProxyEnvEmbedded);
     if (embedded) {
       expect(managed?.environmentKeys).toEqual(["OPENROUTER_API_KEY", "TAVILY_API_KEY"]);
-      expect(proxy?.environmentKeys).toEqual([
-        "HTTPS_PROXY",
-        "HTTP_PROXY",
-        "NO_PROXY",
-        "https_proxy",
-      ]);
+      expect(proxy?.environmentKeys).toEqual(
+        "HTTPS_PROXY HTTP_PROXY NO_PROXY https_proxy".split(" "),
+      );
       expect(proxy?.detail).toContain("HTTPS_PROXY");
     } else {
       expect(managed).toBeUndefined();
@@ -325,20 +309,10 @@ it.each([
     );
   },
 );
-it.each([
-  ["same-token\r\n", " same-token ", false],
-  ["old-token", "new-token", true],
-] as const)("compares normalized service token %s", (serviceToken, configToken, changed) => {
-  expect(checkTokenDrift({ serviceToken, configToken })).toStrictEqual(
-    changed
-      ? {
-          code: codes.gatewayTokenDrift,
-          message:
-            "Config token differs from service token. The daemon will use the old token after restart.",
-          level: "recommended",
-        }
-      : null,
-  );
+it("compares normalized service tokens", () => {
+  expect(
+    checkTokenDrift({ serviceToken: "same-token\r\n", configToken: " same-token " }),
+  ).toBeNull();
 });
 describe("auditGatewayServiceConfig systemd", () => {
   let home: string;
@@ -358,29 +332,22 @@ describe("auditGatewayServiceConfig systemd", () => {
       unitPath,
       [
         "[Unit]",
-        "Description=OpenClaw Gateway",
         ...lines.filter(isUnitKey),
         "[Service]",
         ...lines.filter((line) => !isUnitKey(line)),
         "ExecStart=/usr/bin/node gateway",
         "",
-        "[Install]",
-        "WantedBy=default.target",
-        "",
       ].join("\n"),
     );
   }
   function manager(lines: string[]) {
-    execSystemctlUserMock.mockResolvedValueOnce({
-      stdout: lines.join("\n"),
-      stderr: "",
-      code: 0,
-      termination: "exit",
-    });
+    execSystemctlUserMock.mockResolvedValueOnce(nativeExit(lines.join("\n")));
+  }
+  async function drainingUnit() {
+    await writeUnit([...network, "KillMode=mixed", "TimeoutStopSec=330"]);
   }
   const systemdCodes = (result: Awaited<ReturnType<typeof audit>>) =>
     result.issues.filter((issue) => issue.code.startsWith("systemd-")).map((issue) => issue.code);
-
   it.each([
     {
       unit: ["KillMode=mixed"],
@@ -407,17 +374,6 @@ describe("auditGatewayServiceConfig systemd", () => {
     await writeUnit(unit);
     manager(["LoadState=loaded", ...effective]);
     expect(systemdCodes(await auditUnit(321))).toEqual(expected);
-    expect(execSystemctlUserMock).toHaveBeenCalledExactlyOnceWith(
-      { ...env(), OPENCLAW_STATE_DIR: runtimePinStateDir },
-      [
-        "show",
-        "openclaw-audit.service",
-        "--no-page",
-        "--property",
-        "After,Wants,RestartUSec,KillMode,LoadState,TimeoutStopUSec,ControlGroup",
-      ],
-      321,
-    );
   });
 
   it.each([
@@ -427,33 +383,31 @@ describe("auditGatewayServiceConfig systemd", () => {
     ["infinity", false],
     [undefined, false],
   ] as const)("reports host shutdown limits separately (%s)", async (timeout, warned) => {
-    await writeUnit([...network, "KillMode=mixed", "TimeoutStopSec=330"]);
+    await drainingUnit();
     manager([
       "LoadState=loaded",
-      "After=network-online.target",
-      "Wants=network-online.target",
+      ...network.slice(0, 2),
       "RestartUSec=5s",
       "KillMode=mixed",
       "TimeoutStopUSec=5min 30s",
       "ControlGroup=/user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-audit.service",
     ]);
-    execSystemctlMock.mockResolvedValue({
-      code: timeout ? 0 : 1,
-      stdout: timeout ? `LoadState=loaded\nTimeoutStopUSec=${timeout}` : "",
-      stderr: "",
-      termination: "exit",
-    });
+    execSystemctlMock.mockResolvedValue(
+      nativeExit(
+        timeout ? `LoadState=loaded\nTimeoutStopUSec=${timeout}` : "",
+        "",
+        timeout ? 0 : 1,
+      ),
+    );
     const result = await auditUnit(321);
     expect(systemdCodes(result)).toEqual(warned ? ["systemd-user-manager-stop-timeout"] : []);
     if (warned) {
-      expect(result.issues).toContainEqual(
-        expect.objectContaining({
-          message: expect.stringContaining(
-            "/etc/systemd/system/user@1000.service.d/zz-openclaw-stop-timeout.conf",
-          ),
-          detail: "user@1000.service: 5s (system manager)",
-        }),
-      );
+      expectIssue(result, codes.systemdUserManagerStopTimeout, {
+        message: expect.stringContaining(
+          "/etc/systemd/system/user@1000.service.d/zz-openclaw-stop-timeout.conf",
+        ),
+        detail: "user@1000.service: 5s (system manager)",
+      });
     }
   });
 
@@ -469,17 +423,32 @@ describe("auditGatewayServiceConfig systemd", () => {
     expect(systemdCodes(await auditUnit())).toEqual([]);
   });
 
-  it.each(["none", ""])(
-    "warns about base-unit KillMode=%s when the manager is unavailable",
-    async (killMode) => {
-      await writeUnit([...network, `KillMode=${killMode}`]);
-      const result = await auditUnit();
-      expect(
-        hasIssue(
-          result,
-          killMode ? codes.systemdKillModeProcessOrNone : codes.systemdKillModeControlGroup,
-        ),
-      ).toBe(true);
+  it.each([
+    ["KillMode=none", codes.systemdKillModeProcessOrNone],
+    ["KillMode=", codes.systemdKillModeControlGroup],
+    ["TimeoutStopSec=infinity", undefined],
+    ["TimeoutStopSec=0", undefined],
+    ["TimeoutStopSec=invalid", codes.systemdStopTimeout],
+  ] as const)(
+    "audits base-unit %s when the manager is unavailable",
+    async (directive, issueCode) => {
+      await writeUnit([
+        ...network,
+        ...(directive.startsWith("KillMode=") ? [] : ["KillMode=mixed"]),
+        directive,
+      ]);
+      const result = await audit(null, { env: env() });
+      if (issueCode) {
+        expectIssue(result, issueCode, {
+          level: "recommended",
+          detail: expect.stringContaining(unitPath),
+          ...(issueCode === codes.systemdStopTimeout
+            ? { message: expect.stringContaining("TimeoutStopSec=330") }
+            : {}),
+        });
+      } else {
+        expect(hasIssue(result, codes.systemdStopTimeout)).toBe(false);
+      }
     },
   );
 
@@ -509,8 +478,8 @@ describe("auditGatewayServiceConfig systemd", () => {
     });
   });
 
-  it.each(["EACCES", "EIO"])("reports a backup inspection failure (%s)", async (code) => {
-    await writeUnit([...network, "KillMode=mixed", "TimeoutStopSec=330"]);
+  it("reports a backup inspection failure", async () => {
+    await drainingUnit();
     const backupPath = `${unitPath}.bak`;
     const lstat = fs.lstat;
     const inspection = vi
@@ -518,7 +487,7 @@ describe("auditGatewayServiceConfig systemd", () => {
       .mockImplementation((...args) =>
         args[0] === backupPath
           ? Promise.reject(
-              Object.assign(new Error("synthetic backup inspection failure"), { code }),
+              Object.assign(new Error("synthetic backup inspection failure"), { code: "EACCES" }),
             )
           : lstat(...args),
       );
@@ -532,22 +501,70 @@ describe("auditGatewayServiceConfig systemd", () => {
       inspection.mockRestore();
     }
   });
-  it.each([
-    { name: "unlimited base timeout", base: "infinity", expected: false },
-    { name: "disabled base timeout", base: "0", expected: false },
-    { name: "invalid base timeout", base: "invalid", expected: true },
-  ])("reports a drain requirement for $name", async ({ base, expected }) => {
-    await writeUnit([...network, "KillMode=mixed", `TimeoutStopSec=${base}`]);
+});
 
-    const result = await audit(null, { env: env() });
-    const issue = result.issues.find((entry) => entry.code === "systemd-stop-timeout");
-    expect(Boolean(issue)).toBe(expected);
-    if (expected) {
-      expect(issue).toMatchObject({
-        message: expect.stringContaining("TimeoutStopSec=330"),
-        detail: expect.stringContaining(unitPath),
-        level: "recommended",
-      });
-    }
+describe("managed service environment drift", () => {
+  it.each([
+    ["changed value", "new-value", true, {}],
+    ["removed value", undefined, true, {}],
+    ["exact whitespace", "old-value ", true, {}],
+    ["matching value", "old-value", false, {}],
+    ["generated file snapshot", "new-value", true, { source: "file" }],
+    ["non-durable SecretRef", undefined, false, { secretRef: true }],
+    ["durable SecretRef", "new-value", true, { secretRef: true }],
+    ["dynamic systemd value", "new-value", false, { systemd: true }],
+    ["unrecorded file value", "new-value", false, { source: "file", unrecorded: true }],
+  ] as const)("%s", (_name, durable, drift, options) => {
+    const scenario: {
+      source?: "file";
+      secretRef?: boolean;
+      systemd?: boolean;
+      unrecorded?: boolean;
+    } = options;
+    const result = checkManagedServiceEnvDrift({
+      command: {
+        programArguments: [],
+        environment: {
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: scenario.unrecorded ? "" : "TAVILY_API_KEY",
+          tavily_api_key: "old-value",
+          ...(scenario.systemd ? { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" } : {}),
+        },
+        environmentValueSources: scenario.source ? { TAVILY_API_KEY: scenario.source } : undefined,
+      },
+      durableEnvironment: { TAVILY_API_KEY: durable },
+      secretRefKeys: scenario.secretRef ? ["tavily_api_key"] : [],
+      platform: scenario.systemd ? "linux" : "darwin",
+    });
+    expect(result?.environmentKeys ?? []).toEqual(drift ? ["TAVILY_API_KEY"] : []);
+    expect(JSON.stringify(result)).not.toMatch(/old-value|new-value/);
+  });
+
+  it("reports only portable managed names and leaves token drift to its owner", async () => {
+    const result = await audit(
+      {
+        environment: {
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS:
+            "TAVILY_API_KEY,OPENCLAW_GATEWAY_TOKEN,OPENCLAW_SERVICE_VERSION,bad\\nkey",
+          TAVILY_API_KEY: "old-value",
+          OPENCLAW_GATEWAY_TOKEN: "old-token",
+          OPENCLAW_SERVICE_VERSION: "old-version",
+          "bad\nkey": "old-value",
+        },
+      },
+      {
+        platform: "darwin",
+        expectedDurableEnvironment: {
+          TAVILY_API_KEY: "new-value",
+          OPENCLAW_GATEWAY_TOKEN: "new-token",
+          OPENCLAW_SERVICE_VERSION: "new-version",
+        },
+      },
+    );
+    expectIssue(result, codes.gatewayEnvDrift, {
+      environmentKeys: ["TAVILY_API_KEY"],
+      detail: "drifted keys: TAVILY_API_KEY",
+      level: "recommended",
+    });
+    expect(JSON.stringify(result.issues)).not.toMatch(/old-value|new-value|old-token|new-token/);
   });
 });

@@ -1,3 +1,4 @@
+import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
@@ -48,6 +49,7 @@ export function createRepositoryGitHubPublicationExecution(params: {
       assertCurrent?: () => void;
       action?: PersonalGitHubSessionActionV2;
       requester?: GitHubPublicationRequesterPolicyV2;
+      recoveryResult?: SessionGitHubPublicationResult;
     },
   ) => {
     let row = initial;
@@ -115,6 +117,12 @@ export function createRepositoryGitHubPublicationExecution(params: {
       return execution;
     };
     try {
+      if (context.recoveryResult) {
+        assertCustody();
+        return projectGitHubPublicationResult(
+          await (await claimExecution()).complete(context.recoveryResult),
+        );
+      }
       if (row.owner_profile_id === null) {
         if (
           context.requester &&
@@ -153,8 +161,11 @@ export function createRepositoryGitHubPublicationExecution(params: {
             );
           }
           assertExecution();
+          const actor = action ? undefined : getRequester().snapshot.actor;
           return await executeRepositoryGitHubPublication({
             execution: await claimExecution(),
+            requesterProfileId:
+              action?.owner ?? (actor?.kind === "operator" ? actor.profileId : undefined),
             snapshot: prepared.snapshot,
             snapshotRoot: prepared.snapshotRoot,
             storePath: loaded.storePath,

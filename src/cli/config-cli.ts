@@ -32,6 +32,9 @@ import { collectOption } from "./program/helpers.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
 
+const CONFIG_ALLOW_EXEC_DESCRIPTION =
+  "Dry-run only: allow exec SecretRef resolvability checks (may execute provider commands)";
+
 const CONFIG_SET_DESCRIPTION = [
   "Set config values by path (value mode, ref/provider builder mode, or batch JSON mode).",
   "Examples:",
@@ -76,36 +79,49 @@ async function runConfigMutation(
       opts.localStateOwner !== undefined &&
       prepared.operations.length > 0 &&
       prepared.operations.every(({ setPath }) => setPath[0] === "database");
-    // Previews inspect installed plugin state without acquiring write custody.
-    if (
-      opts.localStateOwner &&
-      opts.cliOptions.dryRun &&
-      !databaseOnly &&
-      !getDatabaseEngineSelection()
-    ) {
-      const { readConfigSnapshotForEngineSelection } =
-        await import("../commands/config-preflight-snapshot.js");
-      await readConfigSnapshotForEngineSelection();
-    }
-    const runLocal = () =>
+    const run = (commit?: ConfigOperationParams["commit"]) =>
       runConfigOperations({
         runtime,
         options: opts.cliOptions,
         ...prepared,
         ...(databaseOnly ? { databaseOnly: true } : {}),
+        ...(commit ? { commit } : {}),
       });
-    if (!opts.localStateOwner || opts.cliOptions.dryRun) {
-      await runLocal();
+    if (!opts.localStateOwner) {
+      await run();
+    } else if (opts.cliOptions.dryRun) {
+      // Previews inspect installed plugin state without write custody.
+      if (!databaseOnly && !getDatabaseEngineSelection()) {
+        const { readConfigSnapshotForEngineSelection } =
+          await import("../commands/config-preflight-snapshot.js");
+        await readConfigSnapshotForEngineSelection();
+      }
+      await run();
     } else {
       const { runWithLocalStateOwner } = await import("./local-state-owner.js");
+      const { target } = opts.localStateOwner;
       await runWithLocalStateOwner({
         ...opts.localStateOwner,
         params: {},
-        onForeignOwner: "refuse",
-        onlineAlternative:
-          "For online config changes, use openclaw gateway call config.patch with a raw patch and baseHash from openclaw gateway call config.get.",
+        ...(target === "config"
+          ? {}
+          : { recoveryCommand: `openclaw config get ${quoteCliArg(target)}` }),
+        ...(prepared.operations.some(({ setPath }) => setPath[0] === "database")
+          ? {
+              onForeignOwner: "refuse" as const,
+              onlineAlternative:
+                "Database settings select the state database the running Gateway holds open, so they change only offline.",
+            }
+          : {
+              // The Gateway stays the single config writer: this process prepares the same
+              // change it would write offline and the owner commits it against baseHash.
+              onForeignOwner: async ({ env, requestOwner }) => {
+                const { bindConfigOwner } = await import("./config-cli-owner-patch.js");
+                await run(await bindConfigOwner(requestOwner, env));
+              },
+            }),
         ...(databaseOnly ? { databaseAccess: "none" } : { databaseEngine: "configured" }),
-        runLocal,
+        runLocal: () => run(),
       });
     }
   } catch (err) {
@@ -313,11 +329,7 @@ export function registerConfigCli(program: Command) {
       "Validate changes without writing openclaw.json (checks run in builder/json/batch modes; exec SecretRefs are skipped unless --allow-exec is set)",
       false,
     )
-    .option(
-      "--allow-exec",
-      "Dry-run only: allow exec SecretRef resolvability checks (may execute provider commands)",
-      false,
-    )
+    .option("--allow-exec", CONFIG_ALLOW_EXEC_DESCRIPTION, false)
     .option("--merge", "Merge object/map values instead of replacing the target path", false)
     .option(
       "--replace",
@@ -387,11 +399,7 @@ export function registerConfigCli(program: Command) {
       "Validate changes without writing openclaw.json (checks schema and SecretRef resolvability; exec SecretRefs are skipped unless --allow-exec is set)",
       false,
     )
-    .option(
-      "--allow-exec",
-      "Dry-run only: allow exec SecretRef resolvability checks (may execute provider commands)",
-      false,
-    )
+    .option("--allow-exec", CONFIG_ALLOW_EXEC_DESCRIPTION, false)
     .option("--json", "Output dry-run result as JSON", false)
     .option(
       "--replace-path <path>",

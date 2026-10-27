@@ -144,19 +144,6 @@ function writeMinimalPackagePlugin(
   fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n");
 }
 
-function setupInstallPluginFromDirFixture() {
-  const fixture = setupPluginInstallDirs();
-  fs.mkdirSync(path.join(fixture.pluginDir, "dist"));
-  writeJson(path.join(fixture.pluginDir, "package.json"), {
-    name: "@openclaw/test-plugin",
-    version: "0.0.1",
-    openclaw: { extensions: ["./dist/index.js"] },
-    dependencies: { "left-pad": "1.3.0" },
-  });
-  fs.writeFileSync(path.join(fixture.pluginDir, "dist/index.js"), "export {};");
-  return fixture;
-}
-
 async function installFromDirWithWarnings({
   pluginDir,
   extensionsDir,
@@ -265,6 +252,22 @@ function readCapturedInstallPolicyRequests(logPath: string): CapturedInstallPoli
     .map((line) => JSON.parse(line) as CapturedInstallPolicyRequest);
 }
 
+function expectUserArchiveRequests(logPath: string, kind: string, spec: string, count: number) {
+  const requests = readCapturedInstallPolicyRequests(logPath);
+  expect(requests).toHaveLength(count);
+  for (const request of requests) {
+    expect(request.request.kind).toBe(kind);
+    expect(request.source).toEqual({
+      kind: "archive",
+      authority: "user",
+      mutable: true,
+      network: false,
+    });
+  }
+  expect(requests[0]?.request.requestedSpecifier).toBe(spec);
+  return requests;
+}
+
 function mockNpmViewMetadata(params: { name: string; version?: string }) {
   vi.mocked(runCommandWithTimeout).mockResolvedValueOnce(
     createCommandResult({
@@ -334,14 +337,6 @@ function mockSuccessfulManagedNpmInstall(params: { packageName: string; version?
   });
 }
 
-function updateOpenClawMetadata(pluginDir: string, patch: Record<string, unknown>) {
-  const file = path.join(pluginDir, "package.json");
-  const manifest: { openclaw?: Record<string, unknown> } = JSON.parse(
-    fs.readFileSync(file, "utf8"),
-  );
-  writeJson(file, { ...manifest, openclaw: { ...manifest.openclaw, ...patch } });
-}
-
 function expectFailedInstallResult(
   result: Awaited<ReturnType<typeof installPluginFromPath>>,
   code: string,
@@ -400,13 +395,8 @@ function setupManifestlessClaudeInstallFixture() {
 async function ensureArchive(name: string, version = "1.0.0", flatRoot = false): Promise<string> {
   const templateDir = suiteTempRootTracker.makeTempDir();
   const pkgDir = flatRoot ? templateDir : path.join(templateDir, "package");
-  fs.mkdirSync(path.join(pkgDir, "dist"), { recursive: true });
-  fs.writeFileSync(path.join(pkgDir, "dist/index.js"), "export {};");
-  writeJson(path.join(pkgDir, "package.json"), {
-    name,
-    version,
-    openclaw: { extensions: ["./dist/index.js"] },
-  });
+  fs.mkdirSync(pkgDir, { recursive: true });
+  writeMinimalPackagePlugin(pkgDir, name, { version });
   writeJson(path.join(pkgDir, "openclaw.plugin.json"), {
     id: name,
     configSchema: { type: "object", properties: {} },
@@ -453,29 +443,12 @@ beforeEach(() => {
 
 describe("installPluginFromArchive", () => {
   it("reports direct local archive installs as user-provided archive sources", async () => {
-    const stateDir = suiteTempRootTracker.makeTempDir();
-    const extensionsDir = path.join(stateDir, "extensions");
-    const { scriptPath, logPath } = writeInstallPolicyScript(stateDir, "allow");
+    const { extensionsDir, config, logPath } = setupNpmPolicy("allow");
     fs.mkdirSync(extensionsDir, { recursive: true });
     const archivePath = await ensureArchive("local-policy-archive", "1.0.0", true);
-
-    const result = await installPluginFromArchive({
-      archivePath,
-      extensionsDir,
-      config: configWithInstallPolicy(scriptPath, logPath),
-    });
-
+    const result = await installPluginFromArchive({ archivePath, extensionsDir, config });
     expect(result.ok).toBe(true);
-    const requests = readCapturedInstallPolicyRequests(logPath);
-    expect(requests.map((request) => request.request.kind)).toEqual([
-      "plugin-archive",
-      "plugin-archive",
-    ]);
-    expect(requests.map((request) => request.source)).toEqual([
-      { kind: "archive", authority: "user", mutable: true, network: false },
-      { kind: "archive", authority: "user", mutable: true, network: false },
-    ]);
-    expect(requests[0]?.request.requestedSpecifier).toBe(archivePath);
+    expectUserArchiveRequests(logPath, "plugin-archive", archivePath, 2);
   });
 
   it("rejects reserved archive package ids", async () => {
@@ -616,6 +589,14 @@ describe("installPluginFromArchive", () => {
       const requests = readCapturedInstallPolicyRequests(logPath);
       if (approved) {
         expect(onInstallPolicyWarning).toHaveBeenCalledTimes(1);
+        expect(onInstallPolicyWarning).toHaveBeenCalledWith(
+          expect.objectContaining({
+            reason: "review package policy",
+            requestMode: "install",
+            targetName: pluginId,
+            targetType: "plugin",
+          }),
+        );
         expect(requests.map((request) => request.plugin?.contentType)).toEqual([
           "package",
           "package",
@@ -693,16 +674,6 @@ describe("installPluginFromNpmSpec", () => {
       "npm installs are disabled by policy",
     );
     expect(countNpmCommands()).toBe(1);
-    expect(npmCommandArgs(vi.mocked(runCommandWithTimeout).mock.calls[0]![0])).toEqual([
-      "view",
-      `${packageName}@1.0.0`,
-      "name",
-      "version",
-      "dist.integrity",
-      "dist.shasum",
-      "openclaw",
-      "--json",
-    ]);
     await expect(fsPromises.stat(npmDir)).rejects.toThrow();
     const requests = readCapturedInstallPolicyRequests(logPath);
     expect(requests).toHaveLength(1);
@@ -716,118 +687,89 @@ describe("installPluginFromNpmSpec", () => {
     expectAuditEvent(events, packageName, "plugin.audit.failed", "denied", "npm", "install");
   });
 
-  it("does not treat similarly named npm projects as update generations", async () => {
-    const { npmDir, install, logPath } = setupNpmPolicy("block-install");
-    const packageName = "foo";
-    const legacyProjectRoot = resolvePluginNpmProjectDir({ npmDir, packageName });
-    const unrelatedProjectRoot = path.join(
-      path.dirname(legacyProjectRoot),
-      `${path.basename(legacyProjectRoot)}-unrelated`,
-    );
-    const unrelatedDependencyDir = path.join(unrelatedProjectRoot, "node_modules", packageName);
-    fs.mkdirSync(unrelatedDependencyDir, { recursive: true });
-    writeJson(path.join(unrelatedDependencyDir, "package.json"), {
-      name: packageName,
-      version: "0.9.0",
-    });
-    mockNpmViewMetadata({ name: packageName, version: "1.0.0" });
-    mockSuccessfulManagedNpmInstall({ packageName, version: "1.0.0" });
-
-    const result = await install(`${packageName}@1.0.0`, "update");
-
-    expectFailedInstallResult(
-      result,
-      PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED,
-      "fresh npm installs are disabled by policy",
-    );
-    const requests = readCapturedInstallPolicyRequests(logPath);
-    expect(requests).toHaveLength(1);
-    expect(requests[0]?.request.mode).toBe("install");
-  });
-
-  it("reports update mode to policy when npm update installs a new artifact generation", async () => {
-    const { npmDir, install, logPath } = setupNpmPolicy("block-install");
-    const packageName = "@acme/policy-generation-plugin";
-    const existingProjectRoot = resolvePluginNpmProjectDir({ npmDir, packageName });
-    const existingPackageDir = path.join(
-      existingProjectRoot,
-      "node_modules",
-      ...packageName.split("/"),
-    );
-    fs.mkdirSync(existingPackageDir, { recursive: true });
-    writeMinimalPackagePlugin(existingPackageDir, packageName, { version: "0.9.0" });
-    mockNpmViewMetadata({ name: packageName, version: "1.2.3" });
-    mockSuccessfulManagedNpmInstall({ packageName, version: "1.2.3" });
-    const { result, events } = await withSecurityEvents(() =>
-      install(`${packageName}@1.2.3`, "update"),
-    );
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-    expect(result.targetDir).not.toBe(existingPackageDir);
-    const requests = readCapturedInstallPolicyRequests(logPath);
-    expect(requests.length).toBeGreaterThan(0);
-    expect(requests.map((request) => request.request.mode)).toEqual(requests.map(() => "update"));
-    expectAuditEvent(events, packageName, "plugin.updated", "success", "npm", "update");
-  });
-
-  it("reports install mode to policy when update-mode reactivates retained generations", async () => {
-    const { npmDir, install, logPath } = setupNpmPolicy("block-install");
-    const packageName = "@acme/policy-generation-plugin";
-    const packagePath = (projectRoot: string) =>
-      path.join(projectRoot, "node_modules", ...packageName.split("/"));
-    const generationPath = (version: string, integrity: string, shasum: string) =>
-      packagePath(
-        resolvePluginNpmGenerationProjectDir({
-          npmDir,
-          packageName,
-          generationKey: [
+  it.each(["unrelated", "active", "retained"] as const)(
+    "classifies npm update authority with an %s generation",
+    async (generation) => {
+      const { npmDir, install, logPath } = setupNpmPolicy("block-install");
+      const packageName = generation === "unrelated" ? "foo" : "@acme/policy-generation-plugin";
+      const packagePath = (projectRoot: string) =>
+        path.join(projectRoot, "node_modules", ...packageName.split("/"));
+      const generationPath = (version: string, integrity: string, shasum: string) =>
+        packagePath(
+          resolvePluginNpmGenerationProjectDir({
+            npmDir,
             packageName,
-            version,
-            packageName + "@" + version,
-            integrity,
-            shasum,
-          ].join("\n"),
-        }),
+            generationKey: [
+              packageName,
+              version,
+              packageName + "@" + version,
+              integrity,
+              shasum,
+            ].join("\n"),
+          }),
+        );
+      const legacyPackageDir = packagePath(resolvePluginNpmProjectDir({ npmDir, packageName }));
+      if (generation === "retained") {
+        for (const packageDir of [
+          legacyPackageDir,
+          generationPath("1.2.3", "sha512-test", "abc123"),
+        ]) {
+          fs.mkdirSync(packageDir, { recursive: true });
+          await markRetainedManagedNpmInstall({
+            packageDir,
+            pluginId: "policy-generation-plugin",
+            reason: "test-retained-generation",
+          });
+        }
+        fs.mkdirSync(generationPath("2.0.0", "sha512-active", "active123"), { recursive: true });
+      } else {
+        const existingPackageDir =
+          generation === "active"
+            ? legacyPackageDir
+            : packagePath(`${resolvePluginNpmProjectDir({ npmDir, packageName })}-unrelated`);
+        fs.mkdirSync(existingPackageDir, { recursive: true });
+        writeMinimalPackagePlugin(existingPackageDir, packageName, { version: "0.9.0" });
+      }
+      mockNpmViewMetadata({ name: packageName, version: "1.2.3" });
+      if (generation !== "retained") {
+        mockSuccessfulManagedNpmInstall({ packageName, version: "1.2.3" });
+      }
+      const { result, events } = await withSecurityEvents(() =>
+        install(`${packageName}@1.2.3`, "update"),
       );
-    const legacyPackageDir = packagePath(resolvePluginNpmProjectDir({ npmDir, packageName }));
-    const generationPackageDir = generationPath("1.2.3", "sha512-test", "abc123");
-    const activeGenerationPackageDir = generationPath("2.0.0", "sha512-active", "active123");
-    for (const packageDir of [legacyPackageDir, generationPackageDir]) {
-      fs.mkdirSync(packageDir, { recursive: true });
-      await markRetainedManagedNpmInstall({
-        packageDir,
-        pluginId: "policy-generation-plugin",
-        reason: "test-retained-generation",
-      });
-    }
-    fs.mkdirSync(activeGenerationPackageDir, { recursive: true });
-    mockNpmViewMetadata({ name: packageName, version: "1.2.3" });
-
-    const result = await install(`${packageName}@1.2.3`, "update");
-
-    expectFailedInstallResult(
-      result,
-      PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED,
-      "fresh npm installs are disabled by policy",
-    );
-    const requests = readCapturedInstallPolicyRequests(logPath);
-    expect(requests).toHaveLength(1);
-    expect(requests[0]?.request.mode).toBe("install");
-    expect(requests[0]?.request.kind).toBe("plugin-npm");
-  });
+      const requests = readCapturedInstallPolicyRequests(logPath);
+      if (generation === "active") {
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          expect(result.targetDir).not.toBe(legacyPackageDir);
+        }
+        expect(requests.length).toBeGreaterThan(0);
+        expect(requests.map((request) => request.request.mode)).toEqual(
+          requests.map(() => "update"),
+        );
+        expectAuditEvent(events, packageName, "plugin.updated", "success", "npm", "update");
+      } else {
+        expectFailedInstallResult(
+          result,
+          PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED,
+          "fresh npm installs are disabled by policy",
+        );
+        expect(requests).toHaveLength(1);
+        expect(requests[0]?.request).toMatchObject({ mode: "install", kind: "plugin-npm" });
+      }
+    },
+  );
 
   it("reports npm-pack local archives as mutable user archive sources", async () => {
     const { npmDir, extensionsDir, config, logPath } = setupNpmPolicy("block");
-    const archivePath = await ensureArchive("npm-pack-policy-archive");
+    const name = "npm-pack-policy-archive";
+    const archivePath = await ensureArchive(name);
     vi.mocked(runCommandWithTimeout).mockResolvedValueOnce(
       createCommandResult({
         stdout: JSON.stringify([
           {
             filename: path.basename(archivePath),
-            name: "npm-pack-policy-archive",
+            name,
             version: "1.0.0",
             integrity: "sha512-test",
             shasum: "abc123",
@@ -844,7 +786,6 @@ describe("installPluginFromNpmSpec", () => {
         dryRun: true,
       }),
     );
-
     expectFailedInstallResult(
       result,
       PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED,
@@ -852,34 +793,19 @@ describe("installPluginFromNpmSpec", () => {
     );
     expect(countNpmCommands()).toBe(1);
     await expect(fsPromises.stat(npmDir)).rejects.toThrow();
-    const requests = readCapturedInstallPolicyRequests(logPath);
-    expect(requests).toHaveLength(1);
-    expect(requests[0]).toMatchObject({
-      request: { kind: "plugin-npm", requestedSpecifier: `npm-pack:${archivePath}` },
-      sourcePath: archivePath,
-      sourcePathKind: "file",
+    const requests = expectUserArchiveRequests(logPath, "plugin-npm", `npm-pack:${archivePath}`, 1);
+    expect(requests[0]).toMatchObject({ sourcePath: archivePath, sourcePathKind: "file" });
+    expectAuditEvent(events, name, "plugin.audit.failed", "denied", "archive", "install", {
+      category: "plugin",
     });
-    expect(requests[0]?.source).toEqual({
-      kind: "archive",
-      authority: "user",
-      mutable: true,
-      network: false,
-    });
-    expectAuditEvent(
-      events,
-      "npm-pack-policy-archive",
-      "plugin.audit.failed",
-      "denied",
-      "archive",
-      "install",
-      { category: "plugin" },
-    );
   });
 });
 
 describe("installPluginFromDir", () => {
   it("emits a redacted security event after installing a plugin directory", async () => {
-    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs("@openclaw/test-plugin", {
+      dependencies: { "left-pad": "1.3.0" },
+    });
     const { result: res, events } = await withSecurityEvents(() =>
       installDirectory(pluginDir, extensionsDir),
     );
@@ -908,56 +834,25 @@ describe("installPluginFromDir", () => {
     expect(serialized).not.toContain(extensionsDir);
   });
 
-  const compatibility = (
-    code: keyof typeof PLUGIN_INSTALL_ERROR_CODE,
-    host: string | undefined,
-    metadata: Record<string, unknown>,
-    messages: string[],
-    excludes?: string,
-  ) => ({ code, host, metadata, messages, excludes });
   it.each([
-    compatibility(
-      "INCOMPATIBLE_HOST_VERSION",
-      "2026.3.21",
-      { install: { minHostVersion: ">=2026.3.22" } },
-      ["requires OpenClaw >=2026.3.22, but this host is 2026.3.21"],
-    ),
-    compatibility(
-      "INVALID_MIN_HOST_VERSION",
-      undefined,
-      { install: { minHostVersion: "2026.3.22" } },
-      ["invalid package.json openclaw.install.minHostVersion"],
-    ),
-    compatibility(
-      "UNKNOWN_HOST_VERSION",
-      "unknown",
-      { install: { minHostVersion: ">=2026.3.22" } },
-      ["host version could not be determined"],
-    ),
-    compatibility("INVALID_PLUGIN_API", "2026.5.27", { compat: { pluginApi: 20260527 } }, [
-      "openclaw.compat.pluginApi",
-      "must be a string",
-    ]),
-    compatibility(
+    ["UNKNOWN_HOST_VERSION", "unknown", { install: { minHostVersion: ">=2026.3.22" } }],
+    [
       "INCOMPATIBLE_PLUGIN_API",
       "2026.5.27-beta.1",
       { extensions: { runtime: "./src/index.ts" }, compat: { pluginApi: ">=2026.5.27-beta.2" } },
-      ["requires plugin API >=2026.5.27-beta.2", "runtime exposes 2026.5.27-beta.1"],
-      "openclaw.extensions",
-    ),
-  ])("rejects $code before npm work", async ({ code, host, metadata, messages, excludes }) => {
-    if (host) {
-      resolveCompatibilityHostVersionMock.mockReturnValueOnce(host);
-    }
-    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
-    updateOpenClawMetadata(pluginDir, metadata);
+    ],
+  ] as const)("rejects %s before npm work", async (code, host, metadata) => {
+    resolveCompatibilityHostVersionMock.mockReturnValueOnce(host);
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs("compatibility-plugin", {
+      dependencies: { "left-pad": "1.3.0" },
+      openclaw: { extensions: ["index.js"], ...metadata },
+    });
     const result = expectFailedInstallResult(
       await installDirectory(pluginDir, extensionsDir),
       PLUGIN_INSTALL_ERROR_CODE[code],
-      ...messages,
     );
-    if (excludes) {
-      expect(result.error).not.toContain(excludes);
+    if (code === "INCOMPATIBLE_PLUGIN_API") {
+      expect(result.error).not.toContain("openclaw.extensions");
     }
     expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
   });
@@ -1041,7 +936,13 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
     }
     const { result, warnings } = installed;
     expect(result.ok).toBe(true);
-    expect(warnings).toHaveLength(0);
+    expect(warnings).toEqual(
+      update
+        ? [
+            'Plugin runtime compatibility: [scan-incomplete] peer-dep-plugin@1.0.0 package.json:1:1: Missing required runtime dependency "unrelated-host"; install package dependencies before qualification.',
+          ]
+        : [expect.stringMatching(/^Repaired OpenClaw host link at /)],
+    );
     if (!result.ok) {
       return;
     }

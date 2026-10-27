@@ -31,6 +31,16 @@ type CommandContext = {
   sessionKey?: string;
 };
 
+const workspaceAccess = { unrestricted: false, roots: ["/workspace"], writable: true };
+function workspaceConfig(...agents: string[]) {
+  return {
+    tools: { fs: { workspaceOnly: true } },
+    agents: {
+      entries: Object.fromEntries(agents.map((agent) => [agent, { workspace: "/workspace" }])),
+    },
+  };
+}
+
 function createCommandFixture(
   run = vi.fn().mockResolvedValue({ runId: "run-1" }),
   options: Parameters<typeof createWorkboardSqliteTestStore>[0] = {},
@@ -53,31 +63,24 @@ function createCommandFixture(
       args,
       ...context,
     } as never);
-  return { store, api, command };
-}
-
-async function expectReply(
-  result: ReturnType<OpenClawPluginCommandDefinition["handler"]>,
-  text: string,
-  isError?: boolean,
-) {
-  expect(await result).toMatchObject({
-    text: expect.stringContaining(text),
-    ...(isError === undefined ? {} : { isError }),
-  });
+  const ready = (title: string, extra: Omit<Parameters<typeof store.create>[0], "title"> = {}) =>
+    store.create({ status: "ready", ...extra, title });
+  const reply = async (args: string, text: string, context?: CommandContext, isError?: boolean) =>
+    expect(await command(args, context)).toMatchObject({
+      text: expect.stringContaining(text),
+      ...(isError === undefined ? {} : { isError }),
+    });
+  return { store, api, command, ready, reply };
 }
 
 describe("handleWorkboardCommand", () => {
   it("requires an explicit agent workspace for multi-agent local commands", () => {
     const config = {
-      tools: { fs: { workspaceOnly: true } },
+      ...workspaceConfig(),
       agents: {
         entries: {
-          first: {
-            workspace: "/first",
-            tools: { fs: { workspaceOnly: false } },
-          },
-          chosen: { workspace: "/chosen" },
+          first: { workspace: "/first", tools: { fs: { workspaceOnly: false } } },
+          chosen: { workspace: "/workspace" },
         },
       },
     };
@@ -85,12 +88,9 @@ describe("handleWorkboardCommand", () => {
     expect(() => resolveCommandWorkboardWorkspaceAccess({ config })).toThrow(
       "Multiple agents are configured",
     );
-    expect(
-      resolveCommandWorkboardWorkspaceAccess({
-        config,
-        agentId: "chosen",
-      }),
-    ).toEqual({ unrestricted: false, roots: ["/chosen"], writable: true });
+    expect(resolveCommandWorkboardWorkspaceAccess({ config, agentId: "chosen" })).toEqual(
+      workspaceAccess,
+    );
   });
 
   it("inherits slash-session sandbox roots and write mode", () => {
@@ -115,14 +115,8 @@ describe("handleWorkboardCommand", () => {
   });
 
   it("attests the card's assigned agent independently of the slash-command caller", async () => {
-    const run = vi.fn().mockResolvedValue({ runId: "run-assigned-agent" });
-    const { store, api, command } = createCommandFixture(run);
-    await store.create({
-      title: "Assigned slash card",
-      status: "ready",
-      agentId: "main",
-      workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
-    });
+    const { api, command, ready } = createCommandFixture();
+    await ready("Assigned slash card", { agentId: "main", workspaceAccess });
     api.runtime.sandbox = createSandboxRuntime(true);
     const prepareWorkspaceAuthority = vi.mocked(api.runtime.sandbox.prepareWorkspaceAuthority);
     await command("dispatch", {
@@ -130,77 +124,64 @@ describe("handleWorkboardCommand", () => {
       config: {
         agents: {
           defaults: { sandbox: { mode: "all", workspaceAccess: "rw" } },
-          entries: {
-            main: { workspace: "/workspace" },
-            secondary: { workspace: "/workspace" },
-          },
+          entries: workspaceConfig("main", "secondary").agents.entries,
         },
       },
       agentId: "secondary",
       sessionKey: "agent:secondary:main",
     });
 
-    expect(run).toHaveBeenCalledOnce();
-    expect(prepareWorkspaceAuthority).toHaveBeenCalled();
-    expect(prepareWorkspaceAuthority.mock.calls.every(([input]) => input.agentId === "main")).toBe(
-      true,
-    );
+    expect(api.runtime.subagent.run).toHaveBeenCalledOnce();
     expect(prepareWorkspaceAuthority).toHaveBeenCalledWith(
       expect.objectContaining({
+        agentId: "main",
         requiredToolNames: ["workboard_heartbeat", "workboard_complete", "workboard_block"],
       }),
     );
+    expect(prepareWorkspaceAuthority.mock.calls.every(([input]) => input.agentId === "main")).toBe(
+      true,
+    );
   });
 
-  it("creates, lists, and dispatches workboard cards", async () => {
-    const { store, api, command } = createCommandFixture();
-    await expectReply(command("create Ship CLI", { senderIsOwner: true }), "Ship CLI");
+  it("requires write access to create and dispatch cards while leaving reads open", async () => {
+    const { store, api, reply } = createCommandFixture();
+    await reply("create Ship CLI", "Ship CLI", { senderIsOwner: true });
     const card = expectDefined((await store.list())[0], "created workboard card");
     expect(card).toMatchObject({
       title: "Ship CLI",
       metadata: { automation: { workspaceAccess: { unrestricted: true } } },
     });
 
-    await expectReply(command("list"), "Ship CLI");
+    await reply("list", "Ship CLI");
     await store.update(card.id, { status: "ready" });
-    await expectReply(command("dispatch", { senderIsOwner: true }), "started=1");
+    await reply("create Blocked", "operator.write", undefined, true);
+    await reply("dispatch", "operator.write", undefined, true);
+    await reply(`move ${card.id} --status running`, "operator.write", undefined, true);
+    expect(api.runtime.subagent.run).not.toHaveBeenCalled();
+    await expect(store.get(card.id)).resolves.toMatchObject({ status: "ready" });
+    await reply("dispatch", "started=1", { senderIsOwner: true });
     expect(api.runtime.subagent.run).toHaveBeenCalledOnce();
   });
 
-  it("requires write access for slash mutations", async () => {
-    const { store, api, command } = createCommandFixture();
-    const card = await store.create({ title: "Ready worker", status: "ready" });
-
-    await expectReply(command("list"), "Ready worker");
-    await expectReply(command("create Blocked"), "operator.write", true);
-    await expectReply(command("dispatch"), "operator.write", true);
-    await expectReply(command(`move ${card.id} --status running`), "operator.write", true);
-    expect(api.runtime.subagent.run).not.toHaveBeenCalled();
-    await expect(store.get(card.id)).resolves.toMatchObject({ status: "ready" });
-  });
-
   it("shows when an archived card is excluded from dispatch", async () => {
-    const { store, command } = createCommandFixture();
+    const { store, reply } = createCommandFixture();
     const card = await store.create({ title: "Archived slash card", status: "ready" });
     await store.archive(card.id, true);
 
-    await expectReply(command(`show ${card.id}`), "archived: yes (excluded from dispatch)");
+    await reply(`show ${card.id}`, "archived: yes (excluded from dispatch)");
   });
 
   it("moves claimed cards for operators on slash-command surfaces", async () => {
-    const { store, command } = createCommandFixture();
+    const { store, reply } = createCommandFixture();
     const card = await store.create({ title: "Claimed slash card", status: "todo" });
     await store.claim(card.id, { ownerId: "worker", token: "secret-token" });
 
-    await expectReply(
-      command(`move ${card.id.slice(0, 8)} --status review`, {
-        gatewayClientScopes: ["operator.write"],
-        assertOwnerCurrent: () => {
-          throw new Error("not a chat owner");
-        },
-      }),
-      "review",
-    );
+    await reply(`move ${card.id.slice(0, 8)} --status review`, "review", {
+      gatewayClientScopes: ["operator.write"],
+      assertOwnerCurrent: () => {
+        throw new Error("not a chat owner");
+      },
+    });
     await expect(store.get(card.id)).resolves.toMatchObject({
       status: "review",
       metadata: { claim: { ownerId: "worker", token: "secret-token" } },
@@ -210,7 +191,7 @@ describe("handleWorkboardCommand", () => {
   it("rechecks owner authority after create and move preparation without gating reads", async () => {
     let ownerCurrent = true;
     let revokeBeforeWrite = false;
-    const { store, command } = createCommandFixture(undefined, {
+    const { store, command, reply } = createCommandFixture(undefined, {
       beforeCardWrite: () => {
         if (revokeBeforeWrite) {
           ownerCurrent = false;
@@ -245,9 +226,7 @@ describe("handleWorkboardCommand", () => {
       "owner revoked",
     );
     expect(await store.get(card.id)).toEqual(card);
-    await expect(command("list", context)).resolves.toEqual({
-      text: expect.stringContaining("Keep original"),
-    });
+    await reply("list", "Keep original", context);
   });
 
   it("settles an accepted dispatch but refuses another worker after owner revocation", async () => {
@@ -256,14 +235,14 @@ describe("handleWorkboardCommand", () => {
       ownerCurrent = false;
       return { runId: "accepted-before-revocation" };
     });
-    const { store, command } = createCommandFixture(run);
-    const first = await store.create({ title: "First", status: "ready", agentId: "first" });
-    const second = await store.create({ title: "Second", status: "ready", agentId: "second" });
-    const result = await command(
+    const { store, reply, ready } = createCommandFixture(run);
+    const first = await ready("First", { agentId: "first" });
+    const second = await ready("Second", { agentId: "second" });
+    await reply(
       "dispatch",
+      "started=1 failures=1",
       ownerContext(() => ownerCurrent),
     );
-    expect(result).toEqual({ text: expect.stringContaining("started=1 failures=1") });
     expect(run).toHaveBeenCalledOnce();
     await expect(store.get(first.id)).resolves.toMatchObject({
       status: "running",
@@ -275,18 +254,15 @@ describe("handleWorkboardCommand", () => {
 
   it("requires fresh owner authority for each card in a serialized dispatch batch", async () => {
     const { store, api, command } = createCommandFixture();
-    const first = await store.create({
-      title: "Promote before revocation",
-      status: "scheduled",
-      scheduledAt: 1,
-      position: 0,
-    });
-    const second = await store.create({
-      title: "Preserve after revocation",
-      status: "scheduled",
-      scheduledAt: 1,
-      position: 1,
-    });
+    const scheduled = (position: number) =>
+      store.create({
+        title: `Scheduled ${position}`,
+        status: "scheduled",
+        scheduledAt: 1,
+        position,
+      });
+    const first = await scheduled(0);
+    const second = await scheduled(1);
     const { promise: secondRead, resolve: secondReadEntered } = Promise.withResolvers<void>();
     const { promise: readResumed, resolve: resumeSecondRead } = Promise.withResolvers<void>();
     const get = store.get.bind(store);
@@ -319,14 +295,10 @@ describe("handleWorkboardCommand", () => {
   });
 
   it("rejects invalid slash-command move statuses", async () => {
-    const { store, command } = createCommandFixture();
+    const { store, reply } = createCommandFixture();
     const card = await store.create({ title: "Invalid slash move" });
 
-    await expectReply(
-      command(`move ${card.id} --status later`, { senderIsOwner: true }),
-      "status must be",
-      true,
-    );
+    await reply(`move ${card.id} --status later`, "status must be", { senderIsOwner: true }, true);
   });
 
   it.each([
@@ -337,46 +309,38 @@ describe("handleWorkboardCommand", () => {
     "uses slash caller scope=%s for %s worktree materialization",
     async (scope, agentId, path) => {
       const admin = scope === "operator.admin";
-      const run = vi.fn(async (input: { idempotencyKey: string }) => ({
-        runId: `accepted:${input.idempotencyKey}`,
-      }));
-      const { store, api, command } = createCommandFixture(run);
+      const { store, api, reply, ready } = createCommandFixture();
+      const run = api.runtime.subagent.run;
       const createWorktree = vi.mocked(api.runtime.worktrees.create).mockResolvedValue({
         id: "managed-id",
         path: "/state/worktrees/fingerprint/wb-card",
         branch: "openclaw/wb-card",
       });
-      const card = await store.create({
-        title: "Checkout",
-        status: "ready",
+      const card = await ready("Checkout", {
         agentId,
         workspace: { kind: "worktree", path },
         ...(admin ? { workspaceAccess: { unrestricted: true } } : {}),
       });
       api.runtime.sandbox = createSandboxRuntime(!admin);
-      const result = command("dispatch", {
-        ...(scope ? { gatewayClientScopes: [scope] } : { senderIsOwner: true }),
-        agentId: admin ? "admin" : "main",
-        config: admin
-          ? { agents: { entries: { admin: { workspace: path } } } }
-          : {
-              tools: { fs: { workspaceOnly: true } },
-              agents: {
-                entries: {
-                  main: { workspace: "/workspace" },
-                  restricted: { workspace: "/workspace" },
-                },
-              },
-            },
-      });
+      const result = reply(
+        "dispatch",
+        path === "/repo-denied" ? "outside the caller" : "started=1",
+        {
+          ...(scope ? { gatewayClientScopes: [scope] } : { senderIsOwner: true }),
+          agentId: admin ? "admin" : "main",
+          config: admin
+            ? { agents: { entries: { admin: { workspace: path } } } }
+            : workspaceConfig("main", "restricted"),
+        },
+      );
       if (path === "/repo-denied") {
-        await expectReply(result, "outside the caller");
+        await result;
         expect(createWorktree).not.toHaveBeenCalled();
         expect(run).not.toHaveBeenCalled();
         await expect(store.get(card.id)).resolves.toMatchObject({ status: "ready" });
         return;
       }
-      await expectReply(result, "started=1");
+      await result;
       if (admin) {
         expect(createWorktree).toHaveBeenCalledWith(
           expect.objectContaining({ repoRoot: path, ownerId: card.id }),
@@ -385,12 +349,10 @@ describe("handleWorkboardCommand", () => {
         expect(createWorktree).not.toHaveBeenCalled();
         expect(run).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/workspace" }));
       }
-      expect(run).toHaveBeenCalledOnce();
-      const runId = `accepted:${run.mock.calls[0]?.[0].idempotencyKey}`;
       await expect(store.get(card.id)).resolves.toMatchObject({
         status: "running",
-        runId,
-        execution: { runId },
+        runId: "run-1",
+        execution: { runId: "run-1" },
         ...(!admin
           ? { metadata: { automation: { workspace: { kind: "dir", path: "/workspace" } } } }
           : {}),
@@ -399,9 +361,9 @@ describe("handleWorkboardCommand", () => {
   );
 
   it("rejects ambiguous card id prefixes", async () => {
-    const { store, command } = createCommandFixture();
+    const { store, reply } = createCommandFixture();
     const prefix = await createAmbiguousPrefix(store);
 
-    await expectReply(command(`show ${prefix}`), "Ambiguous card id prefix", true);
+    await reply(`show ${prefix}`, "Ambiguous card id prefix", undefined, true);
   });
 });

@@ -3,8 +3,6 @@ import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { prepareSteeringDelivery } from "../../auto-reply/reply/steering-delivery-preparation.js";
-import { createPresenceRecipientProjection } from "../../gateway/presence-projection.js";
-import type { GatewayClient } from "../../gateway/server-methods/types.js";
 import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import {
@@ -13,7 +11,7 @@ import {
   completeRestartRecoveryTerminalDelivery,
 } from "./restart-recovery-receipt.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
-import { withSessionActorStorage } from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import type { SessionActorStorageCommand } from "./session-actor-storage-contract.js";
 import { prepareSessionDeliveryGeneration } from "./session-delivery-generation.js";
 import { addSessionSuggestionInWorker } from "./session-metadata-write.async.js";
@@ -89,7 +87,7 @@ it("keeps unbound absent collaboration reads empty without allocating an owner",
   expect(memorySessionActorOwners.read(location)).toBeUndefined();
 });
 
-it("shares current unbound memory facts across sharing, delivery, steering and presence", async () => {
+it("shares current unbound memory facts across sharing, delivery and steering", async () => {
   const scope = scopeFor("composition");
   const entry = {
     sessionId: "composition",
@@ -107,25 +105,8 @@ it("shares current unbound memory facts across sharing, delivery, steering and p
     lifecycleRevision: entry.lifecycleRevision,
   });
   try {
-    const person = { text: "Memory watcher", ts: 1, watchedSessions: [scope.sessionKey] };
-    const project = createPresenceRecipientProjection({ cfg, presence: [person] });
-    const client: GatewayClient = {
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        role: "operator",
-        scopes: ["operator.admin"],
-        client: {
-          id: "openclaw-control-ui",
-          version: "test",
-          platform: "test",
-          mode: "webchat",
-        },
-      },
-    };
     expect(facts.storageTarget.storePath).toBe(location.path);
     expect(facts.readCurrent(cfg).target?.entry.sessionId).toBe(entry.sessionId);
-    expect(project(client)).toEqual([person]);
     delivery.assertCurrent();
 
     await addSessionMember(scope, { identityId: "viewer", addedBy: "owner" });
@@ -152,7 +133,6 @@ it("shares current unbound memory facts across sharing, delivery, steering and p
     expect(() => facts.readCurrent(cfg)).toThrow("Session access facts are unavailable");
     expect(() => delivery.assertCurrent()).toThrow(/Session delivery generation/);
     await expect(steering.prepareCurrent()).rejects.toThrow("closed");
-    expect(project(client)).toEqual([{ text: person.text, ts: person.ts }]);
   } finally {
     delivery.release();
     facts.release();

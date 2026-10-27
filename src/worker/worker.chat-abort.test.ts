@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { WorkerLiveEventParams } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
@@ -95,8 +96,10 @@ it.each([
       ask: "off",
       safeBins: [],
     };
-    const claim = projectWorkerSessionTurnClaim(placements.get(SESSION_ID)!);
-    expect(claim).toBeDefined();
+    const claim = expectDefined(
+      projectWorkerSessionTurnClaim(placements.get(SESSION_ID)!),
+      "worker turn claim",
+    );
     const runContext = {
       agentId: "main",
       sessionId: SESSION_ID,
@@ -115,12 +118,10 @@ it.each([
         harness.chat.state.registry.remove(...args),
     });
     let deliverCancellation: (() => void) | undefined;
-    const authority = getActiveAgentRunDelegatedAuthority(
-      descriptor.assignment.operationalRunInstance,
+    const authority = expectDefined(
+      getActiveAgentRunDelegatedAuthority(descriptor.assignment.operationalRunInstance),
+      "managed worker turn authority",
     );
-    if (!authority) {
-      throw new Error("managed worker turn has no admitted authority");
-    }
     const registration = registerChatAbortController({
       target: captureSessionTarget({
         storeScope: harness.sessionTarget.storePath,
@@ -142,15 +143,12 @@ it.each([
     registration.bindAgentRunDelegatedAuthority(authority);
     registration.initializeTiming();
     const releaseSource = await claimRpcSourceForTest(registration.entry);
-    const operation = registration.entry.input.claim?.operation;
-    if (!operation) {
-      throw new Error("Expected controller-owned worker operation");
-    }
+    const operation = expectDefined(registration.entry.input.claim?.operation, "worker operation");
     expect(registration.markExecutionStarted()).toBe(true);
     const ownerInput = {
       placements,
       isReplyDelivered: () => false,
-      claim: claim!,
+      claim,
       sessionKey: SESSION_KEY,
       turn: {
         ...runContext,
@@ -243,7 +241,7 @@ it.each([
       await waitFor(outerCancelled.promise, "outer cancellation");
       expect(owner.signal.aborted).toBe(true);
       expect(getAgentRunContext(RUN_ID)).toBeUndefined();
-      expect(placements.validateTurnClaim(claim!)).toBe(true);
+      expect(placements.validateTurnClaim(claim)).toBe(true);
       const publishedAtAbort = publishedEvents;
       previewGate?.release.resolve();
       await waitFor(finishingGate.entered.promise, "cancellation finishing");
@@ -259,7 +257,7 @@ it.each([
           sessionId: SESSION_ID,
           rpcSetVersion: credential.rpcSetVersion,
           expiresAtMs: credential.expiresAtMs,
-          credentialHash: hashWorkerCredential("synthetic-replacement-credential", claim!),
+          credentialHash: hashWorkerCredential("synthetic-replacement-credential", claim),
         });
       } else if (fence === "run owner") {
         owner.dispose();

@@ -1,4 +1,3 @@
-// Workboard tests cover tools plugin behavior.
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isToolResultError } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -8,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import plugin from "../index.js";
 import { WorkboardStore } from "./store.js";
+import { toolsByName } from "./test/interaction-fixtures.js";
 import { startEmptySessionsBoardService } from "./test/sessions-board.js";
 import {
   createWorkboardSqliteTestHarness,
@@ -15,6 +15,49 @@ import {
 } from "./test/sqlite-store.js";
 import { createWorkboardTools } from "./tools.js";
 import { guardWorkboardToolsForWorkspaceAccess } from "./workspace-access.js";
+
+function toolSet(store: WorkboardStore, agentId = "main") {
+  return toolsByName(createWorkboardTools({ store, context: { agentId } }));
+}
+
+function executeTool(
+  tools: ReturnType<typeof toolsByName>,
+  name: string,
+  params: Record<string, unknown>,
+) {
+  return expectDefined(tools.get(`workboard_${name}`), name).execute(name, params);
+}
+
+async function runTool(
+  tools: ReturnType<typeof toolsByName>,
+  name: string,
+  params: Record<string, unknown>,
+) {
+  return readPayload(await executeTool(tools, name, params));
+}
+
+function registeredSessionsFactory(name: string) {
+  const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
+  plugin.register(
+    createTestPluginApi({
+      runtimeSource: fileURLToPath(new URL("../index.ts", import.meta.url)),
+      registerTool,
+    }),
+  );
+  return expectDefined(
+    registerTool.mock.calls.find(([, registration]) => registration?.names?.includes(name)),
+    "Sessions board factory",
+  );
+}
+
+function workspaceTools(
+  store: WorkboardStore,
+  context: NonNullable<Parameters<typeof guardWorkboardToolsForWorkspaceAccess>[1]>,
+) {
+  return toolsByName(
+    guardWorkboardToolsForWorkspaceAccess(createWorkboardTools({ store, context }), context),
+  );
+}
 
 function readPayload(result: unknown): Record<string, unknown> {
   return (result as { details?: Record<string, unknown> }).details ?? {};
@@ -27,19 +70,7 @@ describe("workboard tools", () => {
     const board = await store.upsertBoard({ id: "sessions", kind: "sessions" });
     using openStore = vi.spyOn(WorkboardStore, "openSqlite");
     openStore.mockReturnValue(store);
-    const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
-    plugin.register(
-      createTestPluginApi({
-        runtimeSource: fileURLToPath(new URL("../index.ts", import.meta.url)),
-        registerTool,
-      }),
-    );
-    const [factory, options] = expectDefined(
-      registerTool.mock.calls.find(([, registration]) =>
-        registration?.names?.includes("workboard_sessions_board_update"),
-      ),
-      "Sessions board factory",
-    );
+    const [factory, options] = registeredSessionsFactory("workboard_sessions_board_update");
     expect(options?.optional).not.toBe(true);
     const context = {
       assertInvocationCurrent() {
@@ -79,19 +110,7 @@ describe("workboard tools", () => {
     try {
       using openStore = vi.spyOn(WorkboardStore, "openSqlite");
       openStore.mockReturnValue(store);
-      const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
-      plugin.register(
-        createTestPluginApi({
-          runtimeSource: fileURLToPath(new URL("../index.ts", import.meta.url)),
-          registerTool,
-        }),
-      );
-      const [factory] = expectDefined(
-        registerTool.mock.calls.find(([, registration]) =>
-          registration?.names?.includes("workboard_sessions_board_read"),
-        ),
-        "Sessions board factory",
-      );
+      const [factory] = registeredSessionsFactory("workboard_sessions_board_read");
       if (typeof factory === "function" || !("create" in factory)) {
         throw new Error("Expected the registered version-2 Sessions board factory.");
       }
@@ -99,9 +118,7 @@ describe("workboard tools", () => {
       if (!Array.isArray(sessionsTools)) {
         throw new Error("Expected Sessions board tools from the registered factory.");
       }
-      const tools = new Map(
-        [...createWorkboardTools({ store }), ...sessionsTools].map((tool) => [tool.name, tool]),
-      );
+      const tools = toolsByName([...createWorkboardTools({ store }), ...sessionsTools]);
       const read = expectDefined(tools.get("workboard_sessions_board_read"), "Sessions board read");
       const update = expectDefined(
         tools.get("workboard_sessions_board_update"),
@@ -172,82 +189,43 @@ describe("workboard tools", () => {
     }
   });
 
-  it("inherits the active tool filesystem boundary for workspace metadata", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const restrictedContext = {
-      agentId: "main",
-      workspaceDir: "/workspace",
-      fsPolicy: { workspaceOnly: true },
-    } as const;
-    const restricted = new Map(
-      guardWorkboardToolsForWorkspaceAccess(
-        createWorkboardTools({ store, context: restrictedContext }),
-        restrictedContext,
-      ).map((tool) => [tool.name, tool]),
-    );
-
-    await expect(
-      restricted.get("workboard_create")?.execute("outside", {
-        title: "Outside",
-        workspace: { kind: "worktree", path: "/outside/repo" },
-      }),
-    ).rejects.toThrow(/outside the caller/);
-    await expect(
-      restricted.get("workboard_create")?.execute("inside", {
-        title: "Inside",
-        workspace: { kind: "worktree", path: "/workspace/repo" },
-        workspaceAccess: { unrestricted: true },
-      }),
-    ).resolves.toBeDefined();
-
-    const unrestrictedContext = {
-      agentId: "main",
-      workspaceDir: "/workspace",
-      fsPolicy: { workspaceOnly: false },
-    } as const;
-    const unrestricted = new Map(
-      guardWorkboardToolsForWorkspaceAccess(
-        createWorkboardTools({ store, context: unrestrictedContext }),
-        unrestrictedContext,
-      ).map((tool) => [tool.name, tool]),
-    );
-    await expect(
-      unrestricted.get("workboard_create")?.execute("unrestricted", {
-        title: "Unrestricted",
-        workspace: { kind: "worktree", path: "/outside/repo" },
-      }),
-    ).resolves.toBeDefined();
-
-    expect((await store.list()).find((card) => card.title === "Inside")).toMatchObject({
-      metadata: {
-        automation: {
-          workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
-        },
-      },
-    });
-    expect((await store.list()).find((card) => card.title === "Unrestricted")).toMatchObject({
-      metadata: { automation: { workspaceAccess: { unrestricted: true } } },
-    });
-
-    const sandboxContext = {
-      agentId: "main",
-      workspaceDir: "/workspace",
-      fsPolicy: { workspaceOnly: false },
-      sandboxed: true,
-    } as const;
-    const sandboxed = new Map(
-      guardWorkboardToolsForWorkspaceAccess(
-        createWorkboardTools({ store, context: sandboxContext }),
-        sandboxContext,
-      ).map((tool) => [tool.name, tool]),
-    );
-    await expect(
-      sandboxed.get("workboard_create")?.execute("sandbox-outside", {
-        title: "Sandbox outside",
-        workspace: { kind: "worktree", path: "/outside/repo" },
-      }),
-    ).rejects.toThrow(/outside the caller/);
-  });
+  it.each([
+    ["workspace-only", true, false],
+    ["unrestricted", false, false],
+    ["sandboxed", false, true],
+  ] as const)(
+    "inherits %s filesystem authority for workspace metadata",
+    async (_name, workspaceOnly, sandboxed) => {
+      const store = createWorkboardSqliteTestStore();
+      const confined = workspaceOnly || sandboxed;
+      const tools = workspaceTools(store, {
+        agentId: "main",
+        workspaceDir: "/workspace",
+        fsPolicy: { workspaceOnly },
+        sandboxed,
+      });
+      if (confined) {
+        await expect(
+          executeTool(tools, "create", {
+            title: "Outside",
+            workspace: { kind: "worktree", path: "/outside/repo" },
+          }),
+        ).rejects.toThrow(/outside the caller/);
+      }
+      await expect(
+        executeTool(tools, "create", {
+          title: "Allowed",
+          workspace: { kind: "worktree", path: confined ? "/workspace/repo" : "/outside/repo" },
+          workspaceAccess: { unrestricted: true },
+        }),
+      ).resolves.toBeDefined();
+      expect((await store.list())[0]?.metadata?.automation?.workspaceAccess).toMatchObject(
+        confined
+          ? { unrestricted: false, roots: ["/workspace"], writable: !sandboxed }
+          : { unrestricted: true },
+      );
+    },
+  );
 
   it("preserves read-only sandbox authority while allowing manual card movement", async () => {
     const store = createWorkboardSqliteTestStore();
@@ -263,19 +241,15 @@ describe("workboard tools", () => {
         },
       },
     };
-    const tools = new Map(
-      guardWorkboardToolsForWorkspaceAccess(createWorkboardTools({ store, context }), context).map(
-        (tool) => [tool.name, tool],
-      ),
-    );
+    const tools = workspaceTools(store, context);
 
-    const created = readPayload(
-      await tools.get("workboard_create")?.execute("create-readonly", {
+    const created = (
+      await runTool(tools, "create", {
         title: "Read-only card",
-      }),
+      })
     ).card as { id: string };
     await expect(
-      tools.get("workboard_promote")?.execute("move-readonly", { id: created.id, force: true }),
+      executeTool(tools, "promote", { id: created.id, force: true }),
     ).resolves.toBeDefined();
     await expect(store.get(created.id)).resolves.toMatchObject({
       status: "ready",
@@ -287,84 +261,19 @@ describe("workboard tools", () => {
     });
   });
 
-  it("lists, claims, heartbeats, and reads worker context", async () => {
-    const { store: workboardStore, stores } = createWorkboardSqliteTestHarness();
-    const keyed = stores.cards;
-    const tools = createWorkboardTools({
-      store: workboardStore,
-      context: { agentId: "main", sessionKey: "session-1" },
-    });
-    const byName = new Map(tools.map((tool) => [tool.name, tool]));
-
-    const store = keyed;
-    await store.register("card-1", {
-      version: 1,
-      card: {
-        id: "card-1",
-        title: "Ship coordination",
-        status: "todo",
-        priority: "normal",
-        labels: [],
-        agentId: "main",
-        position: 1000,
-        createdAt: 1,
-        updatedAt: 1,
-      },
-    });
-    await store.register("archived-1", {
-      version: 1,
-      card: {
-        id: "archived-1",
-        title: "Closed work",
-        status: "done",
-        priority: "normal",
-        labels: [],
-        position: 2000,
-        createdAt: 1,
-        updatedAt: 1,
-        metadata: { archivedAt: 2 },
-      },
-    });
-
-    const claimed = readPayload(
-      await byName.get("workboard_claim")?.execute("call-1", { id: "card-1" }),
-    );
-    expect(claimed.card).toMatchObject({
-      status: "running",
-      metadata: { claim: { ownerId: "main", token: "[redacted]" } },
-    });
-    const token = (claimed.token as string | undefined) ?? "";
-
-    const heartbeat = readPayload(
-      await byName
-        .get("workboard_heartbeat")
-        ?.execute("call-2", { id: "card-1", token, note: "alive" }),
-    );
-    expect(heartbeat).toMatchObject({
-      card: { metadata: { comments: [expect.objectContaining({ body: "alive" })] } },
-    });
-
-    const read = readPayload(
-      await byName.get("workboard_read")?.execute("call-3", { id: "card-1" }),
-    );
-    expect(read.workerContext).toContain("Ship coordination");
-    expect(read.card).toMatchObject({ metadata: { claim: { token: "[redacted]" } } });
-
-    const released = readPayload(
-      await byName
-        .get("workboard_release")
-        ?.execute("call-4", { id: "card-1", token, status: "review" }),
-    );
-    expect(released).toMatchObject({ card: { status: "review" } });
-    expect((released.card as { metadata?: { claim?: unknown } }).metadata?.claim).toBeUndefined();
-
-    const list = readPayload(await byName.get("workboard_list")?.execute("call-5", {}));
-    expect(list.cards).toEqual([expect.objectContaining({ id: "card-1" })]);
-    const archivedList = readPayload(
-      await byName.get("workboard_list")?.execute("call-6", { includeArchived: true }),
-    );
-    expect(archivedList.cards).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: "archived-1", archivedAt: 2 })]),
+  it("lists archived cards only when requested", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const tools = toolSet(store);
+    const active = await store.create({ title: "Active" });
+    const closed = await store.create({ title: "Closed", status: "done" });
+    const archived = await store.archive(closed.id, true);
+    expect((await runTool(tools, "list", {})).cards).toEqual([
+      expect.objectContaining({ id: active.id }),
+    ]);
+    expect((await runTool(tools, "list", { includeArchived: true })).cards).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: closed.id, archivedAt: archived.metadata?.archivedAt }),
+      ]),
     );
   });
 
@@ -405,12 +314,7 @@ describe("workboard tools", () => {
     const store = createWorkboardSqliteTestStore();
     const parent = await store.create({ title: "Completed parent", status: "done" });
     const child = await store.create({ title: "Blocked child", parents: [parent.id] });
-    const tools = new Map(
-      createWorkboardTools({ store, context: { agentId: "main" } }).map((tool) => [
-        tool.name,
-        tool,
-      ]),
-    );
+    const tools = toolSet(store);
     const claim = expectDefined(tools.get("workboard_claim"), "Workboard claim");
     const claimed = readPayload(await claim.execute("claim", { id: child.id }));
     await expectDefined(tools.get("workboard_block"), "Workboard block").execute("block", {
@@ -427,50 +331,29 @@ describe("workboard tools", () => {
 
   it("keeps blocked-card mutations out of the host tool failure contract", async () => {
     const { store, stores } = createWorkboardSqliteTestHarness();
-    const keyed = stores.cards;
-    const tools = createWorkboardTools({
-      store,
-      context: { agentId: "main" },
-    });
-    const byName = new Map(tools.map((tool) => [tool.name, tool]));
+    const byName = toolSet(store);
     const token = "claim-token-1";
-    await keyed.register("card-1", {
+    const card = await store.create({ title: "Blocked work", status: "blocked" });
+    await stores.cards.register(card.id, {
       version: 1,
       card: {
-        id: "card-1",
-        title: "Blocked work",
-        status: "blocked",
-        priority: "normal",
-        labels: [],
-        position: 1000,
-        createdAt: 1,
-        updatedAt: 1,
+        ...card,
         metadata: { claim: { ownerId: "main", token, claimedAt: 1, lastHeartbeatAt: 1 } },
       },
     });
+    const id = card.id;
 
     const calls = [
-      ["workboard_comment", { id: "card-1", token, body: "still waiting on review" }],
-      ["workboard_heartbeat", { id: "card-1", token, note: "still blocked" }],
-      ["workboard_release", { id: "card-1", token }],
+      ["workboard_comment", { id, token, body: "still waiting on review" }],
+      ["workboard_heartbeat", { id, token, note: "still blocked" }],
+      ["workboard_release", { id, token }],
     ] as const;
-    const graded: Array<{ tool: string; isError: boolean; card: unknown }> = [];
     for (const [name, params] of calls) {
       const result = await expectDefined(byName.get(name), name).execute(name, params);
-      graded.push({
-        tool: name,
-        isError: isToolResultError(result),
-        card: readPayload(result).card,
-      });
+      expect(isToolResultError(result), name).toBe(false);
+      expect(readPayload(result).card, name).toMatchObject({ id, status: "blocked" });
     }
-
-    const blockedCard = expect.objectContaining({ id: "card-1", status: "blocked" });
-    expect(graded).toEqual([
-      { tool: "workboard_comment", isError: false, card: blockedCard },
-      { tool: "workboard_heartbeat", isError: false, card: blockedCard },
-      { tool: "workboard_release", isError: false, card: blockedCard },
-    ]);
-    expect((await keyed.lookup("card-1"))?.card).toMatchObject({
+    expect((await stores.cards.lookup(id))?.card).toMatchObject({
       status: "blocked",
       metadata: {
         comments: [
@@ -479,34 +362,24 @@ describe("workboard tools", () => {
         ],
       },
     });
-    expect((await keyed.lookup("card-1"))?.card.metadata?.claim).toBeUndefined();
+    expect((await stores.cards.lookup(id))?.card.metadata?.claim).toBeUndefined();
   });
 
   it("requires claim scope before creating or linking dependencies against claimed cards", async () => {
     const store = createWorkboardSqliteTestStore();
-    const mainTools = new Map(
-      createWorkboardTools({
-        store,
-        context: { agentId: "main" },
-      }).map((tool) => [tool.name, tool]),
-    );
-    const otherTools = new Map(
-      createWorkboardTools({
-        store,
-        context: { agentId: "other" },
-      }).map((tool) => [tool.name, tool]),
-    );
+    const mainTools = toolSet(store);
+    const otherTools = toolSet(store, "other");
     const parent = await store.create({ title: "Claimed parent" });
     const claimed = await store.claim(parent.id, { ownerId: "main", token: "parent-token" });
 
     await expect(
-      otherTools.get("workboard_create")?.execute("call-1", {
+      executeTool(otherTools, "create", {
         title: "Blocked child",
         parents: [parent.id],
       }),
     ).rejects.toThrow(/claimed by main/);
     await expect(
-      otherTools.get("workboard_create")?.execute("call-1b", {
+      executeTool(otherTools, "create", {
         title: "Blocked child",
         parents: parent.id,
       }),
@@ -514,13 +387,13 @@ describe("workboard tools", () => {
     expect(await store.list()).toHaveLength(1);
 
     await expect(
-      otherTools.get("workboard_create")?.execute("call-2b", {
+      executeTool(otherTools, "create", {
         title: "Wrong token child",
         parents: [parent.id],
         token: "test-token-placeholder",
       }),
     ).rejects.toThrow(/claimed by main/);
-    await otherTools.get("workboard_create")?.execute("call-2", {
+    await executeTool(otherTools, "create", {
       title: "Scoped child",
       parents: [parent.id],
       token: claimed.token,
@@ -528,23 +401,21 @@ describe("workboard tools", () => {
     const child = await store.create({ title: "Claimed child" });
     await store.claim(child.id, { ownerId: "child-worker", token: "child-token" });
     await expect(
-      otherTools.get("workboard_link")?.execute("call-3", {
+      executeTool(otherTools, "link", {
         parentId: parent.id,
         childId: child.id,
       }),
     ).rejects.toThrow(/claimed by main/);
 
-    const linked = readPayload(
-      await otherTools.get("workboard_link")?.execute("call-4", {
-        parentId: parent.id,
-        childId: (await store.create({ title: "Idle child" })).id,
-        token: claimed.token,
-      }),
-    );
+    const linked = await runTool(otherTools, "link", {
+      parentId: parent.id,
+      childId: (await store.create({ title: "Idle child" })).id,
+      token: claimed.token,
+    });
     expect(linked.card).toMatchObject({ status: "todo" });
 
     await expect(
-      mainTools.get("workboard_link")?.execute("call-5", {
+      executeTool(mainTools, "link", {
         parentId: parent.id,
         childId: child.id,
         token: "child-token",
@@ -554,89 +425,83 @@ describe("workboard tools", () => {
 
   it("creates dependent cards and completes claimed work through tools", async () => {
     const store = createWorkboardSqliteTestStore();
-    const tools = new Map(
-      createWorkboardTools({
-        store,
-        context: { agentId: "main" },
-      }).map((tool) => [tool.name, tool]),
-    );
+    const tools = toolSet(store);
 
-    const parentPayload = readPayload(
-      await tools.get("workboard_create")?.execute("call-1", {
-        title: "Parent",
-        status: "running",
-      }),
-    );
+    const parentPayload = await runTool(tools, "create", {
+      title: "Parent",
+      status: "running",
+    });
     const parent = parentPayload.card as { id: string };
-    const childPayload = readPayload(
-      await tools.get("workboard_create")?.execute("call-2", {
-        title: "Child",
-        parents: [parent.id],
-        tenant: "qa",
-        skills: ["testing"],
-      }),
-    );
+    const childPayload = await runTool(tools, "create", {
+      title: "Child",
+      parents: [parent.id],
+      tenant: "qa",
+      skills: ["testing"],
+    });
     const child = childPayload.card as { id: string; status: string };
     expect(child.status).toBe("todo");
 
     await expect(
-      tools.get("workboard_complete")?.execute("call-unclaimed-complete", {
+      executeTool(tools, "complete", {
         id: parent.id,
         summary: "Too early.",
       }),
     ).rejects.toThrow(/claimed/);
     await expect(
-      tools.get("workboard_block")?.execute("call-unclaimed-block", {
+      executeTool(tools, "block", {
         id: child.id,
         reason: "Too early.",
       }),
     ).rejects.toThrow(/claimed/);
     await expect(
-      tools.get("workboard_protocol_violation")?.execute("call-unclaimed-violation", {
+      executeTool(tools, "protocol_violation", {
         id: child.id,
         detail: "Too early.",
       }),
     ).rejects.toThrow(/claimed/);
 
-    const claimed = readPayload(
-      await tools.get("workboard_claim")?.execute("call-3", { id: parent.id }),
-    );
-    const token = claimed.token as string;
-    const pendingProof = readPayload(
-      await tools.get("workboard_proof")?.execute("call-proof", {
-        id: parent.id,
-        token,
-        status: "passed",
-        command: "pnpm test extensions/workboard",
-      }),
-    );
+    const claimed = await runTool(tools, "claim", { id: parent.id });
+    expect(claimed.card).toMatchObject({
+      status: "running",
+      metadata: { claim: { ownerId: "main", token: "[redacted]" } },
+    });
+    const read = await runTool(tools, "read", { id: parent.id });
+    expect(read.workerContext).toContain("Parent");
+    expect(read.card).toMatchObject({ metadata: { claim: { token: "[redacted]" } } });
+    const released = await runTool(tools, "release", {
+      id: parent.id,
+      token: claimed.token,
+      status: "review",
+    });
+    expect(released.card).toMatchObject({ status: "review" });
+    expect((released.card as { metadata?: { claim?: unknown } }).metadata?.claim).toBeUndefined();
+    const token = (await runTool(tools, "claim", { id: parent.id })).token as string;
+    const pendingProof = await runTool(tools, "proof", {
+      id: parent.id,
+      token,
+      status: "passed",
+      command: "pnpm test extensions/workboard",
+    });
     expect(pendingProof.proofId).toEqual(expect.any(String));
-    const completed = readPayload(
-      await tools.get("workboard_complete")?.execute("call-4", {
-        id: parent.id,
-        token,
-        summary: "Done.",
-        createdCardIds: [child.id],
-        proofId: pendingProof.proofId,
-      }),
-    );
+    const completed = await runTool(tools, "complete", {
+      id: parent.id,
+      token,
+      summary: "Done.",
+      createdCardIds: [child.id],
+      proofId: pendingProof.proofId,
+    });
     expect(completed.card).toMatchObject({
       status: "done",
       metadata: { proof: [{ id: pendingProof.proofId, status: "passed" }] },
     });
 
-    const dispatch = readPayload(await tools.get("workboard_dispatch")?.execute("call-5", {}));
+    const dispatch = await runTool(tools, "dispatch", {});
     expect(dispatch.promoted).toEqual([expect.objectContaining({ id: child.id, status: "ready" })]);
   });
 
   it("redacts claim tokens from dispatch tool results", async () => {
     const store = createWorkboardSqliteTestStore();
-    const tools = new Map(
-      createWorkboardTools({
-        store,
-        context: { agentId: "main" },
-      }).map((tool) => [tool.name, tool]),
-    );
+    const tools = toolSet(store);
     const card = await store.create({
       title: "Scheduled",
       status: "scheduled",
@@ -655,7 +520,7 @@ describe("workboard tools", () => {
       },
     });
 
-    const dispatch = readPayload(await tools.get("workboard_dispatch")?.execute("call-1", {}));
+    const dispatch = await runTool(tools, "dispatch", {});
 
     const promoted = dispatch.promoted as Array<{
       metadata?: { claim?: { token?: string } };
@@ -666,11 +531,11 @@ describe("workboard tools", () => {
 
   it("exposes board lifecycle, decomposition, runs, and notification tools", async () => {
     const store = createWorkboardSqliteTestStore();
-    const tools = new Map(
+    const tools = toolsByName(
       createWorkboardTools({
         store,
         context: { agentId: "main" },
-      }).map((tool) => [tool.name, tool]),
+      }),
     );
 
     const boardPayload = readPayload(
@@ -799,37 +664,137 @@ describe("workboard tools", () => {
 
   it("moves cards with agent claim scope", async () => {
     const store = createWorkboardSqliteTestStore();
-    const tools = new Map(
-      createWorkboardTools({ store, context: { agentId: "agent-b" } }).map((tool) => [
-        tool.name,
-        tool,
-      ]),
-    );
+    const tools = toolSet(store, "agent-b");
     const card = await store.create({ title: "Move tool card", status: "todo" });
 
-    const unclaimed = readPayload(
-      await tools.get("workboard_move")?.execute("move-unclaimed", {
-        id: card.id,
-        status: "ready",
-      }),
-    );
+    const unclaimed = await runTool(tools, "move", {
+      id: card.id,
+      status: "ready",
+    });
     expect(unclaimed.card).toMatchObject({ status: "ready" });
 
     await store.claim(card.id, { ownerId: "agent-a", token: "test-auth-token" });
     await expect(
-      tools.get("workboard_move")?.execute("move-denied", {
+      executeTool(tools, "move", {
         id: card.id,
         status: "review",
       }),
     ).rejects.toThrow("card is claimed by agent-a");
 
-    const claimed = readPayload(
-      await tools.get("workboard_move")?.execute("move-claimed", {
-        id: card.id,
-        status: "review",
-        token: "test-auth-token",
-      }),
-    );
-    expect(claimed.card).toMatchObject({ status: "review" });
+    const claimed = await runTool(tools, "move", {
+      id: card.id,
+      status: "review",
+      token: "test-auth-token",
+    });
+    // Review is not terminal: the claim stays with its owner.
+    expect(claimed.card).toMatchObject({
+      status: "review",
+      metadata: { claim: { ownerId: "agent-a" } },
+    });
   });
+});
+
+async function createDispatchedCard(store: ReturnType<typeof createWorkboardSqliteTestStore>) {
+  const card = await store.create({ title: "Dispatched card", status: "ready" });
+  const claim = await store.claim(card.id, { ownerId: "agent-a" });
+  const prepared = await store.prepareExecutionLaunch(card.id, {
+    requestedSessionKey: "subagent:workboard-terminal",
+    now: claim.card.updatedAt + 1,
+    scope: { ownerId: "agent-a", token: claim.token },
+  });
+  const sessionKey = "agent:main:subagent:workboard-terminal";
+  await store.acceptExecutionLaunch(card.id, {
+    expectedLaunch: prepared.launch,
+    expectedSessionKey: prepared.launch.requestedSessionKey,
+    expectedRunId: prepared.launch.provisionalRunId,
+    sessionKey,
+    runId: "terminal-run",
+    execution: { ...prepared.card.execution!, sessionKey, runId: "terminal-run" },
+    acceptedAt: prepared.launch.preparedAt + 1,
+  });
+  return { card, token: claim.token };
+}
+
+async function expectRunFinished(
+  store: ReturnType<typeof createWorkboardSqliteTestStore>,
+  id: string,
+  status: "done" | "blocked",
+) {
+  const card = expectDefined(await store.get(id), "terminal card");
+  expect(card).toMatchObject({ status, execution: { status } });
+  expect(card.metadata?.claim).toBeUndefined();
+  expect(card.metadata?.attempts).toEqual([
+    expect.objectContaining({ status: status === "done" ? "succeeded" : "blocked" }),
+  ]);
+  expect(card.metadata?.failureCount ?? 0).toBe(status === "done" ? 0 : 1);
+  expect(card.metadata?.notifications?.map((notification) => notification.kind)).toEqual([
+    status === "done" ? "completed" : "failed",
+  ]);
+  const next = await store.create({ title: "Next card", status: "ready" });
+  await expect(store.claim(next.id, { ownerId: "agent-a" })).resolves.toMatchObject({
+    card: { status: "running" },
+  });
+}
+
+describe("workboard terminal status writes", () => {
+  it.each([
+    ["move", "done"],
+    ["move", "blocked"],
+    ["update", "done"],
+    ["block", "blocked"],
+  ] as const)("settles the run when %s writes %s", async (action, status) => {
+    const store = createWorkboardSqliteTestStore();
+    const { card, token } = await createDispatchedCard(store);
+    if (action === "move") {
+      const moved = await runTool(toolSet(store, "agent-a"), "move", {
+        id: card.id,
+        status,
+        token,
+      });
+      expect(moved.card).toMatchObject({ status });
+    } else if (action === "update") {
+      await store.update(card.id, { status });
+    } else {
+      await store.block(card.id, { ownerId: "agent-a", token, reason: "Workboard card blocked." });
+      await store.move(card.id, "blocked", undefined);
+      await store.update(card.id, { status: "blocked" });
+    }
+    await expectRunFinished(store, card.id, status);
+  });
+
+  it.each(["done", "blocked"] as const)(
+    "only releases the claim when moving to %s after the run already ended",
+    async (status) => {
+      const store = createWorkboardSqliteTestStore();
+      const { card } = await createDispatchedCard(store);
+      const running = expectDefined(await store.get(card.id), "running card");
+      const now = running.updatedAt + 1;
+      await store.syncLifecycle(card.id, {
+        targetStatus: "review",
+        executionStatus: "done",
+        sourceUpdatedAt: now,
+        stale: undefined,
+        now,
+        association: {
+          expectedSessionKey: running.sessionKey,
+          expectedRunId: running.runId,
+          sessionKey: running.sessionKey!,
+          runId: running.runId,
+        },
+      });
+
+      await store.move(card.id, status, undefined);
+
+      const moved = expectDefined(await store.get(card.id), "moved card");
+      expect(moved).toMatchObject({ status, execution: { status: "done" } });
+      expect(moved.metadata?.claim).toBeUndefined();
+      expect(moved.metadata?.attempts).toEqual([expect.objectContaining({ status: "succeeded" })]);
+      expect(moved.metadata?.failureCount ?? 0).toBe(0);
+      expect(moved.metadata?.notifications ?? []).toEqual([]);
+      const next = await store.create({ title: "Next card", status: "ready" });
+      await expect(store.claim(next.id, { ownerId: "agent-a" })).resolves.toMatchObject({
+        card: { status: "running" },
+      });
+    },
+  );
 });

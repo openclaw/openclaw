@@ -7,7 +7,7 @@ import {
   Virtualizer,
   type VirtualItem,
 } from "@tanstack/virtual-core";
-import { createMemo, createSignal, onSettled, Show } from "solid-js";
+import { createMemo, createProjection, createSignal, onSettled, Show } from "solid-js";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 
 export type ModelPickerRowRenderer = (key: string, render: () => JSX.Element) => JSX.Element;
@@ -22,6 +22,10 @@ export function createModelPickerWindow(
   const [window, setWindow] = createSignal<{ items: VirtualItem[]; height: number }>({
     items: [],
     height: 0,
+  });
+  const itemKey = createMemo(() => {
+    const source = rows();
+    return (index: number) => source[index]!;
   });
   const publish = () =>
     setWindow({ items: virtualizer.getVirtualItems(), height: virtualizer.getTotalSize() });
@@ -43,7 +47,12 @@ export function createModelPickerWindow(
     return mountVirtualizer();
   });
   createLayoutMeasurement(
-    () => ({ rows: rows(), highlighted: highlighted(), shortcuts: shortcuts() }),
+    () => ({
+      rows: rows(),
+      highlighted: highlighted(),
+      shortcuts: shortcuts(),
+      itemKey: itemKey(),
+    }),
     (next) => {
       if (!next) {
         return;
@@ -53,7 +62,7 @@ export function createModelPickerWindow(
       virtualizer.setOptions({
         ...virtualizer.options,
         count: next.rows.length,
-        getItemKey: (index) => next.rows[index]!,
+        getItemKey: next.itemKey,
         // Keep the active descendant and digit shortcuts addressable offscreen.
         rangeExtractor: (range) =>
           [...new Set([...defaultRangeExtractor(range), ...pinnedIndexes])].toSorted(
@@ -66,7 +75,9 @@ export function createModelPickerWindow(
     },
     { targets: () => [viewport], changeTiming: "sync" },
   );
-  const items = createMemo(() => new Map(window().items.map((item) => [item.key, item])));
+  const items = createProjection<Record<string, VirtualItem | undefined>>(() =>
+    Object.fromEntries(window().items.map((item) => [item.key, item])),
+  );
   function Row(props: { rowKey: string; render: () => JSX.Element }) {
     let element: HTMLDivElement;
     onSettled(() => {
@@ -77,22 +88,22 @@ export function createModelPickerWindow(
       <div
         ref={(node) => (element = node)}
         class="chat-controls__model-virtual-row"
-        data-index={items().get(props.rowKey)?.index}
-        style={{ transform: `translateY(${items().get(props.rowKey)?.start ?? 0}px)` }}
+        data-index={items[props.rowKey]?.index}
+        style={{ transform: `translateY(${items[props.rowKey]?.start ?? 0}px)` }}
       >
         {props.render()}
       </div>
     );
   }
   const renderRow: ModelPickerRowRenderer = (key, render) => (
-    <Show when={items().has(key)}>
+    <Show when={items[key]}>
       <Row rowKey={key} render={render} />
     </Show>
   );
   return {
     bind: (element: HTMLDivElement) => (viewport = element),
     height: () => window().height,
-    has: (key: string) => items().has(key),
+    has: (key: string) => Boolean(items[key]),
     renderRow,
     reveal(key: string) {
       const index = rows().indexOf(key);

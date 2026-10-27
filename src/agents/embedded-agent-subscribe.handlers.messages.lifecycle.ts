@@ -11,6 +11,10 @@ import { resolveAssistantMessagePhase } from "../shared/chat-message-content.js"
 import { isToolCallBlockType } from "../shared/tool-block-contract.js";
 import { prepareAgentRunTerminalReply } from "./agent-run-terminal-reply.js";
 import {
+  snapshotAssistantMessage,
+  type AssistantSnapshotReasoning,
+} from "./embedded-agent-subscribe.assistant-snapshot.js";
+import {
   recordPendingAssistantReplyDirectives,
   resolveManagedStreamMediaUrls,
 } from "./embedded-agent-subscribe.handlers.messages.replies.js";
@@ -82,6 +86,7 @@ export function handleMessageStart(
 export function handleMessageEnd(
   ctx: EmbeddedAgentSubscribeContext,
   evt: AgentEvent & { message: AgentMessage },
+  assistantReasoning?: AssistantSnapshotReasoning,
 ): void | Promise<void> {
   const msg = evt.message;
   if (msg.role === "user" && ctx.state.lastAssistant) {
@@ -115,7 +120,7 @@ export function handleMessageEnd(
   const assistantPhase = resolveAssistantMessagePhase(assistantMessage);
   const suppressVisibleAssistantOutput = assistantPhase === "commentary";
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
-  const suppressSourceReplyOutput = shouldSuppressSourceReplyOutput(ctx);
+  const suppressSourceReplyOutput = shouldSuppressSourceReplyOutput(ctx, assistantMessage);
   const canEmitReply = () =>
     !ctx.params.silentExpected &&
     !suppressDeterministicApprovalOutput &&
@@ -309,8 +314,8 @@ export function handleMessageEnd(
     ctx.state.hasFlushedPartialText = false;
     ctx.blockChunker.reset();
     // Late text_end events still use the partial lane's tag/inline state.
-    const { thinking, final, inlineCode } = ctx.state.partialBlockState;
-    ctx.state.partialBlockState = { thinking, final, inlineCode };
+    const { reasoningDepth, final, inlineCode } = ctx.state.partialBlockState;
+    ctx.state.partialBlockState = { reasoningDepth, final, inlineCode };
     ctx.state.assistantStream = undefined;
     ctx.state.reasoningStreamOpen = false;
   };
@@ -396,7 +401,9 @@ export function handleMessageEnd(
     // Like the completed terminal, retain this run's prepared bytes (projections mutate the
     // original) and index them by the last recorded text, which the flush above may add.
     ctx.state.inputAnswer = {
-      assistant: applyAssistantDeliveryDirectives(structuredClone(assistantMessage)),
+      assistant: applyAssistantDeliveryDirectives(
+        snapshotAssistantMessage(assistantMessage, assistantReasoning).snapshot,
+      ),
       messageIndex: ctx.state.lastAssistantTextMessageIndex,
     };
     const sourceReceipt = readAgentAssistantSource(assistantMessage);

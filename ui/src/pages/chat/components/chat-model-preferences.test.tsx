@@ -2,14 +2,33 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { createSignal } from "solid-js";
-import { expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import type { CyberAccessProgram } from "../../../api/types.ts";
+import { i18n } from "../../../i18n/index.ts";
+import { captureI18nStateForTesting } from "../../../i18n/lib/translate.test-support.ts";
 import { createSessionsListResult } from "../../../test-helpers/chat-model.ts";
+import { createMediaQueryList } from "../../../test-helpers/media-query.ts";
 import { installModelPickerLayout } from "../../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatModelControls } from "./chat-model-controls.tsx";
 
 type Props = Parameters<typeof ChatModelControls>[0];
+
+// Cold loading is covered by browser proof; these cases exercise the loaded controls.
+beforeAll(async () => {
+  await Promise.all([
+    import("./chat-model-picker-panel.tsx"),
+    import("./chat-effort-picker-panel.tsx"),
+  ]);
+});
+
+beforeEach(() => {
+  // jsdom has no Web Animations API; the browser suite owns motion proof.
+  vi.stubGlobal("matchMedia", (query: string) =>
+    createMediaQueryList(query, query === "(prefers-reduced-motion: reduce)"),
+  );
+});
 
 async function controls(overrides: Partial<Props>) {
   installModelPickerLayout();
@@ -56,9 +75,10 @@ async function controls(overrides: Partial<Props>) {
   picker.open = true;
   picker.dispatchEvent(new Event("toggle"));
   flush();
-  await waitForSolid(() =>
-    expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
-  );
+  await waitForSolid(() => {
+    expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull();
+    expect(container.querySelector("[data-chat-thinking-slider]")).not.toBeNull();
+  });
   const update = (next: Partial<Props>) => {
     setCurrent({ ...current(), ...next });
     flush();
@@ -165,6 +185,36 @@ it("retires and restores an unavailable context-window control with its access g
   ).toBe(true);
 });
 
+it("refreshes context choices when a replaced session has unchanged model facts", async () => {
+  const sessionsResult = createSessionsListResult({ model: "primary", modelProvider: "example" });
+  const contextWindows = [
+    { id: "standard", label: "Standard", contextWindow: 100_000 },
+    { id: "extended", label: "Extended", contextWindow: 200_000 },
+  ];
+  const selectedSession = {
+    ...sessionsResult.sessions[0]!,
+    contextWindow: "standard",
+    contextWindowDefault: "standard",
+    contextWindows,
+  };
+  const onContextWindowSelect = vi.fn();
+  const view = await controls({ selectedSession, sessionsResult, onContextWindowSelect });
+  const toggle = () =>
+    expectDefined(
+      view.container.querySelector<HTMLButtonElement>("[data-chat-context-window-toggle]"),
+      "context window toggle",
+    );
+  expect(toggle().getAttribute("aria-checked")).toBe("false");
+
+  view.update({ selectedSession: { ...selectedSession, contextWindow: "extended" } });
+  expect(toggle().getAttribute("aria-checked")).toBe("true");
+  toggle().click();
+  expect(onContextWindowSelect).toHaveBeenCalledExactlyOnceWith("standard", "main");
+
+  view.update({ selectedSession: { ...selectedSession, contextWindows: [] } });
+  expect(view.container.querySelector("[data-chat-context-window-toggle]")).toBeNull();
+});
+
 it("updates model selection against a retained and replaced catalog", async () => {
   const view = await controls({});
   const option = (id: string) =>
@@ -204,4 +254,182 @@ it("updates model selection against a retained and replaced catalog", async () =
   });
   expectDefined(option("other"), "refreshed model option").click();
   expect(view.onModelSelect).toHaveBeenCalledWith("example/other", "main", undefined);
+});
+
+it("refreshes provider account labels when the locale changes without new props", async () => {
+  const restoreI18n = captureI18nStateForTesting();
+  onTestFinished(restoreI18n);
+  await i18n.setLocale("en");
+  const view = await controls({
+    modelSelectionTarget: "session",
+    modelAuthStatusResult: {
+      ts: 1,
+      providers: [
+        {
+          provider: "example",
+          displayName: "Example",
+          status: "ok",
+          profiles: [{ profileId: "example:oauth", type: "oauth", status: "ok" }],
+        },
+      ],
+    },
+  });
+  const label = () =>
+    view.container.querySelector(
+      '[data-chat-model-provider-group="example"] .chat-controls__auth-meta-label',
+    )?.textContent;
+  expect(label()).toBe("Subscription");
+  await i18n.setLocale("de");
+  await waitForSolid(() => expect(label()).toBe("Abonnement"));
+});
+
+it("refreshes a retained session model when the containing frame changes", async () => {
+  const sessions = createSessionsListResult({ model: "primary", modelProvider: "example" });
+  const selectedSession = { ...sessions.sessions[0]!, modelOverrideSource: "user" as const };
+  const view = await controls({ selectedSession });
+  expect(view.model.textContent).toContain("primary");
+
+  selectedSession.model = "other";
+  view.update({ stream: "A new activity frame" });
+  await waitForSolid(() => {
+    expect(view.model.textContent).toContain("other");
+    expect(view.option.getAttribute("aria-selected")).toBe("true");
+  });
+});
+
+it("refreshes saved and effective speed on a retained target when the frame changes", async () => {
+  const fastModeTarget: NonNullable<Props["fastModeTarget"]> = {
+    model: "primary",
+    modelProvider: "example",
+    fastMode: false,
+    effectiveFastMode: false,
+  };
+  const view = await controls({ fastModeTarget });
+  expect(view.speed.getAttribute("aria-checked")).toBe("false");
+
+  fastModeTarget.fastMode = true;
+  fastModeTarget.effectiveFastMode = true;
+  view.update({ stream: "Saved speed refreshed" });
+  expect(view.speed.getAttribute("aria-checked")).toBe("true");
+  expectDefined(
+    view.container.querySelector<HTMLButtonElement>("[data-chat-speed-option=off]"),
+    "standard speed option",
+  ).click();
+  expect(view.onFastModeSelect).toHaveBeenCalledWith("off", "main");
+
+  fastModeTarget.effectiveFastMode = false;
+  view.update({ stream: "Effective speed refreshed" });
+  expect(view.speed.getAttribute("aria-checked")).toBe("false");
+});
+
+it("keeps known effort visible but disabled until the same connection returns", async () => {
+  const view = await controls({});
+  const picker = view.container.querySelector<HTMLDetailsElement>(".chat-controls__effort-picker")!;
+  expect(view.effort.textContent).toContain("High");
+  view.update({ connected: false, modelCatalogState: { hasSnapshot: true, status: "offline" } });
+  expect(picker.getAttribute("aria-hidden")).toBe("false");
+  expect(picker.hasAttribute("inert")).toBe(false);
+  expect(view.effort.textContent).toContain("High");
+  expect(view.effort.getAttribute("aria-disabled")).toBe("true");
+  expect(view.slider.disabled).toBe(true);
+  expect(view.speed.disabled).toBe(true);
+  view.slider.value = "0";
+  view.slider.dispatchEvent(new Event("change", { bubbles: true }));
+  view.speed.click();
+  expect(view.onThinkingSelect).not.toHaveBeenCalled();
+  expect(view.onFastModeSelect).not.toHaveBeenCalled();
+  view.update({ connected: true, modelCatalogState: { hasSnapshot: true, status: "ready" } });
+  expect(view.effort.textContent).toContain("High");
+  expect(view.effort.getAttribute("aria-disabled")).toBe("false");
+  expect(view.slider.disabled).toBe(false);
+});
+
+it.each([
+  { hasSnapshot: false, initialized: false, status: "offline" as const },
+  { hasSnapshot: false, retired: true, status: "offline" as const },
+])("does not expose effort without an admitted catalog snapshot: %j", async (modelCatalogState) => {
+  const view = await controls({});
+  view.update({ connected: false, modelCatalog: [], modelCatalogState });
+  const picker = view.container.querySelector(".chat-controls__effort-picker")!;
+  expect(picker.getAttribute("aria-hidden")).toBe("true");
+  expect(picker.hasAttribute("inert")).toBe(true);
+});
+
+it("does not invent reasoning options for an offline non-reasoning model", async () => {
+  const view = await controls({});
+  const selectedSession = {
+    key: "main",
+    kind: "direct" as const,
+    updatedAt: 1,
+    model: "plain",
+    modelProvider: "example",
+    thinkingLevels: [],
+    thinkingDefault: "off",
+  };
+  view.update({
+    connected: false,
+    modelCatalog: [
+      {
+        id: "plain",
+        name: "Plain",
+        provider: "example",
+        reasoning: false,
+        thinkingLevels: [],
+        thinkingDefault: "off",
+      },
+    ],
+    modelCatalogState: { hasSnapshot: true, status: "offline" },
+    selectedSession,
+    thinkingSession: selectedSession,
+  });
+  expect(view.container.querySelector("[data-chat-thinking-select]")).toBeNull();
+});
+
+it("retains the Access selection without borrowing entitlement from another runtime or a retired catalog", async () => {
+  const model = {
+    id: "primary",
+    name: "primary",
+    provider: "example",
+    supportsFastMode: true,
+    agentRuntime: { id: "openclaw", source: "model" as const },
+    availableAccessPrograms: {
+      cyber: ["standard", "daybreak_blue"] satisfies CyberAccessProgram[],
+    },
+    cyberAccessProgramDefault: "daybreak_blue" as const,
+    runtimeChoices: [{ agentRuntime: { id: "codex", source: "model" as const } }],
+  };
+  const onSelect = vi.fn();
+  const view = await controls({
+    modelCatalog: [model, { id: "other", name: "other", provider: "example" }],
+    selectedAgentRuntime: "codex",
+    requestedAccessProgram: "daybreak_red",
+    onAccessProgramSelect: onSelect,
+  });
+  const options = () => [
+    ...view.container.querySelectorAll<HTMLButtonElement>("[data-chat-access-option]"),
+  ];
+  const unavailable = () =>
+    view.container.querySelector('.chat-controls__access-options [aria-disabled="true"]')
+      ?.textContent;
+  expect(options()).toHaveLength(0);
+  expect(unavailable()).toBeUndefined();
+  view.update({ selectedAgentRuntime: "openclaw" });
+  expect(options().map((option) => option.textContent)).toEqual(["Blue"]);
+  expect(unavailable()).toContain("unavailable");
+  view.update({ requestedAccessProgram: undefined });
+  expect(options()[0]?.getAttribute("aria-pressed")).toBe("true");
+  options()[0]?.click();
+  expect(onSelect).not.toHaveBeenCalled();
+  view.update({ modelCatalogState: { hasSnapshot: true, status: "loading", retired: true } });
+  expect(options()).toHaveLength(0);
+  view.update({ requestedAccessProgram: "daybreak_red" });
+  expect(unavailable()).toBeUndefined();
+  expect(options()).toHaveLength(0);
+  view.update({
+    modelCatalogState: { hasSnapshot: true, status: "ready" },
+    modelCatalog: [{ ...model, available: false }],
+  });
+  expect(options().every((option) => option.disabled)).toBe(true);
+  options()[0]?.click();
+  expect(onSelect).not.toHaveBeenCalled();
 });

@@ -1,13 +1,9 @@
-import { createMemo, createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { ProjectsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
-import { resolveProjectChip } from "./project-chip.ts";
-import { ProjectChip } from "./project-chip.tsx";
-import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
+import { mountProjectChip } from "./project-chip.test-support.tsx";
 
 it("keeps project search live through catalog reads and retires invalidated rows", async () => {
   const fixture = createRepositoryFixture();
@@ -34,41 +30,21 @@ it("keeps project search live through catalog reads and retires invalidated rows
   vi.spyOn(place, "deviceFolderAvailable", "get").mockReturnValue(false);
   onTestFinished(() => browser.disconnect());
   browser.synchronize();
-  const options: NewSessionPlaceControlsOptions = {
-    place,
-    gateway,
-    context,
-    data: undefined,
-    submitting: false,
-    pendingPlacement: false,
-    onConnectMachine: vi.fn(),
-    onNavigate: vi.fn(),
-    onFocusComposer: vi.fn(),
-    onChange: changed,
-  };
   let nativeTerminal = false;
   const mountPicker = () =>
-    mountSolid(() => {
-      const [revision, setRevision] = createSignal(0);
-      changed.mockImplementation(() => setRevision((value) => value + 1));
-      const props = createMemo(() => {
-        revision();
-        return {
-          params: { ...options },
-          state: resolveProjectChip({
-            folder: "",
-            workspace: "/home/openclaw/.openclaw/workspace",
-            projectId: browser.projectId,
-            selectedRemoteProject: browser.remoteProject,
-            projects: browser.projects,
-            recents: [],
-            projectQuery: browser.projectQuery,
-          }),
-          nativeTerminal,
-        };
-      });
-      return <ProjectChip {...props()} />;
-    });
+    mountProjectChip(
+      fixture,
+      () => ({
+        folder: "",
+        workspace: "/home/openclaw/.openclaw/workspace",
+        projectId: browser.projectId,
+        selectedRemoteProject: browser.remoteProject,
+        projects: browser.projects,
+        recents: [],
+        projectQuery: browser.projectQuery,
+      }),
+      () => nativeTerminal,
+    );
   let view = mountPicker();
   expect(view.container.querySelector('input[type="search"]')).toBeNull();
   popoverOpen.mockReturnValue(true);

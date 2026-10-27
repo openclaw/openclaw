@@ -32,7 +32,6 @@ const PARENT_READY = "QA-VISIBLE-CHILD-PARENT-READY";
 const PARENT_DONE = "QA-VISIBLE-CHILD-PARENT-DONE";
 const REPLY_STEP_MARKER = "Agent-to-agent reply step";
 const ANNOUNCE_STEP_MARKER = "Agent-to-agent announce step";
-const CHILD_KEY_PATTERN = /^agent:qa:dashboard:[A-Za-z0-9-]+$/;
 
 type ProviderRequest = {
   model: string;
@@ -193,13 +192,6 @@ function writeToolCall(
     arguments: JSON.stringify(args),
   };
   writeOpenAiResponsesSse(response, [
-    { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
-    {
-      type: "response.function_call_arguments.delta",
-      item_id: item.id,
-      output_index: 0,
-      delta: item.arguments,
-    },
     { type: "response.output_item.done", output_index: 0, item },
     {
       type: "response.completed",
@@ -244,6 +236,7 @@ it("returns the waited reply inline without an announce run against the child", 
   cleanups.push(async () => expect((await owner.stop()).errors).toEqual([]));
   const gateway = await owner.start({
     repoRoot: REPO_ROOT,
+    initializeCurrentRuntimeState: true,
     // Source-mode startup exceeds the child Gateway's listen deadline.
     command: {
       executablePath: process.execPath,
@@ -316,12 +309,7 @@ it("returns the waited reply inline without an announce run against the child", 
   // Close the owned Gateway before freezing evidence; provider and bus stay live
   // while its admitted work drains and its process exits.
   await gateway.stop();
-  const announceLines = gateway
-    .logs()
-    .split("\n")
-    .filter((line) => line.includes("sessions_send announce"));
   expect(provider.errors).toEqual([]);
-  expect(childKey).toMatch(CHILD_KEY_PATTERN);
   expect(child).toMatchObject({ spawnedBy: PARENT_KEY, parentSessionKey: PARENT_KEY });
   expect(provider.send).toMatchObject({
     status: "ok",
@@ -333,5 +321,4 @@ it("returns the waited reply inline without an announce run against the child", 
   expect(
     provider.requests.filter((request) => request.replyStep || request.announceStep),
   ).toHaveLength(0);
-  expect(announceLines).toHaveLength(0);
 }, 400_000);

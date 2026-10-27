@@ -14,8 +14,8 @@ import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import * as workerUrls from "./runtime-worker-url.js";
 import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
 import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
+import { reclaimAbandonedSqliteSnapshotsAsync } from "./sqlite-snapshot-reclamation.js";
 import { prepareSqliteReadOnlyLocation } from "./sqlite-snapshot-source.js";
-import { reclaimAbandonedSqliteSnapshotsAsync } from "./sqlite-snapshot-staging.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 
 const processMocks = vi.hoisted(() => ({

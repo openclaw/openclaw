@@ -447,7 +447,17 @@ node scripts/run-vitest.mjs --isolated-image "$IMAGE_ID" run \
 
 The adapter requires Linux, an existing rootless Podman installation with its native init helper (normally catatonit), checkout-local `pnpm install --frozen-lockfile` dependencies, and native Node and pnpm executables compatible with the image. Put the native pnpm executable matching `package.json` on `PATH`, or select it through the existing `npm_execpath` environment variable; a Corepack/download shim is not an offline executable. The image must already contain the Chromium revision required by the installed Playwright package under `/ms-playwright`, including its headless shell and system libraries. The runner checks versions and launches Chromium before starting the test command. SELinux-labeled hosts are not supported by this initial adapter: it refuses before creating a container rather than relabeling shared host files or disabling enforcement. Use an already supported isolated runner instead of changing host security policy.
 
-It runs Vitest, Chromium, the provider fixture, and the test Gateway in the same network-none namespace. Podman’s init owns PID 1 so detached test children are reaped after their launchers exit; the Node entrypoint still owns the test invocation and cleanup. Host proxy settings stay unchanged; host credentials, Gateway state, Git metadata, and private scratch are not exposed to the container. There are no published ports or external network access. Missing prerequisites fail with setup guidance instead of installing packages or weakening isolation.
+For WebKit browser tests, the image must also contain the installed Playwright package's WebKit revision and system libraries. Prepare a trusted upstream Playwright image matching that package version before invoking the adapter; image preparation is separate from the offline test run. Select the standalone WebKit config instead of the package config's environment opt-in or `--project` (neither is forwarded by this isolated launcher):
+
+```bash
+node scripts/run-vitest.mjs --isolated-image "$IMAGE_ID" run \
+  --config test/vitest/vitest.ui-browser-webkit.config.ts --configLoader runner \
+  ui/src/components/solid/menu-navigation.browser.test.tsx --maxWorkers=1
+```
+
+If the host pnpm executable auto-selects another version, resolve the already prepared pinned native executable with `pnpm exec node -p process.env.npm_execpath` and set `npm_execpath` to that path for the invocation. The container checks the executable itself, without downloading a replacement.
+
+It runs Vitest, the selected browser, the provider fixture, and the test Gateway in the same network-none namespace. Podman’s init owns PID 1 so detached test children are reaped after their launchers exit; the Node entrypoint still owns the test invocation and cleanup. Host proxy settings stay unchanged; host credentials, Gateway state, Git metadata, and private scratch are not exposed to the container. There are no published ports or external network access. Missing prerequisites fail with setup guidance instead of installing packages or weakening isolation.
 
 Use the ordinary local config, not the CI-only prebuilt config. The adapter uses the standard test selection to prepare `qaRuntime` artifacts inside the container for tests that consume built runtime, including private-QA artifacts when required. Source-only selections do not pay for a runtime build and retain the 8 GiB container memory cap. Runs that prepare built artifacts use a bounded 16 GiB cap to accommodate the compiler heap and native build memory; CPU, network, filesystem, and process limits are unchanged. For the standard Control UI E2E config, it retains the private-QA `ciArtifacts` build before admitting tests; backend readiness alone does not mean the dashboard assets are ready. The host’s live-Gateway artifact admission is unchanged. The isolated source snapshot uses tracked working-tree files, including staged new files; stage a new test before selecting it. Keep source and dependencies unchanged during the invocation, and keep dependency installation separate. The initial interface supports exact tracked test files, a tracked config, and console reporters; it does not export files from the disposable snapshot. This route is not suitable for live-provider tests or tests that must contact services outside their own container.
 
@@ -706,3 +716,12 @@ the admitted-agent matrix supplies a synthetic typed completion event. Neither
 fixture delivers an external announcement. These assertions define the offline regression contract; mock
 token usage is not evidence of provider cache reuse, which requires a successful
 live run.
+
+## Opt-in Gateway restart stress
+
+The existing team-shaped stress controller also supports bounded real-process
+restart chaos, with a mock dry mode and an explicitly selected approved live model.
+It combines concurrent coding turns, subagents, background exec, steering, queued
+messages, metadata churn, and a local TPM-429 proxy. It never connects to an existing
+Gateway or runs in CI. See `scripts/perf/team-shape-stress.md` in the repository for
+commands, credential isolation, report artifacts, and the limits of each invariant.

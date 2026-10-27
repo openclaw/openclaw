@@ -17,7 +17,6 @@ export const UPLOAD_ARTIFACT_V7 =
   "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9";
 export const DOWNLOAD_ARTIFACT_V8 =
   "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333";
-export const MANTIS_GITHUB_APP_CLIENT_ID = "Iv23liPJCozR0uHm6P7G";
 const SETUP_ANDROID_TOOLCHAIN_ACTION = ".github/actions/setup-android-toolchain/action.yml";
 export const MATURITY_SCORECARD_WORKFLOW = ".github/workflows/maturity-scorecard.yml";
 export const AMBIGUOUS_MAIN_PUSH_DIAGNOSTIC =
@@ -54,6 +53,7 @@ export function evaluateWorkflow(
 
 export type WorkflowStep = {
   "continue-on-error"?: boolean;
+  "timeout-minutes"?: number | string;
   env?: Record<string, unknown>;
   id?: string;
   if?: string;
@@ -420,4 +420,42 @@ export function readWorkflowOutputs(outputPath: string): Record<string, string> 
         }),
       )
     : {};
+}
+
+/** Execute the UI phases with Actions' output/env handoff and stop-on-failure behavior. */
+export function runControlUiE2eWorkflow(options: { cwd: string; env: NodeJS.ProcessEnv }) {
+  const steps = readCiWorkflow().jobs["checks-ui-e2e"].steps as WorkflowStep[];
+  const first = steps.findIndex((step) => step.name === "Decode Control UI E2E selection");
+  const last = steps.findIndex((step) => step.name === "Test Control UI end-to-end");
+  expect(first).toBeGreaterThanOrEqual(0);
+  expect(last).toBeGreaterThan(first);
+  const envFile = path.join(options.cwd, "github-env");
+  const outputFile = path.join(options.cwd, "github-output");
+  const env = { ...options.env, GITHUB_ENV: envFile, GITHUB_OUTPUT: outputFile };
+  writeFileSync(envFile, "");
+  const context = {
+    ...defaultContext,
+    matrix: { task: "control-ui" },
+    steps: {} as Record<string, { outputs: Record<string, string> }>,
+  };
+  let result: ReturnType<typeof runWorkflowShellScript> | undefined;
+  let stdout = "";
+  let stderr = "";
+  for (const step of steps.slice(first, last + 1)) {
+    if (step.if && !evaluateWorkflowCondition(step.if, context)) {
+      continue;
+    }
+    writeFileSync(outputFile, "");
+    result = runWorkflowShellScript(`set -e\n${step.run}`, { cwd: options.cwd, env });
+    stdout += result.stdout;
+    stderr += result.stderr;
+    if (result.status !== 0) {
+      break;
+    }
+    Object.assign(env, readWorkflowOutputs(envFile));
+    if (step.id) {
+      context.steps[step.id] = { outputs: readWorkflowOutputs(outputFile) };
+    }
+  }
+  return { ...expectDefined(result, "Control UI E2E workflow result"), stdout, stderr };
 }

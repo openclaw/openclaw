@@ -36,8 +36,9 @@ import {
 } from "./github-publication-coordinator-methods.js";
 import {
   matchesGitHubPublicationIdentityRow,
-  projectGitHubPublicationResult,
+  projectGitHubPublicationResult as projectReceipt,
 } from "./github-publication-receipt.js";
+import type { GitHubPublicationRecoveryBackoff } from "./github-publication-recovery.js";
 import { insertRepositoryGitHubPublicationAsync } from "./github-publication-request-async.js";
 import type { GitHubPublicationRequesterPolicyV2 } from "./github-publication-requester.js";
 import { bindGitHubPublicationSourceLifetime } from "./github-publication-source.js";
@@ -67,8 +68,13 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
   getCommittedRuntimeConfig: () => OpenClawConfig;
   assertCurrent: () => void;
   signal: AbortSignal;
+  recovery?: GitHubPublicationRecoveryBackoff;
 }) {
   const { placements, getCommittedRuntimeConfig } = params;
+  const projectGitHubPublicationResult = (row: RepositoryGitHubPublicationRow) => {
+    const result = projectReceipt(row);
+    return params.recovery?.describe(result) ?? result;
+  };
   const prepareSource = async (
     requester: Pick<GitHubPublicationRequesterPolicyV2, "prepareSource">,
     selector: Parameters<GitHubPublicationRequesterPolicyV2["prepareSource"]>[0],
@@ -453,10 +459,12 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
     },
     ...createRepositoryGitHubPublicationRecovery({
       placements,
+      recovery: params.recovery,
       getCommittedRuntimeConfig,
       assertCurrent: params.assertCurrent,
       isExecuting: (requestId) => active.has(requestId),
-      execute: (row, assertCustody) => execute(row, { assertCustody }),
+      execute: (row, assertCustody, recoveryResult) =>
+        execute(row, { assertCustody, recoveryResult }),
     }),
     preparePersonalStatus,
     async personalStatusAsync(

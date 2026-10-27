@@ -123,10 +123,7 @@ const createSession = () =>
   callGatewayTool(
     "sessions.create",
     {},
-    {
-      parentSessionKey: "agent:ops:main",
-      spawnDepth: 1,
-    },
+    { parentSessionKey: "agent:ops:main", spawnDepth: 1 },
     requiredIdentity,
   );
 const capabilities: string[] = [];
@@ -348,7 +345,7 @@ describe("Gateway tool identity and hosted routing", () => {
   );
 
   it("redeems private spawn lineage once", async () => {
-    const result = await withCaller({ executionIdentityToken: parent }, async () => {
+    await withCaller({ executionIdentityToken: parent }, async () => {
       await runWithGatewaySessionSpawnContext(lineageContext, () =>
         runWithGatewaySessionSpawnParentExecutionIdentity(parent, () =>
           callGatewayTool(
@@ -379,15 +376,12 @@ describe("Gateway tool identity and hosted routing", () => {
           },
           {},
         );
-      return {
-        identity,
-        facts: prepareFacts(identity ? { ...identity } : undefined),
-        replayFacts: prepareFacts(identity),
-      };
+      expect(identity).toBeDefined();
+      expect(prepareFacts(identity ? { ...identity } : undefined)?.spawnAdmission).toEqual(
+        expect.any(String),
+      );
+      expect(prepareFacts(identity)).toBeUndefined();
     });
-    expect(result.identity).toBeDefined();
-    expect(result.facts?.spawnAdmission).toEqual(expect.any(String));
-    expect(result.replayFacts).toBeUndefined();
     await expect(verifyCallIdentity()).resolves.toBeUndefined();
   });
 

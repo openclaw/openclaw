@@ -38,6 +38,7 @@ import {
   deliverTelegramUpdate,
   groupChat,
   groupCommand,
+  from,
   harness,
   photo,
 } from "./bot.create-telegram-bot.native-pipeline.test-support.js";
@@ -107,23 +108,36 @@ async function receive(bot: Bot, message: NonNullable<Update["message"]>) {
   });
 }
 
+const entry = (sessionKey: string, agentId?: string) =>
+  getSessionEntry({ storePath, sessionKey, agentId });
+const deliveryContext = (to: string, threadId?: string) => ({
+  channel: "telegram",
+  to,
+  ...(threadId === undefined ? {} : { threadId }),
+});
+function expectDelivery(sessionKey: string, context: Record<string, unknown>) {
+  expect(entry(sessionKey)?.delivery).toMatchObject({ kind: "external", context });
+}
+const privateTopicKey = "agent:main:main:thread:42001:77";
+function serviceMessage(fields: Partial<NonNullable<Update["message"]>>) {
+  return { message_id: ++updateId, date: 1736380700, chat, from, ...fields };
+}
+function topicReply(name: string, messageId: number, fromBot = false) {
+  return {
+    message_id: messageId,
+    date: 1736380700,
+    chat: groupChat,
+    ...(fromBot ? { from: telegramBotInfoForTest } : {}),
+    forum_topic_created: { name, icon_color: 7322096 },
+    reply_to_message: undefined,
+  };
+}
+
 describe("Telegram recorded session destinations", () => {
-  it.each([
-    {
-      name: "deleted direct session",
-      thread: undefined,
-      key: "agent:main:telegram:direct:42001",
-      to: "telegram:42001",
-      savedThread: undefined,
-    },
-    {
-      name: "bot-private topic",
-      thread: 77,
-      key: "agent:main:main:thread:42001:77",
-      to: "telegram:42001",
-      savedThread: "77",
-    },
-  ])("persists the deliverable destination for $name", async ({ thread, key, to, savedThread }) => {
+  it.each<[string, number | undefined, string]>([
+    ["deleted direct session", undefined, "agent:main:telegram:direct:42001"],
+    ["bot-private topic", 77, privateTopicKey],
+  ])("persists the deliverable destination for %s", async (_name, thread, key) => {
     if (thread === undefined) {
       cfg.session = { ...cfg.session, dmScope: "per-channel-peer" };
     }
@@ -137,9 +151,14 @@ describe("Telegram recorded session destinations", () => {
       chat,
       message_thread_id: thread,
     });
-    const delivery = getSessionEntry({ storePath, sessionKey: key })?.delivery;
-    expect(delivery).toMatchObject({ kind: "external", context: { channel: "telegram", to } });
-    expect(delivery?.kind === "external" ? delivery.context.threadId : null).toBe(savedThread);
+    const delivery = entry(key)?.delivery;
+    expect(delivery).toMatchObject({
+      kind: "external",
+      context: deliveryContext("telegram:42001"),
+    });
+    expect(delivery?.kind === "external" ? delivery.context.threadId : null).toBe(
+      thread?.toString(),
+    );
     if (thread === undefined) {
       expect(delivery).toMatchObject({ origin: { provider: "telegram", chatType: "direct" } });
     }
@@ -172,11 +191,10 @@ describe("Telegram recorded session destinations", () => {
       await harness.state.writeConfig(cfg);
       bind(String(chat.id), targetSessionKey);
       for (const sessionKey of [selectedSessionKey, ...wrongSessionKeys]) {
-        expect(getSessionEntry({ agentId: "main", storePath, sessionKey })).toBeUndefined();
+        expect(entry(sessionKey, "main")).toBeUndefined();
       }
       harness.replySpy.mockImplementation(async (context, options) => {
-        expect(context.SessionKey).toBe(selectedSessionKey);
-        expect(context.CommandSource).toBe("text");
+        expect(context).toMatchObject({ SessionKey: selectedSessionKey, CommandSource: "text" });
         expect(context.CommandTargetSessionKey).toBeUndefined();
         const reply = await getReplyFromConfig(context, options, cfg);
         const replies = Array.isArray(reply) ? reply : [reply];
@@ -201,17 +219,13 @@ describe("Telegram recorded session destinations", () => {
           }),
         ],
       ]);
-      const selected = getSessionEntry({
-        agentId: "main",
-        storePath,
-        sessionKey: selectedSessionKey,
-      });
+      const selected = entry(selectedSessionKey, "main");
       // Inbound metadata can create a row before the resolver; only real reply
       // initialization records the session start and interaction timestamps.
       expect(selected?.sessionStartedAt).toBeGreaterThanOrEqual(startedAt);
       expect(selected?.lastInteractionAt).toBeGreaterThanOrEqual(startedAt);
       for (const sessionKey of wrongSessionKeys) {
-        expect(getSessionEntry({ agentId: "main", storePath, sessionKey })).toBeUndefined();
+        expect(entry(sessionKey, "main")).toBeUndefined();
       }
     } finally {
       vi.stubEnv("OPENCLAW_TEST_FAST", previousFastTest);
@@ -230,20 +244,12 @@ describe("Telegram recorded session destinations", () => {
         from: { id: 814912386, is_bot: false, first_name: "Alice" },
       });
     }
-    expect(
-      getSessionEntry({ storePath, sessionKey: "agent:main:telegram:atlas:direct:alice-shared" })
-        ?.delivery,
-    ).toMatchObject({
-      kind: "external",
-      context: { accountId: "atlas", to: "telegram:999999999" },
-    });
-    expect(
-      getSessionEntry({ storePath, sessionKey: "agent:main:telegram:skynet:direct:alice-shared" })
-        ?.delivery,
-    ).toMatchObject({
-      kind: "external",
-      context: { accountId: "skynet", to: "telegram:999999999" },
-    });
+    for (const accountId of ["atlas", "skynet"]) {
+      expectDelivery(`agent:main:telegram:${accountId}:direct:alice-shared`, {
+        accountId,
+        to: "telegram:999999999",
+      });
+    }
   });
 
   it("admits plugin-bound ambient topics without replacing their channel session", async () => {
@@ -269,19 +275,12 @@ describe("Telegram recorded session destinations", () => {
     const bot = await createBot(false, true, cfg);
     bind("-10042001:topic:99", "plugin-binding:openclaw-codex-app-server:abc123", {
       pluginBindingOwner: "plugin",
-      pluginId: "openclaw-codex-app-server",
+      pluginId,
       pluginRoot: "/tmp/context-plugin",
     });
     await receive(bot, {
       ...groupCommand("ambient plugin input"),
-      reply_to_message: {
-        message_id: 99,
-        date: 1736380700,
-        chat: groupChat,
-        from: telegramBotInfoForTest,
-        forum_topic_created: { name: "Plugin topic", icon_color: 7322096 },
-        reply_to_message: undefined,
-      },
+      reply_to_message: topicReply("Plugin topic", 99, true),
     });
     expect(claim).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ content: "ambient plugin input" }),
@@ -306,13 +305,10 @@ describe("Telegram recorded session destinations", () => {
       expect.anything(),
     );
     expect(harness.replySpy).not.toHaveBeenCalled();
-    expect(
-      getSessionEntry({ storePath, sessionKey: "agent:main:telegram:group:-10042001:topic:99" })
-        ?.delivery,
-    ).toMatchObject({
-      kind: "external",
-      context: { channel: "telegram", to: "telegram:-10042001:topic:99", threadId: "99" },
-    });
+    expectDelivery(
+      "agent:main:telegram:group:-10042001:topic:99",
+      deliveryContext("telegram:-10042001:topic:99", "99"),
+    );
   });
 
   it("keeps ordinary bindings mention-gated and preserves their recorded destination", async () => {
@@ -326,7 +322,7 @@ describe("Telegram recorded session destinations", () => {
         sessionId: "bound-session",
         updatedAt: 1,
         delivery: normalizeSessionDeliveryState({
-          context: { channel: "telegram", to: "telegram:555", threadId: "7" },
+          context: deliveryContext("telegram:555", "7"),
         }),
       },
     });
@@ -337,25 +333,87 @@ describe("Telegram recorded session destinations", () => {
       entities: [{ type: "mention", offset: 0, length: 13 }],
     });
     expect(harness.replySpy.mock.calls[0]?.[0].SessionKey).toBe("agent:ops:acp:bound");
-    expect(
-      getSessionEntry({ storePath, sessionKey: "agent:ops:acp:bound" })?.delivery,
-    ).toMatchObject({
-      kind: "external",
-      context: { channel: "telegram", to: "telegram:555", threadId: "7" },
+    expectDelivery("agent:ops:acp:bound", deliveryContext("telegram:555", "7"));
+  });
+
+  it("renames an existing private bot topic session from a title service update without a turn", async () => {
+    const sessionKey = privateTopicKey;
+    const bot = await createBot(false, true, cfg, true);
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "private-topic-session",
+        updatedAt: 1,
+        displayName: "New Chat",
+        topicName: "Old topic name",
+        delivery: normalizeSessionDeliveryState({
+          context: { ...deliveryContext("telegram:42001", "77"), accountId: "default" },
+          origin: {
+            provider: "telegram",
+            from: "telegram:direct:42001",
+            to: "telegram:42001",
+            accountId: "default",
+            threadId: "77",
+            label: "Old topic name",
+          },
+        }),
+      },
     });
+    const callsBefore = apiCalls.mock.calls.length;
+    await receive(
+      bot,
+      serviceMessage({
+        message_thread_id: 77,
+        forum_topic_edited: { name: "Renamed personal topic" },
+      }),
+    );
+
+    const updated = entry(sessionKey);
+    expect(updated?.label).toBeUndefined();
+    expect(updated).toMatchObject({
+      displayName: "New Chat",
+      topicName: "Renamed personal topic",
+      updatedAt: 1,
+      delivery: {
+        context: { ...deliveryContext("telegram:42001", "77"), accountId: "default" },
+        origin: { label: "Alice id:42001", threadId: 77 },
+      },
+    });
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    const serviceCalls = apiCalls.mock.calls.slice(callsBefore).map(([method]) => method);
+    expect(serviceCalls).not.toContain("sendMessage");
+    expect(serviceCalls).not.toContain("sendChatAction");
+  });
+
+  it("does not create a private topic session from a title-only service update", async () => {
+    const sessionKey = privateTopicKey;
+    const bot = await createBot(false, true, cfg, true);
+    await receive(
+      bot,
+      serviceMessage({
+        forum_topic_edited: { name: "Topic without a thread identity" },
+      }),
+    );
+    expect(entry(sessionKey)).toBeUndefined();
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    await receive(
+      bot,
+      serviceMessage({
+        message_thread_id: 77,
+        is_topic_message: true,
+        forum_topic_created: { name: "New personal topic", icon_color: 7322096 },
+      }),
+    );
+    expect(entry(sessionKey)).toBeUndefined();
+    expect(harness.replySpy).not.toHaveBeenCalled();
   });
 
   it("learns reply topic names and restores them after plugin-state reopen", async () => {
     const bot = await createBot(false, true, cfg);
     await receive(bot, {
       ...groupCommand("first topic message"),
-      reply_to_message: {
-        message_id: 3,
-        date: 1736380700,
-        chat: groupChat,
-        forum_topic_created: { name: "Deployments", icon_color: 0x6fb9f0 },
-        reply_to_message: undefined,
-      },
+      reply_to_message: topicReply("Deployments", 3),
     });
     expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
       RawBody: "first topic message",

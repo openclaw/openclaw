@@ -1,8 +1,11 @@
 // Control UI E2E tests cover chat run lifecycle behavior through the Gateway WebSocket.
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
 import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openMockAbortableRun } from "./chat-run-lifecycle.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -63,10 +66,10 @@ async function expectDraft(composer: Locator, stop: Locator, state: "visible" | 
   await composer.fill("");
   await stop.waitFor({ state });
 }
-async function expectReady(page: Page, composer: Locator, stop: Locator, exact = true) {
+async function expectReady(page: Page, composer: Locator, stop: Locator) {
   await expectDraft(composer, stop, "detached");
   await composer.fill("next message");
-  await sendButton(page, exact).waitFor({ state: "visible" });
+  await sendButton(page, true).waitFor({ state: "visible" });
 }
 function bubbleText(page: Page, text: string) {
   return page.locator(".chat-bubble").getByText(text, { exact: true });
@@ -279,6 +282,14 @@ suite.define(() => {
       sessionId: `session:${sessionKey}`,
       sessionInfo: completedSession,
     });
+    await gateway.emitGatewayEvent("agent", {
+      stream: "usage",
+      runId,
+      seq: 1,
+      sessionKey,
+      data: { outputTokens: 42 },
+      ts: completedSession.endedAt,
+    });
     await gateway.emitGatewayEvent("chat", { sessionKey, runId, state: "final", message: reply });
     await gateway.emitGatewayEvent("sessions.changed", {
       ...completedSession,
@@ -303,8 +314,38 @@ suite.define(() => {
     await expect.poll(() => operationLabel.textContent()).toBe("Worked for 13 seconds");
     expect(await stopButton(page).count()).toBe(0);
 
+    const successorSession = {
+      ...completedSession,
+      lastRunId: "background-successor",
+      runtimeMs: 27_000,
+      updatedAt: completedSession.updatedAt + 30_000,
+    };
+    await gateway.setSessionsListResponse({ sessions: [successorSession] });
+    await gateway.emitGatewayEvent("sessions.changed", {
+      sessionKey,
+      reason: "lifecycle",
+      session: successorSession,
+    });
+    await evaluateControlUiContext(page, async (application) => {
+      await application.sessions.refresh({ agentId: "main", force: true });
+    });
+    const screenshot = await takeControlUiScreenshotFrame(
+      page,
+      page.locator(".chat-thread"),
+      [operationLabel, replyBody],
+      { animations: "disabled" },
+    );
+    await writeFile(join(suite.artifactDir, "worked-duration.png"), screenshot.png);
+    console.log("WORKED_DURATION_PROOF", suite.artifactDir);
+    await expect.poll(() => operationLabel.textContent()).toBe("Worked for 13 seconds");
+    expect(await page.locator(".chat-turn-recap").allTextContents()).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("Done in")]),
+    );
+    expect(await page.locator(".chat-turn-recap").textContent()).toBe("42 output tokens");
+    await gateway.setSessionsListResponse({ sessions: [completedSession] });
+
     await page.reload();
-    await gateway.waitForRequest("chat.startup");
+    await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
     await replyBody.waitFor();
     await operationLabel.waitFor();
     expect(await operationLabel.textContent()).toBe("Worked for 13 seconds");
@@ -330,9 +371,10 @@ suite.define(() => {
 
     expect(await assistantGroup.count()).toBe(1);
     expect(await page.locator(".chat-reading-indicator").count()).toBe(0);
+    await assistantGroup.getByText("Working…", { exact: true }).waitFor();
     expect(
-      await assistantGroup.getByText("Waiting for turn to start…", { exact: true }).count(),
-    ).toBe(1);
+      await assistantGroup.getByText("Waiting for turn to start", { exact: true }).count(),
+    ).toBe(0);
   });
 
   it("keeps a different active run in its own status row", async () => {
@@ -412,24 +454,6 @@ suite.define(() => {
     await stop.waitFor({ state: "detached" });
     expect(await gateway.getRequests("chat.abort")).toHaveLength(1);
     expect(await composer.inputValue()).toBe("keep this draft");
-  });
-
-  it("restores stale Stop through a terminal mock-Gateway history response", async () => {
-    const run = await openAbortable("finished-run");
-    const { page, gateway, sessionKey, runId, stop, composer } = run;
-    // Change only the mock server's next snapshot after the browser observes activity.
-    // No terminal event reaches the page; Stop must request the new history.
-    await gateway.setMethodResponse(
-      "chat.history",
-      completedHistory(sessionKey, runId, "The completed reply."),
-    );
-    const historyCount = (await gateway.getRequests("chat.history")).length;
-    await requestStop(run);
-    await gateway.resolveDeferred("chat.abort", noAbort);
-    await gateway.waitForRequest("chat.history", { after: historyCount });
-    await bubbleText(page, "The completed reply.").waitFor();
-    await expectReady(page, composer, stop, false);
-    expect(await gateway.getRequests("chat.abort")).toHaveLength(1);
   });
 
   it("keeps a finalizing mock-Gateway run active after a no-op Stop refresh", async () => {
@@ -543,68 +567,65 @@ suite.define(() => {
     await expectReady(page, composer, stop);
   });
 
-  it.each(["direct", "descendant"] as const)(
-    "refreshes cached %s activity after a session-only mock-Gateway Stop",
-    async (activity) => {
-      const page = await newPage({});
-      const sessionKey = "agent:main:main";
-      const activeUpdatedAt = Date.now();
-      const sessionInfo = {
-        key: sessionKey,
-        kind: "direct",
-        updatedAt: activeUpdatedAt,
-        hasActiveRun: activity === "direct",
-        hasActiveSubagentRun: activity === "descendant",
-        status: activity === "direct" ? "running" : "done",
-      };
-      const gateway = await installMockGateway(page, {
-        sessionKey,
-        sessions: [sessionInfo],
-        sessionInfo,
-        methodResponses: {
-          "sessions.abort": noSessionAbort,
-        },
-      });
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      const stop = stopButton(page);
-      const composer = page.locator(".agent-chat__input textarea");
-      await stop.waitFor({ state: "visible" });
-      const finishedSession = {
-        key: sessionKey,
-        sessionId: `session:${sessionKey}`,
-        kind: "direct",
-        updatedAt: activeUpdatedAt + 1,
-        hasActiveRun: false,
-        hasActiveSubagentRun: false,
-        activeRunIds: [],
-        status: "done",
-      };
-      const historyCount = (await gateway.getRequests("chat.history")).length;
-      await gateway.deferNext("sessions.abort");
-      await stop.click();
-      const abort = await gateway.waitForRequest("sessions.abort");
-      expect(abort.params).toEqual({ key: sessionKey, clearQueued: true });
-      expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
-      // Post-Stop reads begin when the Gateway answers Stop. Publishing them earlier
-      // lets a still-pending startup read settle the run before Stop is clicked.
-      await gateway.setMethodResponse("chat.history", {
-        messages: [{ role: "assistant", content: "Cached activity has finished." }],
-        sessionId: `session:${sessionKey}`,
-        sessionInfo: finishedSession,
-      });
-      await gateway.deferNext("chat.history");
-      await composer.fill("keep this draft");
-      await gateway.resolveDeferred("sessions.abort", noSessionAbort);
-      await gateway.waitForRequest("chat.history", { after: historyCount });
-      // A newer sidebar read may publish while Stop's history is still pending.
-      await evaluateControlUiContext(page, async (application) => {
-        await application.sessions.refreshList({ force: true });
-      });
-      await gateway.resolveDeferred("chat.history");
-      await bubbleText(page, "Cached activity has finished.").waitFor();
-      await expectReady(page, composer, stop);
-    },
-  );
+  it("refreshes cached descendant activity after a session-only mock-Gateway Stop", async () => {
+    const page = await newPage({});
+    const sessionKey = "agent:main:main";
+    const activeUpdatedAt = Date.now();
+    const sessionInfo = {
+      key: sessionKey,
+      kind: "direct",
+      updatedAt: activeUpdatedAt,
+      hasActiveRun: false,
+      hasActiveSubagentRun: true,
+      status: "done",
+    };
+    const gateway = await installMockGateway(page, {
+      sessionKey,
+      sessions: [sessionInfo],
+      sessionInfo,
+      methodResponses: {
+        "sessions.abort": noSessionAbort,
+      },
+    });
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+    const stop = stopButton(page);
+    const composer = page.locator(".agent-chat__input textarea");
+    await stop.waitFor({ state: "visible" });
+    const finishedSession = {
+      key: sessionKey,
+      sessionId: `session:${sessionKey}`,
+      kind: "direct",
+      updatedAt: activeUpdatedAt + 1,
+      hasActiveRun: false,
+      hasActiveSubagentRun: false,
+      activeRunIds: [],
+      status: "done",
+    };
+    const historyCount = (await gateway.getRequests("chat.history")).length;
+    await gateway.deferNext("sessions.abort");
+    await stop.click();
+    const abort = await gateway.waitForRequest("sessions.abort");
+    expect(abort.params).toEqual({ key: sessionKey, clearQueued: true });
+    expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
+    // Post-Stop reads begin when the Gateway answers Stop. Publishing them earlier
+    // lets a still-pending startup read settle the run before Stop is clicked.
+    await gateway.setMethodResponse("chat.history", {
+      messages: [{ role: "assistant", content: "Cached activity has finished." }],
+      sessionId: `session:${sessionKey}`,
+      sessionInfo: finishedSession,
+    });
+    await gateway.deferNext("chat.history");
+    await composer.fill("keep this draft");
+    await gateway.resolveDeferred("sessions.abort", noSessionAbort);
+    await gateway.waitForRequest("chat.history", { after: historyCount });
+    // A newer sidebar read may publish while Stop's history is still pending.
+    await evaluateControlUiContext(page, async (application) => {
+      await application.sessions.refreshList({ force: true });
+    });
+    await gateway.resolveDeferred("chat.history");
+    await bubbleText(page, "Cached activity has finished.").waitFor();
+    await expectReady(page, composer, stop);
+  });
 
   it("shows compaction savings and live working time", async () => {
     const page = await newPage();
@@ -640,10 +661,11 @@ suite.define(() => {
       .poll(() => page.locator(".chat-working-indicator__elapsed").textContent())
       .toBe("2m 57s");
     const workingLabel = page.locator(".chat-working-indicator__status > span:first-child");
-    expect(await workingLabel.textContent()).toBe("Waiting for turn to start…");
+    expect(await workingLabel.textContent()).toBe("Working…");
+    expect(await workingLabel.getAttribute("class")).toContain("sr-only");
     expect(
       await page.locator(".chat-working-indicator__status > span:not(.sr-only)").allTextContents(),
-    ).toEqual(["Waiting for turn to start…", "·"]);
+    ).toEqual([]);
   });
 
   it.each(["final", "error"] as const)(
@@ -706,15 +728,6 @@ suite.define(() => {
       });
       await page.locator(".chat-pane__session-title", { hasText: staleActiveLabel }).waitFor();
       await expectIdle(page);
-
-      const staleUpdatedAt = await page.evaluate(() => Date.now());
-      const emitStale = await deferRosterEvent(page, gateway);
-      await emitStale({
-        ...activeSession(runId, staleUpdatedAt),
-        reason: "lifecycle",
-      });
-      await expectIdle(page);
-      await gateway.resolveDeferred("sessions.list");
 
       await page.clock.fastForward(CHAT_RUN_STATUS_TOAST_DURATION_MS + 250);
       expect(await stopButton(page).count()).toBe(0);

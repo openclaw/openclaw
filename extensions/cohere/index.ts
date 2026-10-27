@@ -28,10 +28,6 @@ const COHERE_MODERN_MODEL_IDS = new Set([
   COHERE_NORTH_MINI_CODE_MODEL_ID,
 ]);
 
-function isModernCohereModelId(modelId: string): boolean {
-  return COHERE_MODERN_MODEL_IDS.has(modelId.trim().toLowerCase());
-}
-
 function buildCohereCatalogModels(): ModelDefinitionConfig[] {
   return buildManifestModelProviderConfig({
     providerId: "cohere",
@@ -99,6 +95,6 @@ export default defineSingleProviderPluginEntry({
     },
     wrapStreamFn: wrapCohereProviderStream,
     wrapSimpleCompletionStreamFn: wrapCohereProviderStream,
-    isModernModelRef: ({ modelId }) => isModernCohereModelId(modelId),
+    isModernModelRef: ({ modelId }) => COHERE_MODERN_MODEL_IDS.has(modelId.trim().toLowerCase()),
   },
 });

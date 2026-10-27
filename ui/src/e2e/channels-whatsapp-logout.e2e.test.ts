@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { buildChannelWizardMocks } from "../../../scripts/control-ui-mock-channels.ts";
+import { emptyPairingSnapshot } from "../pages/channels/pairing.test-support.ts";
 import {
   installMockGateway,
   type MockGatewayControls,
@@ -18,12 +19,7 @@ const suite = createControlUiE2eSuite({
 
 const QR_DATA_URL =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlY9Z8AAAAASUVORK5CYII=";
-const pairing = {
-  accounts: [],
-  requests: [],
-  commandOwnerConfigured: true,
-  limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
-};
+const pairing = emptyPairingSnapshot();
 const linked = { configured: true, linked: true, running: true, connected: true };
 function channelStatus(
   labels: Record<string, string>,
@@ -255,9 +251,10 @@ suite.define(() => {
 
         await logout.click();
         await expectRequests(gateway, "channels.logout", 0);
-        const firstConfirm = (await waitForConfirmModal(page)).filter({
+        const logoutConfirmation = page.locator("openclaw-modal-dialog").filter({
           has: page.getByText("Log out of WhatsApp account default?", { exact: true }),
         });
+        const firstConfirm = await waitForConfirmModal(page, logoutConfirmation);
         const confirmation = await firstConfirm.textContent();
         expect(confirmation).toContain("Log out of WhatsApp account default?");
         expect(confirmation).toContain(
@@ -272,9 +269,7 @@ suite.define(() => {
         await expect.poll(() => field(detail, "Linked").textContent()).toContain("Yes");
 
         await logout.click();
-        const secondConfirm = (await waitForConfirmModal(page)).filter({
-          has: page.getByText("Log out of WhatsApp account default?", { exact: true }),
-        });
+        const secondConfirm = await waitForConfirmModal(page, logoutConfirmation);
         await button(secondConfirm, "Logout").click();
         await expect
           .poll(async () => detail.locator(".settings-row__desc").allTextContents())
@@ -346,9 +341,12 @@ suite.define(() => {
       async (page, gateway) => {
         const detail = await openChannel(page);
         await detail.getByRole("button", { name: "Logout" }).click();
-        const confirm = (await waitForConfirmModal(page)).filter({
-          has: page.getByText("Log out of WhatsApp account work?", { exact: true }),
-        });
+        const confirm = await waitForConfirmModal(
+          page,
+          page.locator("openclaw-modal-dialog").filter({
+            has: page.getByText("Log out of WhatsApp account work?", { exact: true }),
+          }),
+        );
         await expect.poll(() => confirm.count()).toBe(1);
         const socketCount = await gateway.getSocketCount();
         await gateway.closeLatest(1012, "Reconnect during logout confirmation");

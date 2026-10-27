@@ -264,7 +264,7 @@ export function mergeSessionUsageRollupBucket(
   );
 }
 
-function computeLatencyStats(
+export function computeLatencyStats(
   aggregate: SessionUsageLatencyAggregate,
 ): SessionLatencyStats | undefined {
   if (aggregate.count === 0) {

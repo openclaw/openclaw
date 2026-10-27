@@ -42,6 +42,12 @@ type AgentHarnessModelExecutionBinder = (
   model: import("@openclaw/model-catalog-core/model-catalog-refs").ProviderModelRef | undefined,
 ) => Readonly<{ signal: AbortSignal; assertCurrent: () => void; release: () => void }> | undefined;
 
+type AgentHarnessToolSurfaceBindingOptions = Readonly<{
+  cwd?: string;
+  /** The selected native runtime permits local execution outside Gateway tool policy. */
+  nativeLocalExecution?: true;
+}>;
+
 export type AgentHarnessHostCapabilities = Readonly<{
   kind: "agent-harness-host-capability";
   version: 1;
@@ -165,12 +171,12 @@ export type AgentHarnessHostCapabilities = Readonly<{
   /** @deprecated Await createToolSurfaceAsync for worker-backed exec policy. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   createToolSurface?: (
     options: AgentHarnessToolSurfaceOptions,
-    bindingOptions?: Readonly<{ cwd?: string }>,
+    bindingOptions?: AgentHarnessToolSurfaceBindingOptions,
   ) => AnyAgentTool[];
   /** Prepares fresh exec policy, then creates and binds tools to this exact live host. */
   createToolSurfaceAsync?: (
     options: AgentHarnessToolSurfaceOptions,
-    bindingOptions?: Readonly<{ cwd?: string }>,
+    bindingOptions?: AgentHarnessToolSurfaceBindingOptions,
   ) => Promise<AnyAgentTool[]>;
   /** Core-owned byte binding for a native command approval, scoped to this admitted run. */
   prepareMutableFileApproval?: (request: { command: string; cwd?: string }) => Promise<

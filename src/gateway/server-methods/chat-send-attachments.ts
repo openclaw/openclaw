@@ -170,7 +170,7 @@ export async function prepareChatSendAttachments(params: {
             }
             try {
               const [
-                { ensureSandboxWorkspaceForSession },
+                { prepareSandboxWorkspaceForSession },
                 { SANDBOX_MEDIA_MAX_BYTES, stageSandboxMedia },
               ] = await Promise.all([
                 import("../../agents/sandbox/context.js"),
@@ -218,7 +218,7 @@ export async function prepareChatSendAttachments(params: {
                 : undefined;
               abortSignal.throwIfAborted();
               assertInputCurrent();
-              const sandbox = await ensureSandboxWorkspaceForSession({
+              using preparedWorkspace = await prepareSandboxWorkspaceForSession({
                 config: cfg,
                 agentId,
                 sessionKey,
@@ -226,7 +226,7 @@ export async function prepareChatSendAttachments(params: {
                 skillsSnapshot,
               });
               assertInputCurrent();
-              if (!sandbox) {
+              if (!preparedWorkspace) {
                 return refsByManagedPath(mediaPathRefs);
               }
 
@@ -243,6 +243,7 @@ export async function prepareChatSendAttachments(params: {
                   sessionKey,
                   workspaceDir,
                   skillsSnapshot,
+                  preparedWorkspace,
                   abortSignal,
                 });
               } catch (stageErr) {
@@ -280,7 +281,7 @@ export async function prepareChatSendAttachments(params: {
                   url: ref.mediaRef,
                   contentType: resolved?.contentType ?? ref.mimeType,
                   fileName: ref.label,
-                  workspaceDir: sandbox.workspaceDir,
+                  workspaceDir: preparedWorkspace.workspace.workspaceDir,
                 };
               });
             } catch (err) {

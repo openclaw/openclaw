@@ -45,7 +45,7 @@ export {
 export {
   acknowledgeInternalToolResult,
   copyInternalToolResultState,
-} from "../agents/runtime/internal-hooks.js";
+} from "../../packages/agent-core/src/internal-hooks.js";
 
 type OpenClawCodingToolsOptions = NonNullable<
   Parameters<typeof import("./agent-harness.js").createOpenClawCodingToolsAsync>[0]

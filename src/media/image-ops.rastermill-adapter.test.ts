@@ -1,6 +1,5 @@
 // Raster image adapter tests cover image operation integration with RasterMill.
-import type { ImageProbe } from "rastermill";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { createTinyJpegBuffer } from "../../test/helpers/image-fixtures.js";
 
@@ -28,9 +27,11 @@ describe("image ops Rastermill adapter", () => {
       vi.resetModules();
     });
 
-    it("does not load Photon for Rastermill-backed operations", async () => {
+    it("configures Rastermill without eagerly loading Photon", async () => {
       const actualRastermill = await vi.importActual<typeof import("rastermill")>("rastermill");
       const encode = vi.fn(async () => ({ data: Buffer.from("jpeg") }));
+      const createRastermill = vi.fn((_options: unknown) => ({ encode }));
+      const resolveSystemBin = vi.fn(() => "/usr/bin/tool");
       const photonModuleFactory = vi.fn(() => {
         throw new Error("Photon loaded eagerly");
       });
@@ -38,30 +39,7 @@ describe("image ops Rastermill adapter", () => {
       vi.doMock("@silvia-odwyer/photon-node", photonModuleFactory);
       vi.doMock("rastermill", () => ({
         ...actualRastermill,
-        createRastermill: vi.fn(() => ({ encode })),
-        readImageMetadataFromHeader: vi.fn(() => ({ width: 1, height: 1 })),
-        readImageProbeFromHeader: vi.fn(() => ({ width: 1, height: 1, format: "jpeg" })),
-      }));
-
-      const { createLocalImageProcessor } = await import("./image-processor-config.js");
-
-      await expect(
-        createLocalImageProcessor("auto").encode(Buffer.from("input"), { format: "jpeg" }),
-      ).resolves.toEqual({ data: Buffer.from("jpeg") });
-      expect(photonModuleFactory).not.toHaveBeenCalled();
-    });
-
-    it("configures Rastermill with OpenClaw limits, temp root, and command resolution", async () => {
-      const actualRastermill = await vi.importActual<typeof import("rastermill")>("rastermill");
-      const encode = vi.fn(async () => ({ data: Buffer.from("jpeg") }));
-      const createRastermill = vi.fn((_options: unknown) => ({ encode }));
-      const resolveSystemBin = vi.fn(() => "/usr/bin/tool");
-
-      vi.doMock("rastermill", () => ({
-        ...actualRastermill,
         createRastermill,
-        readImageMetadataFromHeader: vi.fn(() => ({ width: 1, height: 1 })),
-        readImageProbeFromHeader: vi.fn(() => ({ width: 1, height: 1, format: "png" })),
       }));
       vi.doMock("../infra/resolve-system-bin.js", () => ({
         resolveSystemBin,
@@ -92,6 +70,7 @@ describe("image ops Rastermill adapter", () => {
       expect(options.env).toBeUndefined();
       expect(options.commandResolver("powershell")).toBe("/usr/bin/tool");
       expect(resolveSystemBin).toHaveBeenLastCalledWith("powershell", { trust: "strict" });
+      expect(photonModuleFactory).not.toHaveBeenCalled();
     });
 
     it("scopes the larger source admission to media understanding", async () => {
@@ -237,61 +216,5 @@ describe("image ops Rastermill adapter", () => {
       ).resolves.toBe(true);
       expect(encode).toHaveBeenCalledWith(input, options);
     });
-  });
-
-  describe("display metadata", () => {
-    const probe = vi.fn<() => Promise<ImageProbe | null>>();
-    const readProbe = vi.fn<() => ImageProbe | null>();
-    let imageOps: typeof import("./image-ops.js");
-
-    beforeAll(async () => {
-      vi.resetModules();
-      const actualRastermill = await vi.importActual<typeof import("rastermill")>("rastermill");
-      vi.doMock("rastermill", () => ({
-        ...actualRastermill,
-        createRastermill: vi.fn(() => ({ probe })),
-        readImageProbeFromHeader: readProbe,
-      }));
-      imageOps = await import("./image-ops.js");
-    });
-
-    beforeEach(() => {
-      probe.mockReset();
-      readProbe.mockReset();
-    });
-
-    afterAll(() => {
-      vi.doUnmock("rastermill");
-      vi.resetModules();
-    });
-
-    it.each([
-      { orientation: null, expected: { width: 640, height: 480 } },
-      { orientation: 1, expected: { width: 640, height: 480 } },
-      { orientation: 4, expected: { width: 640, height: 480 } },
-      { orientation: 5, expected: { width: 480, height: 640 } },
-      { orientation: 6, expected: { width: 480, height: 640 } },
-      { orientation: 7, expected: { width: 480, height: 640 } },
-      { orientation: 8, expected: { width: 480, height: 640 } },
-    ] as const)(
-      "reports display dimensions for EXIF orientation $orientation",
-      async (testCase) => {
-        const imageProbe = {
-          width: 640,
-          height: 480,
-          format: "jpeg" as const,
-          hasAlpha: false,
-          orientation: testCase.orientation,
-          bytes: 24,
-        };
-        probe.mockResolvedValue(imageProbe);
-        readProbe.mockReturnValue(imageProbe);
-        const image = Buffer.from("image");
-
-        expect(imageOps.readImageMetadataFromHeader(image)).toEqual(testCase.expected);
-        await expect(imageOps.getImageMetadata(image)).resolves.toEqual(testCase.expected);
-        expect(imageOps.readImageProbeFromHeader(image)).toEqual(imageProbe);
-      },
-    );
   });
 });

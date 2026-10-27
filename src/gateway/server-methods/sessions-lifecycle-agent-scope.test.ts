@@ -3,7 +3,6 @@ import {
   createArchivedSubagentSweeperRun,
   createSubagentSweeperHarness,
 } from "../../agents/subagents/registry/subagent-registry-sweeper.test-support.js";
-import { deleteSubagentSessionForCleanup } from "../../agents/subagents/registry/subagent-session-cleanup.js";
 import {
   createQueueSettings,
   createQueueTestRun,
@@ -71,58 +70,43 @@ function gateway(extraHandlers = { ...sessionDeleteHandlers, ...sessionMutationH
   };
 }
 
-it.each(["sweep", "cleanup"] as const)(
-  "%s removes the recorded raw child owner without deleting another agent's global session",
-  async (flow) => {
-    lifecycleConfig();
-    for (const agentId of ["main", "research"]) {
-      await upsertSessionEntryCore(
-        { agentId, sessionKey: "global" },
-        {
-          sessionId: `${agentId}-global`,
-          lifecycleRevision: `${agentId}-revision`,
-          updatedAt: Date.now(),
-        },
-      );
-    }
-    const mainBefore = loadSessionEntry({ agentId: "main", sessionKey: "global" });
-    const call = gateway(sessionDeleteHandlers);
-    const entry = createArchivedSubagentSweeperRun({
-      childSessionKey: "global",
-      childAgentId: "research",
-      childSessionIdentity: {
-        sessionId: "research-global",
-        lifecycleRevision: "research-revision",
+it("sweep removes the recorded raw child owner without deleting another agent's global session", async () => {
+  lifecycleConfig();
+  for (const agentId of ["main", "research"]) {
+    await upsertSessionEntryCore(
+      { agentId, sessionKey: "global" },
+      {
+        sessionId: `${agentId}-global`,
+        lifecycleRevision: `${agentId}-revision`,
+        updatedAt: Date.now(),
       },
-    });
-    const h = createSubagentSweeperHarness({}, entry);
-    h.callGateway.mockImplementation(async (request) => {
-      await request.prepareDispatchCurrent?.();
-      request.assertDispatchCurrent?.();
-      return call(request.method, request.params);
-    });
-    try {
-      if (flow === "sweep") {
-        await h.sweeper.sweepOnce();
-        expect(h.runs.has(entry.runId)).toBe(false);
-      } else {
-        expect(
-          await deleteSubagentSessionForCleanup({
-            callGateway: h.callGateway,
-            childSessionKey: entry.childSessionKey,
-            childAgentId: entry.childAgentId,
-            expectedSessionId: "research-global",
-            expectedLifecycleRevision: "research-revision",
-          }),
-        ).toBe("deleted");
-      }
-      expect(loadSessionEntry({ agentId: "research", sessionKey: "global" })).toBeUndefined();
-      expect(loadSessionEntry({ agentId: "main", sessionKey: "global" })).toEqual(mainBefore);
-    } finally {
-      await h.sweeper.reset();
-    }
-  },
-);
+    );
+  }
+  const mainBefore = loadSessionEntry({ agentId: "main", sessionKey: "global" });
+  const call = gateway(sessionDeleteHandlers);
+  const entry = createArchivedSubagentSweeperRun({
+    childSessionKey: "global",
+    childAgentId: "research",
+    childSessionIdentity: {
+      sessionId: "research-global",
+      lifecycleRevision: "research-revision",
+    },
+  });
+  const h = createSubagentSweeperHarness({}, entry);
+  h.callGateway.mockImplementation(async (request) => {
+    await request.prepareDispatchCurrent?.();
+    request.assertDispatchCurrent?.();
+    return call(request.method, request.params);
+  });
+  try {
+    await h.sweeper.sweepOnce();
+    expect(h.runs.has(entry.runId)).toBe(false);
+    expect(loadSessionEntry({ agentId: "research", sessionKey: "global" })).toBeUndefined();
+    expect(loadSessionEntry({ agentId: "main", sessionKey: "global" })).toEqual(mainBefore);
+  } finally {
+    await h.sweeper.reset();
+  }
+});
 
 it.each([
   { method: "sessions.delete", key: "global", agentId: "research" },

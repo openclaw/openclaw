@@ -99,7 +99,7 @@ function hasSensitiveProseContent(value: string): boolean {
     ) {
       return true;
     }
-    mediaContext ||= isDiagnosticMediaPayload({ [key]: { value: assigned } });
+    mediaContext ||= isDiagnosticMediaPayload((field) => (field === key ? assigned : undefined));
     contextualPayload ||= Boolean(extractDiagnosticMediaField(key, normalized, undefined, true));
     if (mediaContext && contextualPayload) {
       return true;
@@ -108,8 +108,20 @@ function hasSensitiveProseContent(value: string): boolean {
   return false;
 }
 
+// Projection normalizes every key of every node; payload key vocabularies repeat heavily.
+const normalizedDiagnosticFieldNames = new Map<string, string>();
+const NORMALIZED_DIAGNOSTIC_FIELD_NAMES_MAX_ENTRIES = 4_096;
+
 function normalizeDiagnosticFieldName(value: string): string {
-  return value.toLowerCase().replaceAll(DIAGNOSTIC_FIELD_SEPARATOR_RE, "");
+  let normalized = normalizedDiagnosticFieldNames.get(value);
+  if (normalized === undefined) {
+    normalized = value.toLowerCase().replaceAll(DIAGNOSTIC_FIELD_SEPARATOR_RE, "");
+    if (normalizedDiagnosticFieldNames.size >= NORMALIZED_DIAGNOSTIC_FIELD_NAMES_MAX_ENTRIES) {
+      normalizedDiagnosticFieldNames.clear();
+    }
+    normalizedDiagnosticFieldNames.set(value, normalized);
+  }
+  return normalized;
 }
 
 /** Classifies credential-bearing fields, including case-insensitive HTTP header names. */
@@ -148,13 +160,13 @@ function diagnosticBytes(value: unknown, numericArrays = false): Uint8Array | un
         : undefined;
 }
 
-function isDiagnosticMediaPayload(descriptors: PropertyDescriptorMap): boolean {
-  const type = descriptors.type?.value;
+function isDiagnosticMediaPayload(field: (key: string) => unknown): boolean {
+  const type = field("type");
   if (typeof type === "string" && MEDIA_TYPE_RE.test(normalizeDiagnosticFieldName(type))) {
     return true;
   }
   for (const key of MEDIA_MIME_FIELDS) {
-    const mime = descriptors[key]?.value;
+    const mime = field(key);
     if (typeof mime === "string" && MEDIA_MIME_RE.test(mime)) {
       return true;
     }
@@ -210,16 +222,26 @@ function extractDiagnosticMediaField(
   return { kind: "redacted", bytes, source: encoded };
 }
 
-const diagnosticRecords = new WeakSet<object>();
-
-/** Fresh records need no native-object probe while their prototype stays ordinary. */
-export function createDiagnosticRecord(): Record<string, unknown> {
-  const record = {};
-  diagnosticRecords.add(record);
-  return record;
+export function projectDiagnosticValue(
+  value: unknown,
+  policy: DiagnosticProjectionPolicy = {},
+  seen?: WeakSet<object>,
+  mediaPayload?: boolean,
+  state?: { changed: boolean; nodesRemaining: number },
+): unknown {
+  return projectValue(false, value, policy, seen, mediaPayload, state);
 }
 
-export function projectDiagnosticValue(
+/** Internal producers supply a fresh graph of ordinary records and assigned array elements. */
+export function projectPreparedDiagnosticValue(
+  value: unknown,
+  policy?: DiagnosticProjectionPolicy,
+): unknown {
+  return projectValue(true, value, policy);
+}
+
+function projectValue(
+  producerOwned: boolean,
   value: unknown,
   policy: DiagnosticProjectionPolicy = {},
   seen = new WeakSet<object>(),
@@ -257,7 +279,7 @@ export function projectDiagnosticValue(
     }
     if (
       !Array.isArray(value) &&
-      (!diagnosticRecords.has(value) || Object.getPrototypeOf(value) !== Object.prototype)
+      (!producerOwned || Object.getPrototypeOf(value) !== Object.prototype)
     ) {
       try {
         // Brand-check without provider getters; retain only numeric retry timing.
@@ -270,43 +292,65 @@ export function projectDiagnosticValue(
       }
     }
     const keys = Reflect.ownKeys(value);
-    // Snapshot descriptors before recursion; the map restores numeric key order from proxies.
-    const descriptors: PropertyDescriptorMap = Object.create(null);
     const maxKeys = policy.maxKeys ?? 64;
-    for (let index = 0; index < Math.min(keys.length, maxKeys); index += 1) {
-      const key = keys[index];
-      if (typeof key !== "string") {
-        continue;
+    // Prepared producer output holds only own enumerable data properties in native key order,
+    // so reading it directly matches the descriptor snapshot without allocating one per key.
+    const trusted =
+      keys.length <= maxKeys &&
+      producerOwned &&
+      Object.getPrototypeOf(value) === (Array.isArray(value) ? Array.prototype : Object.prototype);
+    let descriptors: PropertyDescriptorMap | undefined;
+    if (!trusted) {
+      // Snapshot descriptors before recursion; the map restores numeric key order from proxies.
+      const snapshot: PropertyDescriptorMap = Object.create(null);
+      for (let index = 0; index < Math.min(keys.length, maxKeys); index += 1) {
+        const key = keys[index];
+        if (typeof key !== "string") {
+          continue;
+        }
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (descriptor) {
+          snapshot[key] = descriptor;
+        }
       }
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (descriptor) {
-        descriptors[key] = descriptor;
-      }
+      descriptors = snapshot;
     }
+    const field = (key: string): unknown =>
+      descriptors
+        ? descriptors[key]?.value
+        : Object.hasOwn(value, key)
+          ? Reflect.get(value, key)
+          : undefined;
     state.changed ||= keys.length > maxKeys;
     seen.add(value);
     const out = (Array.isArray(value) ? [] : {}) as Record<string, unknown>;
-    const rawName =
-      typeof descriptors.name?.value === "string" ? descriptors.name.value : descriptors.key?.value;
+    const name = field("name");
+    const rawName = typeof name === "string" ? name : field("key");
     const redactValueField =
       policy.redactCredentials !== false &&
       (keys.length > maxKeys ||
         (typeof rawName === "string" &&
           isCredentialFieldName(normalizeDiagnosticFieldName(rawName))));
-    const redactMedia =
-      mediaPayload || keys.length > maxKeys || isDiagnosticMediaPayload(descriptors);
-    for (const key in descriptors) {
-      const descriptor = expectDefined(descriptors[key], "diagnostic descriptor");
-      if (
-        !("value" in descriptor) ||
-        (!descriptor.enumerable &&
-          (policy.propertyScope === "enumerable" ||
-            !["cause", "errors", "message", "name", "stack"].includes(key))) ||
-        key === "length"
-      ) {
+    const redactMedia = mediaPayload || keys.length > maxKeys || isDiagnosticMediaPayload(field);
+    for (const key of descriptors ? Object.keys(descriptors) : keys) {
+      if (typeof key !== "string" || key === "length") {
         continue;
       }
-      const child = descriptor.value;
+      let child: unknown;
+      if (descriptors) {
+        const descriptor = expectDefined(descriptors[key], "diagnostic descriptor");
+        if (
+          !("value" in descriptor) ||
+          (!descriptor.enumerable &&
+            (policy.propertyScope === "enumerable" ||
+              !["cause", "errors", "message", "name", "stack"].includes(key)))
+        ) {
+          continue;
+        }
+        child = descriptor.value;
+      } else {
+        child = Reflect.get(value, key);
+      }
       const normalized = policy.omitField?.(key) ? undefined : normalizeDiagnosticFieldName(key);
       if (
         normalized === undefined ||
@@ -329,7 +373,7 @@ export function projectDiagnosticValue(
         continue;
       }
       const childMedia = media?.kind === "context";
-      out[key] = projectDiagnosticValue(child, policy, seen, childMedia, state);
+      out[key] = projectValue(producerOwned, child, policy, seen, childMedia, state);
     }
     return out;
   } catch {
@@ -387,7 +431,8 @@ function projectDiagnosticText(value: string): string {
     try {
       const state = { changed: false, nodesRemaining: 64 };
       const parsed = JSON.parse(fragment.json);
-      const projected = projectDiagnosticValue(parsed, {}, new WeakSet(), false, state);
+      // JSON.parse owns this fresh data-only graph; no provider getters or native brands remain.
+      const projected = projectValue(true, parsed, {}, new WeakSet(), false, state);
       redacted += state.changed ? stableStringify(projected) : fragment.json;
     } catch {
       return "[Malformed diagnostic JSON redacted]";

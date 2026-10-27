@@ -6,7 +6,6 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/config.js";
 import { encodeSessionArchiveContent } from "../../config/sessions/archive-compression.js";
-import { loadCombinedSessionStoreForGatewayCore } from "../../config/sessions/combined-store-gateway.native.js";
 import {
   listSessionTranscriptInstances,
   loadSessionEntryReadOnly,
@@ -233,28 +232,24 @@ it("keeps same-key overview context reports with their selected agent", async ()
       ["opus", "global"],
     ]);
     // Federation picks one public sentinel today; assembly must retain each physical owner supplied by selection.
-    const selection = vi
+    using _ = vi
       .spyOn(usageSessionSelection, "selectUsageSessions")
       .mockResolvedValueOnce(candidates);
-    try {
-      const result = await readUsage({
-        agentScope: "all",
-        range: "all",
-        projection: "overview",
-        includeContextWeight: true,
+    const result = await readUsage({
+      agentScope: "all",
+      range: "all",
+      projection: "overview",
+      includeContextWeight: true,
+    });
+    expect(result.sessions).toHaveLength(2);
+    for (const [index, agentId] of ["main", "opus"].entries()) {
+      expect(result.sessions.find((row) => row.agentId === agentId)).toMatchObject({
+        key: "global",
+        agentId,
+        sessionId: `${agentId}-global-context`,
+        hasContextWeight: true,
+        contextWeight: reports[index],
       });
-      expect(result.sessions).toHaveLength(2);
-      for (const [index, agentId] of ["main", "opus"].entries()) {
-        expect(result.sessions.find((row) => row.agentId === agentId)).toMatchObject({
-          key: "global",
-          agentId,
-          sessionId: `${agentId}-global-context`,
-          hasContextWeight: true,
-          contextWeight: reports[index],
-        });
-      }
-    } finally {
-      selection.mockRestore();
     }
   });
 });
@@ -487,7 +482,7 @@ it("reads selected reports from the physical owner of shared-store sentinels and
       session: { store: storePath },
       plugins: { enabled: false },
     });
-    const config = await captureRuntimeConfigAsyncReader()();
+    await captureRuntimeConfigAsyncReader()();
     openOpenClawAgentDatabase({ agentId: "main", path: storePath });
     for (const [agentId, key] of [
       ["ops", "global"],
@@ -498,11 +493,6 @@ it("reads selected reports from the physical owner of shared-store sentinels and
         { agentId, sessionKey: key, storePath },
         { sessionId: `${agentId}-usage`, updatedAt: 1, systemPromptReport: contextWeight },
       );
-      const target = loadCombinedSessionStoreForGatewayCore(config, {
-        agentId,
-      }).targetsBySessionKey.get(key);
-      expect(target?.agentId).toBe(agentId);
-      expect(target?.storeTarget).toEqual({ agentId: "main", storePath });
       const params = { range: "all", key, includeContextWeight: true };
       for (const requestedAgent of [undefined, agentId]) {
         const payload = await readUsage({ ...params, agentId: requestedAgent });
@@ -523,7 +513,6 @@ it.each([
   "keeps independent same-id transcripts with $owner store key $key through the real usage handler",
   async ({ owner, key: opusKey }) => {
     await withUsageState(async (state) => {
-      const config = getRuntimeConfig();
       const sessionId = "shared-usage-session";
       const mainKey = "agent:main:telegram:dm";
       for (const agentId of ["main", owner]) {
@@ -554,11 +543,6 @@ it.each([
         });
       }
 
-      const projected = loadCombinedSessionStoreForGatewayCore(config);
-      expect(projected.targetsBySessionKey.get(mainKey)?.agentId).toBe("main");
-      if (opusKey) {
-        expect(projected.targetsBySessionKey.get(opusKey)?.agentId).toBe(owner);
-      }
       const result = await readUsage({ agentScope: "all", range: "all", limit: 50 });
       expect(result.sessions).toHaveLength(2);
       expect(result.sessions.map(({ key, agentId, label }) => ({ key, agentId, label }))).toEqual(

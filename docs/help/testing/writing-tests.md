@@ -86,6 +86,15 @@ completion signals, and product races. Repair the producer. If a removal caused
 the red, read its PR's accepted tradeoffs before restoring it. Choose repeat
 counts for the reproduced failure mode, not a fixed clean-run quota.
 
+The Control UI's non-isolated `unit` project reports per-test DOM leaks with
+`[ui-test-leak]` after fixture teardown. Reports name the test and leftover body
+children, body or HTML styles/classes, pointer captures, repository-owned global
+listeners, or fake timers. Node-environment tests still check fake timers. The
+guard currently reports without failing; fix the fixture or resource owner
+rather than adding an ignore list. Use `mountSolid` for owned render roots,
+dispose non-rendering owners, and restore document-wide state changed by a
+fixture. A unit report does not cover the separate real-browser project.
+
 ## Adding regressions (guidance)
 
 Pass bounded synthetic inventories and fixed timing through real planners for

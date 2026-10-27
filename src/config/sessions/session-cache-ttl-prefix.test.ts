@@ -9,35 +9,76 @@ import { readCacheTtlProjectionPrefix } from "./session-cache-ttl-prefix.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
 import { reconcileSessionTranscriptIndexes } from "./session-transcript-reconcile.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+import { messageEvent } from "./transcript-message.test-support.js";
+
+type Fixture = Pick<ReturnType<typeof createSessionCompoundWorkerFixture>, "database" | "scope">;
+function checkpoint(id: string, parentId: string | null, data: Record<string, unknown>) {
+  return { type: "custom", id, parentId, customType: "openclaw.cache-ttl", data };
+}
+function frozenData(text: string) {
+  return {
+    prunedToolResults: [],
+    ambiguousToolResultBaseKeys: [],
+    frozenToolResults: [{ key: "synthetic-tool", sourceHash: "synthetic-hash", texts: [text] }],
+  };
+}
+function append(
+  { database, scope }: Fixture,
+  events: Parameters<typeof appendTranscriptEventsInTransaction>[2],
+) {
+  runOpenClawAgentWriteTransaction(
+    () =>
+      appendTranscriptEventsInTransaction(database, scope, events, {
+        scheduleProjectionReconcile: false,
+      }),
+    { agentId: database.agentId, path: database.path },
+  );
+}
+function expectCompressed({ database, scope }: Fixture, count: number) {
+  expect(
+    database.db
+      .prepare(
+        "SELECT COUNT(*) AS count FROM transcript_events WHERE session_id = ? AND event_zstd IS NOT NULL",
+      )
+      .get(scope.sessionId),
+  ).toEqual({ count });
+}
+function prefixAt(
+  scope: Fixture["scope"],
+  anchor: ReturnType<typeof messageEvent>,
+  activePosition?: number,
+) {
+  return withCurrentProjectionSnapshot(scope, (projection) =>
+    readCacheTtlProjectionPrefix(projection, {
+      activePosition: activePosition ?? projection.state.activeEventCount - 1,
+      id: anchor.id,
+      entry: anchor,
+    }),
+  );
+}
 
 it.each([false, true])(
   "selects cache-TTL dependencies without scanning messages (analyzed=%s)",
   async (analyzed) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { database, scope } = createSessionCompoundWorkerFixture();
-      const checkpoint = {
-        type: "custom",
-        id: "checkpoint",
-        parentId: null,
-        customType: "openclaw.cache-ttl",
-        data: {
-          prunedToolResults: [{ key: "synthetic-tool", mode: "soft" }],
-          ambiguousToolResultBaseKeys: [],
-          frozenToolResults: [],
-        },
-      };
-      const messages = Array.from({ length: 1_000 }, (_, index) => ({
-        type: "message",
-        id: `message-${index}`,
-        parentId: index === 0 ? checkpoint.id : `message-${index - 1}`,
-        message: { role: "user", content: `synthetic-${index}` },
-      }));
+      const marker = checkpoint("checkpoint", null, {
+        prunedToolResults: [{ key: "synthetic-tool", mode: "soft" }],
+        ambiguousToolResultBaseKeys: [],
+        frozenToolResults: [],
+      });
+      const messages = Array.from({ length: 1_000 }, (_, index) =>
+        messageEvent(`message-${index}`, index === 0 ? marker.id : `message-${index - 1}`, {
+          role: "user",
+          content: `synthetic-${index}`,
+        }),
+      );
       runOpenClawAgentWriteTransaction(
         () => {
           appendTranscriptEventsInTransaction(
             database,
             scope,
-            [{ type: "session", id: scope.sessionId, version: 3 }, checkpoint, ...messages],
+            [{ type: "session", id: scope.sessionId, version: 3 }, marker, ...messages],
             { scheduleProjectionReconcile: false },
           );
           if (analyzed) {
@@ -57,29 +98,41 @@ it.each([false, true])(
         database.db.exec("ANALYZE");
       }
       const prepare = database.db.prepare.bind(database.db);
-      const statements: StatementSync[] = [];
+      const statements = new Map<StatementSync, string>();
       const spy = vi.spyOn(database.db, "prepare").mockImplementation((query) => {
         const statement = prepare(query);
         if (
           query.includes('"transcript_event_identities"') &&
           statement.columns().some(({ name }) => name === "navigation_valid")
         ) {
-          statements.push(statement);
+          statements.set(statement, statement.expandedSQL);
+          const observe = <Method extends "all" | "get" | "iterate">(
+            observed: Pick<StatementSync, Method | "expandedSQL">,
+            method: Method,
+          ) => {
+            observed[method] = new Proxy(observed[method], {
+              apply(invoke, receiver: StatementSync, args) {
+                const result = Reflect.apply(invoke, receiver, args);
+                // Capture bindings before the executor releases the statement.
+                statements.set(statement, observed.expandedSQL);
+                return result;
+              },
+            });
+          };
+          for (const method of ["all", "get", "iterate"] as const) {
+            observe(statement, method);
+          }
         }
         return statement;
       });
       try {
         const anchor = messages.at(-1)!;
-        const prefix = withCurrentProjectionSnapshot(scope, (projection) =>
-          readCacheTtlProjectionPrefix(projection, {
-            activePosition: messages.length,
-            id: anchor.id,
-            entry: anchor,
-          }),
-        );
-        expect(prefix).toEqual({ anchorIds: [anchor.id], entries: [checkpoint] });
-        expect(statements).toHaveLength(1);
-        const plan = prepare(`EXPLAIN QUERY PLAN ${statements[0]!.expandedSQL}`).all();
+        expect(prefixAt(scope, anchor, messages.length)).toEqual({
+          anchorIds: [anchor.id],
+          entries: [marker],
+        });
+        expect(statements.size).toBe(1);
+        const plan = prepare(`EXPLAIN QUERY PLAN ${statements.values().next().value!}`).all();
         const drivingSearch = plan.find(
           ({ detail }) => typeof detail === "string" && detail.startsWith("SEARCH "),
         )?.detail;
@@ -94,91 +147,35 @@ it.each([false, true])(
 it("decodes only the live cache-TTL prefix after sorting obsolete checkpoints", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { database, scope } = createSessionCompoundWorkerFixture();
-    const data = {
-      prunedToolResults: [],
-      ambiguousToolResultBaseKeys: [],
-      frozenToolResults: [
-        {
-          key: "synthetic-tool",
-          sourceHash: "synthetic-hash",
-          texts: ["synthetic cached result ".repeat(256)],
-        },
-      ],
-    };
-    const obsolete = Array.from({ length: 64 }, (_, index) => ({
-      type: "custom",
-      id: `obsolete-${index}`,
-      parentId: index === 0 ? null : `obsolete-${index - 1}`,
-      customType: "openclaw.cache-ttl",
-      data,
-    }));
-    const checkpoint = {
-      type: "custom",
-      id: "current-checkpoint",
-      parentId: obsolete.at(-1)!.id,
-      customType: "openclaw.cache-ttl",
-      data,
-    };
-    const delta = {
-      type: "custom",
-      id: "current-delta",
-      parentId: checkpoint.id,
-      customType: "openclaw.cache-ttl",
-      data: {
-        cacheTtlDelta: {
-          prunedToolResults: { set: [{ key: "new-tool", mode: "soft" }], remove: [] },
-          ambiguousToolResultBaseKeys: { set: [], remove: [] },
-          frozenToolResults: { set: [], remove: [] },
-        },
-      },
-    };
-    const touch = {
-      type: "custom",
-      id: "current-touch",
-      parentId: delta.id,
-      customType: "openclaw.cache-ttl",
-      data: { timestamp: 1 },
-    };
-    const anchor = {
-      type: "message",
-      id: "current-message",
-      parentId: touch.id,
-      message: { role: "user", content: "synthetic request" },
-    };
-    runOpenClawAgentWriteTransaction(
-      () =>
-        appendTranscriptEventsInTransaction(
-          database,
-          scope,
-          [
-            { type: "session", id: scope.sessionId, version: 3 },
-            ...obsolete,
-            checkpoint,
-            delta,
-            touch,
-            anchor,
-          ],
-          { scheduleProjectionReconcile: false },
-        ),
-      { agentId: database.agentId, path: database.path },
+    const data = frozenData("synthetic cached result ".repeat(256));
+    const obsolete = Array.from({ length: 64 }, (_, index) =>
+      checkpoint(`obsolete-${index}`, index === 0 ? null : `obsolete-${index - 1}`, data),
     );
-    expect(
-      database.db
-        .prepare(
-          "SELECT COUNT(*) AS count FROM transcript_events WHERE session_id = ? AND event_zstd IS NOT NULL",
-        )
-        .get(scope.sessionId),
-    ).toEqual({ count: obsolete.length + 1 });
+    const marker = checkpoint("current-checkpoint", obsolete.at(-1)!.id, data);
+    const delta = checkpoint("current-delta", marker.id, {
+      cacheTtlDelta: {
+        prunedToolResults: { set: [{ key: "new-tool", mode: "soft" }], remove: [] },
+        ambiguousToolResultBaseKeys: { set: [], remove: [] },
+        frozenToolResults: { set: [], remove: [] },
+      },
+    });
+    const touch = checkpoint("current-touch", delta.id, { timestamp: 1 });
+    const anchor = messageEvent("current-message", touch.id, {
+      role: "user",
+      content: "synthetic request",
+    });
+    append({ database, scope }, [
+      { type: "session", id: scope.sessionId, version: 3 },
+      ...obsolete,
+      marker,
+      delta,
+      touch,
+      anchor,
+    ]);
+    expectCompressed({ database, scope }, obsolete.length + 1);
     const decompress = vi.spyOn(resolveZstdCodec(), "decompress");
     try {
-      const prefix = withCurrentProjectionSnapshot(scope, (projection) =>
-        readCacheTtlProjectionPrefix(projection, {
-          activePosition: projection.state.activeEventCount - 1,
-          id: anchor.id,
-          entry: anchor,
-        }),
-      );
-      expect(prefix).toEqual({ anchorIds: [anchor.id], entries: [checkpoint, delta] });
+      expect(prefixAt(scope, anchor)).toEqual({ anchorIds: [anchor.id], entries: [marker, delta] });
       expect(decompress).toHaveBeenCalledTimes(1);
     } finally {
       decompress.mockRestore();
@@ -192,62 +189,26 @@ it("hydrates a checkpoint-heavy transcript within the native worker heap limit",
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const { database, scope } = createSessionCompoundWorkerFixture();
     const obsoleteCount = 512;
-    const data = {
-      prunedToolResults: [],
-      ambiguousToolResultBaseKeys: [],
-      frozenToolResults: [
-        {
-          key: "synthetic-tool",
-          sourceHash: "synthetic-hash",
-          texts: ["x".repeat(2 * 1024 * 1024)],
-        },
-      ],
-    };
-    const checkpoint = {
-      type: "custom",
-      id: "current-checkpoint",
-      parentId: `obsolete-${obsoleteCount - 1}`,
-      customType: "openclaw.cache-ttl",
-      data,
-    };
-    const anchor = {
-      type: "message",
-      id: "current-message",
-      parentId: checkpoint.id,
-      message: { role: "user", content: "synthetic request" },
-    };
-    runOpenClawAgentWriteTransaction(
-      () =>
-        appendTranscriptEventsInTransaction(
-          database,
-          scope,
-          (function* () {
-            yield { type: "session", id: scope.sessionId, version: 3 };
-            // The append owner flushes each MiB; neither fixture memory nor disk
-            // contains a materialized GiB of obsolete checkpoint text.
-            for (let index = 0; index < obsoleteCount; index++) {
-              yield {
-                type: "custom",
-                id: `obsolete-${index}`,
-                parentId: index === 0 ? null : `obsolete-${index - 1}`,
-                customType: "openclaw.cache-ttl",
-                data,
-              };
-            }
-            yield checkpoint;
-            yield anchor;
-          })(),
-          { scheduleProjectionReconcile: false },
-        ),
-      { agentId: database.agentId, path: database.path },
+    const data = frozenData("x".repeat(2 * 1024 * 1024));
+    const marker = checkpoint("current-checkpoint", `obsolete-${obsoleteCount - 1}`, data);
+    const anchor = messageEvent("current-message", marker.id, {
+      role: "user",
+      content: "synthetic request",
+    });
+    append(
+      { database, scope },
+      (function* () {
+        yield { type: "session", id: scope.sessionId, version: 3 };
+        // The append owner flushes each MiB; neither fixture memory nor disk
+        // contains a materialized GiB of obsolete checkpoint text.
+        for (let index = 0; index < obsoleteCount; index++) {
+          yield checkpoint(`obsolete-${index}`, index === 0 ? null : `obsolete-${index - 1}`, data);
+        }
+        yield marker;
+        yield anchor;
+      })(),
     );
-    expect(
-      database.db
-        .prepare(
-          "SELECT COUNT(*) AS count FROM transcript_events WHERE session_id = ? AND event_zstd IS NOT NULL",
-        )
-        .get(scope.sessionId),
-    ).toEqual({ count: obsoleteCount + 1 });
+    expectCompressed({ database, scope }, obsoleteCount + 1);
     await reconcileSessionTranscriptIndexes({
       agentId: scope.agentId,
       path: database.path,
@@ -281,7 +242,7 @@ it("hydrates a checkpoint-heavy transcript within the native worker heap limit",
     expect(result.snapshot.events).toHaveLength(2);
     expect(result.snapshot.events).toContainEqual(anchor);
     expect(result.snapshot.cacheTtlProjectionPrefixes).toEqual([
-      { anchorIds: [anchor.id], entries: [checkpoint] },
+      { anchorIds: [anchor.id], entries: [marker] },
     ]);
   });
 });

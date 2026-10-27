@@ -121,38 +121,32 @@ it.each(["ok", "warning"] as const)(
   },
 );
 
-it.each([
-  { phase: "doctor", setup: () => mocks.doctor.mockRejectedValueOnce(new Error("failed")) },
-  {
-    phase: "convergence",
-    setup: () => mocks.convergence.mockRejectedValueOnce(new Error("failed")),
-  },
-  {
-    phase: "error",
-    setup: () => mocks.plugins.mockResolvedValueOnce({ ...pluginResult, status: "error" }),
-  },
-  {
-    phase: "retained recovery",
-    setup: () =>
-      fs.mkdir(
+it.each(["doctor", "convergence", "error", "retained recovery"] as const)(
+  "preserves history when repair fails in %s",
+  async (phase) => {
+    const [old, recent] = seedPair();
+    if (phase === "retained recovery") {
+      await fs.mkdir(
         path.join(path.dirname(resolveOpenClawStateSqlitePath()), ".openclaw-restore-retained"),
-      ),
+      );
+    } else if (phase === "error") {
+      mocks.plugins.mockResolvedValueOnce({ ...pluginResult, status: "error" });
+    } else {
+      mocks[phase].mockRejectedValueOnce(new Error("failed"));
+    }
+    await expect(repair()).rejects.toThrow(
+      phase === "retained recovery" ? "full-state recovery is deferred" : undefined,
+    );
+    if (phase === "retained recovery") {
+      expect(mocks.doctor).not.toHaveBeenCalled();
+    }
+    expect(getUpdateRun(old.runId)).toEqual(old);
+    expect(getUpdateRun(recent.runId)).toEqual(recent);
+    if (phase !== "retained recovery") {
+      expect(await abandonedWarnings()).toHaveLength(2);
+    }
   },
-])("preserves history when repair fails in $phase", async ({ phase, setup }) => {
-  const [old, recent] = seedPair();
-  await setup();
-  await expect(repair()).rejects.toThrow(
-    phase === "retained recovery" ? "full-state recovery is deferred" : undefined,
-  );
-  if (phase === "retained recovery") {
-    expect(mocks.doctor).not.toHaveBeenCalled();
-  }
-  expect(getUpdateRun(old.runId)).toEqual(old);
-  expect(getUpdateRun(recent.runId)).toEqual(recent);
-  if (phase !== "retained recovery") {
-    expect(await abandonedWarnings()).toHaveLength(2);
-  }
-});
+);
 
 it("acknowledges historical rows while continuing its live owning update", async () => {
   const old = seedHistory(4 * ABANDONED_UPDATE_RUN_MS);

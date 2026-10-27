@@ -6,6 +6,49 @@ import { en } from "./en.ts";
 
 // Settings copy loads with its lazy page or search, not the startup shell.
 const enSettings = {
+  languages: {
+    en: "English",
+    zhCN: "简体中文 (Simplified Chinese)",
+    zhTW: "繁體中文 (Traditional Chinese)",
+    ptBR: "Português (Brazilian Portuguese)",
+    de: "Deutsch (German)",
+    es: "Español (Spanish)",
+    jaJP: "日本語 (Japanese)",
+    ko: "한국어 (Korean)",
+    fr: "Français (French)",
+    hi: "हिन्दी (Hindi)",
+    ar: "العربية (Arabic)",
+    it: "Italiano (Italian)",
+    tr: "Türkçe (Turkish)",
+    uk: "Українська (Ukrainian)",
+    id: "Bahasa Indonesia (Indonesian)",
+    pl: "Polski (Polish)",
+    th: "ไทย (Thai)",
+    vi: "Tiếng Việt (Vietnamese)",
+    nl: "Nederlands (Dutch)",
+    fa: "فارسی (Persian)",
+    ru: "Русский (Russian)",
+    sv: "Svenska (Swedish)",
+  },
+  chat: {
+    sendShortcut: "Send shortcut",
+    sendShortcutHint:
+      "Desktop only. On mobile, Enter adds a new line; use the Send button to send.",
+    sendShortcutEnter: "Enter",
+    followUpMode: "Follow-ups while the agent is working",
+    followUpModeQueue: "Queue until the run ends",
+    followUpModeServer: "Server default ({mode})",
+    followUpModeLoading: "loading…",
+    followUpModeOverriding: "Overriding server default ({mode})",
+    followUpModeReset: "Reset to server default",
+    catalogOpenTarget: "Open external sessions in",
+    catalogOpenTargetViewer: "OpenClaw viewer",
+    catalogOpenTargetTerminal: "Terminal",
+    sidebar: {
+      hiddenSessionSections: "Hidden session sections",
+      showSessionSection: "Show",
+    },
+  },
   agents: {
     createdBy: "Created by {id}",
     defaults: {
@@ -398,6 +441,7 @@ const enSettings = {
     structuredSecretFile: "Structured value (SecretRef) - edit the config file directly",
     defaultValue: en.configForm.defaultValue,
     select: "Select...",
+    required: "Required",
     enumOn: "On",
     enumOff: "Off",
     enumAuto: "Auto",
@@ -418,6 +462,11 @@ const enSettings = {
     key: "Key",
     removeEntry: "Remove entry",
     removeEntryKey: "Remove entry: {key}",
+    renameRejected: "Rename not applied. The original key was kept. {reason}",
+    renameDuplicateKey: "This key is already in use.",
+    renameInvalidKey: "Choose a key that matches this setting's constraints.",
+    renameChangeRejected:
+      "The containing setting did not accept this rename. Review its documentation and constraints before trying another name.",
     renameRedactedBlocked:
       "This entry holds a stored secret. Add the new key with its value, then remove this one.",
     schemaUnavailable: "Schema unavailable.",
@@ -1040,10 +1089,16 @@ const enSettings = {
       missing: "Not signed in",
       apiKey: "API key",
       denied: "Credentials rejected",
+      signInAgain: "Sign in again",
+      signInUnavailable: "Sign-in unavailable",
+      managedExternally: "Managed externally",
       configured: "Credentials configured",
       modelsUnavailable: "Models unavailable",
     },
     expiresIn: "Credential expires in {time}",
+    accessTokenExpiresIn: "Access token expires in {time}",
+    accessTokenExpired: "Access token expired",
+    accessTokenExpiryHelp: "Access-token expiry alone does not mean you need to sign in again.",
     models: "{count} models",
     modelOne: "1 model",
     modelsAvailable: "{available} of {count} models available",
@@ -2210,6 +2265,10 @@ export const registerSettingsEnglish = Object.assign(
     Object.assign(en.configPage, enSettings.configPage);
     Object.assign(en.configView, enSettings.configView);
     Object.assign(en.updates, enSettings.updates);
+    Object.assign(en.languages, enSettings.languages);
+    const { sidebar, ...chat } = enSettings.chat;
+    Object.assign(en.chat, chat);
+    Object.assign(en.chat.sidebar, sidebar);
   },
   { catalog: enSettings },
 );

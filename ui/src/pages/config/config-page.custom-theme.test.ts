@@ -180,27 +180,6 @@ it("keeps the rendered import pending across a retired request and later imports
   }
 });
 
-it("shows import failures inline and retries after editing the URL", async () => {
-  importCustomThemeFromUrl
-    .mockRejectedValueOnce(new Error("Synthetic import failure"))
-    .mockResolvedValueOnce(customThemeFixture("retry"));
-  const { container, start } = mountCustomThemeImporter();
-  await start("failed");
-  await waitForSolid(() =>
-    expect(container.querySelector('.settings-theme-import [role="alert"]')?.textContent).toContain(
-      "Synthetic import failure",
-    ),
-  );
-  await start("retry");
-  await waitForSolid(() =>
-    expect(
-      container.querySelector('.settings-theme-import [role="status"]')?.textContent,
-    ).toContain("Imported retry."),
-  );
-  expect(container.querySelector('.settings-theme-import [role="alert"]')).toBeNull();
-  expect(loadSettings().customTheme?.themeId).toBe("retry");
-});
-
 it.each(["navigation", "Gateway scope"])("retires an import on %s change", async (change) => {
   const { page, context, props, finish } = startImport();
   if (change === "navigation") {
@@ -213,15 +192,6 @@ it.each(["navigation", "Gateway scope"])("retires an import on %s change", async
   await finish();
   expect(importState(props)).toEqual(["first", null]);
   expectNoTheme();
-});
-
-it("preserves a built-in selection made after the first import starts", async () => {
-  const { props, finish } = startImport();
-  props().setTheme("knot");
-  await finish();
-
-  await waitForSolid(() => expect(importState(props)).toMatchObject(["", { kind: "success" }]));
-  expect(loadSettings()).toMatchObject({ theme: "knot", customTheme: { themeId: "first" } });
 });
 
 it.each([

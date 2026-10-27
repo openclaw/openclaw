@@ -3,14 +3,14 @@ import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.j
 import { isCronWithinActiveHours } from "../active-hours.js";
 import { isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
-import { readDefaultProactiveJobReceiptsAsync } from "../proactive-job-receipt.js";
+import { readDefaultProactiveJobReceiptsByKeyAsync } from "../proactive-job-receipt.js";
 import { isProactiveJobMigrationPending } from "../proactive-job-receipt.kernel.js";
 import { resolveCronRunAdmissionSource } from "../run-authority.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import type { ScheduledOccurrence } from "../scheduled-occurrence.js";
 import { resolveCronToolsAllowExecTargetRecoveryError } from "../scheduled-tool-policy.js";
 import { isCronScratchEffectivelyEmpty } from "../scratch-contract.js";
-import { readCronScratchSnapshot } from "../scratch-read.js";
+import { readCronScratchSnapshotByKey } from "../scratch-read.js";
 import { cronScriptFailureMetadata } from "../script-failure.js";
 import { resolveCronSessionTargetSessionKey } from "../session-target.js";
 import { ownsCronSource } from "../source-schedule.js";
@@ -110,7 +110,9 @@ export async function executeJobCore(
   );
   let migrationPending = options?.migrationPending;
   if (migrationPending === undefined && agentId) {
-    const receipts = await readDefaultProactiveJobReceiptsAsync(state.deps.storePath, [agentId]);
+    const receipts = await readDefaultProactiveJobReceiptsByKeyAsync(state.deps.storeKey, [
+      agentId,
+    ]);
     assertCurrent();
     migrationPending = isProactiveJobMigrationPending(receipts[agentId], job.id);
   }
@@ -194,8 +196,8 @@ export async function executeJobCore(
       }
     }
     if (job.payload.kind === "agentTurn" && job.payload.skipIfScratchEmpty) {
-      const snapshot = await readCronScratchSnapshot(
-        state.deps.storePath,
+      const snapshot = await readCronScratchSnapshotByKey(
+        state.deps.storeKey,
         { kind: "job", jobId: job.id, createdAtMsFallback: job.createdAtMs },
         {},
         { assertCurrent, signal: abortSignal },
@@ -485,6 +487,7 @@ async function executeDetachedCronJob(
       deliverySuppressionReason: res.deliverySuppressionReason,
       deliveryState: res.deliveryState,
       summary: res.summary,
+      result: res.result,
       delivered: res.delivered,
       deliveryAttempted: res.deliveryAttempted,
       delivery: res.delivery,
@@ -542,6 +545,7 @@ async function executeDetachedCronJob(
     deliveryState: res.deliveryState,
     nextCheck: res.nextCheck,
     summary: res.summary,
+    result: res.result,
     delivered: res.delivered,
     deliveryAttempted: res.deliveryAttempted,
     delivery: res.delivery,

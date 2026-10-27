@@ -1,15 +1,18 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createPluginStateSyncKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { dispatchInboundMessage, resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
+import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import {
   getSessionBindingService,
   testing as sessionBindingTesting,
 } from "openclaw/plugin-sdk/session-binding-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import { createTelegramBotCore } from "./bot-core.js";
 import {
   apiCalls,
+  chat,
+  from,
+  createBot as createNativeBot,
   harness,
   publishTelegramTestConfig,
 } from "./bot.create-telegram-bot.native-pipeline.test-support.js";
@@ -26,27 +29,17 @@ import {
 import { getTelegramThreadBindingManager } from "./thread-bindings.js";
 
 const accountId = "work";
-const chat = { id: 42001, type: "private", first_name: "Alice" } as const;
-const from = { id: chat.id, is_bot: false, first_name: "Alice" } as const;
 const conversation = { channel: "telegram", accountId, conversationId: String(chat.id) };
 const token = "123456:synthetic_disabled_binding_test";
 const service = getSessionBindingService();
 
-const bots: Awaited<ReturnType<typeof createTelegramBotCore>>[] = [];
-const errors = vi.fn();
-const replyResolver = vi.fn(async () => ({ text: "ordinary reply" }));
-
 beforeEach(() => {
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
-  errors.mockClear();
-  replyResolver.mockClear();
+  harness.replySpy.mockResolvedValue({ text: "ordinary reply" });
 });
 
 afterEach(async () => {
   try {
-    for (const bot of bots.splice(0).toReversed()) {
-      await bot.stop();
-    }
     // Also release an owner leaked by a failing constructor in the pre-fix run.
     await getTelegramThreadBindingManager(accountId)?.stop();
   } finally {
@@ -85,18 +78,16 @@ async function createBot(scope: "channel" | "account" | "enabled", botToken = to
   };
   publishTelegramTestConfig(cfg);
   await state.writeConfig(cfg);
-  const bot = await createTelegramBotCore({
+  if (botToken) {
+    return createNativeBot(false, true, cfg, false, accountId);
+  }
+  return createTelegramBotCore({
     token: botToken,
     accountId,
     config: cfg,
     botInfo: telegramBotInfoForTest,
-    runtime: { log: () => {}, error: errors, exit: () => {} },
     telegramTransport: { fetch, sourceFetch: fetch, close: async () => {} },
-    // Keep startup, inbound assembly, core gather, and delivery real; isolate model execution.
-    dispatchReplyFromConfig: (params) => dispatchInboundMessage({ ...params, replyResolver }),
   });
-  bots.push(bot);
-  return bot;
 }
 
 function storedBindings() {
@@ -135,12 +126,10 @@ it("answers an ordinary inbound message with account bindings disabled without p
     update_id: 1001,
     message: { message_id: 101, date: 1736380800, chat, from, text: "hello" },
   });
-  expect(replyResolver, errors.mock.calls.flat().join("\n")).toHaveBeenCalledOnce();
   const sent = apiCalls.mock.calls.filter(([method]) => method === "sendMessage");
   expect(sent).toEqual([["sendMessage", expect.objectContaining({ text: "ordinary reply" })]]);
   const payload = sent[0]?.[1];
   expect(isRecord(payload) ? String(payload.chat_id) : undefined).toBe(String(chat.id));
-  expect(errors).not.toHaveBeenCalled();
   await expectAvailableEmptyOwner();
   const targetSessionKey = "agent:main:subagent:synthetic-child";
   await expect(
@@ -185,6 +174,6 @@ it("does not retain an owner when the real bot constructor fails with enabled bi
   await expect(createBot("enabled", "")).rejects.toThrow("Empty token!");
   await expectUnavailableOwner();
   expect(storedBindings()).toEqual([]);
-  expect(replyResolver).not.toHaveBeenCalled();
+  expect(harness.replySpy).not.toHaveBeenCalled();
   expect(apiCalls).not.toHaveBeenCalled();
 });

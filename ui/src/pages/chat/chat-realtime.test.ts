@@ -36,8 +36,7 @@ function inspectSession(): InspectableRealtimeTalkSession {
 
 async function start() {
   await state.toggleRealtimeTalk();
-  const session = inspectSession();
-  return { session, callbacks: session.callbacks };
+  return inspectSession();
 }
 
 function mockVideo() {
@@ -45,7 +44,7 @@ function mockVideo() {
 }
 
 async function startVideo() {
-  const { session } = await start();
+  const session = await start();
   session.callbacks.onVideoCapability?.(true);
   return session;
 }
@@ -81,12 +80,13 @@ function preview(nextDeviceId: string, label: string) {
 }
 
 let startSpy: MockInstance<RealtimeTalkSession["start"]>;
+let prepareSpy: MockInstance<GatewaySpeechPlayback["prepare"]>;
 
 beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
-  vi.spyOn(GatewaySpeechPlayback.prototype, "prepare").mockImplementation(() =>
-    document.createElement("audio"),
-  );
+  prepareSpy = vi
+    .spyOn(GatewaySpeechPlayback.prototype, "prepare")
+    .mockImplementation(() => document.createElement("audio"));
   startSpy = vi.spyOn(RealtimeTalkSession.prototype, "start").mockResolvedValue(undefined);
   vi.spyOn(RealtimeTalkSession.prototype, "stop").mockResolvedValue(undefined);
   vi.spyOn(RealtimeTalkSession.prototype, "switchCamera").mockResolvedValue(undefined);
@@ -97,6 +97,7 @@ beforeEach(() => {
     },
     connected: true,
     sessionKey: "main",
+    chatMessages: [],
     ...createInitialChatRealtimeState(),
   } as unknown as ChatRealtimeState;
   attachChatRealtimeActions(state);
@@ -680,3 +681,43 @@ it("retires callback ownership before stopping a session", async () => {
     realtimeTalkDetail: null,
   });
 });
+
+it.each(["stop", "route", "disconnect"] as const)(
+  "prepares gesture audio synchronously and rejects a %s during the lazy runtime load",
+  async (change) => {
+    type Runtime = typeof import("./talk/chat-actions-runtime.ts");
+    const loaded = createDeferred<Runtime>();
+    const loading = createDeferred();
+    const startChatRealtimeSession = vi.fn<Runtime["startChatRealtimeSession"]>();
+    // mock-isolation: Hold module evaluation open to prove cancellation before the voice runtime loads.
+    vi.doMock("./talk/chat-actions-runtime.ts", () => {
+      loading.resolve();
+      return loaded.promise;
+    });
+    const starting = state.toggleRealtimeTalk();
+    try {
+      expect(prepareSpy).toHaveBeenCalledOnce();
+      expect(read().realtimeTalkStatus).toBe("connecting");
+      await loading.promise;
+      if (change === "stop") {
+        await state.toggleRealtimeTalk();
+      } else if (change === "route") {
+        state.sessionKey = "another-session";
+      } else {
+        state.connected = false;
+      }
+      loaded.resolve({
+        startChatRealtimeSession,
+        setRealtimeTalkCameraEnabled: vi.fn(),
+        switchRealtimeTalkCamera: vi.fn(),
+      });
+      await starting;
+      expect(startChatRealtimeSession).not.toHaveBeenCalled();
+      expect(startSpy).not.toHaveBeenCalled();
+      expect(read().realtimeTalkSession).toBeNull();
+      expect(read().realtimeTalkActive).toBe(false);
+    } finally {
+      vi.doUnmock("./talk/chat-actions-runtime.ts");
+    }
+  },
+);

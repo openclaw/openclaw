@@ -272,19 +272,18 @@ export async function runReplyAgent(
     // New steering must not reuse a terminal source claim. Compare the active
     // source identity so unrelated retained tombstones still permit steering.
     // The parked admission owner rechecks after any predecessor wait.
-    const activeSourceTurnId =
-      controllerInput.mailbox.owner.sourceTurnId ??
-      normalizeOptionalString(restartRecoveryEntry?.restartRecoveryDeliverySourceRunId) ??
-      "";
     const terminalDeliveryBlockReason = resolveRestartRecoverySteeringBlockReason(
       restartRecoveryEntry,
       activeReplyOperation?.sessionId ?? followupRun.run.sessionId,
-      activeSourceTurnId,
+      controllerInput.mailbox.owner.sourceTurnId ??
+        normalizeOptionalString(restartRecoveryEntry?.restartRecoveryDeliverySourceRunId) ??
+        "",
     );
     const shouldQueueTerminalReceiptSteer =
       isActiveSteer &&
       messageInjectionDisposition === "none" &&
-      terminalDeliveryBlockReason !== undefined;
+      terminalDeliveryBlockReason !== undefined &&
+      terminalDeliveryBlockReason !== "stale-claim";
 
     // Direct question creators can attest their caller before publishing a reply operation.
     const questionInput: Awaited<ReturnType<typeof runReplyQuestionInput>> =

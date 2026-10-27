@@ -112,7 +112,7 @@ and [Owner delivery](/automation/cron-jobs/delivery#owner-delivery-and-direct-me
 
 A stream schedule keeps an operator-authored argv command running under the Gateway and fires the job from its stdout and stderr lines. Stream schedules are event-driven, never time-due, and are available by default.
 
-The agent-facing `automations` tool requires the creator turn to expose `exec` for the stream’s execution location. With `ask: "always"`, creating a stream asks the user to approve that specific persistent watcher. The question identifies the command and execution location, describes output behavior and delivery, and explains that the watcher continues after the conversation and automatically restarts after interruptions and Gateway restarts until disabled or deleted. Approval authorizes that saved watcher, not other commands or additional watchers.
+The agent-facing `automations` tool requires the creator turn to expose `exec` for the stream’s execution location. With `ask: "always"`, creating a stream asks the user to approve that specific persistent watcher. The question identifies the command and execution location, describes output behavior and delivery, and explains that the watcher continues after the conversation and automatically restarts after interruptions and Gateway restarts until disabled or deleted. Approval authorizes that saved watcher, not other commands or additional watchers. Time spent awaiting approval does not require another approval for the same proposal.
 
 ```json
 {
@@ -253,17 +253,65 @@ This fires roughly 5-6 times a month instead of 0-1 times a month. To require bo
 
 An event trigger adds a headless condition script to an `every`, `cron`, or `stream` schedule. Time schedules evaluate it when due; stream schedules evaluate it for each closed batch. The scheduler runs the normal payload only when the script returns `fire: true`:
 
-```json5
-{
-  schedule: { kind: "every", everyMs: 30000 },
-  trigger: {
-    // Fires only when the observed status differs from the last evaluation.
-    script: "const res = await exec({ command: 'gh pr checks 123 --json state -q \\'.[].state\\' | sort -u' }); const status = String(res?.aggregated ?? '').trim(); json({ fire: status !== trigger.state?.status, message: `PR 123 CI: ${trigger.state?.status ?? 'unknown'} -> ${status}`, state: { status } });",
-    once: false,
-  },
-  payload: { kind: "agentTurn", message: "Investigate the CI status change." },
+For example, save this read-only PR CI gate as `watch-pr-ci.js`, then use
+`--trigger-script ./watch-pr-ci.js` with an agent-turn payload that investigates
+the changed checks. It compares the exact PR head and individual check/status
+identities, not an aggregate pass/fail string:
+
+```js
+const repo = "owner/repo";
+const pr = 123;
+async function readJson(command) {
+  const response = await exec({ command });
+  if (response.status !== "completed" || response.exitCode !== 0) {
+    throw new Error("CI observation failed; inspect this automation's run diagnostics.");
+  }
+  return JSON.parse(response.aggregated);
 }
+const { headRefOid: head } = await readJson(
+  "gh pr view " + pr + " --repo " + repo + " --json headRefOid",
+);
+const pages = await readJson(
+  "gh api repos/" + repo + "/commits/" + head + "/check-runs --paginate --slurp",
+);
+const checks = pages
+  .flatMap((page) => page.check_runs)
+  .map((check) => ({
+    id: check.id,
+    name: check.name,
+    appId: check.app.id,
+    head: check.head_sha,
+    status: check.status,
+    conclusion: check.conclusion,
+  }))
+  .sort((a, b) => a.id - b.id);
+const commitStatus = await readJson("gh api repos/" + repo + "/commits/" + head + "/status");
+const contexts = commitStatus.statuses
+  .map((status) => ({
+    id: status.id,
+    context: status.context,
+    state: status.state,
+  }))
+  .sort((a, b) => a.context.localeCompare(b.context));
+const observed = { head, checks, contexts };
+const changed = JSON.stringify(observed) !== JSON.stringify(trigger.state);
+return {
+  fire: changed,
+  ...(changed
+    ? { message: "PR " + pr + " CI observation changed: " + JSON.stringify(observed) }
+    : {}),
+  state: observed,
+};
 ```
+
+A new head, a rerun with a new check identity, or a check/status transition fires
+the payload even when the aggregate status is unchanged. An unchanged observation
+returns `fire: false`, so no model turn or visible update is produced. Observation
+errors throw and remain actionable scheduler failures; do not convert them to
+`fire: false`. Keep this example within the 16 KiB state limit by scoping large
+repositories to the checks the watcher owns. Do not use a change-only gate for an
+explicitly requested recurring report or digest: that job should deliver at its
+requested cadence even if the observations are unchanged.
 
 Forced manual runs bypass this gate: `openclaw automations run <job-id>` (forced by default) and the `automations` tool with `action: "run", runMode: "force"` skip `trigger.script` and execute the payload directly. An `agentTurn` payload wakes the model even if the script would return `fire: false`. To test the gate, wait for a scheduled evaluation or use `openclaw automations run <job-id> --due` when the job is due. The tool's default `runMode: "due"` also honors the gate; neither due mode makes a job due early.
 

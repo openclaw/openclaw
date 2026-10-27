@@ -30,6 +30,7 @@ import type {
 } from "./server-methods/types.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
+import { mayMatchSessionRowModelSearch } from "./session-row-model-facts.js";
 import {
   create as createSessionRow,
   selectionRow,
@@ -259,20 +260,23 @@ export function createSessionRowProjectionFixture(params: {
   }
   const selectEntries = (options?: Parameters<SessionRowProjection["selectEntries"]>[0]) => {
     const query = options ?? {};
+    const parentKey =
+      typeof query.parentSessionKey === "string"
+        ? query.parentSessionKey
+        : query.parentSessionKey?.key;
+    const identities =
+      query.candidateSessionIdsOrKeys ??
+      (query.sessionIdOrKey ? new Set([query.sessionIdOrKey]) : undefined);
     const matchingKeys =
-      query.sessionIdOrKey &&
+      identities &&
       new Set(
         [...rows.values()]
-          .filter(
-            (row) =>
-              row.key === query.sessionIdOrKey || row.entry.sessionId === query.sessionIdOrKey,
-          )
+          .filter((row) => identities.has(row.key) || identities.has(row.entry.sessionId))
           .map((row) => row.key),
       );
     const selected = matching(query).filter(
       (row) =>
-        (!matchingKeys || matchingKeys.has(row.key)) &&
-        (!query.parentSessionKey || row.parents.has(query.parentSessionKey)),
+        (!matchingKeys || matchingKeys.has(row.key)) && (!parentKey || row.parents.has(parentKey)),
     );
     return sortSessionRows(selected, query.sortBy);
   };
@@ -304,6 +308,8 @@ export function createSessionRowProjectionFixture(params: {
     },
     onSelectionChange: revisions.onSelectionChange,
     onFactsChange: revisions.onFactsChange,
+    readTaskPublicationRevision: revisions.taskPublication,
+    hasLogicalChildEntries: (parent) => selectEntries({ parentSessionKey: parent }).length > 0,
     readPreparedRowContext: () => rowContext,
     readPreparedSpawnedBy(query) {
       const row = describe(query);
@@ -330,6 +336,8 @@ export function createSessionRowProjectionFixture(params: {
     ancestorRows: () => undefined,
     setArchivePageSize: () => {},
     modelFacts: (query) => describe(query)!.materialized.source,
+    modelSearchMayMatch: (search) =>
+      mayMatchSessionRowModelSearch({ cfg, modelCatalog, rowContext, rows: rows.values() }, search),
     withPreparedExactRows: async (queries, consume) => {
       queries(cfg);
       return consume(projection);

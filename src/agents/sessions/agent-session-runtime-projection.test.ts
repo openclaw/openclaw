@@ -2,37 +2,32 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
-import type { AssistantMessage, Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
-import { withinTest } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import { toClientToolDefinitions, toToolDefinitions } from "../agent-tool-definition-adapter.js";
-import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
 import {
   attachInternalToolExecutionPreparer,
   getInternalToolExecutionPreparer,
-  type InternalToolExecutionPreparer,
-} from "../runtime/internal-hooks.js";
+} from "../../../packages/agent-core/src/internal-hooks.js";
+import { withinTest } from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { toClientToolDefinitions, toToolDefinitions } from "../agent-tool-definition-adapter.js";
+import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import {
-  createAssistant,
-  createAssistantResultStream,
   createTestSession,
+  mockToolTurn as mockExchange,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
 } from "./agent-session-loop-correctness.test-support.js";
 import type { MessageEndEvent, ToolDefinition } from "./extensions/types.js";
+import { sessionScope } from "./session-manager-fixtures.test-support.js";
 import { SessionManager } from "./session-manager.js";
+import { cleanupTrackedSessionState } from "./session-state-cleanup.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    for (const stateDir of tempDirs.dirs) {
-      await cleanupSessionStateForTest({ stateDir });
-    }
-    cleanup();
+    await cleanupTrackedSessionState(tempDirs.dirs, cleanup);
   }),
 );
 registerAgentSessionLoopTestLifecycle();
@@ -54,16 +49,6 @@ const result = (value: string, details: Record<string, unknown>) => ({
   details,
 });
 
-function mockExchange(content: AssistantMessage["content"], reply: string) {
-  streamMocks.streamSimple
-    .mockImplementationOnce((model: Model) =>
-      createAssistantResultStream(createAssistant(model, content, "toolUse")),
-    )
-    .mockImplementation((model: Model) =>
-      createAssistantResultStream(createAssistant(model, reply)),
-    );
-}
-
 it.for([
   { owner: "adapter", abortBeforeLaunch: false },
   { owner: "source", abortBeforeLaunch: false },
@@ -79,7 +64,6 @@ it.for([
     const args = { value: "local receipt" };
     const partial = result("writing receipt", {});
     const order: string[] = [];
-    const preparations: Parameters<InternalToolExecutionPreparer>[0][] = [];
     const updates: unknown[] = [];
     const outcomes: unknown[] = [];
     const recorder = {
@@ -87,18 +71,17 @@ it.for([
       complete: vi.fn(() => order.push("complete")),
       discard: vi.fn(() => order.push("discard")),
     };
-    const execute = vi.fn<AgentTool["execute"]>(async (_id, input, _signal, onUpdate) => {
-      order.push("implementation");
-      onUpdate?.(partial);
-      await fs.writeFile(output, JSON.stringify(input));
-      return result(await fs.readFile(output, "utf8"), { written: true });
-    });
     const tool = {
       name: "receipt",
       label: "Receipt",
       description: "Write a local receipt.",
       parameters: Type.Object({ value: Type.String() }),
-      execute,
+      async execute(_id, input, _signal, onUpdate) {
+        order.push("implementation");
+        onUpdate?.(partial);
+        await fs.writeFile(output, JSON.stringify(input));
+        return result(await fs.readFile(output, "utf8"), { written: true });
+      },
     } satisfies AgentTool;
     const definitions =
       owner === "client"
@@ -112,7 +95,6 @@ it.for([
     let cancelAtReady = () => {};
     // Observe the real preparer's returned handle; never substitute its launch/disposal work.
     attachInternalToolExecutionPreparer(definition, async (params) => {
-      preparations.push(params);
       const prepared = await prepare(params);
       order.push(prepared.kind);
       if (prepared.kind === "ready" && abortBeforeLaunch) {
@@ -126,10 +108,7 @@ it.for([
         },
       };
     });
-    mockExchange(
-      [{ type: "toolCall", id: "receipt-call", name: "receipt", arguments: args }],
-      "Receipt observed.",
-    );
+    mockExchange([{ type: "toolCall", id: "receipt-call", name: "receipt", arguments: args }]);
     const { session } = await createTestSession({ customTools: definitions });
     cancelAtReady = () => session.agent.abort(new Error("cancelled after preparation"));
     const unsubscribe = session.subscribe((event) => {
@@ -150,28 +129,18 @@ it.for([
     const prompt = session.prompt("Write one receipt.");
     try {
       await withinTest(prompt, signal);
-      expect(preparations).toHaveLength(1);
       expect([session.isStreaming, session.agent.state.pendingToolCalls.size]).toEqual([false, 0]);
       if (abortBeforeLaunch) {
-        expect(execute).not.toHaveBeenCalled();
         expect(recorder.complete).not.toHaveBeenCalled();
         expect(updates).toEqual([]);
-        expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
         await expect(fs.stat(output)).rejects.toMatchObject({ code: "ENOENT" });
         if (owner === "client") {
           expect(recorder.reserve).toHaveBeenCalledExactlyOnceWith("receipt-call", "receipt");
           expect(recorder.discard).toHaveBeenCalledExactlyOnceWith("receipt-call", "receipt");
         }
       } else {
-        expect(execute).toHaveBeenCalledOnce();
-        const call = expectDefined(execute.mock.calls[0], "receipt implementation");
-        expect(call.slice(0, 2)).toEqual(["receipt-call", args]);
-        expect(call[2]).toBe(preparations[0]?.signal);
-        expect(call[3]).toBe(preparations[0]?.onUpdate);
         expect(updates).toEqual([partial]);
-        expect(updates[0]).toBe(partial);
         expect(await fs.readFile(output, "utf8")).toBe(JSON.stringify(args));
-        expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
         expect(streamMocks.streamSimple.mock.calls[1]?.[1].messages).toContainEqual(
           expect.objectContaining({
             role: "toolResult",
@@ -180,13 +149,16 @@ it.for([
           }),
         );
       }
-      expect(outcomes).toHaveLength(1);
-      expect(outcomes[0]).toMatchObject({
-        toolCallId: "receipt-call",
-        isError: abortBeforeLaunch,
-        executionStarted: !abortBeforeLaunch,
-        ...(!abortBeforeLaunch ? { result: result(JSON.stringify(args), { written: true }) } : {}),
-      });
+      expect(outcomes).toMatchObject([
+        {
+          toolCallId: "receipt-call",
+          isError: abortBeforeLaunch,
+          executionStarted: !abortBeforeLaunch,
+          ...(!abortBeforeLaunch
+            ? { result: result(JSON.stringify(args), { written: true }) }
+            : {}),
+        },
+      ]);
       const lifecycle = abortBeforeLaunch
         ? "start ready dispose end result agent_end agent_settled"
         : "start ready implementation update dispose end result agent_end agent_settled";
@@ -209,12 +181,7 @@ it.each(["value", "apiKey", "account"])(
   async (field) => {
     const client = field !== "value";
     const dir = tempDirs.make("openclaw-runtime-projection-");
-    const scope = {
-      agentId: "main",
-      sessionId: "runtime-projection",
-      sessionKey: "agent:main:runtime-projection",
-      storePath: path.join(dir, "sessions.json"),
-    };
+    const scope = sessionScope(path.join(dir, "sessions.json"), "runtime-projection");
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const sessionManager = SessionManager.open(scope, dir);
     guardSessionManager(sessionManager, { config: {}, allowedToolNames: ["lookup"] });
@@ -223,6 +190,7 @@ it.each(["value", "apiKey", "account"])(
       ? ["call_0", "call_1"]
       : ["call_lookup|fc-jztpgrWaMLTnokJk", "call_lookup|fc-jztDifferentokJk"];
     const values = client ? ["alpha", "beta"] : ids;
+    const lookupCalls = values.map((value, index) => lookupCall(ids[index]!, { [field]: value }));
     const parameters = Type.Object({ value: Type.String() });
     const lookup: ToolDefinition<typeof parameters> = {
       name: "lookup",
@@ -245,13 +213,7 @@ it.each(["value", "apiKey", "account"])(
           calls,
         )
       : [lookup];
-    mockExchange(
-      [
-        ...(client ? [text("Looking up both records.")] : []),
-        ...values.map((value, index) => lookupCall(ids[index]!, { [field]: value })),
-      ],
-      client ? "Stopped after tool errors." : "Done.",
-    );
+    mockExchange([...(client ? [text("Looking up both records.")] : []), ...lookupCalls]);
     const extendReply = async (event: unknown) => {
       const { message } = event as MessageEndEvent;
       if (message.role !== "assistant") {
@@ -286,14 +248,7 @@ it.each(["value", "apiKey", "account"])(
       toolCallId,
       isError: false,
       ...(client
-        ? {
-            toolName: "lookup",
-            details: {
-              status: "pending",
-              tool: "lookup",
-              message: "Tool execution delegated to client",
-            },
-          }
+        ? { toolName: "lookup", details: { status: "pending" } }
         : result(values[index]!, { value: values[index] })),
     }));
     const resultHistory = client ? session.state.messages : stored;

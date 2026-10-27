@@ -85,6 +85,7 @@ type CrabboxWorkerProviderDependencies = {
   wallpaperPath: string;
   state: CrabboxState;
   warn?: (message: string) => void;
+  info?: (message: string) => void;
   warmImagePolicy?: CrabboxWarmImagePolicy;
 };
 
@@ -108,9 +109,19 @@ export function createCrabboxWorkerProvider(
     resolveBinary: async (...args) => (await resolveBinary(...args)).binary,
     warn,
   });
+  const activeProvisions = new Set<{ leaseId: string }>();
   const warmImages = createCrabboxWarmImageManager({
+    isLeaseActive: (leaseId) => {
+      for (const owner of activeProvisions) {
+        if (owner.leaseId === leaseId) {
+          return true;
+        }
+      }
+      return false;
+    },
     state: dependencies.state,
     warn,
+    info: dependencies.info,
     policy: dependencies.warmImagePolicy,
     prepareCapture: async (context) => {
       heartbeats.start({ ...context.profile, ...context });
@@ -140,14 +151,20 @@ export function createCrabboxWorkerProvider(
     signal: providerAbort.signal,
     resolveBinaries: resolveMaintenanceBinaries,
   });
-  const stopLease = async (context: LeaseCommandContext): Promise<void> => {
+  const stopLease = async (
+    context: LeaseCommandContext,
+    onCleanupAccepted?: () => void,
+    signal?: AbortSignal,
+  ): Promise<void> => {
     await heartbeats.stop(context.id);
     // Cleanup has its own deadline. Confirmed stop or absence releases allocation/image ownership.
     await stopCrabboxLease({
       ...context,
       warn,
+      onCleanupAccepted,
+      signal,
     });
-    await warmImages.release(context);
+    await warmImages.release({ ...context, signal });
   };
   const resolveLeaseContext = async (
     lease: Parameters<WorkerProvider["inspect"]>[0],
@@ -242,7 +259,7 @@ export function createCrabboxWorkerProvider(
       await assertAwsWorkerHasNoInstanceProfile({ binary, signal });
     }
 
-    return async () => {
+    const provision = async () => {
       assertCurrent();
       // Completed setup can survive a crash before its capture requirement returns.
       // Sample before allocate creates the first-call record; enrolled replay stays closed.
@@ -549,6 +566,16 @@ export function createCrabboxWorkerProvider(
         }
       }
     };
+    return async () => {
+      // An admitted dispatch may not have created its lease yet; absence cannot release its hold.
+      const owner = { leaseId };
+      activeProvisions.add(owner);
+      try {
+        return await provision();
+      } finally {
+        activeProvisions.delete(owner);
+      }
+    };
   };
 
   return {
@@ -593,6 +620,7 @@ export function createCrabboxWorkerProvider(
     },
     ...machineOptions,
     supportedExecutionModes: ["worker-turn", "remote-exec"],
+    supportsCleanupAcceptance: true,
     provisionBeforeInstallation: true,
     requiresNodeEnrollment: true,
     supportsProjectPreparation: supportsCrabboxProjectPreparation,
@@ -635,6 +663,7 @@ export function createCrabboxWorkerProvider(
       return { status: "active", sharedHost: false };
     },
     async destroy(lease): Promise<void> {
+      lease.signal?.throwIfAborted();
       assertCrabboxLeaseId(lease.leaseId);
       // An admitted image capture still owns the source. Plain teardown fences
       // renewal immediately; capture transfers it until the waiting stop below.
@@ -647,45 +676,40 @@ export function createCrabboxWorkerProvider(
           throw error;
         },
       );
-      const captureStarted = Promise.withResolvers<void>();
-      let capturing = false;
-      const teardown = (async () => {
-        try {
-          const allocation = await warmImages.lookupLease(context.id);
-          const captureProfile = resolveCrabboxWarmImageProfile(
-            profile,
-            allocation?.machineClass ?? profile.class,
-            allocation ? (allocation.os ?? "linux") : profile.target,
-          );
-          if (captureProfile.warmImage) {
-            await warmImages.capture({
-              ...context,
-              signal: providerAbort.signal,
-              profile: captureProfile,
-              teardown: true,
-              onCaptureStart: () => {
-                capturing = true;
-                captureStarted.resolve();
-              },
-            });
-          }
-        } catch (error) {
-          warn(
-            `Crabbox warm image capture failed for lease ${context.id}: ${coerceErrorMessage(error)}; next step: crabbox stop --provider ${context.provider} ${context.id}`,
-          );
+      let onCleanupAccepted = lease.onCleanupAccepted;
+      try {
+        const allocation = await warmImages.lookupLease(context.id);
+        const captureProfile = resolveCrabboxWarmImageProfile(
+          profile,
+          allocation?.machineClass ?? profile.class,
+          allocation ? (allocation.os ?? "linux") : profile.target,
+        );
+        if (captureProfile.warmImage) {
+          await warmImages.capture({
+            ...context,
+            signal: lease.signal
+              ? AbortSignal.any([providerAbort.signal, lease.signal])
+              : providerAbort.signal,
+            profile: captureProfile,
+            teardown: true,
+            onCaptureStart: () => {
+              onCleanupAccepted?.();
+              onCleanupAccepted = undefined;
+            },
+          });
         }
-        await stopLease(context).catch((error: unknown) => {
-          if (!capturing) {
-            throw error;
-          }
-          warn(
-            `Crabbox teardown stop failed for lease ${context.id}: ${coerceErrorMessage(error)}; next step: crabbox stop --provider ${context.provider} ${context.id}`,
-          );
-        });
-      })();
-      // Only a claimed capture detaches. If the Gateway exits during it, OpenClaw
-      // will not stop the lease; Crabbox's idle timeout / TTL reaps it.
-      await Promise.race([teardown, captureStarted.promise]);
+      } catch (error) {
+        if (lease.signal?.aborted) {
+          await heartbeats.stop(context.id);
+          lease.signal.throwIfAborted();
+        }
+        warn(
+          `Crabbox warm image capture failed for lease ${context.id}: ${coerceErrorMessage(error)}; next step: crabbox stop --provider ${context.provider} ${context.id}`,
+        );
+      }
+      // A claimed capture releases the reclaim caller through the notification,
+      // while the lifecycle owner keeps this promise until stop is confirmed.
+      await stopLease(context, onCleanupAccepted, lease.signal);
     },
   };
 }

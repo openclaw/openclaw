@@ -4,7 +4,6 @@ import type { CronRuntimeAuthority } from "../../../cron/runtime-authority.js";
 import type { CronScheduledToolCallerOrigin } from "../../../cron/scheduled-tool-policy.js";
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
 import type { ExplicitSkillSelection } from "../../../skills/types.js";
-import type { ModelFallbackAvailability } from "../../agent-scope.js";
 import type { MemoryFlushToolRunContext } from "../../agent-tools.memory-flush.types.js";
 import type { AssistantErrorTranscript } from "../../assistant-error-transcript.js";
 import type { ExecApprovalContinuationPromptRange } from "../../bash-tools.exec-approval-output.js";
@@ -30,12 +29,13 @@ import type { ExpectedAgentHarnessRuntimeArtifact } from "../../harness/runtime-
 import type { AgentInternalEvent } from "../../internal-events.js";
 import type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
 import type { PreparedModelThinkingCapability } from "../../model-catalog-lookup.js";
+import type { ModelFallbackAvailability } from "../../model-fallback.types.js";
 import type { ReplyDeliveryObserver } from "../../reply-completion.js";
 import type { ResolvedToolPromptFinalizer } from "../../resolved-tool-prompt.types.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import type { PromptMode } from "../../system-prompt.types.js";
-import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
+import type { EmbeddedAgentExecutionPhaseInfo } from "../execution-phase.js";
 import type { BlockReplyFlushContext } from "../types.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 export type { ClientToolDefinition } from "../../command/shared-types.js";
@@ -49,6 +49,7 @@ export type RunEmbeddedAgentParams = Pick<
   | "memberRoleIds"
   | "permissionMode"
   | "sessionRoot"
+  | "blindPrompt"
   | "modelSelectionLocked"
   | "authProfileIdSource"
   | "verboseLevel"
@@ -198,17 +199,7 @@ export type RunEmbeddedAgentParams = Pick<
   /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
   conversationRecall?: ConversationRecallContext;
   onExecutionStarted?: (info?: { lifecycleGeneration?: string; backend?: string }) => unknown;
-  onExecutionPhase?: (info: {
-    phase: EmbeddedAgentExecutionPhase;
-    provider?: string;
-    model?: string;
-    backend?: string;
-    source?: string;
-    tool?: string;
-    toolCallId?: string;
-    itemId?: string;
-    firstModelCallStarted?: boolean;
-  }) => void;
+  onExecutionPhase?: (info: EmbeddedAgentExecutionPhaseInfo) => void;
   onLaneWait?: (info: { waitMs: number; queuedAhead: number; waiting?: boolean }) => void;
   onRunProgress?: (info: {
     reason: string;
@@ -303,6 +294,7 @@ export type EmbeddedForegroundPromptContext = Pick<
   | "forceMessageTool"
   | "allowGatewaySubagentBinding"
   | "extraSystemPrompt"
+  | "extraSystemPromptTurnContext"
   | "gitCoauthorPrompt"
   | "silentReplyPromptMode"
   | "ownerNumbers"

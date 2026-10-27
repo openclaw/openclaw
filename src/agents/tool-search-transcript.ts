@@ -1,7 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { copyInternalToolResultState } from "../../packages/agent-core/src/internal-hooks.js";
 import { transferMcpCodeModeGuestResult } from "./mcp-content.js";
 import type { AgentToolResult } from "./runtime/index.js";
-import { copyInternalToolResultState } from "./runtime/internal-hooks.js";
 import { toToolSearchJsonSafe } from "./tool-search-json.js";
 
 function freezeJsonSnapshot(value: unknown): unknown {

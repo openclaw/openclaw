@@ -10,6 +10,7 @@ import * as sessions from "../config/sessions/session-accessor.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { loadSessionEntryAsync as loadEntry } from "./session-entry-load.test-support.js";
+import { holdSubagentExecution } from "./session-row-projection.read-fixture.test-support.js";
 import { createResidentSessionRowReader } from "./session-row-projection.test-support.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { loadGatewaySessionEntryReadOnlyAsync as loadGatewayEntry } from "./session-utils.js";
@@ -89,11 +90,6 @@ function expectCompact(entry: SessionEntry | undefined) {
   expect([entry?.skillsSnapshot, entry?.systemPromptReport]).toEqual([undefined, undefined]);
 }
 
-async function withParseSpy(run: (parse: MockInstance<typeof JSON.parse>) => Promise<void>) {
-  const parse = vi.spyOn(JSON, "parse");
-  await run(parse).finally(() => parse.mockRestore());
-}
-
 async function seed(storePath: string, store: Record<string, SessionEntry>) {
   for (const [sessionKey, entry] of Object.entries(store)) {
     await sessions.replaceSessionEntry({ sessionKey, storePath }, entry);
@@ -109,7 +105,9 @@ async function control(childSessionKey: string, controllerSessionKey: string, cr
     createdAt,
     startedAt: createdAt,
   });
+  const execution = holdSubagentExecution(childSessionKey, childSessionKey);
   subagentRuns.commitOwnership(subagentRuns.get(childSessionKey)!);
+  return execution;
 }
 
 afterEach(async () => {
@@ -175,28 +173,27 @@ test(
     expect(sessions.loadExactSessionEntryReadOnly({ sessionKey, storePath })?.entry.sessionId).toBe(
       visible.sessionId,
     );
-    await withParseSpy(async (parse) => {
-      const metadata = await load("main", "list", MAIN_AGENT_ID);
-      const identity = { agentId: MAIN_AGENT_ID, canonicalKey: sessionKey, storePath };
-      expect(metadata).toMatchObject({
-        ...identity,
-        entry: session(visible.sessionId, now),
-      });
-      expectCompact(metadata.entry);
-      expectUnparsed(parse, "saved skill prompt");
-      expect(await load("main", undefined, MAIN_AGENT_ID)).toMatchObject({
-        ...identity,
-        entry: visible,
-      });
-
-      expect((await load(hidden.sessionKey)).entry).toBeUndefined();
-      expect((await load(hidden.sessionKey, "list")).entry).toBeUndefined();
-      expect((await loadGatewayEntry(hidden.sessionKey)).entry?.sessionId).toBe(hidden.sessionId);
-      expect(
-        sessions.loadExactSessionEntryReadOnly({ ...hidden, storePath })?.entry.sessionId,
-      ).toBe(hidden.sessionId);
-      expectUnparsed(parse, "unrelated-session-");
+    using parse = vi.spyOn(JSON, "parse");
+    const metadata = await load("main", "list", MAIN_AGENT_ID);
+    const identity = { agentId: MAIN_AGENT_ID, canonicalKey: sessionKey, storePath };
+    expect(metadata).toMatchObject({
+      ...identity,
+      entry: session(visible.sessionId, now),
     });
+    expectCompact(metadata.entry);
+    expectUnparsed(parse, "saved skill prompt");
+    expect(await load("main", undefined, MAIN_AGENT_ID)).toMatchObject({
+      ...identity,
+      entry: visible,
+    });
+
+    expect((await load(hidden.sessionKey)).entry).toBeUndefined();
+    expect((await load(hidden.sessionKey, "list")).entry).toBeUndefined();
+    expect((await loadGatewayEntry(hidden.sessionKey)).entry?.sessionId).toBe(hidden.sessionId);
+    expect(sessions.loadExactSessionEntryReadOnly({ ...hidden, storePath })?.entry.sessionId).toBe(
+      hidden.sessionId,
+    );
+    expectUnparsed(parse, "unrelated-session-");
   }),
 );
 
@@ -231,36 +228,35 @@ test(
     expect(rowB?.childSessions).toEqual([childB]);
     expect(rowAAfterWindow?.childSessions).toEqual([childA]);
     for (const projection of [undefined, "list"] as const) {
-      await withParseSpy(async (parse) => {
-        const loaded = await loadChildren(parentA, projection);
-        if (projection === undefined) {
-          expect(loaded.entry?.skillsSnapshot).toEqual({ prompt, skills: [] });
-          expect(loaded.entry?.systemPromptReport).toMatchObject({
-            source: "run",
-            generatedAt: now,
-          });
-        }
-        expect(loaded.store[childA]).toMatchObject({
-          sessionId: "child-a",
-          parentSessionKey: parentA,
+      using parse = vi.spyOn(JSON, "parse");
+      const loaded = await loadChildren(parentA, projection);
+      if (projection === undefined) {
+        expect(loaded.entry?.skillsSnapshot).toEqual({ prompt, skills: [] });
+        expect(loaded.entry?.systemPromptReport).toMatchObject({
+          source: "run",
+          generatedAt: now,
         });
-        expectCompact(loaded.store[childA]);
-        expectUnparsed(parse, "child saved skill prompt", "child saved report");
-        const row = await rowReader.row(loaded.canonicalKey, { now });
-        expect(row?.childSessions).toEqual([childA]);
-        parse.mockClear();
-        const lifecycle = await rowReader.snapshot(parentA, { now });
-        expect(lifecycle.row).toEqual(row);
-        expectUnparsed(parse, "saved skill prompt", '"systemPromptReport"');
-        const denied = lifecycle.row?.toolOverrides?.mcpToolsDeny?.synthetic;
-        if (!denied) {
-          throw new Error("expected lifecycle tool overrides");
-        }
-        expect(denied).toEqual(["blocked"]);
-        expect(Object.isFrozen(denied)).toBe(true);
-        expect(() => denied.push("response-only")).toThrow(TypeError);
-        expect((await rowReader.snapshot(parentA, { now })).row).toEqual(row);
+      }
+      expect(loaded.store[childA]).toMatchObject({
+        sessionId: "child-a",
+        parentSessionKey: parentA,
       });
+      expectCompact(loaded.store[childA]);
+      expectUnparsed(parse, "child saved skill prompt", "child saved report");
+      const row = await rowReader.row(loaded.canonicalKey, { now });
+      expect(row?.childSessions).toEqual([childA]);
+      parse.mockClear();
+      const lifecycle = await rowReader.snapshot(parentA, { now });
+      expect(lifecycle.row).toEqual(row);
+      expectUnparsed(parse, "saved skill prompt", '"systemPromptReport"');
+      const denied = lifecycle.row?.toolOverrides?.mcpToolsDeny?.synthetic;
+      if (!denied) {
+        throw new Error("expected lifecycle tool overrides");
+      }
+      expect(denied).toEqual(["blocked"]);
+      expect(Object.isFrozen(denied)).toBe(true);
+      expect(() => denied.push("response-only")).toThrow(TypeError);
+      expect((await rowReader.snapshot(parentA, { now })).row).toEqual(row);
     }
     await sessions.updateSessionEntry({ sessionKey: parentA, storePath }, () => ({
       label: "fresh lifecycle label",
@@ -291,9 +287,10 @@ test(
       [navigation]: session("navigation", now),
       [child]: { ...session("child", now, navigation), spawnedBy: oldParent },
     });
-    await control(child, oldParent, now);
+    using oldControl = await control(child, oldParent, now);
     expect(await children(navigation, now)).toEqual([child]);
-    await control(child, newParent, now + 25);
+    oldControl[Symbol.dispose]();
+    using _ = await control(child, newParent, now + 25);
     expect(await children(navigation, now + 50)).toEqual([child]);
     expect(await children(oldParent, now + 50)).toBeUndefined();
     expect(await children(newParent, now + 50)).toEqual([child]);
@@ -318,8 +315,9 @@ test.each([false, true])(
         ...session("child", now),
         ...retainedDetails(now, childPrompt),
       });
-      await control(childKey, parentKey, now);
-      await withParseSpy(async (parse) => {
+      using childControl = await control(childKey, parentKey, now);
+      {
+        using parse = vi.spyOn(JSON, "parse");
         const sql = observeHostDataSql();
         using _ = { [Symbol.dispose]: sql.restore };
         const loaded = await loadChildren(parentKey);
@@ -327,7 +325,7 @@ test.each([false, true])(
         expectCompact(loaded.store[childKey]);
         expectUnparsed(parse, childPrompt, '"systemPromptReport"');
         expect(sql.queries).toEqual([]);
-      });
+      }
       expect(await children(parentKey, now)).toEqual([childKey]);
 
       await sessions.replaceSessionEntry(childTarget, {
@@ -344,5 +342,6 @@ test.each([false, true])(
       });
       expect((await loadChildren(parentKey)).store[childKey]).toBeUndefined();
       expect(await children(parentKey, now)).toBeUndefined();
+      childControl[Symbol.dispose]();
     })(),
 );

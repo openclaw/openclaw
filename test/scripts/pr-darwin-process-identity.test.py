@@ -25,7 +25,7 @@ RUNNER = ROOT / 'scripts/pr-lib/process-group-runner.mjs'
 spec = importlib.util.spec_from_file_location('pr_identity', PROVIDER)
 identity = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(identity)
-BASH = shutil.which('bash')
+BASH = '/bin/bash' if sys.platform == 'darwin' else shutil.which('bash')
 NODE = shutil.which('node')
 GIT = shutil.which('git')
 
@@ -224,6 +224,25 @@ class LockTests(unittest.TestCase):
         self.complete(self.supervise('acquire_pr_operation_lock 42\nprintf "held\\n"'),0)
         self.assertFalse(self.exists())
         self.assertFalse((self.repo/'node_modules').exists())
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'Darwin interpreter compatibility')
+    def test_helpers_use_system_bash_independently_of_path(self):
+        tools = self.root/'tools'; tools.mkdir()
+        intercepted = self.root/'intercepted'
+        bash = tools/'bash'
+        self.env['PATH'] = str(tools)+os.pathsep+self.env['PATH']
+        for helper in ('pr-identity-preflight', 'operation-lock-release'):
+            with self.subTest(helper=helper):
+                # The operation uses absolute BASH. Reject just one supervisor
+                # helper at a time so preflight cannot hide a release regression.
+                bash.write_text('#!/bin/sh\nif [ "$3" = "'+helper+'" ]; then\n'
+                                '  printf "%s\\n" "$3" > "'+str(intercepted)+'"\n'
+                                '  exit 97\nfi\nexec /bin/bash "$@"\n')
+                bash.chmod(0o755)
+                self.complete(self.supervise('acquire_pr_operation_lock 42'), 0)
+                self.assertFalse(intercepted.exists())
+                self.assertFalse(self.exists())
+                self.assertFalse(list(self.root.glob('openclaw-pr-lock-release-*')))
 
     def test_anchor_cleanup_after_clean_completion_preserves_dependency_target(self):
         p, anchor, outside = self.supervise_anchor('acquire_pr_operation_lock 42')

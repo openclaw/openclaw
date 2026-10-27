@@ -6,7 +6,10 @@ import type {
   SessionGitHubStatusResult,
 } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { GitHubPublicationRow as PublicationRow } from "../state/github-publication-read.types.js";
+import type {
+  GitHubPublicationRow as PublicationRow,
+  RepositoryGitHubPublicationRow,
+} from "../state/github-publication-read.types.js";
 import { readGitHubPublicationSessionLifecycleInWorker } from "../state/github-publication-session-lifecycles.js";
 import {
   assertExpectedSharedGitHubPublisher,
@@ -19,9 +22,12 @@ import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-
 import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
 import {
   digestGitHubPublicationRequest as digestRequest,
-  projectGitHubPublicationResult as publicationResult,
+  projectGitHubPublicationResult,
 } from "./github-publication-receipt.js";
-import { readGitHubPublicationRequestInWorker } from "./github-publication-recovery.js";
+import {
+  readGitHubPublicationRequestInWorker,
+  type GitHubPublicationRecoveryBackoff,
+} from "./github-publication-recovery.js";
 import { insertGitHubPublicationRequestAsync } from "./github-publication-request-async.js";
 import {
   isGitHubPublicationRequesterV2,
@@ -99,6 +105,10 @@ export function createGitHubPublicationCoordinatorMethods(params: {
   ) => Promise<SessionGitHubPublicationResult>;
   getCommittedRuntimeConfig: () => import("../config/types.openclaw.js").OpenClawConfig;
   signal: AbortSignal;
+  recovery?: {
+    shared: GitHubPublicationRecoveryBackoff;
+    repository: GitHubPublicationRecoveryBackoff;
+  };
   sameWorktree: (
     row: PublicationRow,
     worktree: Awaited<ReturnType<typeof readGitHubPublicationWorktreeOwner>>["worktree"],
@@ -109,10 +119,16 @@ export function createGitHubPublicationCoordinatorMethods(params: {
     validateExecution: () => boolean,
     assertInvocationCurrent?: () => void,
     invocationSignal?: AbortSignal,
+    recoveryResult?: SessionGitHubPublicationResult,
   ) => Promise<SessionGitHubPublicationResult>;
   recordRequestingRun: (requestId: string, runId: string) => void;
 }) {
   const { sameWorktree, processRow } = params;
+  const publicationResult = (row: PublicationRow | RepositoryGitHubPublicationRow) => {
+    const result = projectGitHubPublicationResult(row);
+    const recovery = "workspace_id" in row ? params.recovery?.repository : params.recovery?.shared;
+    return recovery?.describe(result) ?? result;
+  };
   const requestForSession = async (
     input: GitHubPublicationSessionRequestV2,
   ): Promise<SessionGitHubPublicationResult> => {
@@ -393,13 +409,19 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       return requestForSession(input);
     },
 
-    async resumeSessionRequests(isStopping?: () => boolean): Promise<void> {
+    async resumeSessionRequests(
+      isStopping?: () => boolean,
+      isPendingEmpty?: () => boolean,
+    ): Promise<void> {
       if (isStopping?.()) {
         return;
       }
-      const rows = await listSharedGitHubPublicationsAsync({ claimNull: true, pending: true });
+      const rows = isPendingEmpty?.()
+        ? []
+        : await listSharedGitHubPublicationsAsync({ claimNull: true, pending: true });
+      params.recovery?.shared.retain(rows.map((row) => row.request_id));
       params.assertCurrent();
-      if (isStopping?.()) {
+      if (isStopping?.() || rows.length === 0) {
         return;
       }
       const pending = new Set(
@@ -426,10 +448,24 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         }
         try {
           // An executing publication keeps its custody through durable settlement.
-          await processRow(row, () => {
-            const placement = params.placements.get(row.session_id);
-            return !placement?.turnClaim && !pending.has(row.session_id);
-          });
+          const execute = (recoveryResult?: SessionGitHubPublicationResult) =>
+            processRow(
+              row,
+              () => {
+                const placement = params.placements.get(row.session_id);
+                return !placement?.turnClaim && !pending.has(row.session_id);
+              },
+              undefined,
+              undefined,
+              recoveryResult,
+            );
+          const result = params.recovery
+            ? await params.recovery.shared.run(row, execute, execute)
+            : await execute();
+          // Cooldown must not let another request overtake this worktree's unsettled effects.
+          if (!result || result.status === "requested" || result.status === "publishing") {
+            blockedWorktrees.add(row.worktree_id);
+          }
         } catch (error) {
           // Later requests for this checkout must not overtake its unfinished Git transaction.
           blockedWorktrees.add(row.worktree_id);

@@ -24,7 +24,6 @@ import * as databaseLifecycle from "../../../state/openclaw-state-db-cache.js";
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../../agent-run-terminal-outcome.js";
 import { runSpawnPipeline } from "../../spawn-pipeline.js";
 import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
-import { createSubagentRegistryListener } from "./subagent-registry-listener.js";
 import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
@@ -299,17 +298,7 @@ it.each(["open", "restart", "suspend"] as const)(
         emit = handler;
         return () => {};
       });
-      const listener = createSubagentRegistryListener({
-        runs: f.runs,
-        pendingLifecycle: createPendingLifecycleScheduler({
-          runs: f.runs,
-          completeInBackground: vi.fn(),
-        }),
-        resumeRequesterSettleWake: vi.fn(),
-        adoptPausedSubagentRunIntoSuccessor: async () => false,
-        refreshFrozenResultFromSession: async () => {},
-        completeSubagentRunWithRecovery: complete,
-      });
+      const listener = f.createListener({ completeSubagentRunWithRecovery: complete });
       const dispatch = async () => {
         const settleRootWork = observeRootWork();
         if (fence === "restart") {
@@ -372,17 +361,7 @@ it.each([false, true])(
         emit = handler;
         return () => {};
       });
-      const listener = createSubagentRegistryListener({
-        runs: f.runs,
-        pendingLifecycle: createPendingLifecycleScheduler({
-          runs: f.runs,
-          completeInBackground: vi.fn(),
-        }),
-        resumeRequesterSettleWake: vi.fn(),
-        adoptPausedSubagentRunIntoSuccessor: async () => false,
-        refreshFrozenResultFromSession: async () => {},
-        completeSubagentRunWithRecovery: async () => {},
-      });
+      const listener = f.createListener();
       listener.ensure();
       try {
         if (started) {
@@ -446,14 +425,7 @@ it.each(["pending", "already dispatched", "next attempt"] as const)(
         emit = handler;
         return () => {};
       });
-      const listener = createSubagentRegistryListener({
-        runs: f.runs,
-        pendingLifecycle,
-        resumeRequesterSettleWake: vi.fn(),
-        adoptPausedSubagentRunIntoSuccessor: async () => false,
-        refreshFrozenResultFromSession: async () => {},
-        completeSubagentRunWithRecovery: async () => {},
-      });
+      const listener = f.createListener({ pendingLifecycle });
       const restarted = createDeferred();
       const stop = subscribeSubagentRunChanges("persistence", () => {
         if (f.current().execution.startedAt === 20) {

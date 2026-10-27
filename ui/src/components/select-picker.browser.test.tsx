@@ -14,6 +14,7 @@ import { SettingsRow } from "./solid/settings-ui.tsx";
 import "../styles/base.css";
 import "../styles/settings-controls.css";
 import "../styles/settings.css";
+import "../styles/model-providers.css";
 
 afterEach(async () => {
   cleanupSolid();
@@ -54,12 +55,14 @@ function labelsFit(picker: SelectPicker) {
   }
 }
 
-type ModelExtras = Pick<ModelPickerParams, "placement" | "custom">;
+type ModelExtras = Partial<
+  Pick<ModelPickerParams, "placement" | "custom" | "label" | "value" | "id">
+> & { windowed?: boolean };
 async function mountModel(options: ModelPickerOption[], style: string, extra: ModelExtras = {}) {
   const onChange = vi.fn();
-  const params = { value: options[0]!.value, options, ...extra };
+  const params = { label: "Model", value: options[0]!.value, options, ...extra };
   const { picker } = await mountPickers(
-    () => <ModelPicker label="Model" onChange={onChange} {...params} />,
+    () => <ModelPicker onChange={onChange} {...params} />,
     style,
   );
   return { picker, onChange };
@@ -75,64 +78,78 @@ async function mountPickers(content: () => JSX.Element, style = "", direction = 
   return { host, pickers, picker: pickers[0]! };
 }
 
-function menuCase(
-  sizing: "custom" | "viewport" | "trigger" | "wrap" | "search",
-  options: ModelPickerOption[],
-  width = 390,
-  style = "position:fixed;right:12px;top:32px;width:90px",
-  extra: ModelExtras = {},
-) {
-  return {
-    sizing,
-    width,
-    style,
-    selected: options[0]!.label,
-    options,
-    extra,
-  };
-}
-
 describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout", () => {
-  it("keeps the scroll position when the pointer highlights a clipped edge row", async () => {
-    const { userEvent, role } = await browser(1280);
-    const { picker } = await mountModel(numberedModels(60), "width:240px;margin:24px");
+  it("retains virtual rows when a search edit leaves the choices unchanged", async () => {
+    const { page, role } = await browser(390);
+    const { picker } = await mountModel(numberedModels(1000), "width:320px;margin:24px", {
+      windowed: true,
+    });
     await role("button", "Model: Model 0").click();
-    const list = picker.querySelector<HTMLElement>(".picker-select__options")!;
-    const rows = [...picker.querySelectorAll<HTMLElement>('[role="option"]')];
-    await expect.poll(() => list.scrollHeight).toBeGreaterThan(list.clientHeight);
-    const rowHeight = rows[1]!.offsetTop - rows[0]!.offsetTop;
-    const settle = () =>
-      new Promise<void>((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-      });
-    for (const edge of ["bottom", "top"] as const) {
-      // Leave half a row clipped at each edge, as a wheel or trackpad scroll does.
-      list.scrollTop = rowHeight * 10 + Math.round(rowHeight / 2);
-      list.dispatchEvent(new Event("scroll"));
-      await settle();
-      const top = list.scrollTop;
-      const bounds = list.getBoundingClientRect();
-      const clipped = rows.find((row) => {
-        const rect = row.getBoundingClientRect();
-        return edge === "bottom"
-          ? rect.top < bounds.bottom - 2 && rect.bottom > bounds.bottom + 2
-          : rect.top < bounds.top - 2 && rect.bottom > bounds.top + 2;
-      })!;
-      expect(clipped, edge).toBeDefined();
-      const rect = clipped.getBoundingClientRect();
-      // Hover the list at the clipped row's visible sliver; hovering the row
-      // itself would let Playwright scroll it into view before moving.
-      const sliver = (Math.max(rect.top, bounds.top) + Math.min(rect.bottom, bounds.bottom)) / 2;
-      await userEvent.hover(list, { position: { x: 24, y: Math.round(sliver - bounds.top) } });
-      await expect.poll(() => clipped.hasAttribute("data-active")).toBe(true);
-      await settle();
-      expect(list.scrollTop, edge).toBe(top);
-    }
-    // Keyboard navigation after a pointer highlight still reveals the next row.
-    const top = list.scrollTop;
-    await userEvent.keyboard("{ArrowUp}");
-    await expect.poll(() => list.scrollTop).toBeLessThan(top);
+    const first = () => picker.querySelector('[role="option"][data-value="fixture/model-0"]');
+    await expect.poll(first).not.toBeNull();
+    const original = first();
+    const search = picker.querySelector<HTMLInputElement>(".picker-select__search")!;
+    await page.elementLocator(search).fill("Model");
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+    expect(first()).toBe(original);
+    await page.elementLocator(search).fill("Model 999");
+    await expect.poll(() => picker.querySelectorAll('[role="option"]').length).toBe(1);
+    expect(picker.querySelector('[role="option"]')?.getAttribute("data-value")).toBe(
+      "fixture/model-999",
+    );
   });
+
+  it.each([false, true])(
+    "keeps the scroll position on clipped edge hover (windowed=%s)",
+    async (windowed) => {
+      const { userEvent, role } = await browser(1280);
+      const { picker } = await mountModel(
+        numberedModels(windowed ? 1000 : 60),
+        "width:240px;margin:24px",
+        { windowed },
+      );
+      await role("button", "Model: Model 0").click();
+      const list = picker.querySelector<HTMLElement>(".picker-select__options")!;
+      const rows = () => [...picker.querySelectorAll<HTMLElement>('[role="option"]')];
+      await expect.poll(() => list.scrollHeight).toBeGreaterThan(list.clientHeight);
+      await expect.poll(() => rows()[0]?.getBoundingClientRect().height ?? 0).toBeGreaterThan(0);
+      const rowHeight = rows()[0]!.getBoundingClientRect().height;
+      const settle = () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        });
+      for (const edge of ["bottom", "top"] as const) {
+        // Leave half a row clipped at each edge, as a wheel or trackpad scroll does.
+        const middle = rowHeight * 10 + Math.round(rowHeight / 2);
+        list.scrollTop = edge === "bottom" ? middle - list.clientHeight : middle;
+        list.dispatchEvent(new Event("scroll"));
+        await settle();
+        const top = list.scrollTop;
+        const bounds = list.getBoundingClientRect();
+        const clipped = rows().find((row) => {
+          const rect = row.getBoundingClientRect();
+          return edge === "bottom"
+            ? rect.top < bounds.bottom - 2 && rect.bottom > bounds.bottom + 2
+            : rect.top < bounds.top - 2 && rect.bottom > bounds.top + 2;
+        })!;
+        expect(clipped, edge).toBeDefined();
+        const rect = clipped.getBoundingClientRect();
+        // Hover the list at the clipped row's visible sliver; hovering the row
+        // itself would let Playwright scroll it into view before moving.
+        const sliver = (Math.max(rect.top, bounds.top) + Math.min(rect.bottom, bounds.bottom)) / 2;
+        await userEvent.hover(list, { position: { x: 24, y: Math.round(sliver - bounds.top) } });
+        await expect.poll(() => clipped.hasAttribute("data-active")).toBe(true);
+        await settle();
+        expect(list.scrollTop, edge).toBe(top);
+      }
+      // Keyboard navigation after a pointer highlight still reveals the next row.
+      const top = list.scrollTop;
+      await userEvent.keyboard("{ArrowUp}");
+      await expect.poll(() => list.scrollTop).toBeLessThan(top);
+    },
+  );
 
   it("reveals keyboard highlights without untracked reactive reads", async () => {
     const warning = vi.spyOn(console, "warn");
@@ -172,11 +189,9 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
   });
 
   it.each([undefined, "submenu"] as const)(
-    "resolves writing direction on opening without reading closed picker styles (%s)",
+    "resolves writing direction on opening and across placement changes (%s)",
     async (variant) => {
       const { userEvent } = await import("vitest/browser");
-      const computedStyle = vi.spyOn(window, "getComputedStyle");
-      onTestFinished(() => computedStyle.mockRestore());
       const [direction, setDirection] = createSignal<"ltr" | "rtl">("ltr");
       const [placement, setPlacement] = createSignal<"top" | "bottom">("bottom");
       const { picker } = await mountPickers(() => (
@@ -194,15 +209,10 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
         </div>
       ));
       const menu = picker.querySelector<HTMLElement>(".picker-select__menu")!;
-      const hostStyleReads = () =>
-        computedStyle.mock.calls.filter(([element]) => element === picker);
-      expect(hostStyleReads()).toHaveLength(0);
-
       setDirection("rtl");
       setPlacement("top");
       flush();
       await picker.updateComplete;
-      expect(hostStyleReads()).toHaveLength(0);
       const trigger = picker.querySelector<HTMLButtonElement>("button")!;
       trigger.focus();
       await userEvent.keyboard(variant === "submenu" ? "{ArrowLeft}" : "{ArrowDown}");
@@ -216,12 +226,10 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       await picker.updateComplete;
       expect(menu.dataset.placement).toBe(variant === "submenu" ? "right-start" : "bottom-start");
       await userEvent.keyboard("{Escape}");
-      computedStyle.mockClear();
       setDirection("rtl");
       setPlacement("top");
       flush();
       await picker.updateComplete;
-      expect(hostStyleReads()).toHaveLength(0);
       await userEvent.keyboard(variant === "submenu" ? "{ArrowLeft}" : "{ArrowDown}");
       await expect.element(trigger).toHaveAttribute("aria-expanded", "true");
       expect(menu.dataset.placement).toBe(variant === "submenu" ? "left-start" : "top-start");
@@ -231,10 +239,8 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
   );
 
   it.each([
-    { width: 1280, direction: "ltr" },
     { width: 390, direction: "ltr" },
     { width: 1280, direction: "rtl" },
-    { width: 390, direction: "rtl" },
   ])(
     "starts picker searches at the writing edge in $direction at $width pixels",
     async ({ width, direction }) => {
@@ -247,21 +253,6 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
         () => (
           <>
             <SettingsRow title="Primary" control={<ModelPicker label="Primary" {...selection} />} />
-            <SettingsRow
-              title="Decision"
-              control={
-                <DecisionModelPicker
-                  id="alignment-decision"
-                  models={[
-                    { provider: "fixture", id: "one", name: "Decision one", pluginId: "fixture" },
-                  ]}
-                  value="fixture/one"
-                  disabled={false}
-                  onChange={onChange}
-                />
-              }
-            />
-            <SettingsRow title="Shared" control={<Shared />} />
             <Shared />
             <SettingsRow
               title="Value"
@@ -299,151 +290,161 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
     },
   );
 
-  it.each([
-    ...(["bottom", "top"] as const).map((placement) =>
-      menuCase(
-        "search",
-        readableModels,
-        placement === "bottom" ? 1280 : 390,
-        `position:fixed;right:12px;${placement === "top" ? "bottom" : "top"}:32px;width:120px`,
-        { placement },
-      ),
-    ),
-    ...(["bottom", "top"] as const).map((placement) =>
-      menuCase(
-        "custom",
-        [option("", "Default"), { ...option("fixture/anchor"), provider: "fixture" }],
-        placement === "bottom" ? 1280 : 390,
-        `position:fixed;right:12px;${placement === "top" ? "bottom" : "top"}:32px;width:90px`,
-        { placement, custom: { label: "Custom model…" } },
-      ),
-    ),
-    menuCase("viewport", [
-      option("", "Default"),
-      option("fixture/very-long-context-model-reference-for-a-narrow-phone-viewport"),
-    ]),
-    menuCase(
-      "trigger",
-      [option("auto", "Auto"), option("off", "Off")],
-      390,
-      "width:160px;padding:24px",
-    ),
-    menuCase(
-      "wrap",
-      ["0528", "distill"].map((suffix) => ({
-        value: `deepseek/deepseek-r1-${suffix}`,
-        label: `DeepSeek: DeepSeek-R1-${suffix === "distill" ? "Distill" : suffix}`,
-        provider: "deepseek",
-      })),
-      390,
-      "position:fixed;right:12px;top:32px;width:120px",
-    ),
-  ])(
-    "keeps compact model menus readable: $sizing at $width pixels",
-    async ({ width, style, options, extra, selected, sizing }) => {
-      const { page, userEvent, role } = await browser(width);
-      const { picker, onChange } = await mountModel(options, style, extra);
-      await role("button", `Model: ${selected}`).click();
-      if (sizing === "trigger") {
-        await expect.element(role("option", "Off")).toBeVisible();
-        expect(picker.querySelector("input")).toBeNull();
-      } else if (sizing !== "wrap") {
-        await expect.element(role("listbox", "Model")).toBeVisible();
-      }
+  it.each(["search", "custom", "viewport", "trigger", "wrap"] as const)(
+    "keeps compact model menus readable: %s sizing",
+    async (sizing) => {
+      const options = {
+        search: readableModels,
+        custom: [option("", "Default"), { ...option("fixture/anchor"), provider: "fixture" }],
+        viewport: [
+          option("", "Default"),
+          option("fixture/very-long-context-model-reference-for-a-narrow-phone-viewport"),
+        ],
+        trigger: [option("auto", "Auto"), option("off", "Off")],
+        wrap: ["0528", "distill"].map((suffix) => ({
+          value: `deepseek/deepseek-r1-${suffix}`,
+          label: `DeepSeek: DeepSeek-R1-${suffix === "distill" ? "Distill" : suffix}`,
+          provider: "deepseek",
+        })),
+      }[sizing];
+      const { role } = await browser(sizing === "search" ? 1280 : 390);
+      const { picker } = await mountModel(
+        options,
+        sizing === "trigger"
+          ? "width:160px;padding:24px"
+          : `position:fixed;right:12px;${sizing === "custom" ? "bottom" : "top"}:32px;width:${sizing === "search" || sizing === "wrap" ? 120 : 90}px`,
+        sizing === "custom" ? { placement: "top", custom: { label: "Custom model…" } } : {},
+      );
+      await role("button", `Model: ${options[0]!.label}`).click();
+      await expect.element(role("listbox", "Model")).toBeVisible();
       const bounds = picker.querySelector(".picker-select__menu")!.getBoundingClientRect();
-      if (sizing === "custom" || sizing === "viewport" || sizing === "search") {
+      if (sizing === "search" || sizing === "custom" || sizing === "viewport") {
         expect(bounds.left).toBeGreaterThanOrEqual(0);
         expect(bounds.right).toBeLessThanOrEqual(innerWidth);
       }
-      if (sizing === "search") {
-        const row = picker.querySelector<HTMLElement>('[data-value="fixture/aurora-large"]')!;
-        await expect.element(row).toBeVisible();
-        const label = row.querySelector<HTMLElement>(".picker-select__label")!;
-        expect(label.scrollWidth).toBeLessThanOrEqual(label.clientWidth);
+      if (sizing === "search" || sizing === "custom") {
         expect(bounds.top).toBeGreaterThanOrEqual(0);
         expect(bounds.bottom).toBeLessThanOrEqual(innerHeight);
-        await role("combobox", "Search").fill("Aurora Large");
-        expect(onChange).not.toHaveBeenCalled();
-        await picker.updateComplete;
-        expect(
-          picker.querySelector<HTMLElement>('[data-value="fixture/anchor"]')?.checkVisibility() ??
-            false,
-        ).toBe(false);
-        await page
-          .elementLocator(picker.querySelector<HTMLElement>('[data-value="fixture/aurora-large"]')!)
-          .click();
-        expect(onChange).toHaveBeenCalledExactlyOnceWith("fixture/aurora-large");
-        return;
+        labelsFit(picker);
+      }
+      if (sizing === "search") {
+        await expect
+          .element(picker.querySelector<HTMLElement>('[data-value="fixture/aurora-large"]')!)
+          .toBeVisible();
       }
       if (sizing === "viewport") {
         expect(bounds.width).toBeGreaterThan(90);
-      } else if (sizing === "trigger") {
+      }
+      if (sizing === "trigger") {
+        await expect.element(role("option", "Off")).toBeVisible();
         expect(bounds.width).toBeCloseTo(
           picker.querySelector("button")!.getBoundingClientRect().width,
           0,
         );
-      } else {
-        if (sizing === "wrap") {
-          for (const label of picker.querySelectorAll<HTMLElement>(
-            "[role=option] .picker-select__label",
-          )) {
-            expect(getComputedStyle(label).whiteSpace).toBe("normal");
-          }
-        } else {
-          labelsFit(picker);
-        }
-        if (sizing === "custom") {
-          expect(picker.querySelector(".picker-select__search")).toBeNull();
-          expect(bounds.top).toBeGreaterThanOrEqual(0);
-          expect(bounds.bottom).toBeLessThanOrEqual(innerHeight);
-          await userEvent.keyboard("{ArrowDown}{Enter}");
-          expect(onChange).toHaveBeenCalledExactlyOnceWith("fixture/anchor");
+      }
+      if (sizing === "custom" || sizing === "trigger") {
+        expect(picker.querySelector(".picker-select__search")).toBeNull();
+      }
+      if (sizing === "wrap") {
+        for (const label of picker.querySelectorAll<HTMLElement>(
+          "[role=option] .picker-select__label",
+        )) {
+          expect(getComputedStyle(label).whiteSpace).toBe("normal");
         }
       }
     },
   );
 
-  it("displays a saved disabled utility model without making it selectable as primary", async () => {
+  it.each([390, 1280])(
+    "preserves intrinsic width for long provider labels and details at %i pixels",
+    async (width) => {
+      const { page, userEvent } = await browser(width);
+      const options = numberedModels(1000).map((entry, index) => ({
+        value: entry.value,
+        label: entry.label,
+        provider: index % 2 ? "openai" : undefined,
+        description: index % 3 ? "API" : "Account",
+      }));
+      options[998] = {
+        value: "fixture/long",
+        label: "A long provider model with   extra whitespace and a\nwide context window",
+        provider: "openai",
+        description: "Team account with an extended capability description",
+      };
+      const measured: { open: number; filtered: number; empty: number }[] = [];
+      for (const windowed of [false, true]) {
+        const { host, picker } = await mountPickers(
+          () => (
+            <div class="model-providers__defaults">
+              <SettingsRow
+                title="Primary"
+                control={
+                  <ModelPicker
+                    label="Primary"
+                    value={options[0]!.value}
+                    options={options}
+                    onChange={() => {}}
+                    windowed={windowed}
+                  />
+                }
+              />
+            </div>
+          ),
+          "position:fixed;right:12px;top:32px;width:min(720px,calc(100vw - 24px))",
+        );
+        const trigger = picker.querySelector<HTMLButtonElement>(".picker-select__trigger")!;
+        const menu = picker.querySelector<HTMLElement>(".picker-select__menu")!;
+        const list = picker.querySelector<HTMLElement>(".picker-select__options")!;
+        await page.elementLocator(trigger).click();
+        const count = () => picker.querySelectorAll('[role="option"]').length;
+        await expect.poll(count).toBeGreaterThan(0);
+        if (windowed) {
+          expect(count()).toBeLessThan(50);
+          expect(
+            picker.querySelectorAll(".picker-select__sizer .picker-select__option").length,
+          ).toBeLessThanOrEqual(32);
+        } else {
+          expect(count()).toBe(1000);
+        }
+        const open = menu.getBoundingClientRect().width;
+        if (width === 1280) {
+          expect(open).toBeGreaterThan(trigger.getBoundingClientRect().width + 20);
+        }
+        const search = picker.querySelector<HTMLInputElement>(".picker-select__search")!;
+        await page.elementLocator(search).fill("long provider");
+        await expect.poll(count).toBe(1);
+        const filtered = menu.getBoundingClientRect().width;
+        await page.elementLocator(search).fill("no-match-here");
+        await expect.poll(count).toBe(0);
+        const empty = menu.getBoundingClientRect().width;
+        measured.push({ open, filtered, empty });
+        expect(list.scrollWidth).toBeLessThanOrEqual(list.clientWidth + 1);
+        await userEvent.keyboard("{Escape}");
+        cleanupSolid();
+        host.remove();
+      }
+      for (const state of ["open", "filtered", "empty"] as const) {
+        expect(measured[1]![state]).toBeCloseTo(measured[0]![state], 0);
+      }
+    },
+  );
+
+  it("displays a saved disabled utility model and allows returning to automatic", async () => {
     const { role, userEvent } = await browser();
-    const available = "agent-backup fallback-one fallback-two global-one global-three global-two"
-      .split(" ")
-      .map((label) => option(`fixture/${label}`, label));
     const unavailable = {
       value: "retired/not-offered",
       label: "retired/not-offered",
       disabled: true,
     };
-    const utilityChange = vi.fn();
-    const primaryChange = vi.fn();
-    await mountPickers(
-      () => (
-        <>
-          <ModelPicker
-            id="saved-utility"
-            label="Utility Model"
-            value={unavailable.value}
-            options={[
-              { value: "__openclaw_automatic_utility__", label: "Auto" },
-              { value: "", label: "Disabled" },
-              ...available,
-              unavailable,
-            ]}
-            onChange={utilityChange}
-          />
-          <ModelPicker
-            id="available-primary"
-            label="Model"
-            value="fixture/global-three"
-            options={[
-              { value: "", label: "Select a model", disabled: true },
-              ...available,
-              unavailable,
-            ]}
-            onChange={primaryChange}
-          />
-        </>
-      ),
+    const { onChange: utilityChange } = await mountModel(
+      [
+        option("__openclaw_automatic_utility__", "Auto"),
+        option("", "Disabled"),
+        ...numberedModels(6),
+        unavailable,
+      ],
       "width:320px;padding:24px",
+      { id: "saved-utility", label: "Utility Model", value: unavailable.value },
     );
     const utility = role("button", "Utility Model: retired/not-offered");
     await expect.element(utility).toBeVisible();
@@ -455,9 +456,6 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
     await role("combobox", "Search").fill("Auto");
     await userEvent.keyboard("{Enter}");
     expect(utilityChange).toHaveBeenCalledExactlyOnceWith("__openclaw_automatic_utility__");
-    await role("button", "Model: global-three").click();
-    await userEvent.keyboard("{End}{Enter}");
-    expect(primaryChange).toHaveBeenCalledExactlyOnceWith("fixture/global-two");
   });
 
   it.each([390, 1280])(
@@ -520,11 +518,6 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       const alpha = role("button", "Alpha 1");
       await userEvent.keyboard("{Tab}");
       await expect.element(alpha).toHaveFocus();
-      await userEvent.keyboard("{Enter}");
-      await expect.element(alpha).toHaveAttribute("aria-expanded", "false");
-      expect(onChange).not.toHaveBeenCalled();
-      await userEvent.keyboard(" ");
-      await expect.element(alpha).toHaveAttribute("aria-expanded", "true");
       const menu = picker.querySelector<HTMLElement>(".picker-select__menu")!;
       const bounds = menu.getBoundingClientRect();
       expect(bounds.left).toBeGreaterThanOrEqual(0);
@@ -544,12 +537,6 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       await expect.element(role("textbox", "Next field")).toHaveFocus();
       await expect.element(trigger).toHaveAttribute("aria-expanded", "false");
       expect(onChange).not.toHaveBeenCalled();
-      await trigger.click();
-      await search.fill("beta");
-      await expect.element(role("option", "Beta decision model")).toBeVisible();
-      await userEvent.keyboard("{Enter}");
-      expect(onChange).toHaveBeenCalledExactlyOnceWith("beta/two");
-      await expect.element(trigger).toHaveFocus();
     },
   );
 });

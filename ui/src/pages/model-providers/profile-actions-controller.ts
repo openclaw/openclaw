@@ -27,7 +27,7 @@ type PendingProfileOrder = {
   optimisticOrder: string[];
 };
 
-type ProfileActionsOptions = {
+export function createModelProviderProfileActions(options: {
   getAgentEpoch: () => number;
   getAgentId: () => string;
   getClient: () => GatewayBrowserClient | null;
@@ -48,126 +48,16 @@ type ProfileActionsOptions = {
   getConfig: () => RuntimeConfigCapability;
   isCurrentClient: (client: GatewayBrowserClient, epoch: number) => boolean;
   onLogoutStarted: (receipt: { cardId: string; completion: Promise<void> }) => void;
-};
-
-export function createModelProviderProfileActions(options: ProfileActionsOptions) {
+}) {
   let logoutConfirmation: AbortController | null = null;
   let probeEpochs = new Map<string, number>();
   const pendingOrders = new Map<string, PendingProfileOrder>();
   const activeOrderProviders = new Set<string>();
 
-  function resetProbes(): void {
-    probeEpochs = new Map();
-  }
-
   function clearProbe(cardId: string): void {
     probeEpochs.set(cardId, (probeEpochs.get(cardId) ?? 0) + 1);
     options.setBusy("probe:" + cardId, false);
     options.setProbeResult(cardId, null);
-  }
-
-  async function probe(cardId: string, providers: string[]) {
-    const client = options.getClient();
-    const key = `probe:${cardId}`;
-    if (!client || !options.canMutate() || options.isBusy(key)) {
-      return;
-    }
-    const { agentId, isCurrent } = captureScope(client);
-    const probeEpoch = (probeEpochs.get(cardId) ?? 0) + 1;
-    probeEpochs.set(cardId, probeEpoch);
-    const ownsProbe = () => isCurrent() && probeEpochs.get(cardId) === probeEpoch;
-    options.setBusy(key, true);
-    options.clearMessage(cardId);
-    try {
-      const results: ModelsProbeResult[] = [];
-      for (const provider of providers) {
-        if (!ownsProbe()) {
-          return;
-        }
-        results.push(
-          await client.request<ModelsProbeResult>("models.probe", { provider, agentId }),
-        );
-      }
-      if (ownsProbe()) {
-        options.setProbeResult(cardId, mergeProbeResults(cardId, results));
-      }
-    } catch (error) {
-      if (!ownsProbe()) {
-        return;
-      }
-      options.setProbeError(cardId, modelProviderErrorMessage(error));
-    } finally {
-      if (ownsProbe()) {
-        options.setBusy(key, false);
-      }
-    }
-  }
-
-  function resetOrders(): void {
-    pendingOrders.clear();
-    options.setOrders({});
-  }
-
-  function setOrder(cardId: string, provider: string, profileIds: string[] | null): void {
-    const providerStatus = options
-      .getData()
-      ?.authStatus?.providers.find((candidate) => candidate.provider === provider);
-    const optimisticOrder =
-      profileIds ?? providerStatus?.profiles.map((profile) => profile.profileId) ?? [];
-    options.setOrders({ ...options.getOrders(), [provider]: optimisticOrder });
-    pendingOrders.set(provider, { profileIds, optimisticOrder });
-    options.clearMessage(cardId);
-    void flushOrder(provider);
-  }
-
-  function flushPendingOrders(): void {
-    if (!options.canMutate()) {
-      return;
-    }
-    for (const provider of pendingOrders.keys()) {
-      void flushOrder(provider);
-    }
-  }
-
-  function cancelLogout(): void {
-    logoutConfirmation?.abort();
-  }
-
-  async function requestLogout(pending: ModelProviderPendingLogout): Promise<void> {
-    if (logoutConfirmation || !options.canMutate() || options.isBusy(`logout:${pending.cardId}`)) {
-      return;
-    }
-    // Agent changes, reconnects and navigation abort this decision before it can
-    // authorize a logout under a different scope.
-    const controller = new AbortController();
-    logoutConfirmation = controller;
-    const removing = "removeTargets" in pending;
-    const confirmed = await showConfirmDialog({
-      title: removing
-        ? t("modelProviders.remove.title", { provider: pending.label })
-        : t("modelProviders.logout.actionFor", { account: pending.label }),
-      message: removing
-        ? [
-            pending.removeTargets.some((target) => !target.credentialType)
-              ? t("modelProviders.remove.accounts", { provider: pending.label })
-              : "",
-            pending.configKey ? t("modelProviders.remove.keys", { key: pending.configKey }) : "",
-            pending.keptSource
-              ? t("modelProviders.remove.kept", { source: pending.keptSource })
-              : "",
-          ]
-            .filter(Boolean)
-            .join(" ")
-        : t("modelProviders.logout.confirm", { provider: pending.label }),
-      confirmLabel: t(removing ? "modelProviders.remove.action" : "modelProviders.logout.action"),
-      danger: true,
-      signal: controller.signal,
-    }).finally(() => {
-      logoutConfirmation = null;
-    });
-    if (confirmed && !controller.signal.aborted && options.canMutate()) {
-      await logout(pending.cardId, removing ? pending.removeTargets : [pending.target]);
-    }
   }
 
   /** Account targets sign out their profiles; removal targets clear a provider or its API key. */
@@ -367,14 +257,112 @@ export function createModelProviderProfileActions(options: ProfileActionsOptions
     options.setData({ ...data, authStatus: { ...authStatus, providers } });
   }
   return {
-    resetProbes,
+    resetProbes(): void {
+      probeEpochs = new Map();
+    },
     clearProbe,
-    probe,
-    resetOrders,
-    setOrder,
-    flushPendingOrders,
-    cancelLogout,
-    requestLogout,
+    async probe(cardId: string, providers: string[]) {
+      const client = options.getClient();
+      const key = `probe:${cardId}`;
+      if (!client || !options.canMutate() || options.isBusy(key)) {
+        return;
+      }
+      const { agentId, isCurrent } = captureScope(client);
+      const probeEpoch = (probeEpochs.get(cardId) ?? 0) + 1;
+      probeEpochs.set(cardId, probeEpoch);
+      const ownsProbe = () => isCurrent() && probeEpochs.get(cardId) === probeEpoch;
+      options.setBusy(key, true);
+      options.clearMessage(cardId);
+      try {
+        const results: ModelsProbeResult[] = [];
+        for (const provider of providers) {
+          if (!ownsProbe()) {
+            return;
+          }
+          results.push(
+            await client.request<ModelsProbeResult>("models.probe", { provider, agentId }),
+          );
+        }
+        if (ownsProbe()) {
+          options.setProbeResult(cardId, mergeProbeResults(cardId, results));
+        }
+      } catch (error) {
+        if (!ownsProbe()) {
+          return;
+        }
+        options.setProbeError(cardId, modelProviderErrorMessage(error));
+      } finally {
+        if (ownsProbe()) {
+          options.setBusy(key, false);
+        }
+      }
+    },
+    resetOrders(): void {
+      pendingOrders.clear();
+      options.setOrders({});
+    },
+    setOrder: (cardId: string, provider: string, profileIds: string[] | null): void => {
+      const providerStatus = options
+        .getData()
+        ?.authStatus?.providers.find((candidate) => candidate.provider === provider);
+      const optimisticOrder =
+        profileIds ?? providerStatus?.profiles.map((profile) => profile.profileId) ?? [];
+      options.setOrders({ ...options.getOrders(), [provider]: optimisticOrder });
+      pendingOrders.set(provider, { profileIds, optimisticOrder });
+      options.clearMessage(cardId);
+      void flushOrder(provider);
+    },
+    flushPendingOrders(): void {
+      if (!options.canMutate()) {
+        return;
+      }
+      for (const provider of pendingOrders.keys()) {
+        void flushOrder(provider);
+      }
+    },
+    cancelLogout(): void {
+      logoutConfirmation?.abort();
+    },
+    async requestLogout(pending: ModelProviderPendingLogout): Promise<void> {
+      if (
+        logoutConfirmation ||
+        !options.canMutate() ||
+        options.isBusy(`logout:${pending.cardId}`)
+      ) {
+        return;
+      }
+      // Agent changes, reconnects and navigation abort this decision before it can
+      // authorize a logout under a different scope.
+      const controller = new AbortController();
+      logoutConfirmation = controller;
+      const removing = "removeTargets" in pending;
+      const confirmed = await showConfirmDialog({
+        title: removing
+          ? t("modelProviders.remove.title", { provider: pending.label })
+          : t("modelProviders.logout.actionFor", { account: pending.label }),
+        message: removing
+          ? [
+              pending.removeTargets.some((target) => !target.credentialType)
+                ? t("modelProviders.remove.accounts", { provider: pending.label })
+                : "",
+              pending.configKey ? t("modelProviders.remove.keys", { key: pending.configKey }) : "",
+              pending.keptSource
+                ? t("modelProviders.remove.kept", { source: pending.keptSource })
+                : "",
+            ]
+              .filter(Boolean)
+              .join(" ")
+          : t("modelProviders.logout.confirm", { provider: pending.label }),
+        confirmLabel: t(removing ? "modelProviders.remove.action" : "modelProviders.logout.action"),
+        danger: true,
+        signal: controller.signal,
+      }).finally(() => {
+        logoutConfirmation = null;
+      });
+      if (confirmed && !controller.signal.aborted && options.canMutate()) {
+        await logout(pending.cardId, removing ? pending.removeTargets : [pending.target]);
+      }
+    },
     logout,
   };
 }

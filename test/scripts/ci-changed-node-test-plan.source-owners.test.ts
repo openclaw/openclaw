@@ -431,7 +431,7 @@ describe("CI changed Node test plan", () => {
   });
 
   it("runs a boundary target once through its local owner", () => {
-    const target = "test/extension-import-boundaries.test.ts";
+    const target = "test/plugin-extension-import-boundary.test.ts";
     const runnerBackend = "blacksmith";
     expect(createChangedNodeTestShards([target], { runnerBackend })).toEqual([
       {
@@ -455,7 +455,7 @@ describe("CI changed Node test plan", () => {
 
   it("leaves explicit boundary coverage with the selected artifact owner", () => {
     const companion = "src/agents/live-provider-owner.ts";
-    const target = "test/extension-import-boundaries.test.ts";
+    const target = "test/plugin-extension-import-boundary.test.ts";
     const options = { dedicatedBuildArtifacts: true };
     const shards = createChangedNodeTestShards([target, companion], options);
     expect(shards).not.toBeNull();
@@ -517,6 +517,17 @@ describe("CI changed Node test plan", () => {
     expect(selectedFiles(shards)).not.toContain(unrelated);
   });
 
+  it("keeps both pending-input contracts protected by their worker-source policy", () => {
+    const pendingInputTests = [
+      "src/config/sessions/session-accessor.pending-input-retention.test.ts",
+      "src/config/sessions/session-accessor.pending-inputs.test.ts",
+    ];
+    expect(PR_PROTECTED_RUNTIME_TEST_FILES).toEqual(expect.arrayContaining(pendingInputTests));
+    expect(resolvePolicyTestTargets(["src/config/sessions/session-transcript.worker.ts"])).toEqual(
+      expect.arrayContaining(pendingInputTests),
+    );
+  });
+
   it("keeps policy scanners beside ordinary importers without claiming complete source ownership", () => {
     const source = "src/test-utils/runtime.ts";
     const consumer = "src/example/runtime.test.ts";
@@ -524,6 +535,7 @@ describe("CI changed Node test plan", () => {
     const createFixture = () =>
       createSourceFixture("changed-policy-scanner-", {
         [source]: "export const value = 1;\n",
+        "src/example/runtime.ts": "export const value = 1;\n",
         [consumer]: 'import "../test-utils/runtime.js";\n',
         [unowned]: "export {};\n",
       });
@@ -555,13 +567,13 @@ describe("CI changed Node test plan", () => {
       "test/scripts/plugin-sdk-surface-report.test.ts",
       lintSuppressionInventory,
     ];
-    expect(resolvePolicyTestTargets([source])).toEqual([
+    expect(resolvePolicyTestTargets([source], { cwd })).toEqual([
       ...sourceInventories,
       gatewayCallsitesGuard,
       sourcePolicyTest,
     ]);
-    expect(resolvePolicyTestTargets([source], { completeOwnersOnly: true })).toEqual([]);
-    expect(resolvePolicyTestTargets(["src/example/runtime.ts"])).toEqual([
+    expect(resolvePolicyTestTargets([source], { cwd, completeOwnersOnly: true })).toEqual([]);
+    expect(resolvePolicyTestTargets(["src/example/runtime.ts"], { cwd })).toEqual([
       ...sourceInventories,
       gatewayCallsitesGuard,
     ]);
@@ -716,6 +728,17 @@ describe("CI changed Node test plan", () => {
     {
       changedPath: "src/process/command-queue.capacity-groups.ts",
       expected: ["test/gateway-hook-concurrency.e2e.test.ts"],
+    },
+    {
+      changedPath: "src/sessions/session-controller.steer.ts",
+      expected: [
+        "test/gateway-background-process-restart.e2e.test.ts",
+        "test/e2e/qa-lab/runtime/gateway-session-steering.e2e.test.ts",
+      ],
+    },
+    {
+      changedPath: "src/auto-reply/reply/queue/drain.ts",
+      expected: ["test/e2e/qa-lab/runtime/gateway-session-steering.e2e.test.ts"],
     },
     {
       changedPath: "node-runtime-recovery.mjs",

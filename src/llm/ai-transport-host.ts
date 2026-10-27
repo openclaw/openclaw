@@ -10,6 +10,7 @@ import {
   buildGuardedModelFetch,
   resolveModelRequestTimeoutMs,
 } from "../agents/provider-transport-fetch.js";
+import { hasGuardedFetchBeforeRequest } from "../infra/net/fetch-request-authority.js";
 import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAnthropicInlineContentBlocks } from "../media/anthropic-inline-images.js";
@@ -45,7 +46,8 @@ configureAiTransportHost({
       request?.proxy ||
       request?.tls ||
       getModelProviderLocalService(model) ||
-      (scope === "fetch" && getProviderAuthAuthority(model)),
+      // Request-owned Access checks must also survive asynchronous payload preparation.
+      (scope === "fetch" && (getProviderAuthAuthority(model) || hasGuardedFetchBeforeRequest())),
     );
   },
   unwrapModelTransportSentinels: unwrapModelHeaderSentinelsForProviderEgress,
@@ -63,6 +65,7 @@ configureAiTransportHost({
   normalizeAnthropicInlineContentBlocks,
   resolveOpenAIStrictToolSetting,
   resolveModelRequestTimeoutMs: (model) => resolveModelRequestTimeoutMs(model, undefined),
+  isLogEnabled: (subsystem, level) => transportLog(subsystem).isEnabled(level, "any"),
   logDebug: (subsystem, build) => {
     const log = transportLog(subsystem);
     if (!log.isEnabled("debug", "any")) {
@@ -73,8 +76,28 @@ configureAiTransportHost({
       log.debug(entry.message + formatModelTransportContext(), entry.data);
     }
   },
-  logInfo: (subsystem, message, data) =>
-    transportLog(subsystem).info(message + formatModelTransportContext(), data),
-  logWarn: (subsystem, message, data) =>
-    transportLog(subsystem).warn(message + formatModelTransportContext(), data),
+  logInfo: (subsystem, message, data) => {
+    const log = transportLog(subsystem);
+    if (log.isEnabled("info")) {
+      log.info(
+        message +
+          formatModelTransportContext(
+            data?.requestId !== undefined ? "clientRequestId" : "requestId",
+          ),
+        data,
+      );
+    }
+  },
+  logWarn: (subsystem, message, data) => {
+    const log = transportLog(subsystem);
+    if (log.isEnabled("warn")) {
+      log.warn(
+        message +
+          formatModelTransportContext(
+            data?.requestId !== undefined ? "clientRequestId" : "requestId",
+          ),
+        data,
+      );
+    }
+  },
 });

@@ -7,9 +7,7 @@ import type {
   SessionPatchArchivePreparation,
   SessionPatchArchiveTarget,
 } from "./sessions-patch-archive.types.js";
-import type { createSessionPatchCatalogPreparation } from "./sessions-patch-catalog-preparation.js";
 import type { ActiveSessionPermissionChange } from "./sessions-patch-permissions.runtime.js";
-import type { GatewayRequestContext } from "./types.js";
 
 export type MutationTarget = SessionPatchTargetIdentity & {
   commitGuard: () => ErrorShape | undefined;
@@ -43,14 +41,3 @@ type GroupMutationResult =
 export type GroupAdmissionResult =
   | GroupMutationResult
   | { kind: "detached"; snapshot: SqliteLifecycleTargetSnapshot };
-
-export type MutationCoreResult =
-  | { ok: false; error: ErrorShape }
-  | {
-      ok: true;
-      archivedSessionsCommitted: boolean;
-      cfg: ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
-      outcomes: MutationOutcome[];
-      preparedByIndex: Array<PreparedPatchTarget | undefined>;
-      catalogs: ReturnType<typeof createSessionPatchCatalogPreparation>;
-    };

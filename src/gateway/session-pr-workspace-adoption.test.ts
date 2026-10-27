@@ -1,7 +1,8 @@
 import "../config/sessions/session-entry-patch-delivery.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, assert, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, onTestFinished, vi } from "vitest";
+import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
 import { getSession, waitForExecScope } from "../agents/bash-process-registry.js";
@@ -13,7 +14,6 @@ import {
 } from "../agents/bash-tools.lifecycle.test-support.js";
 import { createProcessTool } from "../agents/bash-tools.process.js";
 import { truncateOversizedToolResultsInSessionManager } from "../agents/embedded-agent-runner/tool-result-truncation.js";
-import { acknowledgeInternalToolResult } from "../agents/runtime/internal-hooks.js";
 import * as sandboxContext from "../agents/sandbox/context.js";
 import { createSandboxTestContext } from "../agents/sandbox/test-fixtures.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
@@ -216,35 +216,18 @@ it("adopts one empty owner and keeps original message files separate from same-n
         }),
       );
     }
-    const allocate = allocation.prepareSessionWorktree;
-    let queued: ReturnType<typeof reserveSessionControllerSource> | undefined;
-    const duringPreparation = vi
-      .spyOn(allocation, "prepareSessionWorktree")
-      .mockImplementationOnce(async (...args) => {
-        const result = await allocate(...args);
-        queued = reserveSessionControllerSource(target.sessionKey, {
-          policy: { mode: "followup" },
-          target: captureSessionTarget({
-            storeScope: target.storePath,
-            sessionKey: target.sessionKey,
-            agentId: target.agentId,
-            incarnation: entry.sessionId,
-          }),
-        });
-        return result;
-      });
-    try {
-      await expect(adoptUnboundPullRequestWorkspace(input)).rejects.toThrow("queued input");
-      expect(queued?.phase).toBe("preparing");
-      expect(loadSessionEntryReadOnly(target)?.worktree).toBeUndefined();
-      expect(await managedWorktrees.findLiveByOwner("session", target.sessionKey)).toBeUndefined();
-    } finally {
-      duringPreparation.mockRestore();
-      if (queued) {
-        retireSessionControllerInput(queued);
-        await queued.settlement.promise;
-      }
-    }
+    const queued = reserveSessionControllerSource(target.sessionKey, {
+      policy: { mode: "followup" },
+      target: captureSessionTarget({
+        ...target,
+        storeScope: target.storePath,
+        incarnation: entry.sessionId,
+      }),
+    });
+    onTestFinished(async () => {
+      retireSessionControllerInput(queued);
+      await queued.settlement.promise;
+    });
     let committing: admission.SqliteWorkerOperationAdmission | undefined;
     const createAdmission = admission.createSqliteWorkerOperationAdmission;
     const captureAdmission = vi
@@ -292,6 +275,7 @@ it("adopts one empty owner and keeps original message files separate from same-n
       assertCurrent() {},
       async verifyBeforeBinding() {},
     });
+    expect(queued.phase).toBe("preparing");
     const worktree = await managedWorktrees.findLiveByOwner("session", target.sessionKey);
     expect(worktree).toBeDefined();
     try {

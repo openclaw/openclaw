@@ -8,7 +8,7 @@ import { events, makeReleaseFixture, runOwner } from "./worker-config-owner-fixt
 const boot = "bb487067-6290-49f7-bba7-7fd6970bc53e";
 const invocation = "2".repeat(32);
 const state = (f, values) => {
-  for (const [name, value] of Object.entries(values)) writeFileSync(join(f.state, name), String(value));
+  for (const [name, value] of Object.entries(values)) { writeFileSync(join(f.state, name), String(value)); }
 };
 function fixture(t, scenario = "success", timer = "inactive") {
   const f = makeReleaseFixture(t, scenario);
@@ -27,7 +27,7 @@ function fixture(t, scenario = "success", timer = "inactive") {
   mkdirSync(join(f.serving, "verified"), { mode: 0o700 });
   writeFileSync(join(f.serving, "verified", f.sha), f.sha + "\n", { mode: 0o600 });
   for (const name of ["openclaw-hourly-update.timer", "openclaw-hourly-update.service"])
-    writeFileSync(join(f.root, "etc/systemd/system", name), "# synthetic scheduler input\n", { mode: 0o644 });
+    { writeFileSync(join(f.root, "etc/systemd/system", name), "# synthetic scheduler input\n", { mode: 0o644 }); }
   f.args = ["--recover", "--start-stopped-current", f.sha, boot, "222", "2220000", invocation];
   f.receipt = join(f.serving, "journal", `operator-start-current-${boot}-${invocation}.log`);
   return f;
@@ -39,7 +39,7 @@ function noOtherMutation(f) {
   assert.doesNotMatch(events(f), /service\.(?:system|user)\.(?:stop|restart|enable|disable|daemon-reload)\n|service.user.start|gateway config set|account.openclaw-deploy/);
   assert.equal(readdirSync(join(f.serving, "journal")).includes("activation.json"), false);
 }
-for (const timer of ["inactive", "active"]) test(`same-current stopped recovery starts once and preserves the ${timer} timer policy`, (t) => {
+for (const timer of ["inactive", "active"]) { test(`same-current stopped recovery starts once and preserves the ${timer} timer policy`, (t) => {
   const f = fixture(t, "success", timer);
   const result = runOwner(f, f.args);
   assert.ifError(result.error); assert.equal(result.status, 0, result.stderr + events(f));
@@ -52,7 +52,7 @@ for (const timer of ["inactive", "active"]) test(`same-current stopped recovery 
   assert(receipt.lastIndexOf('"timer":') < receipt.indexOf("phase=recovered"));
   assert.match(events(f), /gateway gateway call agent.wait/);
   noOtherMutation(f);
-});
+}); }
 
 function catchupFixture(t, scenario) {
   const f = fixture(t, scenario), environment = join(f.root, "timer-catchup.sh");
@@ -77,16 +77,16 @@ for (const [scenario, reason] of [
   ["timer-catchup-timeout", /did not settle within verification budget/],
   ["timer-catchup-query-failed", /synthetic catch-up status failure/],
   ["timer-catchup-external-stop", undefined],
-]) test(`${scenario} keeps restored timer recovery unaccepted`, (t) => {
+]) { test(`${scenario} keeps restored timer recovery unaccepted`, (t) => {
   const f = catchupFixture(t, scenario), result = runOwner(f, f.args);
   assert.ifError(result.error); assert.notEqual(result.status, 0);
-  if (reason) assert.match(result.stderr, reason);
+  if (reason) { assert.match(result.stderr, reason); }
   assert.doesNotMatch(result.stdout, /RECOVERED/);
   assert.equal(events(f).split("timer.start\n").length - 1, 1);
-  if (scenario === "timer-catchup-query-failed") assert.doesNotMatch(events(f), /timer.catchup-poll.2/);
+  if (scenario === "timer-catchup-query-failed") { assert.doesNotMatch(events(f), /timer.catchup-poll.2/); }
   assert.match(readFileSync(f.receipt, "utf8"), /phase=timer-partial/);
   noOtherMutation(f);
-});
+}); }
 
 for (const [name, change, reason] of [
   ["stale boot", (f) => { f.args[3] = "a".repeat(8) + "-6290-49f7-bba7-7fd6970bc53e"; }],
@@ -133,13 +133,13 @@ for (const [name, change, reason] of [
     writeFileSync(join(process, "maps"), ""); symlinkSync(f.agentDatabasePath, join(process, "fd/3"));
     writeFileSync(join(process, "fdinfo/3"), "flags:\t0100002\n");
   }],
-]) test(`${name} refuses without Gateway or timer lifecycle actions`, (t) => {
+]) { test(`${name} refuses without Gateway or timer lifecycle actions`, (t) => {
   const f = fixture(t); change(f);
   const result = runOwner(f, f.args);
   assert.ifError(result.error); assert.notEqual(result.status, 0, result.stdout);
-  if (reason) assert.match(result.stderr, reason);
+  if (reason) { assert.match(result.stderr, reason); }
   assert.doesNotMatch(result.stdout, /RECOVERED|MARKER_VERIFIED/); noLifecycle(f);
-});
+}); }
 
 test("foreign-owned database refuses before any lifecycle action", {
   skip: process.getuid() !== 0 ? "real foreign UID proof requires isolated root" : false,
@@ -156,7 +156,7 @@ for (const scenario of ["recovery-start-refused", "start-skip0", "start-uncertai
     assert.ifError(result.error); assert.notEqual(result.status, 0, result.stdout);
     assert.doesNotMatch(result.stdout, /RECOVERED/);
     assert.equal(events(f).split("service.system.start\n").length - 1, 1, result.stderr);
-    if (["start-pending-job", "raced-stop-job"].includes(scenario)) assert.doesNotMatch(events(f), /timer.start/);
+    if (["start-pending-job", "raced-stop-job"].includes(scenario)) { assert.doesNotMatch(events(f), /timer.start/); }
     assert.doesNotMatch(events(f), /competing-stop.replaced/);
     const receipt = readFileSync(f.receipt, "utf8"); assert.match(receipt, /phase=start-intent/);
     const retried = runOwner(f, f.args);
@@ -166,64 +166,35 @@ for (const scenario of ["recovery-start-refused", "start-skip0", "start-uncertai
   });
 }
 
-test("an externally stopped previously active timer is not restarted", (t) => {
-  const f = fixture(t, "timer-stopped-after-marker", "active");
-  const result = runOwner(f, f.args);
-  assert.ifError(result.error); assert.notEqual(result.status, 0);
-  assert.match(events(f), /gateway gateway call agent.wait/);
-  assert.doesNotMatch(events(f), /timer.start/);
-  assert.equal(readFileSync(join(f.state, "timer-active"), "utf8"), "inactive");
+for (const [scenario, timer, event, phase, timerStarts, prepare] of [
+  ["timer-stopped-after-marker", "active", /gateway gateway call agent.wait/, null, 0],
+  ["timer-fired-after-marker", "active", /timer.externally-fired/, "timer-partial", 0],
+  ["timer-change-during-validation", "active", /timer.changed-during-validation/],
+  ["first-environment-file-drift", "inactive", /environment.first-file-changed/, null, 0],
+  ["timer-stopped-after-observation", "inactive", /timer.externally-stopped-after-observation/, "verification-partial", 1],
+  ["replace-empty-store-on-start", "inactive", /empty-store.replaced/, "verification-partial", null, f => {
+    const db = new DatabaseSync(f.agentDatabasePath);
+    try { db.exec("DELETE FROM session_nodes"); } finally { db.close(); }
+  }],
+]) { test(`${scenario} refuses terminal acceptance`, t => {
+  const f = fixture(t, scenario, timer);
+  prepare?.(f);
+  const result = runOwner(f, f.args), log = events(f);
+  assert.ifError(result.error);
+  assert.notEqual(result.status, 0);
+  assert.match(log, event);
   assert.doesNotMatch(result.stdout, /RECOVERED/);
-});
-
-test("an active timer with changed trigger and deadline cannot be silently accepted", (t) => {
-  const f = fixture(t, "timer-fired-after-marker", "active");
-  const result = runOwner(f, f.args);
-  assert.ifError(result.error); assert.notEqual(result.status, 0);
-  assert.match(events(f), /timer.externally-fired/);
-  assert.doesNotMatch(events(f), /timer.start/);
-  assert.doesNotMatch(result.stdout, /RECOVERED/);
-  assert.match(readFileSync(f.receipt, "utf8"), /phase=timer-partial/);
-});
-
-test("timer movement during pre-start validation refuses the Gateway request", (t) => {
-  const f = fixture(t, "timer-change-during-validation", "active");
-  const result = runOwner(f, f.args);
-  assert.ifError(result.error); assert.notEqual(result.status, 0);
-  assert.match(events(f), /timer.changed-during-validation/);
-  noLifecycle(f);
-});
-
-test("drift in the first of three native EnvironmentFiles refuses acceptance", (t) => {
-  const f = fixture(t, "first-environment-file-drift");
-  const result = runOwner(f, f.args);
-  assert.ifError(result.error); assert.notEqual(result.status, 0);
-  assert.match(events(f), /environment.first-file-changed/);
-  assert.doesNotMatch(result.stdout, /RECOVERED/);
-  assert.equal(events(f).split("service.system.start\n").length - 1, 1);
-  assert.doesNotMatch(events(f), /timer.start/);
-});
-
-test("a timer stopped after restoration is rejected by the terminal acceptance fence", (t) => {
-  const f = fixture(t, "timer-stopped-after-observation");
-  const result = runOwner(f, f.args);
-  assert.ifError(result.error); assert.notEqual(result.status, 0);
-  assert.match(events(f), /timer.externally-stopped-after-observation/);
-  assert.equal(events(f).split("timer.start\n").length - 1, 1);
-  assert.doesNotMatch(result.stdout, /RECOVERED/);
-  assert.match(readFileSync(f.receipt, "utf8"), /phase=verification-partial/);
-});
-
-test("even an empty captured agent store must preserve its physical identity", (t) => {
-  const f = fixture(t, "replace-empty-store-on-start");
-  const db = new DatabaseSync(f.agentDatabasePath);
-  try { db.exec("DELETE FROM session_nodes"); } finally { db.close(); }
-  const result = runOwner(f, f.args);
-  assert.ifError(result.error); assert.notEqual(result.status, 0);
-  assert.match(events(f), /empty-store.replaced/);
-  assert.doesNotMatch(result.stdout, /RECOVERED/);
-  assert.match(readFileSync(f.receipt, "utf8"), /phase=verification-partial/);
-});
+  if (scenario === "timer-change-during-validation") { noLifecycle(f); }
+  if (timerStarts === 0) { assert.doesNotMatch(log, /timer.start/); }
+  if (timerStarts === 1) { assert.equal(log.split("timer.start\n").length - 1, 1); }
+  if (phase) { assert.match(readFileSync(f.receipt, "utf8"), new RegExp("phase=" + phase)); }
+  if (scenario === "timer-stopped-after-marker") {
+    assert.equal(readFileSync(join(f.state, "timer-active"), "utf8"), "inactive");
+  }
+  if (scenario === "first-environment-file-drift") {
+    assert.equal(log.split("service.system.start\n").length - 1, 1);
+  }
+}); }
 
 test("spent profiling artifacts remain unchanged and do not authorize or block a start", (t) => {
   const f = fixture(t), operation = "9f487067-6290-49f7-bba7-7fd6970bc53e";

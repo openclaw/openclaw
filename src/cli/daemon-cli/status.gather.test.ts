@@ -1066,26 +1066,6 @@ describe("gatherDaemonStatus", () => {
     },
   );
 
-  it("uses fallback network details when interface discovery throws during status inspection", async () => {
-    daemonLoadedConfig = {
-      gateway: {
-        bind: "tailnet",
-        tls: { enabled: true },
-        auth: { token: "daemon-token" },
-      },
-    };
-    resolveGatewayBindHost.mockImplementationOnce(async () => {
-      throw new Error("uv_interface_addresses failed");
-    });
-
-    const status = await gatherStatus();
-
-    expect(status.gateway?.bindMode).toBe("tailnet");
-    expect(status.gateway?.bindHost).toBe("127.0.0.1");
-    expect(status.gateway?.probeUrl).toBe("wss://127.0.0.1:19001");
-    expect(status.gateway?.probeNote).toContain("interface discovery failed");
-  });
-
   registerStatusTimeoutTests({
     gatherStatus,
     serviceIsLoaded,
@@ -1096,6 +1076,10 @@ describe("gatherDaemonStatus", () => {
   });
 
   registerServiceInspectionStatusTests({
+    setDaemonConfig: (config) => {
+      daemonLoadedConfig = config;
+    },
+    resolveGatewayBindHost,
     serviceFixture,
     setCliConfig: (config) => {
       cliLoadedConfig = config;
@@ -1491,48 +1475,43 @@ describe("gatherDaemonStatus", () => {
     expect(output.logs).not.toContain("Gateway process is running and owns the gateway port");
   });
 
-  it("includes the last gateway error when the service is listening but the RPC probe fails", async () => {
-    inspectPortUsages.mockResolvedValueOnce(
-      new Map([
-        [
-          19001,
-          {
-            port: 19001,
-            status: "busy",
-            listeners: [{ pid: 8000, ppid: 1, commandLine: "openclaw gateway" }],
-            hints: [],
-          },
-        ],
-      ]),
-    );
-    callGatewayStatusProbe.mockResolvedValueOnce({
-      ok: false,
-      url: "wss://127.0.0.1:19001",
-      error: "gateway closed (1000): ",
-    });
-    readLastGatewayErrorLine.mockResolvedValueOnce(
-      "parse/handle error: Error: ENOSPC: no space left on device, write",
-    );
+  it.each(["running", "stopped"] as const)(
+    "includes the last gateway error for a %s service",
+    async (runtimeStatus) => {
+      const running = runtimeStatus === "running";
+      const lastError = running
+        ? "parse/handle error: Error: ENOSPC: no space left on device, write"
+        : "Gateway ownership could not be verified. Run `openclaw gateway recover-lock` to inspect the holder.";
+      serviceReadRuntime.mockResolvedValueOnce({ status: runtimeStatus });
+      const portUsage: PortUsageTestSummary = {
+        ...freePort(19001),
+        status: running ? "busy" : "free",
+        listeners: running ? [{ pid: 8000, ppid: 1, commandLine: "openclaw gateway" }] : [],
+      };
+      inspectPortUsages.mockResolvedValueOnce(new Map([[portUsage.port, portUsage]]));
+      callGatewayStatusProbe.mockResolvedValueOnce({
+        ok: false,
+        url: "wss://127.0.0.1:19001",
+        error: "gateway closed (1000): ",
+      });
+      readLastGatewayErrorLine.mockResolvedValueOnce(lastError);
 
-    const status = await gatherStatus();
+      const status = await gatherStatus();
 
-    expect(readLastGatewayErrorLine).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ...daemonEnvironment,
-      }),
-    );
-    expect(status.port?.status).toBe("busy");
-    expect(status.rpc?.ok).toBe(false);
-    expect(status.lastError).toBe(
-      "parse/handle error: Error: ENOSPC: no space left on device, write",
-    );
-    const output = capturePrintedDaemonStatus(status, { json: false }).errors;
-    expect(output).toContain("Connectivity check: failed");
-    expect(output).toContain("gateway closed (1000):");
-    expect(output).toContain(
-      "Recent Gateway log error (may be from an earlier run): parse/handle error: Error: ENOSPC: no space left on device, write",
-    );
-  });
+      expect(readLastGatewayErrorLine).toHaveBeenCalledWith(
+        expect.objectContaining(daemonEnvironment),
+      );
+      expect(status.port?.status).toBe(running ? "busy" : "free");
+      expect(status.rpc?.ok).toBe(false);
+      expect(status.lastError).toBe(lastError);
+      const output = capturePrintedDaemonStatus(status, { json: false }).errors;
+      expect(output).toContain("Connectivity check: failed");
+      expect(output).toContain("gateway closed (1000):");
+      expect(output).toContain(
+        `Recent Gateway log error (may be from an earlier run): ${lastError}`,
+      );
+    },
+  );
 
   it("compares plugin drift against the running gateway version from the probe, not the CLI VERSION", async () => {
     // Gateway is still running an older version than the invoking CLI.

@@ -1,13 +1,74 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareProjectedAgentRunProgressState } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { PreparedRepositoryWorkspace } from "../state/session-repository-workspaces.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import * as records from "./session-row-projection-record.js";
+import type { SessionSharingTarget } from "./session-sharing-policy.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
+import {
+  projectGatewaySessionRunState,
+  type GatewaySessionRunStateCache,
+} from "./session-utils-display.js";
+
+type SessionRunSource = Pick<
+  records.MaterializedRow["materialized"]["source"],
+  "entry" | "parsedKey"
+>;
+const preparedRunStates = new WeakMap<
+  SessionRunSource,
+  {
+    progress: ReturnType<typeof prepareProjectedAgentRunProgressState>;
+    cache: GatewaySessionRunStateCache;
+  }
+>();
+
+/** Each immutable materialized source belongs to one key; replacement retires its query. */
+export function projectPreparedSessionRunState(
+  key: string,
+  source: SessionRunSource,
+  now: number,
+  rowContext: Parameters<typeof projectGatewaySessionRunState>[0]["rowContext"],
+) {
+  let prepared = preparedRunStates.get(source);
+  if (!prepared) {
+    prepared = {
+      progress: prepareProjectedAgentRunProgressState({
+        sessionKeys: [key],
+        sessionId: source.entry?.sessionId,
+        agentId: source.parsedKey?.agentId ?? "",
+      }),
+      cache: {},
+    };
+    preparedRunStates.set(source, prepared);
+  }
+  return projectGatewaySessionRunState({
+    key,
+    entry: source.entry,
+    parsedKey: source.parsedKey,
+    now,
+    rowContext,
+    projectRunProgress: prepared.progress,
+    cache: prepared.cache,
+  });
+}
+
+export function toProjectedSessionSharingTarget(
+  record: records.MaterializedRow,
+): SessionSharingTarget {
+  return {
+    agentId: record.agentId,
+    canonicalKey: record.key,
+    entry: record.entry,
+    storeKey: record.key,
+    storeKeys: [record.key],
+    storePath: record.storeTarget.storePath,
+  };
+}
 
 export type SessionRowSelectionPreparationOptions = {
   metadataOnly?: boolean;
@@ -16,6 +77,7 @@ export type SessionRowSelectionPreparationOptions = {
 
 export type SessionRowPreparationOptions = {
   includeAncestors?: boolean;
+  /** Queries select canonical durable roster keys; private exact reads use the default path. */
   selection?: boolean | SessionRowSelectionPreparationOptions;
 };
 
@@ -231,4 +293,29 @@ export async function withReadySessionRows<T>(
   const result = await owner.withPreparedExactRows(select, consumeCurrent, options);
   signal?.throwIfAborted();
   return result;
+}
+
+// Child summaries share the same membership boundary as top-level rows.
+export function prepareLinkedSessionEntryFilter(
+  projection: SessionRowReadView,
+  filter:
+    | ((key: string, entry: SessionSharingTarget["entry"], isMember?: boolean) => boolean)
+    | undefined,
+  profileId: string | undefined,
+) {
+  return (
+    key: string,
+    entry: SessionSharingTarget["entry"],
+    agentId?: string,
+    storePath?: string,
+  ) =>
+    filter?.(
+      key,
+      entry,
+      Boolean(
+        profileId &&
+        agentId &&
+        projection.readMembership({ key, agentId, storePath })?.has(profileId),
+      ),
+    ) !== false;
 }

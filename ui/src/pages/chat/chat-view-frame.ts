@@ -1,4 +1,4 @@
-import { merge } from "solid-js";
+import { createMemo, merge } from "solid-js";
 import type {
   SessionPlacementDiskSpace,
   SessionPlacementWorkerRuntimeInstall,
@@ -13,14 +13,19 @@ import type {
   ChatQueueItem,
   ChatSelectionSource,
 } from "../../lib/chat/chat-types.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isSessionRunVisuallyActive } from "../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
-import { buildPendingInputQueueItems, getChatPendingInputs } from "./chat-pending-inputs.ts";
+import {
+  buildPendingInputQueueItems,
+  dismissChatPendingInputs,
+  getChatPendingInputs,
+  isPendingInputDismissHidden,
+} from "./chat-pending-inputs.ts";
 import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
 import { chatStartupStatusLabel } from "./chat-run-startup.ts";
 import { isChatRunWorking } from "./chat-run-working.ts";
@@ -37,7 +42,6 @@ import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import { createChatSelectionAttachment } from "./components/chat-selection-attachment.ts";
 import { showChatAnnotationEditor } from "./components/chat-selection-popup.tsx";
 import type { SidebarContent, SidebarOpenResult } from "./components/chat-sidebar-content-types.ts";
-import type { ChatSwarmProgressProps } from "./components/chat-swarm-progress-types.ts";
 import type { ChatTaskSuggestionTrayProps } from "./components/chat-task-suggestions.tsx";
 import { getTranscriptState, type ChatThreadProps } from "./components/chat-thread-interactions.ts";
 import type { ChatTranscript } from "./components/chat-transcript-controller.ts";
@@ -59,6 +63,7 @@ export type ChatProps = Omit<
   | "queuedMessageAction"
   | "onRetryQueuedMessage"
   | "onDiscardQueuedMessage"
+  | "onDismissPendingInput"
   | "onFocusComposer"
   | "commentAttachments"
   | "commentsDisabled"
@@ -96,11 +101,12 @@ export type ChatProps = Omit<
     ) => Promise<boolean>;
     getQueue?: () => readonly ChatQueueItem[];
     historyState?: ChatState;
-    awaitingActivity?: boolean;
+    /** Session access presentation for dismissing retired inputs; independent of model availability. */
+    canDismissPendingInputs?: boolean;
     environmentStartStatus?: import("../../../../packages/gateway-protocol/src/schema/environments.js").WorkerEnvironmentStartStatus;
     providerPolicyNotice?: ProviderPolicyNotice | null;
     // Resolve after the first pane frame prepares the Solid owner's permission facts.
-    readProviderReview?: () => ChatProviderReviewOwner;
+    readProviderReview?: () => ChatProviderReviewOwner | undefined;
     error: string | null;
     diskSpace?: SessionPlacementDiskSpace;
     workerRuntimeInstall?: SessionPlacementWorkerRuntimeInstall;
@@ -108,13 +114,15 @@ export type ChatProps = Omit<
     approvalBusy?: boolean;
     approvalCanGrant: boolean;
     approvalErrors?: ReadonlyMap<string, string>;
+    approvalNodeNames?: ReadonlyMap<string, string>;
+    approvalPendingCount?: number;
+    onOpenPendingApprovals?: () => void;
     onApprovalDecision?: (
       approvalId: string,
       decision: ExecApprovalDecision,
     ) => void | Promise<void>;
     workspaceConflict?: WorkspaceResultConflict;
     onDismissWorkspaceConflict?: () => void;
-    swarm?: ChatSwarmProgressProps;
     chatMessageMaxWidth?: string | null;
     showNewMessages?: boolean;
     onScrollToBottom?: (options?: { smooth?: boolean }) => void;
@@ -161,50 +169,75 @@ export function createChatViewFrame(
     : undefined;
   const pendingInputs = props.historyState ? getChatPendingInputs(props.historyState) : undefined;
   const displayedPendingInputs = pendingInputs
-    ? [...pendingInputs.page.items.filter((input) => !input.queued), ...pendingInputs.queuedInputs]
+    ? [
+        ...pendingInputs.page.items.filter(
+          (input) => !input.queued && !isPendingInputDismissHidden(pendingInputs, input.id),
+        ),
+        ...pendingInputs.queuedInputs,
+      ]
     : undefined;
   const resolveCommentSource = (selection: ChatSelectionSource) =>
     resolveChatCommentAnchor(props.transcript.messageElements?.elements.values() ?? [], selection)
       ?.range;
-  const openSelectionComment = (
+  const openSelectionComment = async (
     selection: ChatSelectionSource,
     anchorRect: DOMRect,
     stage: (attachment: ChatAttachment) => boolean,
     onCancel?: () => void,
     selectionContextOnly = false,
   ) => {
-    showChatAnnotationEditor({
-      paneId: props.paneId,
-      anchorRect,
-      sourceRange: resolveCommentSource(selection),
-      comment: "",
-      readSignal: props.readSignal,
-      onCancel,
-      onSave: (comment): boolean => {
-        if (props.readSignal?.aborted) {
-          return true;
-        }
-        if (!selectionContextOnly && !uploadsEnabled(props.uploadConfig)) {
-          showToast({ message: uploadsDisabledMessage() });
-          return false;
-        }
-        const attachment = createChatSelectionAttachment(
-          { ...selection, comment, sessionKey: props.sessionKey },
-          { attachmentLimits: props.attachmentLimits, selectionContextOnly },
-          stagedAttachmentBytes(props),
-        );
-        if (!attachment) {
-          return false;
-        }
-        if (!stage(attachment)) {
-          releaseChatAttachmentPayloads([attachment]);
-          return false;
-        }
-        return true;
-      },
-    });
+    const readSignal = props.readSignal;
+    const sessionKey = props.sessionKey;
+    const paneId = props.paneId;
+    const sourceRange = resolveCommentSource(selection);
+    const current = () =>
+      !readSignal?.aborted && props.readSignal === readSignal && props.sessionKey === sessionKey;
+    try {
+      await showChatAnnotationEditor(
+        {
+          paneId,
+          anchorRect,
+          sourceRange,
+          comment: "",
+          readSignal,
+          onCancel,
+          onSave: (comment): boolean => {
+            if (props.readSignal?.aborted) {
+              return true;
+            }
+            if (!selectionContextOnly && !uploadsEnabled(props.uploadConfig)) {
+              showToast({ message: uploadsDisabledMessage() });
+              return false;
+            }
+            const attachment = createChatSelectionAttachment(
+              { ...selection, comment, sessionKey: props.sessionKey },
+              { attachmentLimits: props.attachmentLimits, selectionContextOnly },
+              stagedAttachmentBytes(props),
+            );
+            if (!attachment) {
+              return false;
+            }
+            if (!stage(attachment)) {
+              releaseChatAttachmentPayloads([attachment]);
+              return false;
+            }
+            return true;
+          },
+        },
+        current,
+      );
+    } catch (error) {
+      if (current()) {
+        showToast({ message: formatUiError(error) });
+      }
+    }
   };
   const canCompose = props.canSend;
+  const historyState = props.historyState;
+  const dismissPendingInputs =
+    props.connected && props.canDismissPendingInputs && historyState
+      ? (inputIds: readonly string[]) => void dismissChatPendingInputs(historyState, inputIds)
+      : undefined;
   const questionState = getTranscriptState(props.paneId);
   const openImage = props.onOpenImage
     ? (item: ImageLightboxItem, requestVersion?: number) =>
@@ -230,6 +263,9 @@ export function createChatViewFrame(
   }
   // Placement is visible work, but does not own an abortable model run yet.
   const runWorking = Boolean(placementStartup) || isChatRunWorking(props);
+  const startupLabel = createMemo(() =>
+    chatStartupStatusLabel(props.startupStatus, placementStartup, props.environmentStartStatus),
+  );
   const threadProps: ChatThreadProps = merge(props, {
     asyncQuestions,
     loading: props.loading && !placementStartup,
@@ -241,15 +277,7 @@ export function createChatViewFrame(
     runWorking,
     runFinalizing: !isSessionRunVisuallyActive(true, props.startupStatus?.phase),
     get startupLabel() {
-      return chatStartupStatusLabel(
-        props.startupStatus,
-        placementStartup,
-        props.environmentStartStatus,
-        (runWorking || props.stream !== null) &&
-          props.awaitingActivity !== false &&
-          !props.stream?.trim() &&
-          props.toolMessages.length === 0,
-      );
+      return startupLabel();
     },
     retryAt: props.startupStatus?.phase === "retrying" ? props.startupStatus.retryAt : undefined,
     failureActionsRunId: chatFailureRunId(props.runError, props.selectedSession),
@@ -259,19 +287,19 @@ export function createChatViewFrame(
     queuedMessageAction: props.placementStartup?.initialTurn
       ? {
           id: props.placementStartup.initialTurn.id,
-          label:
-            props.placementStartup.action === "check-delivery"
-              ? t("chat.queue.checkDelivery")
-              : undefined,
           onAction: props.connected ? props.onRetrySessionPlacementStartup : undefined,
+          onDiscard: props.onDiscardSessionPlacementStartup,
         }
       : undefined,
     onRetryQueuedMessage: props.connected && canCompose ? props.onQueueRetry : undefined,
     onDiscardQueuedMessage: props.onQueueRemove,
+    onDismissPendingInput: dismissPendingInputs
+      ? (inputId: string) => dismissPendingInputs([inputId])
+      : undefined,
     onCompanionSelection:
       props.canSend && !props.suggestionComposer && props.onCompanionStageAttachment
         ? (selection, anchorRect) =>
-            openSelectionComment(
+            void openSelectionComment(
               selection,
               anchorRect,
               (attachment) =>
@@ -285,7 +313,7 @@ export function createChatViewFrame(
     onAddToChat:
       props.canSend && !props.suggestionComposer && uploadsEnabled(props.uploadConfig)
         ? (selection, anchorRect) =>
-            openSelectionComment(
+            void openSelectionComment(
               selection,
               anchorRect,
               (attachment) => {
@@ -334,6 +362,7 @@ export function createChatViewFrame(
   return {
     approvalSourceSession,
     pendingInputs,
+    dismissPendingInputs,
     asyncQuestions,
     openImmediateImage,
     attachmentDropHandlers,

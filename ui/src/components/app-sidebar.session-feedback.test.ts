@@ -4,6 +4,7 @@ import type { SessionsCatalogListResult } from "../../../packages/gateway-protoc
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { makeBootRoster } from "../app/bootstrap.test-support.ts";
 import { patchSettings } from "../app/settings.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import {
@@ -36,6 +37,7 @@ import {
   SIDEBAR_SESSION_PAGE_SIZE,
   storeSidebarSessionOwnerFilter,
 } from "./app-sidebar-session-types.ts";
+import { areSessionCatalogsSettled } from "./session-data-catalog.ts";
 import "./app-sidebar.tsx";
 
 const hint = "No active sessions match this filter";
@@ -188,12 +190,9 @@ describe("sidebar session feedback", () => {
         gateway.gateway,
         sessions,
         "panel",
-        {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "per-sender",
+        makeBootRoster({
           agents: [{ id: "main", name: "Harbor" }],
-        },
+        }),
       );
       const plugin = registerSessionPluginAction(context, {
         id: "review",
@@ -376,6 +375,32 @@ describe("sidebar session feedback", () => {
     );
     sidebar.invalidate();
     await expectHint(sidebar);
+  });
+
+  it("settles hidden discovery after a catalog-pending page completes empty", async () => {
+    const { sidebar, enableCatalog, reply } = await emptyCatalogFixture();
+    const pendingPage = catalogPage([]);
+    pendingPage.catalogs[0]!.pending = true;
+    pendingPage.catalogs[0]!.hosts = [];
+    let page = 0;
+    reply(async () => (page++ === 0 ? catalogPage([], "fixture-next") : pendingPage));
+    enableCatalog();
+    await vi.waitFor(() => expect(sidebar.sessionData.sessionCatalogs[0]?.pending).toBe(true));
+    await vi.waitFor(() =>
+      expect(sidebar.sessionData.sessionCatalogLive.requestGeneration).toBeNull(),
+    );
+    expect(areSessionCatalogsSettled(sidebar.sessionData)).toBe(false);
+    expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("fixture-next");
+    expect(sidebar.textContent).not.toContain(hint);
+
+    reply(async () => catalogPage([]));
+    await sidebar.sessionData.loadMoreSessionCatalog("codex");
+    await settleLitElement(sidebar);
+    expect(sidebar.sessionData.sessionCatalogs[0]?.pending).toBeUndefined();
+    expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.pending).toBeUndefined();
+    expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBeUndefined();
+    expect(areSessionCatalogsSettled(sidebar.sessionData)).toBe(true);
+    expect(sidebar.textContent).toContain(hint);
   });
 
   it("keeps the empty-list hint hidden while a catalog host is pending", async () => {

@@ -61,14 +61,34 @@ export function throwCollectedErrors(errors: readonly unknown[], message: string
 export function materializeErrorStack(failure: unknown): void {
   let error = failure;
   const seen = new Set<Error>();
-  while (error instanceof Error && !seen.has(error)) {
-    seen.add(error);
-    try {
-      error.stack = String(error.stack);
-    } catch {
-      // The setter releases private frames even when a custom formatter throws.
-      error.stack = "Stack trace unavailable: custom formatter failed";
+  try {
+    while (error instanceof Error && !seen.has(error)) {
+      seen.add(error);
+      try {
+        error.stack = String(error.stack);
+      } catch {
+        // The setter releases private frames even when a custom formatter throws.
+        error.stack = "Stack trace unavailable: custom formatter failed";
+      }
+      error = error.cause;
     }
-    error = error.cause;
+  } catch {
+    // Immutable errors or opaque diagnostic getters must not replace the original failure.
   }
+}
+
+/** Run every operation in iteration order; callers retain their own settlement and error envelope. */
+export function collectSynchronousErrors<T>(
+  items: Iterable<T>,
+  run: (item: T) => unknown,
+): unknown[] {
+  const errors: unknown[] = [];
+  for (const item of items) {
+    try {
+      run(item);
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  return errors;
 }
