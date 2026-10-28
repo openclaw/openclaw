@@ -74,6 +74,7 @@ function openFile(
   path: string,
   opts: {
     line?: number | null;
+    fragment?: string;
     requestPath?: string;
     sessionKey?: string;
     disposition?: "pinned" | "preview";
@@ -118,6 +119,7 @@ function openFile(
     `Failed to load ${path}`,
     {
       line: opts.line,
+      fragment: opts.fragment,
       disposition: opts.disposition,
       intent: opts.intent,
       label: pathDisplayName(path),
@@ -152,6 +154,7 @@ export function openSessionWorkspaceFile(
 ) {
   return openFile(state, getSessionWorkspace(state), target.path, {
     line: target.line,
+    fragment: target.fragment,
     sessionKey: target.sessionKey,
     disposition,
     messageEntryId: target.messageEntryId,

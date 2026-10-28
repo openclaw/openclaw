@@ -419,6 +419,12 @@ the preview opens a nested file only when a complete workspace search finds exac
 one matching filename. Ambiguous or incomplete searches keep the missing-file error;
 use an explicit path to select the intended file.
 
+In a Markdown file preview, authored relative file links resolve from that document's
+folder. Links such as `guide.md#setup` scroll to the target heading;
+`#setup` targets the current document without changing the chat URL. Use `%23` for
+a literal `#` in an authored filename. Explicit chat/session links still navigate
+to their sessions.
+
 Opening a file collapses the file tree to make room for its preview. Use **Toggle
 file tree** to browse another file, or **Show in Files** to reveal the current file
 in its folder with the **All** filter.

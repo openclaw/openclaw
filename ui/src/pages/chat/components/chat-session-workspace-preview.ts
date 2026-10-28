@@ -33,6 +33,7 @@ export function openWorkspaceItem<T>(
     disposition?: "pinned" | "preview";
     intent?: "navigate";
     line?: number | null;
+    fragment?: string;
     revalidate?: boolean;
     label: string;
     resolveLabel?: (result: T) => string | undefined;
@@ -90,8 +91,12 @@ export function openWorkspaceItem<T>(
     );
     const selectionId = preview.canonicalKey ?? itemId;
     workspace.activeId = selectionId;
-    if (options.line != null) {
-      preview.navigation = { line: options.line };
+    const fileNavigation = options.line != null ? { line: options.line } : undefined;
+    if (options.fragment !== undefined || fileNavigation) {
+      preview.navigation =
+        options.fragment !== undefined
+          ? { ...fileNavigation, fragment: options.fragment }
+          : fileNavigation;
       workspace.navigationOrder = (workspace.navigationOrder ?? 0) + 1;
       preview.navigationOrder = workspace.navigationOrder;
       if (preview.content.kind === "file") {

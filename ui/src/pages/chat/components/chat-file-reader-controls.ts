@@ -5,6 +5,7 @@ import type { FileHtmlPreviewControls } from "./chat-html-preview.ts";
 import type {
   AttachmentSidebarRuntime,
   FileSidebarContent,
+  FileSidebarNavigation,
   MobileFileBack,
 } from "./chat-sidebar-content-types.ts";
 import type { FileReaderWorkspace } from "./chat-sidebar-view-types.ts";
@@ -29,7 +30,11 @@ export type FileViewControls = {
   onCloseSearch?: (reason: MobileFileFindCloseReason) => void;
   readingMode?: FileReadingMode;
   imagePreview?: { content: string };
-  markdown?: { content: string; options: MarkdownRenderOptions };
+  markdown?: {
+    content: string;
+    options: MarkdownRenderOptions;
+    navigation?: FileSidebarNavigation | null;
+  };
   onReadingModeChange?: (mode: FileReadingMode) => void;
   onSelectContent?: () => void;
   htmlPreview?: FileHtmlPreviewControls;

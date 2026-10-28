@@ -19,6 +19,7 @@ import {
   splitMarkdownFileLineSuffix,
 } from "./markdown-file-links.ts";
 import { installMarkdownGitHubRefs } from "./markdown-github-refs.ts";
+import { installMarkdownHeadings } from "./markdown-headings.ts";
 import { installMarkdownHumanMentions } from "./markdown-human-mentions.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
@@ -92,12 +93,18 @@ function linkLabelText(children: readonly Token[], openIndex: number): string {
   return label.trim();
 }
 
-function decorateFileLink(token: Token, target: { path: string; line: number | null }): void {
+function decorateFileLink(
+  token: Token,
+  target: { path: string; line: number | null; fragment?: string },
+): void {
   token.attrJoin("class", "markdown-file-link");
   token.attrSet("role", "button");
   token.attrSet("tabindex", "0");
   token.attrSet("data-file-path", target.path);
   token.attrSet("data-file-kind", fileKindForPath(target.path));
+  if (target.fragment !== undefined) {
+    token.attrSet("data-file-fragment", target.fragment);
+  }
   if (target.line !== null) {
     token.attrSet("data-file-line", String(target.line));
   }
@@ -171,6 +178,7 @@ export function createMarkdownParser(): MarkdownItParser {
   installAssistantTranscriptRoleMarkdown(markdownParser);
   installMarkdownDetails(markdownParser);
   installMarkdownTables(markdownParser);
+  installMarkdownHeadings(markdownParser);
 
   // Bare filenames such as README.md are not web destinations.
   markdownParser.linkify.set({ fuzzyLink: false });
@@ -386,7 +394,10 @@ export function createMarkdownParser(): MarkdownItParser {
             }
             if (!decodedHref.includes("://")) {
               const target =
-                parseMarkdownFileLinkTarget(decodedHref, { authored: true }) ??
+                parseMarkdownFileLinkTarget(href, {
+                  authored: true,
+                  basePath: env.fileLinkBasePath,
+                }) ??
                 (isHostLocalMarkdownFileHref(decodedHref)
                   ? splitMarkdownFileLineSuffix(decodedHref.trim())
                   : null);

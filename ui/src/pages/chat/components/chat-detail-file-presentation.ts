@@ -444,11 +444,13 @@ export function renderFilePanelPresentation(context: {
         (/\.(?:md|markdown|mkd)$/i.test(content.name) || content.mimeType === "text/markdown")
           ? {
               content: context.actions.currentFileText(),
+              navigation: context.props.fileNavigation,
               options: {
                 mode: "document",
                 remoteImages: false,
                 codeBlockInteraction: "interactive",
                 fileLinks: true,
+                fileLinkBasePath: content.absolutePath ?? content.path,
                 sessionLinks: true,
                 interactiveImages: context.props.onOpenImage !== null,
               },

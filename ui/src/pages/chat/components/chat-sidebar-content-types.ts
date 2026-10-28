@@ -282,8 +282,9 @@ export type FileReaderViewRequest = {
 };
 
 export type FileSidebarNavigation =
-  | { line: number; view?: FileReaderViewRequest }
-  | { line?: number; view: FileReaderViewRequest };
+  | { line: number; fragment?: string; view?: FileReaderViewRequest }
+  | { line?: number; fragment?: string; view: FileReaderViewRequest }
+  | { line?: number; fragment: string; view?: FileReaderViewRequest };
 
 export type SessionFileSource = {
   sessionKey: string;

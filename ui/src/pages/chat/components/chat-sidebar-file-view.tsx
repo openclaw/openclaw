@@ -1,6 +1,7 @@
 import { createMemo, onSettled, Show } from "solid-js";
 import { localEditorFilePath } from "../../../app/native-editor-locality.runtime.ts";
 import { createMarkdownRef } from "../../../components/markdown-dom-ref.ts";
+import { scrollMarkdownToFragment } from "../../../components/markdown-headings.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { McpAppCatalog } from "../../../components/mcp-app-catalog.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -17,7 +18,11 @@ import "../../../styles/session-panel-rail.css";
 import type { FileViewControls } from "./chat-file-reader-controls.ts";
 import { measureFileScroll } from "./chat-file-scroll.ts";
 import { HtmlPreview, HtmlPreviewSourceFallback } from "./chat-html-preview-view.tsx";
-import type { FileSidebarContent, AttachmentSidebarRuntime } from "./chat-sidebar-content-types.ts";
+import type {
+  FileSidebarContent,
+  FileSidebarNavigation,
+  AttachmentSidebarRuntime,
+} from "./chat-sidebar-content-types.ts";
 import { ChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.tsx";
 import { DesktopFileChrome, FileCopyButton, FileTextAction } from "./chat-sidebar-file-chrome.tsx";
 import {
@@ -72,13 +77,25 @@ function FileMarkdown(props: { controls: FileViewControls; onSelect: (event: Eve
       releaseArticle?.();
     };
   });
-  const markdownRef = createMarkdownRef(() => ({
-    incremental: true,
-    content: toSanitizedMarkdownHtml(
-      props.controls.markdown?.content ?? "",
-      props.controls.markdown?.options,
-    ),
-  }));
+  let previousNavigation: FileSidebarNavigation | null | undefined;
+  const markdownRef = createMarkdownRef(() => {
+    const navigation = props.controls.markdown?.navigation;
+    return {
+      incremental: true,
+      content: toSanitizedMarkdownHtml(
+        props.controls.markdown?.content ?? "",
+        props.controls.markdown?.options,
+      ),
+      onUpdate: () => {
+        if (navigation !== previousNavigation) {
+          previousNavigation = navigation;
+          if (navigation?.fragment !== undefined) {
+            scrollMarkdownToFragment(article, navigation.fragment);
+          }
+        }
+      },
+    };
+  });
   const schedule = createLayoutMeasurement(
     () => [props.controls.presentation, props.controls.markdown],
     () => measureFileScroll(scroll, props.controls.presentation === "mobile"),

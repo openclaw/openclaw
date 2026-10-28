@@ -92,6 +92,7 @@ const BARE_FILE_EXTENSIONS = new Set([
 export type MarkdownFileLinkTarget = {
   path: string;
   line?: number | null;
+  fragment?: string;
   sessionKey?: string;
   messageEntryId?: string;
 };
@@ -113,6 +114,7 @@ export function markdownFileLinkFromEvent(event: Event): MarkdownFileLinkTarget 
     (!sessionKey ? link.closest<HTMLElement>("[data-entry-id]")?.dataset.entryId : undefined);
   return {
     path,
+    ...(link.dataset.fileFragment !== undefined ? { fragment: link.dataset.fileFragment } : {}),
     line: line ? Number.parseInt(line, 10) : null,
     ...(sessionKey ? { sessionKey } : {}),
     ...(messageEntryId ? { messageEntryId } : {}),
@@ -148,16 +150,69 @@ function isAllowlistedBareFilename(raw: string, grammar: RegExp): boolean {
   return Boolean(match?.[1] && BARE_FILE_EXTENSIONS.has(match[1].toLowerCase()));
 }
 
+function decodeFileLinkPart(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function documentRelativeFilePath(path: string, basePath: string): string {
+  if (/^(?:\/|~\/|[a-z]:[\\/]|\\\\)/i.test(path)) {
+    return path;
+  }
+  const base = basePath.replaceAll("\\", "/");
+  const parts: string[] = [];
+  for (const part of (base.slice(0, base.lastIndexOf("/") + 1) + path).split("/")) {
+    if (part === ".." && parts.length && parts.at(-1) !== "..") {
+      parts.pop();
+    } else if (part && part !== ".") {
+      parts.push(part);
+    }
+  }
+  const root = base.startsWith("//") ? "//" : base.startsWith("/") ? "/" : "";
+  const resolved = root + parts.join("/");
+  return basePath.includes("\\") && !basePath.includes("/")
+    ? resolved.replaceAll("/", "\\")
+    : resolved;
+}
+
 export function parseMarkdownFileLinkTarget(
   raw: string,
-  options?: { authored?: boolean },
-): { path: string; line: number | null } | null {
+  options?: { authored?: boolean; basePath?: string },
+): { path: string; line: number | null; fragment?: string } | null {
   const target = raw.trim();
   const grammar = options?.authored ? AUTHORED_FILE : SCANNED_FILE;
-  if (!grammar.exact.test(target) && !isAllowlistedBareFilename(target, grammar.bare)) {
+  const isFile = (path: string) =>
+    grammar.exact.test(path) || isAllowlistedBareFilename(path, grammar.bare);
+  let path = target;
+  let fragment: string | undefined;
+  if (options?.authored) {
+    // Split URL syntax before decoding: %23 is a literal filename character.
+    // An interior # in a filename (draft#2.md) is still accepted as before.
+    const hash = target.indexOf("#");
+    if (
+      hash >= 0 &&
+      (isFile(decodeFileLinkPart(target.slice(0, hash))) || (hash === 0 && options.basePath))
+    ) {
+      path = target.slice(0, hash);
+      fragment = decodeFileLinkPart(target.slice(hash + 1));
+    }
+    path = decodeFileLinkPart(path);
+  }
+  if (!path && fragment !== undefined && options?.basePath) {
+    return { path: options.basePath, line: null, fragment };
+  }
+  if (!isFile(path)) {
     return null;
   }
-  return splitMarkdownFileLineSuffix(target);
+  const result = splitMarkdownFileLineSuffix(path);
+  return {
+    ...result,
+    path: options?.basePath ? documentRelativeFilePath(result.path, options.basePath) : result.path,
+    ...(fragment !== undefined ? { fragment } : {}),
+  };
 }
 
 export function isHostLocalMarkdownFileHref(href: string): boolean {

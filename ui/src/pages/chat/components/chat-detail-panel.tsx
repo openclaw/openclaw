@@ -172,6 +172,9 @@ function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanelElement) 
     navigation: FileSidebarNavigation | null,
   ) {
     if (!contentChanged) {
+      if (navigationChanged && navigation?.fragment !== undefined && !fileEditing) {
+        presentation.fileReadingMode = "preview";
+      }
       if (
         navigationChanged &&
         navigation?.line != null &&
