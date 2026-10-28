@@ -1,5 +1,5 @@
 // Compare-and-swap session patches must reject reset replacements atomically.
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
@@ -10,9 +10,6 @@ import { applySessionEntryCanonicalReplacements } from "../config/sessions/sessi
 import type { SessionEntry } from "../config/sessions/types.js";
 import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore as createDeferred } from "../shared/deferred.js";
-import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
-import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
-import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -57,12 +54,6 @@ function expectNoPublication(context: ReturnType<typeof observingContext>) {
   expect(sessionHookMocks.triggerInternalHook).not.toHaveBeenCalled();
   expect(context.broadcastToConnIds).not.toHaveBeenCalled();
 }
-
-afterEach(async () => {
-  await disposeSessionReadContexts();
-  await closeOpenClawAgentDatabasesAsync();
-  await closeStateDatabaseForTest();
-});
 
 test.each([undefined, "session-a"])(
   "sessions.patch rejects missing archive targets (expected identity: %s)",

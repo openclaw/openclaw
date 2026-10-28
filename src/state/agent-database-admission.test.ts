@@ -54,20 +54,17 @@ it.each(["settled", "pending"] as const)(
   async (timing) => {
     const env = makeEnv();
     const execution = capture({ agentId: "main", env });
+    await using _ = { [Symbol.asyncDispose]: () => execution.release() };
     const source = sourceFor(() => execution.assertCurrent());
-    try {
-      const missing = execution.runExisting(source, async () => "unexpected");
-      if (timing === "settled") {
-        expect(await missing).toBeUndefined();
-      }
-      const preparing = execution.prepare(source);
+    const missing = execution.runExisting(source, async () => "unexpected");
+    if (timing === "settled") {
       expect(await missing).toBeUndefined();
-      await preparing;
-      expect(fs.existsSync(execution.path)).toBe(true);
-      expect(await execution.runExisting(source, async () => "opened")).toBe("opened");
-    } finally {
-      await execution.release();
     }
+    const preparing = execution.prepare(source);
+    expect(await missing).toBeUndefined();
+    await preparing;
+    expect(fs.existsSync(execution.path)).toBe(true);
+    expect(await execution.runExisting(source, async () => "opened")).toBe("opened");
   },
 );
 
@@ -436,12 +433,9 @@ it("opens an unconfigured external store without reconstructing unknown deletion
   retained.db.exec("INSERT INTO auth_profile_state VALUES ('preserved', '{\"ok\":true}', 1)");
   closeDatabases();
   const bytes = fs.readFileSync(pathname);
-  const generation = nativeGeneration(retained, workerContext({ env }));
-  try {
-    expect(await generation.run(generation.source, async () => "opened")).toBe("opened");
-  } finally {
-    await generation.close();
-  }
+  await using generation = nativeGeneration(retained, workerContext({ env }));
+  expect(await generation.run(generation.source, async () => "opened")).toBe("opened");
+  await generation.close();
   expect(fs.readFileSync(pathname)).toEqual(bytes);
   expect(fs.readdirSync(external).toSorted()).toEqual(["retained.sqlite", "retained.sqlite.seal"]);
   using shared = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath(env), { readOnly: true });

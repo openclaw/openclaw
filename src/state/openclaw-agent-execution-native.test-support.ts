@@ -24,7 +24,10 @@ export function createNativeIntegrityGeneration(
     () => {},
     () => {},
   );
-  return Object.assign(generation, { source: createNativeIntegritySource(assertCurrent) });
+  return Object.assign(generation, {
+    source: createNativeIntegritySource(assertCurrent),
+    [Symbol.asyncDispose]: () => generation.close(),
+  });
 }
 
 export function createNativeIntegritySource(

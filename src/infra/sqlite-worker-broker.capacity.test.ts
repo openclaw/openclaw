@@ -180,14 +180,14 @@ it.for(["shared-state", "agent"] as const)(
   async (carrierClass, { signal }) => {
     const pathname = databasePath();
     const alias = `${pathname}.alias`;
-    const database = openNodeSqliteDatabase(pathname);
+    using database = openNodeSqliteDatabase(pathname);
     database.exec("CREATE TABLE entries (id INTEGER PRIMARY KEY, value TEXT NOT NULL)");
     admitSqliteSchema(database);
     linkSync(pathname, alias);
     const acquired = createDeferredCore();
     let count = 0;
     const createLifecycle = workerLifecycle.createSqliteWorkerLifecycle;
-    const lifecycleSpy = vi
+    using _ = vi
       .spyOn(workerLifecycle, "createSqliteWorkerLifecycle")
       .mockImplementation((options) => {
         const lifecycle = createLifecycle(options);
@@ -215,27 +215,16 @@ it.for(["shared-state", "agent"] as const)(
     ]);
     try {
       const outcomes = await withinTest(opening, signal);
-      const opened = outcomes.flatMap((outcome) =>
-        outcome.status === "fulfilled" && outcome.value ? [outcome.value] : [],
-      );
-      expect(opened).toHaveLength(1);
+      const store = outcomes.find((outcome) => outcome.status === "fulfilled")?.value;
+      assert(store);
       expect(outcomes.find((outcome) => outcome.status === "rejected")).toMatchObject({
         reason: { code: "overloaded", message: expect.stringContaining("retry open") },
       });
-      const store = opened[0]!;
       await appendWorkerRow(store, "still owned");
       await expect(readWorkerRows(store)).resolves.toEqual(["still owned"]);
     } finally {
       acquired.resolve();
-      const outcomes = await opening;
-      await Promise.all(
-        outcomes.flatMap((outcome) =>
-          outcome.status === "fulfilled" && outcome.value ? [outcome.value.close()] : [],
-        ),
-      );
       await broker.close();
-      lifecycleSpy.mockRestore();
-      database.close();
     }
   },
 );

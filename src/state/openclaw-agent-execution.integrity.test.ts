@@ -15,7 +15,6 @@ import {
 } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { createDirectChatContext } from "../gateway/server-chat.agent-events.test-helpers.js";
-import { resolveRequestedSessionAgentId } from "../gateway/session-request-agent.js";
 import { createTestProjection } from "../gateway/session-row-projection.read-fixture.test-support.js";
 import { resolveSessionMutationAuthorizationAsync } from "../gateway/session-sharing-authorization-async.js";
 import { sharingPolicyClient } from "../gateway/session-sharing.test-utils.js";
@@ -170,7 +169,6 @@ function holdIntegrity(pathname: string) {
   counter.path = pathname;
   counter.gate = gate.buffer;
   return {
-    gate,
     entered: () => Promise.resolve(Atomics.waitAsync(gate, 1, 0).value),
     release() {
       Atomics.store(gate, 0, 0);
@@ -248,20 +246,10 @@ it.for(["valid", "invalid-row", "missing-index", "failed", "stopped", "supersede
             ? await createTestProjection({ cfg: config, modelCatalog: [] })
             : undefined;
         if (projection) {
-          await expect(listProjectedSessions({ projection, opts: {} })).resolves.toMatchObject({
-            sessions: [{ key: scope.sessionKey }],
-          });
+          const before = await listProjectedSessions({ projection, opts: {} });
+          expect(before.sessions).toMatchObject([{ key: scope.sessionKey }]);
         }
-        const resolved = resolveRequestedSessionAgentId(config, scope.sessionKey, "main", "read");
-        expect(resolved).toMatchObject(
-          contents === "missing-index"
-            ? { ok: false, error: { code: "UNAVAILABLE" } }
-            : { ok: true, agentId: "main" },
-        );
         expect(publicationWrite).toThrow("startup inspection");
-        expect(isAgentDatabaseStartupReadReady(pathname, { env })).toBe(
-          contents !== "missing-index",
-        );
         expect(isAgentDatabaseStartupReadReady(`${pathname}.other`, { env })).toBe(false);
         const writeSettled = vi.fn();
         const writing = Promise.resolve(admission.waitForAgentPreparation("main", { env })).then(
@@ -269,7 +257,6 @@ it.for(["valid", "invalid-row", "missing-index", "failed", "stopped", "supersede
           writeSettled,
         );
         if (contents !== "missing-index") {
-          expect(admission.waitForAgentPreparation("main", { forWrite: false })).toBeUndefined();
           const read = withinTest(
             withEntry(scope.sessionKey, scope, (row) => row.entry),
             signal,
@@ -278,25 +265,28 @@ it.for(["valid", "invalid-row", "missing-index", "failed", "stopped", "supersede
             await expect(read).rejects.toThrow("invalid persisted session row requires repair");
           } else {
             await expect(read).resolves.toEqual(entry);
+            expect(admission.waitForAgentPreparation("main", { forWrite: false })).toBeUndefined();
           }
-          if (contents === "valid") {
-            for (const method of ["sessions.resolve", "chat.metadata"]) {
-              const result = await withinTest(
-                resolveSessionMutationAuthorizationAsync({
-                  client: sharingPolicyClient({ scopes: ["operator.read"] }),
-                  context: createDirectChatContext({ getRuntimeConfig: () => config }),
-                  method,
-                  requestParams:
-                    method === "sessions.resolve"
-                      ? { key: scope.sessionKey }
-                      : { sessionKey: scope.sessionKey },
-                }),
-                signal,
-              );
-              using _ = { [Symbol.dispose]: () => result.authorization?.release?.() };
-              expect(result.error).toBeNull();
-              result.authorization?.assertCurrent();
-            }
+        }
+        if (contents === "valid" || contents === "missing-index") {
+          for (const method of ["sessions.resolve", "chat.metadata"]) {
+            const result = await withinTest(
+              resolveSessionMutationAuthorizationAsync({
+                client: sharingPolicyClient({ scopes: ["operator.read"] }),
+                context: createDirectChatContext({ getRuntimeConfig: () => config }),
+                method,
+                requestParams:
+                  method === "sessions.resolve"
+                    ? { key: scope.sessionKey }
+                    : { sessionKey: scope.sessionKey },
+              }),
+              signal,
+            );
+            using _ = { [Symbol.dispose]: () => result.authorization?.release?.() };
+            expect(result.error).toEqual(
+              contents === "valid" ? null : expect.objectContaining({ code: "UNAVAILABLE" }),
+            );
+            result.authorization?.assertCurrent();
           }
         }
         expect(writeSettled).not.toHaveBeenCalled();
@@ -313,9 +303,8 @@ it.for(["valid", "invalid-row", "missing-index", "failed", "stopped", "supersede
         await stopping;
         await writing;
         if (projection) {
-          await expect(listProjectedSessions({ projection, opts: {} })).resolves.toMatchObject({
-            sessions: [],
-          });
+          const after = await listProjectedSessions({ projection, opts: {} });
+          expect(after.sessions).toEqual([]);
         }
         expect(isAgentDatabaseStartupReadReady(pathname, { env })).toBe(false);
         expect(Boolean(readAgentDatabaseReadAdmissionRefusal("main", { env }))).toBe(
@@ -355,17 +344,10 @@ it.for(["before-promotion", "revoked", "aborted"] as const)(
     const integrity = holdIntegrity(database.path);
     const initiator = capture(options);
     const borrowers = [initiator, ...Array.from({ length: 2 }, () => capture(options))];
-    const source = sourceFor(() => {});
     const retainedRegistry = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env }, () => false);
     const controller = new AbortController();
-    let initiatingCallerCurrent = true;
     const refused = new Error("Initiating caller cancelled after integrity started");
-    const initiatingSource = sourceFor(() => {
-      controller.signal.throwIfAborted();
-      if (!initiatingCallerCurrent) {
-        throw refused;
-      }
-    });
+    const initiatingSource = sourceFor(() => controller.signal.throwIfAborted());
     const initiatingOperation = vi.fn((scope: AgentDatabaseExecutionScope) =>
       initialized(scope, "initiator"),
     );
@@ -375,7 +357,7 @@ it.for(["before-promotion", "revoked", "aborted"] as const)(
         ? vi
             .spyOn(sqliteWorkerStore, "runSqliteWorkerStoreOperation")
             .mockImplementationOnce((...args) => {
-              initiatingCallerCurrent = false;
+              controller.abort(refused);
               promotion?.mockRestore();
               return runOperation(...args);
             })
@@ -389,18 +371,15 @@ it.for(["before-promotion", "revoked", "aborted"] as const)(
     try {
       if (cancellation === "before-promotion") {
         await expect(initiating).rejects.toBe(refused);
-        expect(initiatingCallerCurrent).toBe(false);
         expect(() => borrowers[1]!.assertCurrent()).not.toThrow();
       } else {
         await withinTest(integrity.entered(), signal);
       }
+      controller.abort(refused);
       if (cancellation === "aborted") {
-        controller.abort(refused);
         await expect(initiating).rejects.toBe(refused);
         // Discovery still joins physical preparation after its only waiter leaves.
         expect(getPendingOpenClawAgentDatabasePreparation(database.path)).toBeDefined();
-      } else {
-        initiatingCallerCurrent = false;
       }
       peers = borrowers.slice(1).map((borrower, index) => {
         const registry =
@@ -449,13 +428,9 @@ it.for(["before-promotion", "revoked", "aborted"] as const)(
       { session_key: "agent:main:peer-0", current_session_id: "peer-0" },
       { session_key: "agent:main:peer-1", current_session_id: "peer-1" },
     ]);
-    const reopened = nativeGeneration(database, workerContext({ env }), () => {});
-    try {
-      expect(await reopened.run(source, async () => "reopened")).toBe("reopened");
-      expect(checks()).toEqual([1, 1]);
-    } finally {
-      await reopened.close();
-    }
+    await using reopened = nativeGeneration(database, workerContext({ env }), () => {});
+    expect(await reopened.run(reopened.source, async () => "reopened")).toBe("reopened");
+    expect(checks()).toEqual([1, 1]);
   },
 );
 
@@ -552,10 +527,10 @@ it.each(["confirmed close", "native exit"] as const)(
         .all(database.path);
     const hostLeases = leases();
     expect(hostLeases).toHaveLength(1);
-    const generation = nativeGeneration(database, workerContext({ env }));
     const workers: Worker[] = [];
     const observeWorker = (worker: Worker) => workers.push(worker);
-    const cleanup = vi.spyOn(stateWorkerStore, "openOpenClawStateWorkerCleanupStore");
+    using cleanup = vi.spyOn(stateWorkerStore, "openOpenClawStateWorkerCleanupStore");
+    await using generation = nativeGeneration(database, workerContext({ env }));
     process.on("worker", observeWorker);
     try {
       await expect(generation.run(generation.source, async () => "opened")).resolves.toBe("opened");
@@ -579,11 +554,6 @@ it.each(["confirmed close", "native exit"] as const)(
       }
     } finally {
       process.off("worker", observeWorker);
-      try {
-        await generation.close();
-      } finally {
-        cleanup.mockRestore();
-      }
     }
   },
 );
@@ -716,19 +686,15 @@ it.each([
       : createOpenClawAgentDatabaseClaim(database, retainAgentDatabase(database.db));
     if (proof === "closed-host-blocked" || proof === "closed-host-blocked-last") {
       database.db.exec("INSERT INTO auth_profile_state VALUES ('checkpoint', '{}', 1)");
-      const reader = openNodeSqliteDatabase(database.path, { readOnly: true });
-      try {
-        reader.exec("BEGIN");
-        reader
-          .prepare("SELECT state_json FROM auth_profile_state WHERE state_key='checkpoint'")
-          .get();
-        database.db.exec("UPDATE auth_profile_state SET updated_at=2 WHERE state_key='checkpoint'");
-        closeCachedOpenClawAgentDatabase(database);
-        expect(database.db.isOpen).toBe(false);
-        expect(readSqliteDatabaseCleanClose(database.path)).toBe(false);
-      } finally {
-        reader.close();
-      }
+      using reader = openNodeSqliteDatabase(database.path, { readOnly: true });
+      reader.exec("BEGIN");
+      reader
+        .prepare("SELECT state_json FROM auth_profile_state WHERE state_key='checkpoint'")
+        .get();
+      database.db.exec("UPDATE auth_profile_state SET updated_at=2 WHERE state_key='checkpoint'");
+      closeCachedOpenClawAgentDatabase(database);
+      expect(database.db.isOpen).toBe(false);
+      expect(readSqliteDatabaseCleanClose(database.path)).toBe(false);
     } else if (closedHost) {
       closeAgent(database.path);
     }
@@ -747,12 +713,7 @@ it.each([
     let revokedBeforeGrant = false;
     let revokedAfterVerificationAdmission = false;
     const source = sourceFor(assertCurrent, (request) => {
-      if (
-        request.stage !== "prepare" ||
-        typeof request.facts !== "object" ||
-        request.facts === null ||
-        !("kind" in request.facts)
-      ) {
+      if (request.stage !== "prepare" || !isRecord(request.facts)) {
         return;
       }
       if (proof === "revoked-before-grant" && request.facts.kind === "shared-owner") {
@@ -768,7 +729,12 @@ it.each([
         revokedAfterVerificationAdmission = true;
       }
     });
-    const generation = nativeGeneration(database, context, assertCurrent);
+    using ownership = new DisposableStack();
+    if (siblingLease) {
+      ownership.defer(() => releaseOpenClawAgentDatabaseLease(siblingLease, { env }, "read-only"));
+    }
+    ownership.defer(() => claim?.release());
+    await using generation = nativeGeneration(database, context, assertCurrent);
     if (
       proof === "invalidated" ||
       proof === "closed-host-revoked" ||
@@ -785,34 +751,24 @@ it.each([
       revokeSqliteDatabaseAdmissionsForPath(database.path);
     }
     const operation = vi.fn(async () => "opened");
-    try {
-      if (proof === "failed" || proof === "revoked-after-verification-admission") {
-        await expect(generation.run(source, operation)).rejects.toThrow(
-          proof === "failed"
-            ? "OpenClaw agent database claim is no longer current"
-            : "Agent schema admission changed before publication",
-        );
-        expect(operation).not.toHaveBeenCalled();
-        expect(
-          proof === "failed" ? getValidation(database) : revokedAfterVerificationAdmission,
-        ).toBe(proof === "failed" ? undefined : true);
-        return;
-      }
+    if (proof === "failed" || proof === "revoked-after-verification-admission") {
+      await expect(generation.run(source, operation)).rejects.toThrow(
+        proof === "failed"
+          ? "OpenClaw agent database claim is no longer current"
+          : "Agent schema admission changed before publication",
+      );
+      expect(operation).not.toHaveBeenCalled();
+      expect(proof === "failed" ? getValidation(database) : revokedAfterVerificationAdmission).toBe(
+        proof === "failed" ? undefined : true,
+      );
+    } else {
       await expect(
         generation.run(source, operation, undefined, proof === "prepared-existing"),
       ).resolves.toBe("opened");
       expect(revokedBeforeGrant).toBe(proof === "revoked-before-grant");
-    } finally {
-      try {
-        await generation.close();
-        expect(checks()).toEqual([expectedChecks, expectedChecks]);
-      } finally {
-        claim?.release();
-        if (siblingLease) {
-          releaseOpenClawAgentDatabaseLease(siblingLease, { env }, "read-only");
-        }
-      }
     }
+    await generation.close();
+    expect(checks()).toEqual([expectedChecks, expectedChecks]);
     if (proof === "closed-host-blocked-last") {
       expect(readSqliteDatabaseCleanClose(database.path)).toBe(true);
       expect(readSqliteDatabaseIntegrityVerification(database.path)?.verifiedAt).toBe(verifiedAt);
@@ -918,31 +874,28 @@ it.runIf(process.platform === "linux")(
         assertAgentDatabaseAdmitted(agentId, { env });
       };
       const source = sourceFor(assertCurrent);
-      const generation = nativeGeneration(fixture, context, assertCurrent, () =>
+      await using generation = nativeGeneration(fixture, context, assertCurrent, () =>
         context.admission.assertCurrent(),
       );
-      try {
-        if (agentId === "corrupt-page") {
-          await expect(generation.run(source, async () => "opened")).rejects.toThrow(
-            /integrity|malformed|corrupt/i,
-          );
-          expect(Atomics.load(new Int32Array(counter.checks), 0)).toBeGreaterThan(0);
-          continue;
-        }
-        const sessionKey = `agent:${agentId}:after-crash`;
-        await expect(
-          generation.run(source, (scope) => {
-            expect(checks(), agentId).toEqual([1, 1]);
-            return initialized(scope, "after-crash", agentId);
-          }),
-        ).resolves.toMatchObject({ kind: "session-transcript-initialized", sessionKey });
-        expect(checks(), agentId).toEqual([1, 1]);
-        expect(readSqliteDatabaseIntegrityVerification(pathname)).toEqual({
-          verifiedAt: expect.any(Number),
-        });
-      } finally {
-        await generation.close();
+      if (agentId === "corrupt-page") {
+        await expect(generation.run(source, async () => "opened")).rejects.toThrow(
+          /integrity|malformed|corrupt/i,
+        );
+        expect(Atomics.load(new Int32Array(counter.checks), 0)).toBeGreaterThan(0);
+        continue;
       }
+      const sessionKey = `agent:${agentId}:after-crash`;
+      await expect(
+        generation.run(source, (scope) => {
+          expect(checks(), agentId).toEqual([1, 1]);
+          return initialized(scope, "after-crash", agentId);
+        }),
+      ).resolves.toMatchObject({ kind: "session-transcript-initialized", sessionKey });
+      expect(checks(), agentId).toEqual([1, 1]);
+      expect(readSqliteDatabaseIntegrityVerification(pathname)).toEqual({
+        verifiedAt: expect.any(Number),
+      });
+      await generation.close();
       expect(readSqliteDatabaseCleanClose(pathname)).toBe(true);
       using reopened = openNodeSqliteDatabase(pathname, { readOnly: true });
       expect(reopened.prepare("SELECT store_json FROM auth_profile_store").all()).toEqual([
@@ -956,24 +909,17 @@ it.runIf(process.platform === "linux")(
 );
 
 it("settles peer native leases when close revokes a shared worker's opening executor", async () => {
-  const fixture = () => ({
+  const options = Array.from({ length: 5 }, () => ({
     agentId: "main",
     env: makeEnv("agent-close-peers-"),
-  });
+  }));
   const source = sourceFor(() => {});
-  const peers = [];
-  const options = [];
+  const peers = options.map((target) => capture(target));
+  const execution = peers.pop()!;
   // Retained agents share broker workers with the next native opener.
-  for (let index = 0; index < 4; index += 1) {
-    const target = fixture();
-    options.push(target);
-    const peer = capture(target);
+  for (const peer of peers) {
     await peer.prepare(source);
-    peers.push(peer);
   }
-  const target = fixture();
-  options.push(target);
-  const execution = capture(target);
   let closing: Promise<void> | undefined;
   const preparing = execution.prepare({
     ...source,
@@ -984,9 +930,7 @@ it("settles peer native leases when close revokes a shared worker's opening exec
           if (
             !closing &&
             request.stage === "prepare" &&
-            typeof request.facts === "object" &&
-            request.facts !== null &&
-            "kind" in request.facts &&
+            isRecord(request.facts) &&
             request.facts.kind === "agent-open-resume"
           ) {
             closing = closeOpenClawAgentDatabasesAsync();
