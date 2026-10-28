@@ -16,8 +16,8 @@ import {
 } from "../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { PortalReachability } from "./portal-reachability.ts";
-
 const probePortalReachable = vi.hoisted(() => vi.fn<() => Promise<PortalReachability>>());
+// mock-isolation: Drive reachability results without issuing network probes from page fixtures.
 vi.mock("./portal-reachability.ts", () => ({ probePortalReachable }));
 import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
 import "./portals-page.tsx";
