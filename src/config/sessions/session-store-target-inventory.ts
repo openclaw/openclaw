@@ -10,6 +10,7 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   listAgentDatabaseAdmissionRefusals,
   readAgentDatabaseAdmissionRefusal,
+  readAgentDatabaseReadAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -373,6 +374,7 @@ export function prepareSessionStoreTargetInventory(
   inputAgentIds: readonly string[],
   inputEnv?: NodeJS.ProcessEnv,
   selection?: SessionStoreTargetInventoryRequest["selection"],
+  admission: "read" | "write" = "write",
 ): Omit<SessionStoreTargetInventoryRequest, "registeredDatabases"> {
   const environment = captureSessionStoreEnvironment(cfg, inputEnv);
   const { config, env, stateDir, serialized } = environment;
@@ -390,7 +392,9 @@ export function prepareSessionStoreTargetInventory(
   const refusals =
     selection === "recovery"
       ? listAgentDatabaseAdmissionRefusals({ env }).filter((refusal) =>
-          readAgentDatabaseAdmissionRefusal(refusal.agentId, { env }),
+          admission === "read"
+            ? readAgentDatabaseReadAdmissionRefusal(refusal.agentId, { env })
+            : readAgentDatabaseAdmissionRefusal(refusal.agentId, { env }),
         )
       : [];
   const excludedAgentIds = new Set(refusals.map((refusal) => refusal.agentId));

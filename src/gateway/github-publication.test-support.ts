@@ -306,6 +306,19 @@ export function commandResult(stdout = "", code = 0) {
   };
 }
 
+type CommandOverride = ReturnType<typeof commandResult> | void;
+
+/** Answer or observe selected commands; unanswered ones fall through to the installed transport. */
+export function overrideCommands(
+  override: (argv: string[], input?: string) => CommandOverride | Promise<CommandOverride>,
+) {
+  const fallback = mocks.runCommand.getMockImplementation()!;
+  mocks.runCommand.mockImplementation(
+    async (argv: string[], options?: { input?: string }) =>
+      (await override(argv, options?.input)) ?? (await fallback(argv, options)),
+  );
+}
+
 export function seedLocalPublication(
   database: OpenClawStateDatabase,
   params: {

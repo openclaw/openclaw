@@ -36,10 +36,12 @@ function isConfirmedYield(card: ToolCard): boolean {
   );
 }
 
-function isConfirmedPrPreparationHandoff(card: ToolCard): boolean {
+// PR preparation and workspace publication both end the turn and resume it
+// with their result; the shared handoff receipt, not the action, proves that.
+function isConfirmedGitHubHandoff(card: ToolCard): boolean {
   if (
     card.name !== "github_publish" ||
-    asRecord(card.args)?.action !== "prepare_pr" ||
+    !Object.hasOwn(card, "args") ||
     card.completed !== true ||
     card.isError === true
   ) {
@@ -145,9 +147,9 @@ function scanSessionsYieldItems(
     const yields = yieldCards.filter(isConfirmedYield);
     const lastYield = yields.at(-1);
     const boundary: ChatItem[] = [];
-    // PR preparation also yields, but its public tool details and non-subagent
+    // GitHub handoffs also yield, but their public tool details and non-subagent
     // lifecycle must not enter the private sessions_yield projection below.
-    const handoff = lastYield ?? cards.findLast(isConfirmedPrPreparationHandoff);
+    const handoff = lastYield ?? cards.findLast(isConfirmedGitHubHandoff);
     if (handoff) {
       // The invisible boundary keeps handed-off rows in place and separates
       // their run from a continuation without declaring an interruption.
