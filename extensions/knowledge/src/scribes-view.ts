@@ -182,6 +182,7 @@ export async function scribes(ui: Page, n: number, target: HTMLElement) {
     return;
   }
   renderScribesTab(ui.scribesTab, snapshots.filter((entry) => isOn(entry.status)).length);
+  s.scribesCountAgent = agentId;
   target.replaceChildren(snapshot ? detail(ui, snapshot, runs) : list(ui, snapshots, detection));
 }
 
@@ -213,8 +214,13 @@ const firstRunPending = (snapshot: ScribeSnapshot) =>
     (snapshot.job.state.runningAtMs || firstRuns.has(snapshot.job.id)),
   );
 
+/** Number of the agent's scribes that are on, for the Scribes tab count. */
+export async function countScribesOn(host: Parameters<typeof loadScribes>[0], agentId: string) {
+  return (await loadScribes(host, agentId)).filter((entry) => isOn(entry.status)).length;
+}
+
 /** Tab label with the count of scribes that are on. */
-function renderScribesTab(tab: HTMLButtonElement, on: number) {
+export function renderScribesTab(tab: HTMLButtonElement, on: number) {
   tab.replaceChildren(document.createTextNode("Scribes"));
   if (on) {
     const badge = el("span", String(on), "knowledge-tab-count");

@@ -1,5 +1,6 @@
-# Preserve 502 net lines of Sections regression coverage (#186229): two-step
-# editor scoping, Gateway search, ordering, guest flow and session-menu entry.
-# Current main contributes 6,310,802 lines; this candidate adds exactly 502.
-# Admit the measured 6,311,304 total without extra future allowance.
-6311304
+# Preserve 649 net lines of CLI watchdog regression coverage (#186446): fresh
+# thinking and thinking-token progress, prefix-replay rejection, and the bounded
+# backend turn assessment (stale capture, cancellation, timeout and deadline
+# paths). Main 76f48387 measured 6,311,599 lines under its 6,311,700 ceiling;
+# 6,311,700 + 649 = 6,312,349. Counting and CI rules stay unchanged.
+6312349

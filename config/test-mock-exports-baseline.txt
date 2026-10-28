@@ -5718,7 +5718,6 @@
 ["src/media-understanding/runtime.test.ts","./image-runtime.js","46c3820f85310165d4257827cfb47e62d30217b735428864a87295e0d3eb57e2",1]
 ["src/media-understanding/runtime.test.ts","./provider-registry.js","18f966b36c97a23bd4ecc8bbe0ded61710edeeeab91e8a5141e1fcf84237f104",1]
 ["src/media-understanding/runtime.test.ts","./runner.js","7500e4c8dd2c2b7b6929469149fc11c63b424ad8a1e033f68a8ed28647b87327",1]
-["src/media/anthropic-inline-images.test.ts","./image-ops.js","4c10d1d5c446dda1956d65b9683573d757ab5884aec9db2bc1bb94f5deb09bdb",1]
 ["src/media/channel-inbound-roots.fast-path.test.ts","../plugins/plugin-metadata-snapshot.runtime.js","d68d1c0d1442d663b5ff43e9542e4ed79ea821781ea945432ae5488d31714170",1]
 ["src/media/channel-inbound-roots.fast-path.test.ts","../plugins/public-surface-loader.js","95aa16d40f5760c1243caebe2c5775a6e750ce6928c56626a6a92d08c0695950",1]
 ["src/media/fetch.test-support.ts","../infra/net/fetch-guard.js","e6240f4f89d287c00a22e9ad1fc9cdbc00c828e9c88502ceb254d56714d52d7d",1]
