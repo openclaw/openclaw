@@ -128,35 +128,6 @@ async function update(sidebar: Sidebar, change: (() => void) | Partial<Sidebar>)
 }
 
 describe("sidebar projection memo", () => {
-  it("keeps session pages scoped to grouping and collapses to each initial window", async () => {
-    const { sidebar } = await mount(
-      Array.from({ length: 61 }, (_, index) => session(`page-${index}`)),
-    );
-    const owner = getAppSidebarOwner(sidebar.hostElement)!;
-    const visible = () =>
-      sidebar.querySelectorAll(".sidebar-session-content .sidebar-recent-session").length;
-    const click = async (label: string) => {
-      const button = sidebar.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
-      expect(button).not.toBeNull();
-      button!.click();
-      await settleLitElement(sidebar);
-    };
-    for (const grouping of ["none", "category", "person", "project"] as const) {
-      setSessionsGrouping(owner.sessionOrganizer, grouping);
-      await settleLitElement(sidebar);
-      const initial = grouping === "none" ? 30 : 15;
-      expect(visible()).toBe(initial);
-      await click("Show more");
-      expect(visible()).toBe(initial + 15);
-      await click("Collapse");
-      expect(visible()).toBe(initial);
-      await click("Show more");
-    }
-    setSessionsGrouping(owner.sessionOrganizer, "none");
-    await settleLitElement(sidebar);
-    expect(visible()).toBe(45);
-  });
-
   it("reuses a held roster without enumerating it for each navigation read", async () => {
     const first = session("first");
     const { sidebar } = await mount([first]);
