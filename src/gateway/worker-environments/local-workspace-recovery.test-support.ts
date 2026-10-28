@@ -1,8 +1,15 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { expect } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
+import { stagedInputDirectory, STAGED_INPUT_GITIGNORE } from "../../media/staged-inputs.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { localWorkspaceDigestBytes } from "./local-workspace-cas.js";
+import { readLocalWorkspaceTree } from "./local-workspace-cas.kernel.js";
+import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
 import { readLocalWorkspaceProjection } from "./local-workspace-store.test-support.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 
@@ -260,4 +267,109 @@ export async function proveAggregateWorkspaceRecovery({
     pending_ref: null,
     pending_target: null,
   });
+}
+
+export async function proveAcceptedInventoryRecovery(
+  owner: LocalWorkspaceOwner,
+  retainedMembership: boolean,
+) {
+  const canonical = owner.worktree.path;
+  const prepare = () => withLocalWorkspaceProjection(owner, (state) => state.prepare());
+  const synchronize = () =>
+    withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
+  const readProjection = () => readLocalWorkspaceProjection(owner.worktree.id);
+  const git = (root: string, ...args: string[]) => requireGit(root, args);
+  const writeText = (root: string, relative: string, data: string) =>
+    fs.writeFile(path.join(root, relative), data);
+  const expectText = async (root: string, relative: string, expected: string) => {
+    expect(await fs.readFile(path.join(root, relative), "utf8")).toBe(expected);
+  };
+  const expectMissing = async (root: string, relative: string) => {
+    await expect(fs.stat(path.join(root, relative))).rejects.toMatchObject({ code: "ENOENT" });
+  };
+  const projection = await prepare();
+  const attachmentDirectory = stagedInputDirectory(randomUUID());
+  const acceptedFiles = new Map([
+    ["media/review/patch.txt", "accepted patch\n"],
+    ["media/review/note.txt", "accepted verification\n"],
+    ["skills/accepted.txt", "accepted skill\n"],
+    [`${attachmentDirectory}/.gitignore`, STAGED_INPUT_GITIGNORE],
+    [`${attachmentDirectory}/node_modules/input.txt`, "accepted attachment\n"],
+  ]);
+  for (const [relative, contents] of acceptedFiles) {
+    await fs.mkdir(path.dirname(path.join(projection, relative)), { recursive: true });
+    await writeText(projection, relative, contents);
+  }
+  await fs.mkdir(path.join(projection, "skills/accepted-empty"), { recursive: true });
+  await synchronize();
+  const saved = (await readProjection())!;
+  expect(saved).toMatchObject({
+    baseline_json: null,
+    checkpoint_json: null,
+    pending_ref: null,
+    pending_target: null,
+    journal_json: null,
+  });
+  expect(await git(canonical, "ls-files")).not.toContain("media/");
+  const original = await withLocalWorkspaceProjection(owner, (state) => state.baselineDocument());
+  await closeOpenClawStateDatabaseAsync();
+  {
+    using db = new DatabaseSync(resolveOpenClawStateSqlitePath());
+    const records = readLocalWorkspaceTree(db, saved.tree_root_digest!);
+    const child = records.get("media/review")!.children!;
+    const missing = records.get(child)!.treeRef;
+    expect(
+      db
+        .prepare("DELETE FROM local_workspace_tree_packs WHERE tree_digest = ?")
+        .run(localWorkspaceDigestBytes(missing)).changes,
+    ).toBe(1);
+  }
+  const partial = "media/review/fingerprint.txt";
+  await writeText(projection, partial, "partial fingerprint\n");
+  if (retainedMembership) {
+    await fs.unlink(path.join(projection, "skills/accepted.txt"));
+    for (const directory of [canonical, projection]) {
+      await fs.mkdir(path.join(directory, "skills/accepted-empty/node_modules"));
+      await writeText(directory, "skills/accepted-empty/node_modules/cache.txt", "local cache\n");
+    }
+  }
+  const recovered = await withLocalWorkspaceProjection(owner, (state) => state.baselineDocument());
+  expect(recovered).toEqual(original);
+  expect(await readProjection()).toMatchObject({
+    baseline_ref: saved.baseline_ref,
+    tree_root_digest: saved.tree_root_digest,
+    source_paths_digest: saved.source_paths_digest,
+  });
+  await expectMissing(canonical, partial);
+  await expectText(projection, partial, "partial fingerprint\n");
+  for (const [relative, contents] of acceptedFiles) {
+    await expectText(canonical, relative, contents);
+    if (retainedMembership && relative === "skills/accepted.txt") {
+      await expectMissing(projection, relative);
+    } else {
+      await expectText(projection, relative, contents);
+    }
+  }
+  await expect(
+    withLocalWorkspaceProjection(
+      {
+        ...owner,
+        assertCurrent: () => {
+          throw new Error("revoked");
+        },
+      },
+      (state) => state.prepare(),
+    ),
+  ).rejects.toThrow("revoked");
+  await expectMissing(canonical, partial);
+  await prepare();
+  await expectText(canonical, partial, "partial fingerprint\n");
+  await writeText(projection, partial, "completed fingerprint\n");
+  await synchronize();
+  await expectText(canonical, partial, "completed fingerprint\n");
+  if (retainedMembership) {
+    await expectMissing(canonical, "skills/accepted.txt");
+    expect((await fs.stat(path.join(canonical, "skills/accepted-empty"))).isDirectory()).toBe(true);
+  }
+  await expectMissing(projection, ".env.local");
 }
