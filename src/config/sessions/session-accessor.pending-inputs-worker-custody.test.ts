@@ -453,7 +453,7 @@ it("refuses a stale shared reader without orphaning its source settlement captur
       },
     );
     // Startup recovery may capture a live source without retaining a waiter.
-    captureSessionControllerSettlement({ target: source.target! });
+    void captureSessionControllerSettlement({ target: source.target! });
     const unhandled: unknown[] = [];
     const listener = (reason: unknown) => unhandled.push(reason);
     process.on("unhandledRejection", listener);
