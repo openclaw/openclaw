@@ -10,7 +10,6 @@ import {
   getOrLoadSqliteDatabaseAdmissionForPath,
   prepareSqliteDatabaseAdmission,
 } from "../infra/sqlite-database-admission.js";
-import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { schemaAdmission } from "../infra/sqlite-schema-admission.js";
@@ -27,6 +26,7 @@ import {
   assertAgentDatabaseAdmitted,
   createAgentDatabaseInspectionRefusal,
   failPendingAgentDatabase,
+  isTransientAgentDatabaseContention,
   listAgentDatabaseAdmissionRefusals,
   preparePendingAgentDatabase,
   preparePendingAgentDatabaseRead,
@@ -580,7 +580,7 @@ class AgentDatabaseStartupAdmission {
                       jitter: 0.2,
                       sleep: (ms) => sleepWithAbort(ms, this.signal),
                       // Mixed cleanup failures and uncertain outcomes must not replay preparation.
-                      shouldRetry: isSqliteLockError,
+                      shouldRetry: isTransientAgentDatabaseContention,
                       onRetry: ({ attempt }) =>
                         log.warn("agent database startup locked; retrying preparation", {
                           agentId,
@@ -606,7 +606,9 @@ class AgentDatabaseStartupAdmission {
                 });
                 await retryLockedPreparation(async () => {
                   phase("migration-wait");
-                  const releaseMigration = await this.migrating.acquire({ signal: this.signal });
+                  const releaseMigration = await this.migrating.acquire({
+                    signal: this.signal,
+                  });
                   try {
                     assertCurrent();
                     phase("migration");

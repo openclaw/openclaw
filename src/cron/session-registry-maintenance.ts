@@ -8,19 +8,37 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import { resolveAllAgentSessionStoreTargetsAsync } from "../config/sessions/targets-runtime.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isGatewayRestartDrainError } from "../process/gateway-work-admission.js";
 import {
+  AgentDatabaseAdmissionError,
+  isTransientAgentDatabaseContention,
   listAgentDatabaseAdmissionRefusals,
   readAgentDatabaseAdmissionRefusal,
   type AgentDatabaseAdmissionRefusal,
 } from "../state/agent-database-admission.js";
 import { createRetainedAgentDatabaseMatcherFromSnapshot } from "../state/agent-deletion-discovery.js";
-import { prepareAgentDatabaseDeletionSnapshotRead } from "../state/agent-deletion-journal.read.js";
+import {
+  isAgentDatabaseDeletionSnapshotChangedError,
+  prepareAgentDatabaseDeletionSnapshotRead,
+} from "../state/agent-deletion-journal.read.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { loadCronJobsStoreWithConfigJobsReadOnly } from "./store/read-only.js";
 
 const log = createSubsystemLogger("cron/maintenance");
 
 const SESSION_REGISTRY_RETENTION_MS = 7 * 24 * 60 * 60_000;
+
+/**
+ * Only a refusal or transient contention may be skipped for one store.
+ *
+ * An admission refusal means this agent's database is unavailable right now; a
+ * lock means another writer held it for a moment. Both are recoverable for the
+ * other stores, which must keep their own session retention. A damaged database
+ * or a schema mismatch is terminal and stays terminal.
+ */
+function isIsolatableAgentStoreFailure(error: unknown): boolean {
+  return error instanceof AgentDatabaseAdmissionError || isTransientAgentDatabaseContention(error);
+}
 
 type SessionRegistryMaintenanceStoreIdentity = {
   agentId: string;
@@ -42,6 +60,10 @@ type SessionRegistryMaintenanceStoreSummary =
   | (SessionRegistryMaintenanceStoreIdentity & {
       skippedReason: "agent-store-held";
       warning: string;
+    })
+  | (SessionRegistryMaintenanceStoreIdentity & {
+      skippedReason: "agent-store-failed";
+      warning: string;
     });
 
 type SessionRegistryMaintenanceSummary = {
@@ -49,6 +71,8 @@ type SessionRegistryMaintenanceSummary = {
   runningCronJobs: number;
   pruned: number;
   skippedStores: number;
+  /** Stores whose own maintenance failed; the remaining stores were still maintained. */
+  failedStores: number;
   stores: SessionRegistryMaintenanceStoreSummary[];
   nextSweepAtMs: number | null;
   /** Set when missing cron or child inventory facts prevent safe pruning. */
@@ -109,6 +133,7 @@ export async function runSessionRegistryMaintenance(params: {
       runningCronJobs: 0,
       pruned: 0,
       skippedStores: 0,
+      failedStores: 0,
       stores: [],
       nextSweepAtMs: Date.now() + 60_000,
       skippedReason: `cron store unreadable: ${runningCronJobs.reason}`,
@@ -193,14 +218,44 @@ export async function runSessionRegistryMaintenance(params: {
       );
       for (const target of incompleteInventory ? [] : eligibleTargets) {
         assertCurrent();
-        const result = await runSessionRegistryMaintenanceForStore({
-          ...target,
-          apply: params.apply,
-          retentionMs: SESSION_REGISTRY_RETENTION_MS,
-          runningCronJobIds: runningCronJobs.ids,
-          childStores: eligibleTargets,
-          assertCurrent,
-        });
+        let result: Awaited<ReturnType<typeof runSessionRegistryMaintenanceForStore>>;
+        try {
+          result = await runSessionRegistryMaintenanceForStore({
+            ...target,
+            apply: params.apply,
+            retentionMs: SESSION_REGISTRY_RETENTION_MS,
+            runningCronJobIds: runningCronJobs.ids,
+            childStores: eligibleTargets,
+            assertCurrent,
+          });
+        } catch (error) {
+          // Restart drain and snapshot changes are sweep-level conditions, not store failures.
+          if (
+            isGatewayRestartDrainError(error) ||
+            isAgentDatabaseDeletionSnapshotChangedError(error)
+          ) {
+            throw error;
+          }
+          // A refused or contended store must not abort the sweep for every other
+          // store. Anything else (a damaged database, a schema mismatch) stays
+          // terminal: the sweep keeps failing loudly instead of skipping silently.
+          if (!isIsolatableAgentStoreFailure(error)) {
+            throw error;
+          }
+          const reason = formatErrorMessage(error);
+          log.warn("Session registry maintenance skipped for one agent store", {
+            agentId: target.agentId,
+            storePath: target.storePath,
+            reason,
+          });
+          stores.push({
+            agentId: target.agentId,
+            storePath: target.storePath,
+            skippedReason: "agent-store-failed",
+            warning: reason,
+          });
+          continue;
+        }
         assertCurrent();
         stores.push({
           agentId: target.agentId,
@@ -229,6 +284,9 @@ export async function runSessionRegistryMaintenance(params: {
         runningCronJobs: runningCronJobs.count,
         pruned: stores.reduce((total, store) => total + ("pruned" in store ? store.pruned : 0), 0),
         skippedStores: stores.filter((store) => "skippedReason" in store).length,
+        failedStores: stores.filter(
+          (store) => "skippedReason" in store && store.skippedReason === "agent-store-failed",
+        ).length,
         stores,
       };
     },

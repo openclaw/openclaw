@@ -80,6 +80,12 @@ async function sweep(signal: AbortSignal, getCronStorePath: () => string) {
                 skippedStores: result.skippedStores,
               });
             }
+            if (result.failedStores > 0) {
+              log.warn("Session registry maintenance skipped some agent stores", {
+                failedStores: result.failedStores,
+                skippedStores: result.skippedStores,
+              });
+            }
           } catch (error) {
             nextRegistrySweepAtMs = Math.min(
               nextRegistrySweepAtMs,
