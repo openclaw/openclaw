@@ -2,75 +2,35 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
+import * as mcpLease from "../agents/mcp-lifecycle-lease.js";
 import { listConfiguredMcpServers, mcpConfigInternal } from "../config/mcp-config.js";
 import { closeStateDatabaseForTest as closeState } from "../test-utils/database-cleanup.js";
-import { CLAW_SCHEMA_VERSION } from "./manifest-contract.js";
 import {
-  ClawMcpInstallError,
   installClawMcpServersStateless,
   rollbackStatelessClawMcpServers,
+  type PersistedClawMcpServerRef,
 } from "./mcp.js";
-import { CLAW_ADD_PLAN_SCHEMA_VERSION, CLAW_OUTPUT_STABILITY, type ClawAddPlan } from "./types.js";
 
 const SERVER = { command: "uvx", args: ["fixture-mcp"] };
 
-function fixturePlan(): ClawAddPlan {
+function fixturePlan(ids: string[]) {
   return {
-    schemaVersion: CLAW_ADD_PLAN_SCHEMA_VERSION,
-    manifestSchemaVersion: CLAW_SCHEMA_VERSION,
-    stability: CLAW_OUTPUT_STABILITY,
-    dryRun: true,
-    mutationAllowed: false,
-    planIntegrity: "fixture",
-    claw: {
-      kind: "development",
-      name: "fixture-claw",
-      version: "0.0.0",
-      packageRoot: "/fixture",
-      manifestPath: "/fixture/claw.json",
-      integrityKind: "development-snapshot",
-      integrity: "fixture",
-      byteLength: 0,
-    },
-    agent: {
-      requestedId: "main",
-      finalId: "main",
-      workspace: "/fixture/workspace",
-      config: { id: "main", workspace: "/fixture/workspace" },
-    },
-    summary: {
-      totalActions: 1,
-      agentActions: 0,
-      workspaceActions: 0,
-      packageActions: 0,
-      mcpServerActions: 1,
-      cronJobActions: 0,
-      blockedActions: 0,
-      capabilityEscalations: 0,
-    },
-    actions: [
-      {
-        kind: "mcpServer",
-        id: "fixture",
-        action: "configure",
-        target: "mcp.servers.fixture",
-        details: SERVER,
-        blocked: false,
-      },
-    ],
-    capabilityChanges: [],
-    readiness: { ready: true, requirements: [] },
-    blockers: [],
-    diagnostics: [],
+    agent: { finalId: "main" },
+    actions: ids.map((id) => ({
+      kind: "mcpServer" as const,
+      id,
+      action: "configure" as const,
+      target: `mcp.servers.${id}`,
+      details: SERVER,
+      blocked: false,
+    })),
   };
 }
 
-async function installExpectingError(): Promise<ClawMcpInstallError> {
-  const error = await installClawMcpServersStateless(fixturePlan()).catch(
-    (failure: unknown) => failure,
-  );
-  expect(error).toBeInstanceOf(ClawMcpInstallError);
-  return error as ClawMcpInstallError;
+async function installExpectingError(ids = ["fixture"]): Promise<PersistedClawMcpServerRef[]> {
+  const refs: PersistedClawMcpServerRef[] = [];
+  await expect(installClawMcpServersStateless(fixturePlan(ids), { refs })).rejects.toThrow();
+  return refs;
 }
 
 async function configured(name: string) {
@@ -114,8 +74,8 @@ it.each([{ changed: false }, { changed: true }])(
   "reconciles a committed MCP write (changed by another writer: $changed)",
   async ({ changed }) => {
     loseAcknowledgementAfterCommit();
-    const error = await installExpectingError();
-    expect(error.mcpServers).toHaveLength(1);
+    const refs = await installExpectingError();
+    expect(refs).toHaveLength(1);
 
     if (changed) {
       await mcpConfigInternal.set({
@@ -123,17 +83,30 @@ it.each([{ changed: false }, { changed: true }])(
         server: { command: "uvx", args: ["changed-after-failure"] },
       });
     }
-    await expect(rollbackStatelessClawMcpServers(error.mcpServers)).resolves.toEqual([]);
+    await expect(rollbackStatelessClawMcpServers(refs)).resolves.toEqual([]);
     expect(await configured("fixture")).toEqual(
       changed ? expect.objectContaining({ args: ["changed-after-failure"] }) : undefined,
     );
   },
 );
 
-it("does not claim an MCP server whose write never committed", async () => {
+it("drops the ref of an MCP server whose write never committed", async () => {
   vi.spyOn(mcpConfigInternal, "set").mockRejectedValueOnce(new Error("write refused"));
 
-  const error = await installExpectingError();
-  expect(error.mcpServers).toEqual([]);
+  const refs = await installExpectingError();
+  await expect(rollbackStatelessClawMcpServers(refs)).resolves.toEqual([]);
+  expect(refs).toEqual([]);
+  expect(await configured("fixture")).toBeUndefined();
+});
+
+it("keeps an earlier server in refs when a later action cannot start", async () => {
+  const withLease = mcpLease.withMcpLifecycleLease;
+  vi.spyOn(mcpLease, "withMcpLifecycleLease").mockImplementation((name, options, run) =>
+    name === "second" ? Promise.reject(new Error("lease timeout")) : withLease(name, options, run),
+  );
+
+  const refs = await installExpectingError(["fixture", "second"]);
+  expect(refs).toHaveLength(1);
+  await expect(rollbackStatelessClawMcpServers(refs)).resolves.toEqual([]);
   expect(await configured("fixture")).toBeUndefined();
 });

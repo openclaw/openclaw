@@ -14,7 +14,10 @@ import {
   createPluginSettingsDetailProps,
   createResult,
 } from "./plugins-page.test-support.ts";
-import { renderPluginSettingsDetail, type DetailProps } from "./settings-view.tsx";
+import {
+  renderPluginSettingsDetail as PluginSettingsDetail,
+  type DetailProps,
+} from "./settings-view.tsx";
 
 beforeEach(() => i18n.setLocale("en"));
 
@@ -28,12 +31,21 @@ function setting(container: ParentNode, key: string) {
 
 function mount(overrides: Partial<DetailProps>, setup?: (props: DetailProps) => void) {
   const props: DetailProps = createPluginSettingsDetailProps(createResult(), overrides);
+  const [currentProps, setProps] = createSignal(props);
   const { container } = mountSolid(() => {
     setup?.(props);
-    return renderPluginSettingsDetail(props);
+    return <PluginSettingsDetail {...currentProps()} />;
   });
   flush();
-  return { container, find: queryWithin(container), props };
+  return {
+    container,
+    find: queryWithin(container),
+    props,
+    update: (next: Partial<DetailProps>) => {
+      setProps((previous) => ({ ...previous, ...next }));
+      flush();
+    },
+  };
 }
 
 async function selectSettingAction(row: Element, value: "ask" | "reset") {
@@ -86,6 +98,36 @@ it("does not offer enablement or Settings for an uninstalled plugin", () => {
     result: createResult(createPlugin({ installed: false, state: "not-installed" })),
   });
   expect(find('[aria-label="Enable Workboard"], [aria-label="Settings"]')).toBeNull();
+});
+
+it("updates native UI disclosure from inventory and inspection across enablement", () => {
+  const { container, find, update } = mount({});
+  expect(find(".plugin-native-ui-disclosure")).toBeNull();
+  for (const [inventory, inspected, enabled, visible] of [
+    [true, null, false, true],
+    [true, null, true, true],
+    [true, undefined, true, true],
+    [true, false, true, false],
+    [false, true, true, true],
+    [undefined, undefined, true, false],
+  ] as const) {
+    update({
+      result: createResult(
+        createPlugin({ hasNativeUi: inventory, enabled, state: enabled ? "enabled" : "disabled" }),
+      ),
+      inspection:
+        inspected === null
+          ? null
+          : createInspectResult({
+              overview: {
+                hasNativeUi: inspected,
+                capabilities: { providers: [], channels: [], contracts: {}, ui: ["page"] },
+              },
+            }),
+    });
+    expect(Boolean(container.querySelector(".plugin-native-ui-disclosure"))).toBe(visible);
+    expect(find(`[aria-label="${enabled ? "Disable" : "Enable"} Workboard"]`)).not.toBeNull();
+  }
 });
 
 it("retains inspection retry focus and uses the current error and callback", async () => {

@@ -288,7 +288,7 @@ function effectText(input: StartDialogInput, mode: ScribeMode) {
     ` as you, with ${storeName}’s private access, and send it the prompt above. `,
     mode === "once"
       ? `It works through ${scribe.id === "memory" ? "Memory" : "them"} once and reports back here. Nothing is scheduled.`
-      : scribe.id === "unlinked-review"
+      : scribe.id === "claim-consolidation"
         ? "It sets up its own schedule and does one test run first."
         : "If you keep it learning, it sets up its own schedule and does one test run first.",
   );
@@ -375,7 +375,7 @@ export function openStartDialog(input: StartDialogInput) {
     frame.body.append(...fields.nodes);
     mode = fields.mode;
     options = fields.options;
-  } else if (scribe.id === "unlinked-review") {
+  } else if (scribe.id === "claim-consolidation") {
     const fields = reviewFields(changed);
     frame.body.append(...fields.nodes);
     options = fields.options;
