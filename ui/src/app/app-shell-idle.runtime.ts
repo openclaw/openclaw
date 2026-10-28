@@ -1,5 +1,5 @@
 import { routeIdFromPath, isSessionRouteId, type RouteId } from "../app-route-paths.ts";
-import { hasIdleWarmups, onIdleWarmupRegistered, takeIdleWarmups } from "../lib/idle-warmup.ts";
+import { hasIdleWarmups, takeIdleWarmups } from "../lib/idle-warmup.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type { ShellOwner } from "./app-host.tsx";
 import type { ApplicationContext } from "./context.ts";
@@ -303,7 +303,6 @@ export function connectShellIdle(
     router.subscribe(schedule),
     gateway.subscribe(schedule),
     context.theme.subscribe(schedule),
-    onIdleWarmupRegistered(schedule),
     listen(shell, "pointerover", onIntent),
     listen(shell, "pointerout", onIntent),
     listen(shell, "focusin", onIntent),
