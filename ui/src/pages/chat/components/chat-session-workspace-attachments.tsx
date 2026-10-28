@@ -157,6 +157,9 @@ function TranscriptAttachmentRow(props: {
             <span class="workspace-desktop__disclosure" />
           </Show>
           <Icon
+            class={
+              mobile() ? "chat-workspace-mobile__file-icon" : "workspace-desktop__attachment-icon"
+            }
             name={
               props.entry.kind === "image" || props.entry.mimeType?.startsWith("image/")
                 ? "image"
@@ -189,7 +192,7 @@ function TranscriptAttachmentRow(props: {
             </Show>
           </span>
           <Show when={mobile()}>
-            <Icon name="chevronRight" />
+            <Icon name="chevronRight" class="chat-workspace-mobile__chevron" />
           </Show>
         </button>
         <Show when={childProps.action().reason}>
