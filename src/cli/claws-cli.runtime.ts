@@ -15,8 +15,8 @@ import {
   isClawsLabsEnabled,
 } from "../claws/labs-gate.js";
 import { buildClawAddPlan } from "../claws/lifecycle.js";
+import { resolveLocalClawSource } from "../claws/local-source.js";
 import { preflightClawPackage, type ClawSkillInstallConsent } from "../claws/packages.js";
-import { readClawManifestFile } from "../claws/reader.js";
 import { collectClawSkillWarningReviews } from "../claws/skill-warning-review.js";
 import {
   CLAW_INSPECT_RESULT_SCHEMA_VERSION,
@@ -120,7 +120,8 @@ export async function runClawsInspectCommand(
   sourcePath: string,
   opts: ClawsInspectOptions,
 ): Promise<void> {
-  const result = await readClawManifestFile(sourcePath);
+  await using source = await resolveLocalClawSource(sourcePath);
+  const result = source.claw;
   if (!result.ok) {
     emitClawFailure(opts.json, formatClawDiagnostics(result.diagnostics), {
       schemaVersion: CLAW_INSPECT_RESULT_SCHEMA_VERSION,
@@ -202,7 +203,8 @@ export async function runClawsAddCommand(sourcePath: string, opts: ClawsAddOptio
         return;
       }
 
-      const result = await readClawManifestFile(sourcePath);
+      await using source = await resolveLocalClawSource(sourcePath);
+      const result = source.claw;
       if (!result.ok) {
         emitClawFailure(opts.json, formatClawDiagnostics(result.diagnostics), {
           schemaVersion: CLAW_ADD_PLAN_SCHEMA_VERSION,

@@ -24,7 +24,8 @@ Enable **Claws** in **Settings → Labs** before adding one. On a headless insta
 `gateway.controlUi.experimental.claws` to `true` in OpenClaw config.
 Authoring and inspecting local Claw packages do not require the Labs toggle.
 
-The CLI accepts a local package directory, `CLAW.md`, or grouped JSON manifest.
+The CLI accepts a local package directory, `.tgz` or `.tar.gz` package archive,
+`CLAW.md`, or grouped JSON manifest.
 JSON manifests, `package.json`, and OpenClaw YAML profiles must contain valid UTF-8.
 If inspection reports an encoding error, re-encode the source file as UTF-8 and retry;
 Add refuses it before creating an agent or workspace.
@@ -83,6 +84,24 @@ requirements locally without installing packages, contacting ClawHub,
 starting an agent turn, enabling automations, or changing OpenClaw state.
 Requirements needing online preflight appear as blockers. `build` creates a
 deterministic `.tgz` and refuses to overwrite an existing file.
+
+To deliver a Claw offline, send the built `.tgz` to the recipient. They can
+inspect it and Add a new agent without the author's project directory or a
+ClawHub publication:
+
+```bash
+openclaw claws inspect ./incident-triage-1.0.0.tgz
+openclaw claws add ./incident-triage-1.0.0.tgz --dry-run --json
+openclaw claws add ./incident-triage-1.0.0.tgz
+```
+
+Review local package contents and declared requirements before Add. Local
+archives are not ClawHub-reviewed releases; dependency trust and capability
+consent checks still apply. Archive paths must be local files; URLs are not
+accepted. The installer rejects unsafe entries and applies its archive limits.
+Extraction is temporary: Add copies the selected content into the new agent's
+workspace and does not retain a managed Claw installation or an extra copy of
+the source archive.
 
 A minimal `package.json` identifies the package and its manifest:
 

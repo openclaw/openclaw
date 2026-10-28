@@ -69,7 +69,7 @@ export function registerClawsCli(program: Command) {
   claws
     .command("inspect")
     .description("Validate a Claw package or local development manifest")
-    .argument("<source>", "Path to a Claw package directory or grouped manifest")
+    .argument("<source>", "Path to a Claw package directory, .tgz archive, or grouped manifest")
     .option("--json", "Print JSON", false)
     .action(async (source: string, opts: ClawsInspectOptions) => {
       const { runClawsInspectCommand } = await import("./claws-cli.runtime.js");
@@ -79,7 +79,7 @@ export function registerClawsCli(program: Command) {
   claws
     .command("add")
     .description("Add a new agent and its requirements from a Claw")
-    .argument("<source>", "Path to a Claw package directory or grouped manifest")
+    .argument("<source>", "Path to a Claw package directory, .tgz archive, or grouped manifest")
     .option("--dry-run", "Preview all actions without mutating state", false)
     .option("--accept-capabilities", "Accept required plugin capabilities", false)
     .option("--acknowledge-clawhub-risk", "Acknowledge ClawHub trust warnings", false)
