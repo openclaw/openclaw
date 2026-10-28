@@ -377,25 +377,37 @@ it.for([false, true])(
   },
 );
 
-test.for(["completes", "slow", "cancelled"] as const)(
+test.for(["completes", "slow", "cancelled", "rollback"] as const)(
   "bounds publication waiting when the request is %s without adopting background work",
-  async (phase, { usage: { files, refresh, hold, dirty, read, newScope } }) => {
+  async (phase, { usage: { agentId, files, refresh, hold, dirty, read, newScope } }) => {
     const refreshOwner = newScope();
     const requestOwner = newScope();
     const release = hold("refreshed");
     refresh.mockReturnValue(release.promise);
     const reason = new Error("usage client disconnected");
+    await expectStale({ config, agentId, startMs: 0, endMs: Date.now() });
     dirty(files[0], refreshOwner);
-    const reading = requestOwner.track(() => read(files[0], { maxPublicationWaitMs: 100 }));
+    const reading = requestOwner.track(async () =>
+      phase === "rollback"
+        ? loadSummary({ config, agentId, startMs: 0, endMs: Date.now() })
+        : read(files[0], { maxPublicationWaitMs: 100 }),
+    );
     // Observe rejection immediately; scope cancellation must not become an
     // unhandled rejection while the fake clock advances other work.
     const result = Promise.allSettled([reading]);
     await tick(0, 1);
+    if (phase === "rollback") {
+      const settled = vi.fn();
+      void reading.then(settled, settled);
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() - 90_000);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.waitFor(() => expect(settled).toHaveBeenCalled(), { timeout: 1_000 });
+    }
     if (phase === "completes") {
       release.resolve("refreshed");
     } else if (phase === "cancelled") {
       requestOwner.beginClose(reason);
-    } else {
+    } else if (phase === "slow") {
       await vi.advanceTimersByTimeAsync(100);
     }
     const [outcome] = await result;
@@ -404,7 +416,10 @@ test.for(["completes", "slow", "cancelled"] as const)(
     } else {
       expect(outcome).toMatchObject({
         status: "fulfilled",
-        value: { summaries: [null], cacheStatus: { status: "stale" } },
+        value:
+          phase === "rollback"
+            ? { totals: { totalTokens: 0 }, cacheStatus: { status: "refreshing", staleFiles: 2 } }
+            : { summaries: [null], cacheStatus: { status: "stale" } },
       });
     }
     if (phase !== "completes") {
