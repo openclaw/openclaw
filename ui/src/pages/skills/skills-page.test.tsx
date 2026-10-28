@@ -820,4 +820,118 @@ describe("Skills discovery lifecycle", () => {
       }
     },
   );
+
+  it("matches canonical NFC/NFD forms in local discovery filtering without rewriting copy", async () => {
+    const nfcName = "München Alpha";
+    const nfdName = "Mu\u0308nchen Beta";
+    const nfdDescription = "Re\u0301sume\u0301 support";
+    const nfcDescription = "Séance planning";
+    const request = vi.fn(async (method: string) =>
+      method === "skills.library.list" ? personalLibrary : { results: [] },
+    );
+    const { page, publishRouteData } = mountSkills(request);
+    publishRouteData({
+      report: {
+        workspaceDir: "/workspace",
+        managedSkillsDir: "/managed",
+        skills: [
+          createSkill({ name: nfcName, description: nfdDescription, skillKey: "nfc-name" }),
+          createSkill({ name: nfdName, description: nfcDescription, skillKey: "nfd-name" }),
+          createSkill({ name: "Ascii Only", description: "Plain text", skillKey: "ascii-only" }),
+        ],
+      },
+    });
+    await waitForFast(() => expect(page.textContent).toContain("Ascii Only"));
+    const input = page.querySelector<HTMLInputElement>('input[name="skills-search"]')!;
+    const search = (query: string) => {
+      input.value = query;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      flush();
+    };
+    const card = (key: string) => page.querySelector(`[data-skill-id="local:${key}"]`);
+
+    search("münchen"); // composed query, decomposed name
+    expect(card("nfd-name")).not.toBeNull();
+    expect(card("nfc-name")).not.toBeNull();
+    expect(card("ascii-only")).toBeNull();
+    search("Mu\u0308nchen"); // decomposed query, composed name
+    expect(card("nfc-name")).not.toBeNull();
+    search("résumé"); // composed query, decomposed description
+    expect(card("nfc-name")).not.toBeNull();
+    expect(card("nfd-name")).toBeNull();
+    search("se\u0301ance"); // decomposed query, composed description
+    expect(card("nfd-name")).not.toBeNull();
+    expect(card("nfc-name")).toBeNull();
+    search("ASCII"); // ASCII substring/case control unchanged
+    expect(card("ascii-only")).not.toBeNull();
+    expect(card("nfc-name")).toBeNull();
+    search("no-such-skill");
+    expect(page.querySelector('[data-skill-id^="local:"]')).toBeNull();
+    search(""); // displayed copy keeps its original bytes
+    expect(page.querySelector('[data-skill-id="local:nfd-name"] h2')?.textContent).toBe(nfdName);
+    expect(
+      page.querySelector('[data-skill-id="local:nfc-name"] .installed-plugins-card__summary')
+        ?.textContent,
+    ).toBe(nfdDescription);
+  });
+
+  it("matches canonical NFC/NFD forms in installed-skill filtering without rewriting copy", async () => {
+    const nfcName = "München Library";
+    const nfdName = "Mu\u0308nchen Archive";
+    const nfdDescription = "Re\u0301sume\u0301 support";
+    const nfcDescription = "Séance planning";
+    const entries = [
+      libraryEntry({
+        skillId: "nfc-skill-id",
+        slug: "nfc-skill",
+        name: nfcName,
+        description: nfdDescription,
+      }),
+      libraryEntry({
+        skillId: "nfd-skill-id",
+        slug: "nfd-skill",
+        name: nfdName,
+        description: nfcDescription,
+      }),
+      libraryEntry({
+        skillId: "ascii-skill-id",
+        slug: "ascii-skill",
+        name: "Ascii Library",
+        description: "Plain text",
+      }),
+    ];
+    const request = vi.fn(async (method: string) =>
+      method === "skills.library.list" ? { ...personalLibrary, entries } : { results: [] },
+    );
+    const { page } = mountSkills(request, "settings");
+    await waitForFast(() => expect(page.textContent).toContain("nfd-skill"));
+    const input = page.querySelector<HTMLInputElement>('input[name="library-search"]')!;
+    const search = (query: string) => {
+      input.value = query;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      flush();
+    };
+    const slugs = () =>
+      [...page.querySelectorAll(".settings-row .settings-row__title")].map(
+        (element) => element.textContent,
+      );
+
+    search("münchen"); // composed query, decomposed name
+    expect(slugs()).toEqual(["nfc-skill", "nfd-skill"]);
+    search("Mu\u0308nchen"); // decomposed query, composed name
+    expect(slugs()).toEqual(["nfc-skill", "nfd-skill"]);
+    search("résumé"); // composed query, decomposed description
+    expect(slugs()).toEqual(["nfc-skill"]);
+    search("se\u0301ance"); // decomposed query, composed description
+    expect(slugs()).toEqual(["nfd-skill"]);
+    search("ASCII"); // ASCII substring/case control unchanged
+    expect(slugs()).toEqual(["ascii-skill"]);
+    search("no-such-skill");
+    expect(slugs()).toEqual([]);
+    search(""); // displayed copy keeps its original bytes
+    const nfcRow = [...page.querySelectorAll(".settings-row")].find(
+      (row) => row.querySelector(".settings-row__title")?.textContent === "nfc-skill",
+    );
+    expect(nfcRow?.querySelectorAll(".settings-row__desc")[0]?.textContent).toBe(nfdDescription);
+  });
 });
