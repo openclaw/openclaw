@@ -311,6 +311,23 @@ it("admits the recorded Gateway owner without roles and never substitutes it for
           });
           expect(compacted.entry.sessionId).toBe("legacy-compacted-transcript");
           accepted.authority.assertCurrent();
+          // Ordinary initialization also acknowledges unchanged identity. Its nested
+          // preparation must not take custody away from the retained outer turn.
+          const preparation = await beginSessionEffect({ target });
+          try {
+            await preparation.run(() => {
+              accepted.authority.assertCurrent();
+              acknowledgeSessionEffectTransition(target, {
+                previous: compacted.entry,
+                current: compacted.entry,
+              });
+              return Promise.resolve();
+            });
+          } finally {
+            preparation.release();
+            await preparation.released;
+          }
+          accepted.authority.assertCurrent();
         });
       } finally {
         effect.release();

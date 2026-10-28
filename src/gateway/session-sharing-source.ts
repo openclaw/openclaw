@@ -336,7 +336,10 @@ export function createAdmittedSessionSharingAuthority(params: {
         if (
           admittedTarget &&
           previous?.sessionId === admittedTarget.sessionId &&
-          previous?.lifecycleRevision === admittedTarget.lifecycleRevision
+          previous?.lifecycleRevision === admittedTarget.lifecycleRevision &&
+          // Metadata-only initialization must not transfer custody to a nested effect.
+          (current.sessionId !== previous.sessionId ||
+            current.lifecycleRevision !== previous.lifecycleRevision)
         ) {
           admittedTarget = {
             ...admittedTarget,
