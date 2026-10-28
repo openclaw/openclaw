@@ -6,6 +6,7 @@ import { listSwarmRunReservationIds } from "../../agents/subagents/swarm/swarm-s
 import {
   listSessionChildEntriesReadOnly,
   loadSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { requestActiveCronJobCancellation } from "../../cron/active-jobs.js";
 import {
@@ -455,6 +456,103 @@ describe("native scheduled command execution", () => {
       expect(fixture.scheduledResults).toHaveLength(1);
     });
   });
+  it.each(["disabled", "removed"] as const)(
+    "ends a schedule at its first refusal once an in-process reload leaves the plugin %s",
+    async (change) => {
+      await withCommandPlugin(async (fixture) => {
+        const id = await createContinuation(fixture);
+        const plugins = expectDefined(fixture.cfg.plugins, "plugin config");
+        if (change === "disabled") {
+          plugins.entries = { [pluginId]: { enabled: false } };
+        } else {
+          plugins.load = { paths: [] };
+          plugins.entries = {};
+        }
+        await fixture.reloadPlugin();
+        fixture.handler.mockClear();
+        await fixture.cron.run(id, "force");
+        expect(fixture.scheduledResults[0]).toMatchObject({
+          status: "error",
+          error: expect.stringContaining("plugin was disabled or removed"),
+          errorClassification: { kind: "permanent" },
+          executionStarted: false,
+        });
+        expect(fixture.handler).not.toHaveBeenCalled();
+        const [retired] = await fixture.readJobs();
+        expect(retired).toMatchObject({ enabled: false, state: { pluginCommandRuns: 1 } });
+        expect(retired?.state.autoDisabled).toBeUndefined();
+        await expect(fixture.cron.run(id, "force")).resolves.toMatchObject({ ran: false });
+      });
+    },
+  );
+  it("ends a reset parent's schedules, which stop holding the plugin's per-parent cap", async () => {
+    await withCommandPlugin(async (fixture) => {
+      let invocation = 0;
+      fixture.handler.mockImplementation(async (ctx) => {
+        const schedules = expectDefined(ctx.runtimeContext?.scheduledTurns, "schedule capability");
+        invocation += 1;
+        try {
+          for (let index = 0; index < Number(ctx.args); index += 1) {
+            await schedules.schedule(scheduleRequest({ requestId: `${invocation}-${index}` }));
+          }
+          return { text: "scheduled" };
+        } catch (error) {
+          return { text: String(error) };
+        }
+      });
+      const schedule = async (count: number) =>
+        (await commandInvocation(fixture, `/review-panel ${count}`).run())?.reply?.text;
+      expect(await schedule(4)).toBe("scheduled");
+      expect(await schedule(4)).toBe("scheduled");
+      expect(await schedule(1)).toMatch(/limited to 8 active jobs per plugin and parent/);
+      const old = expectDefined((await fixture.readJobs())[0], "schedule from before the reset");
+      const { sessionKey, storePath } = fixture.params();
+      const scope = { agentId: "main", sessionKey, storePath };
+      // As `/new` and `/reset` do: same session id, new lifecycle revision.
+      await upsertSessionEntryCore(scope, {
+        lifecycleRevision: "revision-after-reset",
+        updatedAt: Date.now(),
+      });
+      expect(loadSessionEntry(scope)?.sessionId).toBe(old.pluginCommand?.parent.sessionId);
+      expect(await schedule(1)).toBe("scheduled");
+      fixture.handler.mockClear();
+      await fixture.cron.run(old.id, "force");
+      expect(fixture.scheduledResults[0]).toMatchObject({
+        status: "error",
+        error: expect.stringContaining("parent conversation was reset"),
+        errorClassification: { kind: "permanent" },
+        executionStarted: false,
+      });
+      expect(fixture.handler).not.toHaveBeenCalled();
+      const jobs = await fixture.readJobs();
+      expect(jobs.find((job) => job.id === old.id)).toMatchObject({ enabled: false });
+      expect(jobs.filter((job) => job.enabled)).toHaveLength(8);
+    });
+  });
+  it.each(["archived", "given a new session id"] as const)(
+    "keeps retrying while a parent that was not reset is %s",
+    async (change) => {
+      await withCommandPlugin(async (fixture) => {
+        const id = await createContinuation(fixture);
+        const { sessionKey, storePath } = fixture.params();
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey, storePath },
+          change === "archived"
+            ? { archivedAt: Date.now(), updatedAt: Date.now() }
+            : { sessionId: "successor-session", updatedAt: Date.now() },
+        );
+        fixture.handler.mockClear();
+        await fixture.cron.run(id, "force");
+        expect(fixture.scheduledResults[0]).toMatchObject({
+          status: "error",
+          executionStarted: false,
+        });
+        expect(fixture.scheduledResults[0]?.errorClassification).toBeUndefined();
+        expect(fixture.handler).not.toHaveBeenCalled();
+        expect((await fixture.readJobs())[0]).toMatchObject({ enabled: true });
+      });
+    },
+  );
   it("routes scheduled child requests through the real native tool veto", async () => {
     await withCommandPlugin(async (fixture) => {
       const id = await createContinuation(fixture);

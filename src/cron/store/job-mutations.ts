@@ -122,8 +122,9 @@ export function planCronJobMutation(
           ),
         ).length >= MAX_ACTIVE_PLUGIN_COMMAND_SCHEDULES_PER_PARENT
       ) {
-        // Retired schedules, those bound to a replaced plugin instance or other code, and
-        // non-restartable ones of an earlier Gateway process do not count: none can run again.
+        // Retired schedules, those bound to a replaced plugin instance or other code, those of a
+        // reset parent, and non-restartable ones of an earlier Gateway process do not count: none
+        // can run again.
         throw new Error(
           `plugin command schedules are limited to ${MAX_ACTIVE_PLUGIN_COMMAND_SCHEDULES_PER_PARENT} active jobs per plugin and parent session`,
         );

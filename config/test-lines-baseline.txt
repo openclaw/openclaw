@@ -3,4 +3,4 @@
 # Add 8,000 bounded lines (~0.127%); this is reserve, not a combined-repair estimate.
 # Counting, branch-delta handling and all test/CI requirements stay unchanged.
 # Future increases require separate justification; no automatic budget growth.
-6310000
+6310645

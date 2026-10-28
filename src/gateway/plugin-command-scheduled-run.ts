@@ -104,11 +104,11 @@ export function readPluginCommandScheduledJob(
   return schedule;
 }
 
-/** The bound managed plugin instance was replaced in this process; the schedule ends. */
-class PluginCommandScheduleInstanceReplacedError extends Error {
-  constructor() {
-    super("Scheduled plugin command's original plugin instance was replaced; the schedule ended.");
-    this.name = "PluginCommandScheduleInstanceReplacedError";
+/** The schedule can never run plugin code again; settlement retires it on this refusal. */
+class PluginCommandScheduleEndedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PluginCommandScheduleEndedError";
   }
 }
 
@@ -125,14 +125,20 @@ export function assertPluginCommandScheduleRegistry(
   const { pluginIncarnation } = binding;
   const plugin = registry.plugins.find((record) => record.id === schedule.pluginId);
   const liveIncarnation = plugin && getPluginInstanceIncarnation(plugin);
-  if (
-    !isPluginRegistryRetired(registry) &&
-    liveIncarnation !== undefined &&
-    liveIncarnation !== pluginIncarnation
-  ) {
-    // A current registry already serves another live instance. A transient gap (retired
-    // registry, unloading or disposed instance) stays an ordinary refusal: adoption can keep it.
-    throw new PluginCommandScheduleInstanceReplacedError();
+  if (!isPluginRegistryRetired(registry) && liveIncarnation !== pluginIncarnation) {
+    // A current registry that serves another live instance, or no longer loads the plugin, never
+    // adopts the bound instance again. A transient gap (retired registry, unloading or disposed
+    // instance of an enabled plugin) stays an ordinary refusal: adoption can keep it.
+    if (liveIncarnation !== undefined) {
+      throw new PluginCommandScheduleEndedError(
+        "Scheduled plugin command's original plugin instance was replaced; the schedule ended.",
+      );
+    }
+    if (!plugin?.enabled) {
+      throw new PluginCommandScheduleEndedError(
+        "Scheduled plugin command's plugin was disabled or removed; the schedule ended.",
+      );
+    }
   }
   const command = listRegisteredPluginCommands(registry).find(
     (entry) => entry.name === schedule.command,
@@ -267,13 +273,15 @@ export async function runPluginCommandScheduledTurn(params: {
     try {
       assertSource();
       const entry = currentSession.entry;
-      if (
-        !entry ||
-        entry.archivedAt ||
-        entry.sessionId !== schedule.parent.sessionId ||
-        entry.lifecycleRevision !== schedule.parent.lifecycleRevision
-      ) {
-        throw new Error("Scheduled plugin command parent was deleted, reset or archived.");
+      if (entry && entry.lifecycleRevision !== schedule.parent.lifecycleRevision) {
+        // Every reset (`/new`, `/reset`, automatic rollover) mints a fresh random revision. A
+        // restored archive keeps its own revision, so an archived parent stays an ordinary refusal.
+        throw new PluginCommandScheduleEndedError(
+          "Scheduled plugin command's parent conversation was reset; the schedule ended.",
+        );
+      }
+      if (!entry || entry.archivedAt || entry.sessionId !== schedule.parent.sessionId) {
+        throw new Error("Scheduled plugin command parent was deleted, archived or replaced.");
       }
       const assertParent = composeSessionSourceAssertion(
         [currentSession.source],
@@ -596,7 +604,7 @@ export async function runPluginCommandScheduledTurn(params: {
       error: formatErrorMessage(error),
       ...(turnSignal?.aborted || params.request.abortSignal?.aborted || isAbortError(error)
         ? { errorClassification: { kind: "aborted" as const } }
-        : error instanceof PluginCommandScheduleInstanceReplacedError
+        : error instanceof PluginCommandScheduleEndedError
           ? // Settlement retires the schedule on this first refusal.
             { errorClassification: { kind: "permanent" as const } }
           : {}),
