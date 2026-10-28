@@ -11,16 +11,17 @@ export async function readSystemdGatewayStopTimeout(
   target?: Pick<SystemdServiceReadTarget, "scope" | "unitName">,
 ) {
   const installation = state.systemdInstallation;
-  target ??=
-    installation?.kind === "system"
+  const selected =
+    target ??
+    (installation?.kind === "system"
       ? installation.system
       : installation?.kind === "user" || installation?.kind === "dueling"
         ? installation.user
-        : undefined;
-  const unit = target?.unitName ?? `${resolveSystemdServiceName(state.env)}.service`;
+        : undefined);
+  const unit = selected?.unitName ?? `${resolveSystemdServiceName(state.env)}.service`;
   const args = ["show", unit, "--no-page", "--property", "LoadState,TimeoutStopUSec"];
   const result = await withServiceInspectionBudget(() =>
-    target?.scope === "system"
+    selected?.scope === "system"
       ? execSystemctl(args, state.env, 10_000)
       : execSystemctlUser(state.env, args, 10_000),
   );
