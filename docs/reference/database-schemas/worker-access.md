@@ -7033,6 +7033,11 @@ session invalidations after the read and drains pending reporting on shutdown.
 Each batch reads current placement and environment facts; it retains no placement
 cache and does not scan the placement inventory on the main thread.
 
+Placement retirement discovers only session identities through its ordered worker
+read, adding local-only identities from the existing replica. It reads the complete
+current placement only when session evidence is absent, before retirement or
+environment teardown. Discovery carries no claim, recovery, or workspace payload.
+
 This execution cutover does not change schemas, stored bytes, retention, config,
 or update behavior. A change to those contracts follows the
 [storage review checkpoint](/reference/database-schemas/storage-changes#review-checkpoint-for-material-changes).

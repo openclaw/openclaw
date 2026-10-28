@@ -47,6 +47,7 @@ const repositoryScriptEntries = [
   "scripts/perf/inspection-read-admission.ts!",
   "scripts/perf/local-workspace-refresh-measure.ts!",
   "scripts/perf/node-worker-churn-measure.mjs!",
+  "scripts/perf/placement-retirement-replies.mjs!",
   "scripts/perf/plugin-state-claims-measure.ts!",
   "scripts/perf/schema-crossing-measure.ts!",
   "scripts/perf/session-append-reload-measure.ts!",
