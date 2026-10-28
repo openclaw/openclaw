@@ -17,8 +17,9 @@ type ReleasedHostFactory = (
   options: Omit<PublicOptions, "operationalRunInstance">,
   bindingOptions?: Readonly<{ cwd?: string }>,
 ) => AnyAgentTool[];
-expectTypeOf<SyncHostFactory>().toEqualTypeOf<ReleasedHostFactory>();
-expectTypeOf<Parameters<AsyncHostFactory>>().toEqualTypeOf<Parameters<ReleasedHostFactory>>();
+expectTypeOf<SyncHostFactory>().toExtend<ReleasedHostFactory>();
+expectTypeOf<ReleasedHostFactory>().toExtend<SyncHostFactory>();
+expectTypeOf<Parameters<AsyncHostFactory>>().toEqualTypeOf<Parameters<SyncHostFactory>>();
 expectTypeOf<ReturnType<AsyncHostFactory>>().toEqualTypeOf<Promise<AnyAgentTool[]>>();
 expectTypeOf<ReturnType<typeof createOpenClawCodingTools>>().toEqualTypeOf<AnyAgentTool[]>();
 expectTypeOf<Parameters<typeof createOpenClawCodingToolsAsync>>().toEqualTypeOf<

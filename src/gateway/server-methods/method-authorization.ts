@@ -9,7 +9,10 @@ import {
   resolveSessionMethodScope,
   type SessionOperatorScope,
 } from "../../shared/session-method-scopes-base.js";
-import { holdsCronManagementGrant } from "../cron-creator-authority-grant.js";
+import {
+  holdsCronManagementGrant,
+  isCronModelManagementAllowed,
+} from "../cron-creator-authority-grant.js";
 import { isInProcessSessionRun } from "../in-process-session-run.js";
 import {
   ADMIN_SCOPE,
@@ -18,6 +21,7 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "../method-scopes.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
+import { isHostPluginApprovalCall } from "../operator-approval-authorization.js";
 import {
   authorizeCurrentOperatorRoleScopes,
   resolveGatewayOperatorRoleActor,
@@ -71,13 +75,7 @@ export function authorizeGatewayMethod(
     return { error: null };
   }
   const registeredScope = methodRegistry.getScope(method);
-  if (
-    method === "plugin.approval.request" &&
-    registeredScope === APPROVALS_SCOPE &&
-    client.internal?.syntheticClient === true &&
-    client.internal.pluginApprovalRequestOwnerId?.trim() &&
-    roleScopesAllow({ role: "operator", requestedScopes: [WRITE_SCOPE], allowedScopes: scopes })
-  ) {
+  if (registeredScope === APPROVALS_SCOPE && isHostPluginApprovalCall(method, client)) {
     return { error: null };
   }
   let scopeAuth = isOperatorScope(registeredScope)
@@ -105,6 +103,18 @@ export function authorizeGatewayMethod(
     if (
       runtimeIdentity?.cronManagementGrant &&
       holdsCronManagementGrant(runtimeIdentity.cronManagementGrant, runtimeIdentity, method)
+    ) {
+      return { error: null };
+    }
+    // Managed model calls lose global management grants. Let their write-scoped
+    // runtime identity reach the cron owner's job and live-authority checks.
+    if (
+      runtimeIdentity &&
+      (method === "cron.update" || method === "cron.remove" || method === "cron.run") &&
+      !isCronModelManagementAllowed(
+        (context.getCommittedRuntimeConfig ?? context.getRuntimeConfig)(),
+      ) &&
+      roleScopesAllow({ role: "operator", requestedScopes: [WRITE_SCOPE], allowedScopes: scopes })
     ) {
       return { error: null };
     }

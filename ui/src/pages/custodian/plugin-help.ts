@@ -32,7 +32,7 @@ export function publishPluginHelpContext(
   context: PluginHelpContext,
   owner: object,
   plugin: PluginHelpReference,
-  options: { overview: boolean; installed: boolean },
+  options: { installed: boolean },
 ): () => void {
   const state = pluginHelpState(context);
   const previous = state.publication;
@@ -54,7 +54,6 @@ export function publishPluginHelpContext(
     owner,
     reference,
     pathname: pluginHelpPathname(context),
-    ...options,
   };
   state.publication = publication;
   const changedSelection =
@@ -64,12 +63,7 @@ export function publishPluginHelpContext(
   if (changedSelection) {
     state.selectionEpoch += 1;
   }
-  if (
-    changedSelection ||
-    previous?.overview !== options.overview ||
-    previous?.installed !== options.installed ||
-    JSON.stringify(previous?.reference) !== JSON.stringify(reference)
-  ) {
+  if (changedSelection || JSON.stringify(previous?.reference) !== JSON.stringify(reference)) {
     notifyPluginHelp(state);
   }
   return () => {

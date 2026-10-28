@@ -2,12 +2,16 @@
 import { closeSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isIP } from "node:net";
-import { fileTypeFromBuffer } from "file-type";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import pLimit from "p-limit";
 import { startsWithSvgRootElement } from "../../packages/gateway-protocol/src/svg-image.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFile, readFileDescriptorBounded } from "../infra/boundary-file-read.js";
-import { fetchClawHubPluginIconUrls } from "../infra/clawhub-plugin-icons.js";
+import {
+  fetchClawHubJson,
+  readClawHubStringField,
+  resolveClawHubImageUrl,
+} from "../infra/clawhub-client.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
 import { isBlockedHostnameOrIp } from "../infra/net/ssrf.js";
@@ -79,6 +83,7 @@ async function validateImageMime(body: Buffer, contentType: string): Promise<boo
       !text.includes("\0") && !/<!doctype|<!entity/iu.test(text) && startsWithSvgRootElement(text)
     );
   }
+  const { fileTypeFromBuffer } = await import("file-type");
   const detected = await fileTypeFromBuffer(body);
   return resolveHttpImageMimeType(detected?.mime) === contentType;
 }
@@ -247,11 +252,29 @@ async function loadPluginIcon(
       }
     } else {
       try {
-        const urls = await fetchClawHubPluginIconUrls({
+        // Branding needs one package read, not versions, README or security enrichment.
+        const value = await fetchClawHubJson<unknown>({
           ...source,
           skipAuth: true,
           timeoutMs: PLUGIN_ICON_REQUEST_TIMEOUT_MS,
+          path: `/api/v1/packages/${encodeURIComponent(source.packageName)}`,
+          retryTransientReads: false,
         });
+        if (!isRecord(value) || !isRecord(value.package)) {
+          throw new Error("Malformed ClawHub plugin icon response: expected a package object.");
+        }
+        if (value.package.name !== source.packageName) {
+          throw new Error("ClawHub plugin icon response changed the requested package identity.");
+        }
+        const owner = value.owner;
+        if (owner != null && !isRecord(owner)) {
+          throw new Error("Malformed ClawHub plugin icon response: expected an owner object.");
+        }
+        const packageIcon = readClawHubStringField(value.package, "icon", "plugin icon");
+        const image = owner ? readClawHubStringField(owner, "image", "plugin owner") : undefined;
+        const urls = [packageIcon, image].flatMap((url) =>
+          url ? [resolveClawHubImageUrl(url, source.baseUrl) ?? url] : [],
+        );
         for (const iconUrl of urls) {
           const icon = await loadCatalogIcon({ iconUrl });
           if (icon) {

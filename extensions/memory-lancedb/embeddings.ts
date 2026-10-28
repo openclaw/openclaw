@@ -304,24 +304,29 @@ class ProviderAdapterEmbeddings implements Embeddings {
     embedding: EmbeddingConfig,
     timeoutMs?: number,
   ): Promise<number[]> {
-    if (this.closed) {
-      throw new Error("memory-lancedb embeddings are closed");
-    }
+    const deadlineAtMs = timeoutMs
+      ? performance.now() + resolveTimerTimeoutMs(timeoutMs, 1)
+      : undefined;
     const fingerprint = embeddingConfigFingerprint(embedding);
     this.invalidate(fingerprint);
     const entry = this.getProvider(normalizeAgentId(agentId), embedding);
     entry.activeUses += 1;
     try {
       const provider = await entry.promise;
-      if (!timeoutMs) {
+      if (deadlineAtMs === undefined) {
         return await provider.embed(text, { inputType: "query" });
+      }
+      // Shared initialization may finish after recall returns; never dispatch that expired query.
+      const remainingTimeoutMs = Math.floor(deadlineAtMs - performance.now());
+      if (remainingTimeoutMs <= 0) {
+        throw new Error("memory-lancedb embedding timed out");
       }
       const controller = new AbortController();
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         timer = setTimeout(
           () => controller.abort(new Error("memory-lancedb embedding timed out")),
-          resolveTimerTimeoutMs(timeoutMs, 1),
+          remainingTimeoutMs,
         );
         timer.unref?.();
         return await provider.embed(text, { signal: controller.signal, inputType: "query" });
@@ -364,7 +369,7 @@ export async function runWithTimeout<T>(params: {
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
   // Share one absolute deadline with native work so the outer race cannot
   // abandon a still-running operation after reporting a timeout.
-  const deadlineAtMs = Date.now() + timeoutMs;
+  const deadlineAtMs = performance.now() + timeoutMs;
   try {
     const result = await raceWithTimeout(
       () => params.task(deadlineAtMs),
@@ -372,12 +377,12 @@ export async function runWithTimeout<T>(params: {
       (): typeof TIMEOUT => TIMEOUT,
       { ref: false },
     );
-    if (result === TIMEOUT || Date.now() >= deadlineAtMs) {
+    if (result === TIMEOUT || performance.now() >= deadlineAtMs) {
       return { status: "timeout" };
     }
     return { status: "ok", value: result };
   } catch (error) {
-    if (Date.now() >= deadlineAtMs) {
+    if (performance.now() >= deadlineAtMs) {
       return { status: "timeout" };
     }
     throw error;

@@ -10,7 +10,18 @@ title: "PR wrapper tooling"
 - Supervised PR operations disable automatic Git maintenance through inherited process configuration, preserving repository settings. Explicit maintenance must still join before completion. PR source fetches also disable automatic maintenance: fetching one PR does not authorize repository-wide pruning of unrelated worktree metadata.
 
 - `scripts/pr` serializes review, prepare, and merge operations per PR across linked worktrees; `scripts/pr gc` skips active or indeterminate locks. Its subcommand classification table is the canonical wrapper trust boundary: a mismatched local wrapper may run only a classified `advisory` subcommand with `--dev-wrapper` or `OPENCLAW_PR_DEV_WRAPPER=1`; classified `landing` subcommands always require canonical/origin-main wrapper code. A worktree whose wrapper differs from origin/main (stale base or wrapper-editing branch) loudly substitutes the canonical checkout's wrapper when that checkout is clean and byte-identical to fetched `refs/remotes/origin/main`; it refuses only when no anchor-matching wrapper is available. A successful command return is the trusted synchronous-completion contract: every PR-state-mutating child must be joined before returning, and such work must never daemonize or explicitly escape both the operation group and lock-notification FD. Release on clean exit requires the leader's completion marker; an escaped descendant that merely holds the notify pipe then produces a loud warned release instead of retention (#124583). A failed command auto-releases while its explicit pre-side-effect validation marker remains active, or after side effects when it exits on its own (status 1-127, no signal) and the full drain observes its group dead and every notification-pipe holder gone; that leaves only the fd-closing escapee residual a clean exit already accepts. Interruptions, lingering group work, a still-open pipe, and controller loss stay locked because detached children cannot be disproved. After verifying no child tools remain, use the reported exact-OID `scripts/pr lock-recover` command. Never bypass or delete these refs manually.
-- Materialized wrappers pin selective third-party dependencies to their installed real package directories before handoff, not mutable top-level `node_modules` aliases. The anchored `pr-lib/materialize-dependencies.mjs` owns that set; the child completes it on handoff too, because an older parent may pin fewer packages. Reentry preserves already pinned installations. For anchors predating that helper, the parent performs the same setup against the extracted manifest; pre-#149585 anchors without a manifest retain their original four tooling dependencies. Missing package directories or versions that differ from the anchored package manifest fail before lock acquisition; restore frozen dependencies in a clean trusted-main checkout and retry. Do not link the whole workspace dependency tree or install into the canonical checkout during materialization; only the explicitly selected separate tooling root below may refresh. Keep the resolved package installation intact until the supervised command finishes; pinning paths does not copy or freeze package contents. `test/scripts/eager-import-closure.test.ts` checks archived eager imports against copied sources and pinned package exports; keep `pr-lib/wrapper-components.txt` current when that source closure changes. Run `pnpm test test/scripts/eager-import-closure.test.ts -t "PR wrapper inventory"` for the source-side inventory check before exercising extraction. It names missing eager runtime imports and stale deleted paths; existing shell-launched helpers, workers, and data assets remain explicit inventory roots.
+- Materialized wrappers pin selective third-party dependencies to their installed real package directories before handoff, not mutable top-level `node_modules` aliases. The anchored `pr-lib/materialize-dependencies.mjs` owns that set; the child completes it on handoff too, because an older parent may pin fewer packages. Reentry preserves already pinned installations. For anchors predating that helper, the parent performs the same setup against the extracted manifest; pre-#149585 anchors without a manifest retain their original four tooling dependencies. When installed packages are missing or differ from the anchored manifest, the current wrapper prepares the anchor’s own frozen installation before lock acquisition. It never installs into the canonical checkout, a selected tooling checkout, or another anchor’s installation; only selective third-party package directories are pinned. Keep the resolved package installation intact until the supervised command finishes; pinning paths does not copy or freeze package contents. `test/scripts/eager-import-closure.test.ts` checks archived eager imports against copied sources and pinned package exports; keep `pr-lib/wrapper-components.txt` current when that source closure changes. Run `pnpm test test/scripts/eager-import-closure.test.ts -t "PR wrapper inventory"` for the source-side inventory check before exercising extraction. It names missing eager runtime imports, forked children named through `resolveRuntimeProcessEntrypointUrl`, and stale deleted paths; existing shell-launched helpers, workers, and data assets remain explicit inventory roots.
+
+Materialized anchors use `openclaw-pr-anchor.<creator-pid>.<suffix>` directories.
+The creator owns retirement across its exec chain, including success, failure,
+signals, and failed execs; a supervised operation retains its anchor only while
+its process group or notification pipe has not drained. Every supervisor startup
+also sweeps at most four owned, mode-0700 anchor directories whose modification
+and change times are both older than 24 hours, excluding its own anchor and any
+recorded live creator PID. Legacy names without a PID qualify by age alone. A dead
+creator is the sweep's only evidence that an operation ended: descendants still
+running 24 hours after a crashed or undrained supervisor can lose their anchor,
+while that operation's retained PR lock still requires `lock-recover`.
 
 `OPENCLAW_PR_TOOLING_ROOT` selects a full checkout of the same repository for
 materialized wrappers' third-party dependencies; otherwise `openclaw.pr.toolingRoot` in the
@@ -19,17 +30,90 @@ The standalone CI watcher and Crabbox entrypoint resolve missing third-party
 packages from the same tooling root when their checkout has no `node_modules`,
 with the same explicit-root identity checks and exact package versions. They
 never link an installation or resolve workspace packages from another checkout.
+The line-cap ratchet uses this same no-link, third-party-only admission and runs the package-owned oxlint CLI with the same Node executable.
 The wrapper still selects and verifies code against the existing trust anchor.
 Installed package versions must exactly match the anchor manifest. On mismatch,
-an explicitly selected, separate, clean `main` checkout is fetched, fast-forwarded,
-and installed with `pnpm install --frozen-lockfile` once before rechecking. Fetch and
-fast-forward output streams to stderr, without a diffstat, instead of being captured,
-so a root thousands of commits behind refreshes regardless of output size. A stale
-dirty or non-main root cannot refresh; sparse and unrelated roots are always
-refused. The canonical checkout is never refreshed. Keep the selected installation
-intact until the command finishes. This setting applies at both dependency
-materialization handoffs; in-place wrappers keep their checkout's dependency
-context, and wrapper selection stays unchanged.
+the current wrapper extracts the authenticated anchor commit into a private
+staging directory and runs `pnpm install --frozen-lockfile --prefer-offline`, with
+normal workspace and lifecycle policy. It verifies the extracted source against
+Git before installation, then asks the anchor's own materializer to recheck exact
+versions. A successful installation is published atomically under
+`~/.cache/openclaw/pr-dependencies/`; concurrent creators keep the first complete
+entry and discard their staging copies.
+
+The cache key covers the install inputs, platform, architecture, and Node ABI.
+For the audited source-install path, unrelated source revisions reuse the same
+installation. `scripts/pr-lib/dependency-inputs.json` records the lifecycle read
+set: all package manifests, lockfile, workspace/package-manager configuration,
+patches, lifecycle code (including `pnpm:devPreinstall`) and its imports, both
+SQL schemas, and the native protocol generator's declared inputs and TypeScript
+configuration. Git-hook setup reads the presence of its
+directory, not hook contents. Generated outputs start absent in the archive.
+The full archive still undergoes the same Git blob, mode, symlink, and inventory
+verification before installation; sharing changes only dependency identity.
+
+The audit signature covers executable inputs and dependency/build policy.
+Changes to those inputs, a different runtime, a tracked `dist/` tree, or an older
+wrapper without an audit retain full-tree keying. This prevents a changed hook
+from reading a new source path while reusing an installation based on the old
+read set. SQL schemas are executable inputs too: the generator passes them to
+SQLite. To renew an audit, trace the root/workspace hooks and allowed dependency
+builds, update the read set, then set `auditSha256` to SHA-256 of the selected
+`git ls-tree -r -z <revision>` rows (without the final NUL).
+The current audit qualifies Darwin arm64 and its recorded Node ABI; other
+platforms retain full-tree isolation until their dependency builds are audited.
+The current wrapper can prepare dependencies for older retained workflows without
+changing their binding or executing newer workflow code in their place.
+
+Each entry records its consumer wrapper PIDs. Reuse refreshes its modification
+time; each materialization keeps the four most recently used complete entries
+with no live consumers, plus every entry with a live consumer and the current
+entry. Other unused complete entries are removed regardless of age. Cleanup
+only removes owned, mode-0700 directories with cache entry names. PID reuse may
+delay cleanup. Failed or interrupted staging directories and incomplete entries
+retain a 24-hour grace period and the same live-consumer and live-creator checks.
+The canonical and explicit tooling roots are never fetched, fast-forwarded, or
+reinstalled by this path. Explicit-root identity checks remain unchanged, and
+matching installed packages still take the direct path. Keep any externally
+managed installation intact until its consumers finish.
+
+## Qualify the workspace before review
+
+Before the first `review-init`, run:
+
+```bash
+scripts/pr workspace <PR>
+```
+
+This read-only preflight prints JSON with the physical `canonicalRoot`,
+`commonGitDir`, and `worktree`, plus the derived `artifactDirectory` and `reviewJson`
+paths. It needs no third-party Node dependencies or GitHub authentication,
+including when trusted wrapper code must be materialized. It does not call
+GitHub, acquire a PR lock, admit a workflow, install
+dependencies, create the checkout, or change existing PR state. Normal wrapper
+source qualification still applies. The result is a location report, not proof
+of sandbox permission or landing readiness.
+
+Confirm that the file tools used to read and edit review artifacts can access
+these physical paths. Shell access alone is not sufficient. A linked task
+worktree does not move PR artifacts into the task directory: the canonical
+repository still owns `.worktrees/pr-<PR>/.local`. `OPENCLAW_PR_TOOLING_ROOT`
+changes third-party dependency sourcing only, never this location or the shared
+lock, workflow-binding, and merge-outcome owners.
+
+Native PR tooling already supports an operator-provisioned symlink at the
+canonical `.worktrees` parent. The preflight resolves that target, and provisioning
+uses native Git there while keeping the same canonical repository and state
+owners. An existing allowed target can avoid a full clone. Do not repoint a
+shared parent or move existing PR worktrees to solve one task’s access problem;
+provisioning that shared layout belongs to its operator, not the caller.
+
+If no existing supported location is accessible, use a fresh full ordinary
+checkout inside the allowed workspace **before starting the PR workflow**, then
+repeat this preflight. Preserve full history and blobs; do not use a shallow,
+sparse, or linked checkout as a substitute. Never move an active or uncertain
+operation to another clone: first reconcile it through the native recovery owner
+in the original repository. A new clone has a different lock/outcome namespace.
 
 ## Keep the admitted workflow across commands
 
@@ -39,6 +123,19 @@ its dependency manifest, even when main advances. The binding belongs to the
 canonical repository and PR; a caller cannot select an arbitrary revision or
 replace it with an environment variable. Malformed, foreign, or changed bindings
 fail closed. Developer-wrapper opt-in does not change landing authority.
+
+Security Review publisher sources have a separate owner: the protected-main tip
+captured by merge admission. For inherited-failure admin admission, the publisher
+must be a successful Security Review run on that main history, and its workflow
+and every declared checkout source must match that tip's Git blobs. The verified
+workflow supplies the checkout inventory; the bound wrapper's older files do not.
+Initial admission reads those owner blobs from GitHub at the captured main SHA,
+so it does not require a newly observed main to be materialized locally yet. The
+final local-only source check still follows main materialization.
+An older run remains eligible only while all publisher sources still match main.
+Foreign, malformed, or outdated sources refuse admission. This does not refresh
+or replace the retained workflow binding, select caller-provided source code, or
+waive exact-head security enforcement and current review authority.
 
 Workflow selection crosses supervision through a private held descriptor. This
 is separate from the descriptor that owns temporary wrapper cleanup. Reentry
@@ -66,6 +163,45 @@ anchor and refuses cold acquisition before any fetch.
 Only verified native merge completion retires the exact workflow binding.
 Failures and pending completion preserve it. Repeating completion reconciles
 the merge outcome without repeating publication, comments, or cleanup.
+
+## Reconcile a completed CI review
+
+If native landing rejects an older Security Review publisher because its sources
+no longer match protected main, a human with repository `maintain` or `admin`
+access can post a new PR comment containing only:
+
+```text
+/refresh-security-review <full-current-head-sha>
+```
+
+Use the full 40-character lowercase commit SHA. The command rechecks the comment
+author's current repository role and selects only that open, non-draft PR while
+its head still matches. Edited or deleted refresh comments do not trigger a
+refresh. The new `issue_comment` review uses protected-main publisher sources and
+the existing head-only review job, including for older native workflow bindings.
+It reevaluates current CI and security requirements; it does not rerun CI, approve
+changes, alter a workflow binding, or waive a failed check. Keep refresh and
+approval commands in separate comments; a mixed comment grants no approval.
+
+If CI completed but its combined `openclaw/ci-gate` commit status remains pending,
+maintainers can replay Security Review for that exact CI run:
+
+```bash
+gh workflow run security-review.yml --ref main -f completed_ci_run_id=<run-id>
+```
+
+The replay validates the completed run's repository and workflow, then selects
+only current PRs whose head, source repository, and branch still match. It runs
+the ordinary security review and CI checks; it does not rerun CI or waive a gate.
+The dispatch must use the default branch. A stale run cannot approve a newer PR head.
+Native prior-CI admission accepts the replay only when its successful security
+enforcement names the selected PR head, CI run, and attempt. Protected publisher
+source and current review authority checks still apply.
+
+Completion reviews retain the observed run ID and attempt. Missing or older
+observations retry within the existing recovery budget; exhaustion fails the
+scheduled pass so its scan window remains eligible. A newer active run or attempt
+keeps the status pending until that run completes.
 
 ## Recover a retained dependency projection
 
@@ -143,6 +279,19 @@ counter means renewal occupied the worker; a completed-request counter can expla
 why a negative response budget alone did not fail earlier. Neither extends the
 lease or operation budget. The diagnostics do not change timeout or recovery
 behavior, and a successful retry does not establish the cause of an earlier failure.
+
+If a settled PR template clone loses its Git registration during provisioning,
+the clone owner removes the directory it created and keeps the caller's seed
+branch for retry. Older abandoned clones can be inspected with
+`scripts/pr gc --pr <number> --dry-run` and removed with `scripts/pr gc --pr <number>`,
+including while the PR is open. This recovery requires no PR registration, no
+`.local` artifacts, and an intact backlink to a registered template under the
+same repository's `.worktrees/.templates`. It checks process working directories
+and checks the clone against the PR's retained `temp/pr-<number>` seed using a
+temporary index, so later template refreshes cannot make a clean clone appear
+edited. Modified, untracked, and ignored files are preserved before revalidating
+the clone for removal. A missing seed, missing template metadata, and other
+ambiguous directories remain preserved; recovery never deletes their seed branches.
 
 ## Captured baseline evidence hashes
 

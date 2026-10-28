@@ -139,6 +139,7 @@ export function buildCliAgentSystemPrompt(params: {
       chatType: params.runtimeChatType,
       capabilities: params.runtimeCapabilities,
       customInlineButtonHint: params.customInlineButtonHint,
+      blind: params.preparedSessionEntry?.blindPrompt,
     },
   });
   return buildConfiguredAgentSystemPrompt({
@@ -268,7 +269,7 @@ async function writeCliImages(params: {
   for (const image of params.images) {
     const fileName = resolveCliImageFileName(image);
     const buffer = Buffer.from(image.data, "base64");
-    await store.writeText(fileName, buffer);
+    await store.writeText(fileName, buffer, { durable: false });
     paths.push(store.path(fileName));
   }
   // Keep content-addressed image paths stable across Claude CLI runs so prompt
@@ -290,9 +291,10 @@ export async function writeCliSystemPromptFile(params: {
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "openclaw-cli-system-prompt-",
   });
-  const filePath = await workspace.write(
+  const filePath = await workspace.store.write(
     "system-prompt.md",
     stripSystemPromptCacheBoundary(params.systemPrompt),
+    { durable: false },
   );
   return {
     filePath,

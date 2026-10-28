@@ -10,6 +10,7 @@ import plugin from "../../extensions/codex/index.js";
 import { setRuntimeConfigSnapshot } from "../../src/config/config.js";
 import { loadTranscriptEvents } from "../../src/config/sessions/session-accessor.js";
 import { createGatewaySession } from "../../src/gateway/session-create-service.js";
+import { readGatewayLockProcessNamespace } from "../../src/infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../../src/infra/gateway-state-owner.js";
 import { createPluginRecord } from "../../src/plugins/loader-records.js";
 import {
@@ -30,6 +31,7 @@ it("adopts duplicate native titles without claiming labels or replacing local na
       databasePath: resolveOpenClawStateSqlitePath(state.env),
       payload: {
         pid: process.pid,
+        processNamespace: readGatewayLockProcessNamespace(),
         createdAt: new Date().toISOString(),
         configPath: state.configPath,
         role: "gateway",
@@ -46,6 +48,7 @@ it("adopts duplicate native titles without claiming labels or replacing local na
           }
           const pluginConfig = {
             appServer: { transport: "websocket" as const, url: `ws://127.0.0.1:${address.port}` },
+            supervision: { enabled: true },
           };
           const config = {
             agents: {

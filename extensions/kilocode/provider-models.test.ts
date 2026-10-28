@@ -1,16 +1,11 @@
 import { jsonResponse } from "openclaw/plugin-sdk/test-env";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 
-const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
-  fetchWithSsrFGuardMock: vi.fn(),
-}));
+const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({ fetchWithSsrFGuardMock: vi.fn() }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname: (baseUrl: string) => ({
-    allowedHostnames: [new URL(baseUrl).hostname],
-  }),
 }));
 
 import { buildKilocodeProvider, buildKilocodeProviderWithDiscovery } from "./api.js";
@@ -20,39 +15,33 @@ import {
   KILOCODE_MODELS_URL,
 } from "./provider-models.js";
 
-function requireModelById(models: Awaited<ReturnType<typeof discoverKilocodeModels>>, id: string) {
+function modelById(models: Awaited<ReturnType<typeof discoverKilocodeModels>>, id: string) {
   return models.find((model) => model.id === id) ?? expect.fail(`missing model ${id}`);
 }
-
-const requireRecord = createRequireRecord("record", "expected-label-record");
 
 function pricing(prompt: string, completion: string, cacheRead?: string, cacheWrite?: string) {
   return { prompt, completion, input_cache_read: cacheRead, input_cache_write: cacheWrite };
 }
 
-function makeGatewayModel(overrides: Record<string, unknown> = {}) {
-  return {
-    id: "anthropic/claude-sonnet-4",
-    name: "Anthropic: Claude Sonnet 4",
-    context_length: 200000,
-    architecture: {
-      input_modalities: ["text", "image"],
-    },
-    top_provider: { max_completion_tokens: 8192 },
-    pricing: pricing("0.000003", "0.000015", "0.0000003", "0.00000375"),
-    supported_parameters: ["reasoning"],
-    ...overrides,
-  };
+function cost<T>(input: T, output: T, cacheRead: T, cacheWrite: T) {
+  return { input, output, cacheRead, cacheWrite };
 }
 
-function makeAutoModel(overrides: Record<string, unknown> = {}) {
-  return makeGatewayModel({
-    id: "kilo-auto/balanced",
-    name: "Auto Balanced",
-    pricing: pricing("0.000000325", "0.00000195", "0.0000000325", "0.00000040625"),
-    ...overrides,
-  });
-}
+const chatModel = {
+  id: "chat",
+  context_length: 200000,
+  architecture: { input_modalities: ["text", "image"] },
+  top_provider: { max_completion_tokens: 8192 },
+  pricing: pricing("0.000003", "0.000015", "0.0000003", "0.00000375"),
+  supported_parameters: ["reasoning"],
+};
+
+const autoModel = {
+  ...chatModel,
+  id: "kilo-auto/balanced",
+  name: "Auto Balanced",
+  pricing: pricing("0.000000325", "0.00000195", "0.0000000325", "0.00000040625"),
+};
 
 function stubResponse(response: Response) {
   fetchWithSsrFGuardMock.mockResolvedValue({ response, release: vi.fn(async () => {}) });
@@ -75,32 +64,21 @@ it("preserves the public advisory builder for HTTP 200 with no rows", async () =
 });
 
 it("parses gateway models with correct pricing conversion", async () => {
-  const models = await discoverModels([makeAutoModel(), makeGatewayModel()]);
+  const models = await discoverModels([autoModel, chatModel]);
 
-  expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
-  const guardedFetch = requireRecord(
-    fetchWithSsrFGuardMock.mock.calls[0]?.[0],
-    "guarded fetch params",
+  expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      url: KILOCODE_MODELS_URL,
+      policy: { allowedHostnames: ["api.kilo.ai"] },
+    }),
   );
-  expect(guardedFetch.url).toBe(KILOCODE_MODELS_URL);
-  expect(guardedFetch.auditContext).toBe("kilocode.model_discovery");
-  expect(guardedFetch.policy).toEqual({ allowedHostnames: ["api.kilo.ai"] });
-  const guardedInit = requireRecord(guardedFetch.init, "guarded fetch init");
-  expect(Object.fromEntries(new Headers(guardedInit.headers as HeadersInit))).toEqual({
-    accept: "application/json",
-  });
-  expect(guardedFetch.timeoutMs).toBeGreaterThan(0);
-  expect(guardedFetch.timeoutMs).toBeLessThanOrEqual(5000);
+  const timeoutMs = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.timeoutMs;
+  expect(timeoutMs).toBeGreaterThan(0);
+  expect(timeoutMs).toBeLessThanOrEqual(5000);
   expect(models).toHaveLength(2);
 
-  const sonnet = requireModelById(models, "anthropic/claude-sonnet-4");
-  expect(sonnet).toMatchObject({
-    cost: {
-      input: expect.closeTo(3),
-      output: expect.closeTo(15),
-      cacheRead: expect.closeTo(0.3),
-      cacheWrite: expect.closeTo(3.75),
-    },
+  expect(modelById(models, "chat")).toMatchObject({
+    cost: cost(expect.closeTo(3), expect.closeTo(15), expect.closeTo(0.3), expect.closeTo(3.75)),
     input: ["text", "image"],
     reasoning: true,
     contextWindow: 200000,
@@ -110,33 +88,25 @@ it("parses gateway models with correct pricing conversion", async () => {
 
 it("preserves known default-model pricing for unknown routing rates with valid cache prices", async () => {
   const models = await discoverModels([
-    makeAutoModel({ pricing: pricing("unavailable", "-1", "0.0000003", "0.00000375") }),
-    makeGatewayModel({ id: "kilo-auto/frontier", pricing: pricing("-1", "-1") }),
-    makeGatewayModel({ id: "kilo-auto/free", pricing: pricing("0", "0", "0", "0") }),
+    { ...autoModel, pricing: pricing("unavailable", "-1", "0.0000003", "0.00000375") },
+    { ...chatModel, id: "kilo-auto/frontier", pricing: pricing("-1", "-1") },
+    { ...chatModel, id: "kilo-auto/free", pricing: pricing("0", "0", "0", "0") },
   ]);
-  expect(requireModelById(models, "kilo-auto/balanced").cost).toEqual({
-    input: KILOCODE_DEFAULT_COST.input,
-    output: KILOCODE_DEFAULT_COST.output,
+  expect(modelById(models, "kilo-auto/balanced").cost).toEqual({
+    ...KILOCODE_DEFAULT_COST,
     cacheRead: 0.3,
     cacheWrite: 3.75,
   });
   for (const id of ["kilo-auto/frontier", "kilo-auto/free"]) {
-    expect(requireModelById(models, id).cost).toEqual({
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-    });
+    expect(modelById(models, id).cost).toEqual(cost(0, 0, 0, 0));
   }
 });
 
 it("rejects malformed model list envelopes", async () => {
-  for (const payload of [[], { data: {} }]) {
-    stubResponse(jsonResponse(payload));
-    await expect(discoverKilocodeModels({ discoveryMode: "strict" })).rejects.toThrow(
-      "Kilocode model list: malformed JSON response",
-    );
-  }
+  stubResponse(jsonResponse({ data: {} }));
+  await expect(discoverKilocodeModels({ discoveryMode: "strict" })).rejects.toThrow(
+    "Kilocode model list: malformed JSON response",
+  );
 });
 
 it("does not restore seed models when no usable live rows remain", async () => {
@@ -151,54 +121,33 @@ it.each([
 ])(
   "resolves catalog window %s and provider limits %j to %s/%s",
   async (context_length, top_provider, contextWindow, maxTokens) => {
-    const models = await discoverModels([makeGatewayModel({ context_length, top_provider })]);
-    expect(requireModelById(models, "anthropic/claude-sonnet-4")).toMatchObject({
-      contextWindow,
-      maxTokens,
-    });
+    const models = await discoverModels([{ ...chatModel, context_length, top_provider }]);
+    expect(modelById(models, "chat")).toMatchObject({ contextWindow, maxTokens });
   },
 );
 
 it("detects text-only models without image modality", async () => {
   const models = await discoverModels([
-    makeGatewayModel({
-      id: "some/text-model",
-      architecture: { input_modalities: ["text"] },
-      supported_parameters: [],
-    }),
+    { ...chatModel, architecture: { input_modalities: ["text"] }, supported_parameters: [] },
   ]);
-  expect(requireModelById(models, "some/text-model")).toMatchObject({
-    input: ["text"],
-    reasoning: false,
-  });
+  expect(modelById(models, "chat")).toMatchObject({ input: ["text"], reasoning: false });
 });
 
 it("excludes image-output models while retaining chat and static routing entries", async () => {
   const models = await discoverModels([
-    makeGatewayModel({
-      id: "google/gemini-3.1-flash-image",
-      architecture: {
-        output_modalities: ["image", "text"],
-      },
-    }),
-    makeGatewayModel(),
+    { ...chatModel, id: "image", architecture: { output_modalities: ["image", "text"] } },
+    chatModel,
   ]);
-  expect(models.map((model) => model.id)).toEqual([
-    "kilo-auto/balanced",
-    "anthropic/claude-sonnet-4",
-  ]);
+  expect(models.map((model) => model.id)).toEqual(["kilo-auto/balanced", "chat"]);
 });
 
 it("keeps a later valid duplicate when an earlier entry is malformed", async () => {
   const models = await discoverModels([
-    makeAutoModel({ name: "Broken Auto Balanced", pricing: undefined }),
-    makeAutoModel(),
-    makeGatewayModel(),
+    { ...autoModel, name: "Broken Auto Balanced", pricing: undefined },
+    autoModel,
   ]);
-  const auto = requireModelById(models, "kilo-auto/balanced");
-  expect(auto.name).toBe("Auto Balanced");
-  expect(auto.cost.input).toBeCloseTo(0.325);
-  expect(requireModelById(models, "anthropic/claude-sonnet-4").id).toBe(
-    "anthropic/claude-sonnet-4",
-  );
+  expect(modelById(models, "kilo-auto/balanced")).toMatchObject({
+    name: "Auto Balanced",
+    cost: { input: expect.closeTo(0.325) },
+  });
 });

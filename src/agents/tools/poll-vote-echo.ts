@@ -56,18 +56,13 @@ export function recordPollVote(sessionKey: string, route: string, votedOption: u
   recentPollVoteBySession.set(sessionKey, { option, route, recordedAt });
 }
 
-type NormalizedPollEchoText = {
-  emojiSignature: string;
-  words: string;
-};
-
 // Keep the emoji identity while ignoring where it appears. Messages stores poll
 // options with a trailing emoji, while models commonly restate the same emoji
 // before the label. Retaining the signature avoids collapsing distinct options.
 const POLL_ECHO_EMOJI_SEQUENCE =
   /(?:[0-9#*]\u{FE0F}?\u{20E3}|(?:\p{Extended_Pictographic}|\p{Regional_Indicator}|\p{Emoji_Modifier}|[\u{E0020}-\u{E007F}]|\u{FE0E}|\u{FE0F}|\u{200D})+)/gu;
 
-function normalizePollEchoText(text: string): NormalizedPollEchoText {
+function normalizePollEchoText(text: string) {
   let emojiSignature = "";
   const words = text
     .replace(POLL_ECHO_EMOJI_SEQUENCE, (emoji) => {

@@ -14,6 +14,7 @@ import {
 import type { AgentHarnessAuthBindingFingerprintParams } from "../agents/harness/types.js";
 import * as modelAuth from "../agents/model-auth.js";
 import * as configModule from "../config/config.js";
+import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as pluginArtifactIdentity from "../plugins/plugin-runtime-artifact-identity.js";
 import { createInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
@@ -239,11 +240,6 @@ function createBinding(
   });
 }
 
-function configSnapshot(baseConfig: OpenClawConfig) {
-  const snapshot = { exists: true, valid: true, config: baseConfig };
-  return { readConfigFileSnapshot: vi.fn(async () => snapshot) as never };
-}
-
 function codexHarnessConfig(
   profileId?: string,
   plugins?: OpenClawConfig["plugins"],
@@ -302,9 +298,25 @@ async function revalidate(
   binding: Awaited<ReturnType<typeof bindingFor>>,
   baseConfig: OpenClawConfig,
 ) {
-  return resolveSystemAgentVerifiedInferenceRoute(binding, {
-    ...configSnapshot(baseConfig),
-  });
+  const reader = vi.spyOn(configModule, "readConfigFileSnapshot").mockResolvedValue(
+    createConfigFileSnapshot({
+      path: "/tmp/openclaw.json",
+      exists: true,
+      valid: true,
+      raw: null,
+      parsed: baseConfig,
+      sourceConfig: baseConfig,
+      runtimeConfig: baseConfig,
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    }),
+  );
+  try {
+    return await resolveSystemAgentVerifiedInferenceRoute(binding);
+  } finally {
+    reader.mockRestore();
+  }
 }
 
 async function envAuthFixture() {

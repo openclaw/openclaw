@@ -19,9 +19,9 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import {
   adoptCronRunSessionMetadata,
-  CronSessionLifecycleClaimError,
   createCronRunContinuationSession,
   createPersistCronSessionEntry,
   syncCronSessionLiveSelection,
@@ -256,12 +256,13 @@ describe("createPersistCronSessionEntry", () => {
       ),
       lifecycleRevision,
     } as MutableCronSession;
+    const toolsAllow = ["image_generate", "exec", "write"];
     const continuation = createCronRunContinuationSession({
       cronSession,
       runSessionKey,
       createdActor: { type: "human", source: "profile", id: "profile-ada" },
       thinkingLevel: "high",
-      toolsAllow: ["image_generate", "exec", "write"],
+      toolsAllow,
       toolsAllowIsDefault: true,
       scheduledToolPolicy: {
         version: 1,
@@ -278,8 +279,15 @@ describe("createPersistCronSessionEntry", () => {
       },
     });
 
+    toolsAllow.push("browser");
     await continuation.initialize();
-    await continuation.sync();
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    try {
+      await continuation.sync();
+      expect(clone).toHaveBeenCalledExactlyOnceWith(cronSession.sessionEntry);
+    } finally {
+      clone.mockRestore();
+    }
     let persisted = read();
     expect(persisted?.previousSessionId).toBeUndefined();
     expect(persisted?.forkSource).toBeUndefined();

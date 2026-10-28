@@ -9,6 +9,8 @@ import {
   waitForDiagnosticEventsDrained,
   resetDiagnosticEventsForTest,
 } from "../infra/diagnostic-events.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
+import { testing } from "../sessions/session-controller.test-support.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -24,7 +26,6 @@ import {
   resetDiagnosticRunActivityForTest,
   startDiagnosticRunActivityTracking,
 } from "./diagnostic-run-activity.js";
-import { markDiagnosticToolStartedForTest } from "./diagnostic-run-activity.test-support.js";
 import { resetDiagnosticSessionStateForTest } from "./diagnostic-session-state.js";
 import {
   logSessionStateChange,
@@ -33,6 +34,7 @@ import {
 } from "./diagnostic.js";
 
 afterEach(() => {
+  testing.resetSessionControllerForTest();
   vi.restoreAllMocks();
   vi.useRealTimers();
   resetDiagnosticRunActivityForTest();
@@ -282,9 +284,12 @@ describe("owned backend silence allowances", () => {
       runId: "agent-run",
     };
     logSessionStateChange({ ...ref, state: "processing" });
-    const { owner, snapshot, begin } = startOwnedRun(ref);
-    markDiagnosticToolStartedForTest({
-      ...ref,
+    const operation = createReplyOperation({ ...ref, resetTriggered: false });
+    operation.setPhase("running");
+    const watchdogAttempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
+    const { owner, snapshot, begin } = startOwnedRun({ ...ref, watchdogAttempt });
+    markDiagnosticOwnedToolActivity(owner, {
+      phase: "start",
       toolName: "Agent",
       toolCallId: "toolu_parent",
     });
@@ -296,13 +301,13 @@ describe("owned backend silence allowances", () => {
       expect(snapshot()).toMatchObject({
         activeToolName: "Agent",
         activeToolCallId: "toolu_parent",
-        lastProgressReason: "tool:Agent:started",
+        lastProgressReason: "reply_operation:queued",
         lastProgressAgeMs: 14 * 60_000,
       });
 
       expect(backend.observeAttributedAgentProgress("toolu_parent")).toBe(true);
       expect(snapshot()).toMatchObject({
-        lastProgressReason: "tool:Agent:subagent_progress",
+        lastProgressReason: "tool:owned_progress",
         lastProgressAgeMs: 0,
         activeToolAgeMs: 14 * 60_000,
       });
@@ -310,7 +315,11 @@ describe("owned backend silence allowances", () => {
       await advanceHeartbeats(14 * 60_000);
       expect(recoverStuckSession).not.toHaveBeenCalled();
       await advanceHeartbeats(60_000);
-      expect(recoverStuckSession).toHaveBeenCalled();
+      expect(operation.watchdog.decide().action).toBe("stop");
+      expect(recoverStuckSession).toHaveBeenCalledOnce();
+      expect(recoverStuckSession).toHaveBeenCalledWith(
+        expect.objectContaining({ operation, allowActiveAbort: true }),
+      );
     } finally {
       backend.close();
       closeDiagnosticEmbeddedRunOwner(owner);

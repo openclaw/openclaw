@@ -22,10 +22,9 @@ type MantisCleanupDeadline = {
 };
 
 class MantisCleanupDeadlineError extends Error {
-  constructor(deadline: MantisCleanupDeadline, operation: string, cause?: unknown) {
+  constructor(deadline: MantisCleanupDeadline, operation: string) {
     super(
       `${deadline.lane} worktree cleanup exceeded its total ${deadline.timeoutMs}ms deadline while ${operation}`,
-      cause === undefined ? undefined : { cause },
     );
     this.name = "MantisCleanupDeadlineError";
   }
@@ -179,7 +178,7 @@ function createCleanupVerificationAggregate(params: {
 type RemoveMantisWorktreeParams = {
   commandTimeouts: MantisCommandTimeouts;
   lane: "baseline" | "candidate";
-  ownership?: MantisDirectoryOwnership;
+  ownership: MantisDirectoryOwnership;
   repoRoot: string;
   runner: MantisCommandRunner;
   worktreeDir: string;
@@ -205,20 +204,6 @@ async function removeMantisWorktreeBeforeDeadline(
   const listRegisteredPaths = () =>
     listRegisteredWorktreePaths({ ...params, createExecution: createCleanupExecution });
 
-  if (!ownership) {
-    const registeredWorktreePaths = await listRegisteredPaths();
-    if (!registeredWorktreePaths.includes(normalizedWorktreeDir)) {
-      if (await pathEntryExists(params.worktreeDir)) {
-        throw retainedDirectoryError(
-          new Error("the failed worktree add did not yield an ownership receipt"),
-        );
-      }
-      return;
-    }
-    throw new Error(`${params.lane} worktree cleanup left registered path ${params.worktreeDir}`, {
-      cause: new Error("Mantis cannot prove ownership without a directory receipt"),
-    });
-  }
   const verifyOwnership = () =>
     verifyMantisDirectoryOwnership({
       ownership,

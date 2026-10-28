@@ -58,11 +58,6 @@ export type TailscaleRouteOwnerExit = {
   stopping: boolean;
 };
 
-export type TailscaleRouteOwnerHandle = {
-  exited: Promise<TailscaleRouteOwnerExit>;
-  stop: () => void;
-};
-
 async function signalChild(
   child: ChildProcess,
   signal: "SIGTERM" | "SIGKILL",
@@ -100,7 +95,10 @@ async function signalChild(
 export function runTailscaleRouteOwner(
   start: RouteOwnerStart,
   sendMessage: (message: TailscaleRouteOwnerMessage) => void = send,
-): TailscaleRouteOwnerHandle {
+): {
+  exited: Promise<TailscaleRouteOwnerExit>;
+  stop: () => void;
+} {
   const command = start.argv[0];
   if (!command) {
     throw new Error("Tailscale route-owner command is empty");

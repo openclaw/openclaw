@@ -211,88 +211,43 @@ describe("resolveGatewayRuntimeConfig", () => {
   });
 
   describe("container-aware bind default", () => {
-    beforeEach(() => {
-      vi.spyOn(containerEnvironment, "isContainerEnvironment").mockReturnValue(true);
-    });
+    beforeEach(() =>
+      vi.spyOn(containerEnvironment, "isContainerEnvironment").mockReturnValue(true),
+    );
+    afterEach(() => vi.restoreAllMocks());
 
-    afterEach(() => {
-      vi.restoreAllMocks();
-    });
-
-    it("defaults to auto (0.0.0.0) inside a container with auth configured", async () => {
-      const result = await resolve(gateway({ auth: TOKEN_AUTH, controlUi: { allowedOrigins } }));
-      expect(result.bindHost).toBe("0.0.0.0");
-    });
-
-    it("rejects container auto-bind with auth but without allowedOrigins (origin check preserved)", async () => {
-      await expect(
-        resolveGatewayRuntimeConfig({
-          cfg: { gateway: { auth: TOKEN_AUTH } },
-          port: 18789,
-        }),
-      ).rejects.toThrow(/non-loopback Control UI requires gateway\.controlUi\.allowedOrigins/);
-    });
-
-    it("rejects container auto-bind without auth (security invariant preserved)", async () => {
-      await expect(
-        resolveGatewayRuntimeConfig({
-          cfg: { gateway: { auth: { mode: "none" } } },
-          port: 18789,
-        }),
-      ).rejects.toThrow(/refusing to bind gateway/);
-    });
-
-    it("rejects tailscale serve with explicit no-auth", async () => {
-      await expect(
-        resolve(gateway({ auth: { mode: "none" }, tailscale: { mode: "serve" } })),
-      ).rejects.toThrow("gateway.auth.mode=none cannot be used with gateway.tailscale.mode=serve");
-    });
-
-    it("respects explicit loopback config even inside a container", async () => {
-      const result = await resolveGatewayRuntimeConfig({
-        cfg: { gateway: { bind: "loopback", auth: { mode: "none" } } },
-        port: 18789,
-      });
-      expect(result.bindHost).toBe("127.0.0.1");
-    });
-
-    it("falls back to loopback inside a container when tailscale serve is enabled", async () => {
-      const result = await resolveGatewayRuntimeConfig({
-        cfg: {
-          gateway: {
-            auth: TOKEN_AUTH,
-            tailscale: { mode: "serve" },
-          },
-        },
-        port: 18789,
-      });
-      // Tailscale serve requires loopback — container auto-detection must not
-      // override this constraint when bind is unset.
-      expect(result.bindHost).toBe("127.0.0.1");
-    });
-
-    it("falls back to loopback inside a container when tailscale funnel is enabled", async () => {
-      const result = await resolve(
-        gateway({
+    const authenticated = { auth: TOKEN_AUTH, controlUi: { allowedOrigins } };
+    it.each<[string, NonNullable<OpenClawConfig["gateway"]>, string]>([
+      ["auto", authenticated, "0.0.0.0"],
+      ["explicit loopback", { bind: "loopback", auth: { mode: "none" } }, "127.0.0.1"],
+      ["implicit serve loopback", { auth: TOKEN_AUTH, tailscale: { mode: "serve" } }, "127.0.0.1"],
+      [
+        "implicit funnel loopback",
+        {
           auth: { mode: "password", password: "test-pw" },
           tailscale: { mode: "funnel" },
-        }),
-      );
-      expect(result.bindHost).toBe("127.0.0.1");
+        },
+        "127.0.0.1",
+      ],
+      ["explicit lan", { ...authenticated, bind: "lan" }, "0.0.0.0"],
+    ])("resolves %s inside a container", async (_name, config, bindHost) => {
+      expect((await resolve(gateway(config))).bindHost).toBe(bindHost);
     });
 
-    it("respects explicit lan config inside a container (requires auth)", async () => {
-      const result = await resolveGatewayRuntimeConfig({
-        cfg: {
-          gateway: {
-            bind: "lan",
-            auth: TOKEN_AUTH,
-            controlUi: { allowedOrigins: ["https://control.example.com"] },
-          },
-        },
-        port: 18789,
-      });
-      expect(result.bindHost).toBe("0.0.0.0");
+    it.each<[string, NonNullable<OpenClawConfig["gateway"]>, string]>([
+      [
+        "auto-bind without origins",
+        { auth: TOKEN_AUTH },
+        "non-loopback Control UI requires gateway.controlUi.allowedOrigins",
+      ],
+      ["auto-bind without auth", { auth: { mode: "none" } }, "refusing to bind gateway"],
+      [
+        "serve without auth",
+        { auth: { mode: "none" }, tailscale: { mode: "serve" } },
+        "gateway.auth.mode=none cannot be used with gateway.tailscale.mode=serve",
+      ],
+    ])("rejects %s inside a container", async (_name, config, error) => {
+      await expect(resolve(gateway(config))).rejects.toThrow(error);
     });
   });
 });

@@ -39,7 +39,6 @@ export function createFaceTimeConsultController(params: {
   requesterSessionKey: string;
   normalizedCallUUID: string;
   senderId: string;
-  senderIsOwner: true;
   transcript: RealtimeVoiceTranscriptEntry[];
   getBridge: () => RealtimeVoiceBridgeSession | undefined;
   getGeneration: () => number;
@@ -316,7 +315,7 @@ export function createFaceTimeConsultController(params: {
       sessionKey: params.consultSessionKey,
       spawnedBy: params.requesterSessionKey,
       senderId: params.senderId,
-      senderIsOwner: params.senderIsOwner,
+      senderIsOwner: true,
       contextMode: "fork",
       messageProvider: AGENT_CONSULT_MESSAGE_PROVIDER,
       lane: `facetime:${params.normalizedCallUUID}`,

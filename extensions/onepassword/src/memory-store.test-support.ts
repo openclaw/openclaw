@@ -35,6 +35,12 @@ export class MemoryKeyedStore<T> implements PluginStateKeyedStore<T> {
     return entry?.value;
   }
 
+  async lookupMany(keys: readonly string[]) {
+    return Promise.all(
+      keys.map(async (key) => ({ ok: true as const, value: await this.lookup(key) })),
+    );
+  }
+
   async consume(key: string): Promise<T | undefined> {
     const entry = this.values.get(key);
     this.values.delete(key);

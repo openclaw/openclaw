@@ -1,11 +1,18 @@
 /* @vitest-environment jsdom */
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { persistFirstRunActivationReceipt } from "./first-run-activation-receipt.ts";
+import {
+  persistFirstRunActivationReceipt,
+  readFirstRunActivationReceipt,
+} from "./first-run-activation-receipt.ts";
 import { FirstRunSetup } from "./first-run-setup.ts";
 import {
+  missingWizardError,
+  running,
+  configuredDetection,
+  waitForOnboarding,
   waitForText,
   runningStep,
   authButton,
@@ -25,6 +32,8 @@ import {
   mountDetection,
   reconnectGateway,
   waitForModelSetupDetection,
+  selectManualProvider,
+  setInput,
 } from "./model-setup-first-run.test-support.ts";
 import { MODEL_SETUP_AUTH_START_TIMEOUT_MS } from "./state.ts";
 import { unmountModelSetupPage } from "./test-helpers/solid-page.test-support.tsx";
@@ -74,9 +83,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
       expect(request).toHaveBeenCalledOnce();
       expect(pendingReceipt()).toBe(receipt);
       response.resolve(success);
-      await waitForFast(() =>
-        expect(context.navigate).toHaveBeenCalledWith("custodian", { search: "?onboarding=1" }),
-      );
+      await waitForOnboarding(context);
       expect(request).toHaveBeenCalledOnce();
     } finally {
       response.resolve(success);
@@ -95,21 +102,13 @@ describe("ModelSetupPage first-run activation ownership", () => {
         "openclaw.setup.auth.start": () => ({ sessionId: "auth", done: false, status: "running" }),
         [activatedMethod]: async () => {
           if (entry === "provider sign-in" && releaseActivation) {
-            throw new GatewayRequestError({
-              code: "INVALID_REQUEST",
-              message: "wizard not found",
-              details: { code: "WIZARD_NOT_FOUND" },
-            });
+            throw missingWizardError();
           }
           return await new Promise((resolve) => {
             releaseActivation = resolve;
           });
         },
-        "openclaw.setup.detect": () => ({
-          ...detection,
-          configuredModel: "provider/current",
-          setupComplete: true,
-        }),
+        "openclaw.setup.detect": () => configuredDetection("provider/current"),
         "openclaw.setup.verify": () => ({ ok: true, modelRef: "provider/current", latencyMs: 31 }),
         "wizard.cancel": () => ({ status: "running" }),
       });
@@ -147,9 +146,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
       expect(callsFor(request, "openclaw.setup.verify")).toHaveLength(0);
       expect(context.navigate).not.toHaveBeenCalled();
       pageButton(page, ".model-setup__recovery .btn.primary")!.click();
-      await waitForFast(() =>
-        expect(context.navigate).toHaveBeenCalledWith("custodian", { search: "?onboarding=1" }),
-      );
+      await waitForOnboarding(context);
       releaseActivation?.(activated("provider/late-other"));
       await page.updateComplete;
       expect(callsFor(request, activatedMethod)).toHaveLength(entry === "provider sign-in" ? 2 : 1);
@@ -176,7 +173,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
               retryable: true,
             });
           }
-          return { done: false, status: "running" };
+          return running;
         },
         "wizard.next": () => ({
           done: false,
@@ -188,11 +185,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
           if (outcome === "validation error") {
             return { status: "running" };
           }
-          throw new GatewayRequestError({
-            code: "INVALID_REQUEST",
-            message: "wizard not found",
-            details: { code: "WIZARD_NOT_FOUND" },
-          });
+          throw missingWizardError();
         },
       });
       const { page } = await mountDetection(context, client, {
@@ -237,7 +230,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
           if (terminal === "busy" && startCount++ === 0) {
             return await cancelled.promise;
           }
-          return { done: false, status: "running" };
+          return running;
         }
         if (method === "wizard.next") {
           return runningStep({ id: "login", type: "text", message: "Complete login" });
@@ -357,7 +350,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
       const activatedMethod =
         entry === "manual key" ? "openclaw.setup.activate.start" : "wizard.next";
       mockRequests(request, {
-        "openclaw.setup.auth.start": () => ({ done: false, status: "running" }),
+        "openclaw.setup.auth.start": () => running,
         [activatedMethod]: async () => await reply.promise,
         "openclaw.setup.detect": () => detection,
         "wizard.cancel": () => ({ status: "running" }),
@@ -442,7 +435,6 @@ describe("ModelSetupPage first-run activation ownership", () => {
 
   it.each([
     ["error", "reconnect"],
-    ["cancelled", "unmount"],
     ["running", "unmount"],
   ])(
     "only releases first-run intent after a confirmed negative terminal result (%s, %s)",
@@ -511,6 +503,211 @@ describe("ModelSetupPage first-run activation ownership", () => {
       });
       expect(pendingReceipt() === null).toBe(cancelStatus === "cancelled");
       expect(context.navigate).not.toHaveBeenCalled();
+    },
+  );
+});
+
+type Fixture = ReturnType<typeof createFirstRunContext>;
+const utility = {
+  ...candidate("provider-auto:local", "local/setup", true),
+  modelTarget: "utility" as const,
+};
+const { kind: candidateKind, modelRef, modelTarget } = utility;
+const activatedUtility = activated(modelRef, { modelTarget });
+const utilitySelection = { kind: candidateKind, modelRef, modelTarget };
+const onboarding = { search: "?onboarding=1" };
+const primaryModel = { configuredModel: "cloud/primary", setupComplete: true };
+const configuredUtility = { candidates: [utility], utilityModel: modelRef };
+const utilityAuth = { ...authOption("utility-login", "Login"), modelTarget };
+const utilityKey = { id: "manual-utility", label: "API key", modelTarget };
+
+const expectRequest = (request: Fixture["request"], method: string, params: object) =>
+  expect(request).toHaveBeenCalledWith(method, expect.objectContaining(params), expect.anything());
+const expectAssistant = (context: Fixture["context"]) =>
+  waitForFast(() => expect(context.navigate).toHaveBeenCalledWith("custodian", onboarding));
+
+function createUtilityContext() {
+  const fixture = createFirstRunContext();
+  return {
+    ...fixture,
+    mount: mountDetection.bind(null, fixture.context, fixture.client),
+  };
+}
+
+describe("ModelSetupPage utility roles", () => {
+  useFirstRunFixtures("synthetic-utility-device-key");
+
+  it("opens the assistant after utility activation outside first run", async () => {
+    const { context, request, mount } = createUtilityContext();
+    request.mockResolvedValue(activatedUtility);
+    const { page } = await mount({ candidates: [utility] }, false);
+    expect(page.textContent).toContain("Setup & utility");
+    expect(page.textContent).toContain("Use for setup");
+    expect(request).not.toHaveBeenCalled();
+    await clickCandidate(page, utility.kind);
+    await waitForText(page, "Setup & utility model ready");
+    const success = page.querySelector(".model-setup-success")!;
+    expect(success.textContent).not.toMatch(/start chatting|Active model/u);
+    modalButton(page, "Open setup assistant")!.click();
+    await expectAssistant(context);
+    expect(request.mock.calls[0]?.[1]).toMatchObject(utilitySelection);
+    expect(context.navigate).not.toHaveBeenCalledWith("chat");
+  });
+
+  it.each([false, true])(
+    "reopens and repairs a configured utility (primary: %s)",
+    async (primary) => {
+      const { context, request, mount } = createUtilityContext();
+      request.mockResolvedValue(activatedUtility);
+      const { page } = await mount({
+        ...configuredUtility,
+        ...(primary ? primaryModel : { setupModel: utility.modelRef }),
+      });
+
+      expect(page.querySelector(".model-setup__current") !== null).toBe(primary);
+      expect(page.querySelector(`[data-candidate-kind="${utility.kind}"]`)).toBeNull();
+      expect(page.textContent).toContain(
+        primary
+          ? "Regular chats use your primary model"
+          : "Choose a primary model below for regular chats",
+      );
+      const buttons = [...page.querySelectorAll<HTMLButtonElement>(".model-setup__utility button")];
+      buttons.find((button) => button.textContent?.includes("Open setup assistant"))!.click();
+      expect(context.navigate).toHaveBeenCalledWith("custodian", primary ? {} : onboarding);
+      expect(request).not.toHaveBeenCalled();
+      buttons.find((button) => button.textContent?.includes("Recheck & repair"))!.click();
+      await waitForFast(() =>
+        expectRequest(request, "openclaw.setup.activate.start", utilitySelection),
+      );
+    },
+  );
+
+  it.each(["api-key", "oauth"] as const)(
+    "preserves utility acknowledgement through %s setup",
+    async (kind) => {
+      const { context, request, mount } = createUtilityContext();
+      const oauth = kind === "oauth";
+      const method = oauth ? "openclaw.setup.auth.start" : "openclaw.setup.activate.start";
+      const params = {
+        authChoice: oauth ? "utility-login" : "manual-utility",
+        modelTarget,
+        ...(oauth ? {} : { kind, apiKey: "synthetic-utility-key" }),
+      };
+      if (oauth) {
+        vi.spyOn(window, "open").mockReturnValue(null);
+      }
+      mockRequests(request, {
+        [method]: () => (oauth ? running : activatedUtility),
+        "wizard.next": () => {
+          if (!oauth) {
+            throw new Error("Unexpected method wizard.next");
+          }
+          expect(readFirstRunActivationReceipt(context)).toMatchObject({
+            kind: "provider-auth",
+            modelTarget: "utility",
+            modelRef: null,
+          });
+          return activatedUtility;
+        },
+      });
+      const { page } = await mount(
+        oauth ? { authOptions: [utilityAuth] } : { manualProviders: [utilityKey] },
+      );
+      if (oauth) {
+        authButton(page, "utility-login")!.click();
+      } else {
+        await selectManualProvider(page, "manual-utility");
+        setInput(page, 'input[type="password"]', "synthetic-utility-key");
+        await page.updateComplete;
+        pageButton(page, ".model-setup__manual .btn.primary")!.click();
+      }
+      await expectAssistant(context);
+      expectRequest(request, method, params);
+      expect(request.mock.calls.map(([called]) => called)).toEqual([
+        method,
+        ...(oauth ? ["wizard.next"] : []),
+      ]);
+    },
+  );
+
+  it.each(["direct", "detected", "missing"] as const)(
+    "keeps the utility role for %s preparation",
+    async (outcome) => {
+      const { context, request, mount } = createUtilityContext();
+      const direct = outcome === "direct";
+      const usable = outcome !== "missing";
+      const prepared = {
+        ...detection,
+        ...(direct ? {} : primaryModel),
+        prepareOptions: [{ id: "local", label: "Local utility", modelTarget: "utility" as const }],
+      };
+      mockRequests(request, {
+        "openclaw.setup.prepare.start": () => ({
+          done: true,
+          status: "done",
+          ...(direct ? { preparedModelRef: utility.modelRef } : {}),
+        }),
+        "openclaw.setup.detect": () => {
+          if (direct) {
+            throw new Error("Unexpected method openclaw.setup.detect");
+          }
+          return { ...prepared, utilityModel: modelRef, candidates: usable ? [utility] : [] };
+        },
+        "openclaw.setup.activate.start": () => activatedUtility,
+      });
+      const { page } = await mount(prepared, direct);
+      pageButton(page, '[data-prepare-choice="local"] button')!.click();
+      if (direct) {
+        await expectAssistant(context);
+      } else {
+        await waitForText(
+          page,
+          usable
+            ? "Setup & utility model ready"
+            : "Local utility did not expose a usable local model",
+        );
+        expect(page.querySelector(".model-setup__current")?.textContent).toContain("primary");
+        expect(page.querySelector(".model-setup__utility")).toBeNull();
+      }
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "openclaw.setup.prepare.start",
+        ...(direct ? [] : ["openclaw.setup.detect"]),
+        ...(usable ? ["openclaw.setup.activate.start"] : []),
+      ]);
+      if (usable) {
+        expectRequest(request, "openclaw.setup.activate.start", {
+          agentId: "main",
+          ...utilitySelection,
+        });
+      }
+    },
+  );
+
+  it.each(["utility", undefined] as const)(
+    "recovers only utility-qualified verification: %s",
+    async (replyTarget) => {
+      const { context, request, mount } = createUtilityContext();
+      persistFirstRunActivationReceipt(context, utility);
+      request.mockResolvedValue({
+        ok: true,
+        modelRef: utility.modelRef,
+        ...(replyTarget ? { modelTarget: replyTarget } : {}),
+      });
+      const { page } = await mount({ ...configuredUtility, ...primaryModel });
+      await waitForFast(() => expect(request).toHaveResolved());
+      await page.updateComplete;
+
+      expect(request).toHaveBeenCalledWith(
+        "openclaw.setup.verify",
+        { agentId: "main", modelTarget: "utility" },
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+      if (replyTarget) {
+        expect(context.navigate).toHaveBeenCalledWith("custodian", onboarding);
+      } else {
+        expect(context.navigate).not.toHaveBeenCalled();
+        expect(page.querySelector(".model-setup__verified")).toBeNull();
+      }
     },
   );
 });

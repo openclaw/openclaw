@@ -1,30 +1,30 @@
-import {
-  buildChannelInboundEventContext,
-  createChannelInboundEnvelopeBuilderAsync,
-} from "openclaw/plugin-sdk/channel-inbound";
+import { createChannelInboundEnvelopeBuilderAsync } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { logError } from "openclaw/plugin-sdk/logging-core";
+import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
+import { filterA2aReplyPayload } from "./reply-payload.js";
 import type { A2aTaskStore } from "./task-store.js";
 import type { ResolvedA2aChannelAccount } from "./types.js";
 
-type A2aInboundDispatchParams = {
+export async function dispatchA2aInbound(params: {
   account: ResolvedA2aChannelAccount;
   config: OpenClawConfig;
   channelRuntime: PluginRuntime["channel"];
-  buildContext: typeof buildChannelInboundEventContext;
   store: A2aTaskStore;
   taskId: string;
   contextId: string;
   messageId: string;
   peerName: string;
   text: string;
-};
-
-export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Promise<void> {
+}): Promise<void> {
+  const reportPersistenceError = (error: unknown) => {
+    logError(`A2A task persistence failed: ${String(error)}`);
+  };
   // Peer credentials admit tasks, never user commands (including plugin commands).
   if (params.text.trimStart().startsWith("/")) {
-    params.store.reject(
+    await params.store.reject(
       params.taskId,
       "A2A peers cannot execute slash commands. Send a task in plain text; only users can issue commands.",
     );
@@ -58,7 +58,7 @@ export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Prom
     allowFrom: Object.keys(params.account.config.peers ?? {}),
   });
   if (ingress.ingress.admission !== "dispatch") {
-    params.store.reject(params.taskId, "A2A peer was blocked by channel ingress policy");
+    await params.store.reject(params.taskId, "A2A peer was blocked by channel ingress policy");
     return;
   }
 
@@ -74,7 +74,7 @@ export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Prom
     timestamp,
     body: params.text,
   });
-  const ctxPayload = params.buildContext({
+  const ctxPayload = params.channelRuntime.inbound.buildContext({
     channel: "a2a",
     accountId: route.accountId ?? params.account.accountId,
     messageId: params.messageId,
@@ -105,6 +105,27 @@ export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Prom
     extra: { CommandInterpretationSuppressed: true },
   });
 
+  // A queued turn outlives dispatch and must retain its own task identity instead
+  // of routing the answer as a new outbound peer message.
+  const deliverQueuedReply: NonNullable<GetReplyOptions["onQueuedFollowupReplyBatch"]> = async (
+    batch,
+  ) => {
+    if (batch.completion.kind === "progress") {
+      return;
+    }
+    if (batch.completion.kind !== "completed") {
+      await params.store.fail(params.taskId, `Agent run ${batch.completion.kind}`);
+      return;
+    }
+    const text = batch.payloads
+      .filter((payload) => filterA2aReplyPayload(payload) !== null)
+      .map((payload) => payload.text)
+      .filter(Boolean)
+      .join("\n\n");
+    await params.store.complete(params.taskId, text);
+  };
+  deliverQueuedReply.ownsCompletion = (channel) => channel === "a2a";
+
   const dispatch = await params.channelRuntime.inbound.dispatch({
     cfg: params.config,
     channel: "a2a",
@@ -114,30 +135,34 @@ export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Prom
     delivery: {
       deliver: async (payload, info) => {
         if (info.kind === "final") {
-          params.store.complete(params.taskId, payload.text);
+          await params.store.complete(params.taskId, payload.text);
         }
       },
       onError: (error) => {
-        params.store.fail(params.taskId, error);
+        void params.store.fail(params.taskId, error).catch(reportPersistenceError);
       },
     },
     // Source replies complete the correlated task; the generic message tool
     // starts a separate outbound message without that task correlation.
     replyOptions: {
       sourceReplyDeliveryMode: "automatic",
+      onQueuedFollowupReplyBatch: deliverQueuedReply,
       onAgentRunTerminalOutcome: (outcome) => {
         if (outcome === "failed") {
-          params.store.fail(params.taskId, "Agent run failed");
+          void params.store.fail(params.taskId, "Agent run failed").catch(reportPersistenceError);
         }
       },
     },
     replyPipeline: {},
   });
   if (dispatch.admission.kind !== "dispatch") {
-    params.store.reject(params.taskId, `A2A channel declined the turn: ${dispatch.admission.kind}`);
+    await params.store.reject(
+      params.taskId,
+      `A2A channel declined the turn: ${dispatch.admission.kind}`,
+    );
   } else if (!dispatch.dispatched) {
-    params.store.fail(params.taskId, "A2A channel accepted the turn without dispatching it");
+    await params.store.fail(params.taskId, "A2A channel accepted the turn without dispatching it");
   } else if (!dispatch.dispatchResult.deferredToActiveRun) {
-    params.store.complete(params.taskId, undefined);
+    await params.store.complete(params.taskId, undefined);
   }
 }

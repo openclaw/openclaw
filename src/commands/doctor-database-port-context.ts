@@ -6,8 +6,14 @@ import { z } from "zod";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { readConfigFileSnapshotForWrite } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { resolveStateClientCredentialEnvironment } from "../infra/client-credential-paths.js";
+import {
+  PortClientCredentialMismatchError,
+  rebindPortedClientCredentials,
+} from "../infra/client-credential-restore.js";
 import { DatabasePortError } from "../infra/database-engine/port-command.worker.js";
 import type { PortVerification } from "../infra/database-engine/port.worker.js";
+import type { PostgresPlannerStatistics } from "../infra/database-engine/postgres-planner-statistics.js";
 import {
   resolveDatabaseFamilyEngines,
   listDatabaseEngineStores,
@@ -107,6 +113,7 @@ export const inputsSchema = z.object({
   ),
 });
 export type Context = {
+  plannerStatistics?: Array<{ path: string; result: PostgresPlannerStatistics }>;
   family?: DatabasePortFamily;
   stateDir: string;
   configPath: string;
@@ -132,6 +139,23 @@ export type Context = {
 export function refuse(ctx: Context, observed: string, required: string): never {
   throw new DatabasePortError(
     `Database port ${ctx.phase}: ${ctx.target}; observed ${observed}; required ${required}. Stop the Gateway first; correct this fact and retry, or use --resume/--rollback with ${databasePortManifestPath(ctx.stateDir)}.`,
+  );
+}
+export function refuseFailure(ctx: Context, error: unknown): never {
+  if (error instanceof PortClientCredentialMismatchError) {
+    throw new DatabasePortError(
+      `Database port ${ctx.phase}: ${ctx.target}; ${error.message} Restore the archive with openclaw backup restore before retrying.`,
+    );
+  }
+  if (error instanceof DatabasePortError) {
+    throw error;
+  }
+  // Untrusted driver/config messages may contain a DSN or row payload.
+  const parsed = z.object({ code: z.string().regex(/^[A-Z0-9_]+$/) }).safeParse(error);
+  return refuse(
+    ctx,
+    parsed.success ? parsed.data.code : "validation or I/O failure",
+    "successful verified phase; preserve the recovery directory",
   );
 }
 export const digest = (value: unknown) =>
@@ -239,6 +263,40 @@ export function finalize(ctx: Context, outcome: "ported" | "rolled-back") {
     current.outcome = outcome;
     revise(ctx);
   }
+  // Existing v1 recoveries stored only the profile-global capture at the operation root.
+  const legacyBinding = current.artifacts.find(
+    (artifact) => artifact.path === path.join(ctx.directory, "client-credential-binding.json"),
+  );
+  const globalSharedPath = path.join(ctx.stateDir, "state", "openclaw.sqlite");
+  if (legacyBinding && !current.targets.some((target) => livePath(target) === globalSharedPath)) {
+    refuse(ctx, "credential binding without shared target", "captured shared store");
+  }
+  for (const [index, target] of current.targets.entries()) {
+    const sharedPath = livePath(target);
+    const binding =
+      current.artifacts.find(
+        (artifact) =>
+          artifact.path === path.join(storeDirectory(ctx, index), "client-credential-binding.json"),
+      ) ?? (sharedPath === globalSharedPath ? legacyBinding : undefined);
+    if (!binding) {
+      continue;
+    }
+    ctx.target = sharedPath;
+    const input = ctx.inputs?.stores[index];
+    const env = resolveStateClientCredentialEnvironment({ path: sharedPath, env: ctx.env });
+    if (!input || !env) {
+      refuse(ctx, "credential binding without shared target", "captured shared store");
+    }
+    rebindPortedClientCredentials({
+      env,
+      binding: JSON.parse(fs.readFileSync(binding.path, "utf8")),
+      sharedPath,
+      sqliteSnapshotPath: input.image,
+      engine: outcome === "ported" ? current.direction.to : current.direction.from,
+      storeId: target.storeId,
+      assertCurrent: ctx.assertCurrent,
+    });
+  }
   const archived = archiveDatabasePortManifest(
     ctx.stateDir,
     current.operationId,
@@ -248,6 +306,7 @@ export function finalize(ctx: Context, outcome: "ported" | "rolled-back") {
     phase: "complete",
     engine: outcome === "ported" ? current.direction.to : current.direction.from,
     stores: current.targets.map(livePath),
+    plannerStatistics: ctx.plannerStatistics ?? [],
     backup: ctx.directory,
     remainingSqlite:
       ctx.inputs?.outOfScope

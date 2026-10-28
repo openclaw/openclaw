@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveConfigForRead } from "../config/io.read-helpers.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { setConfigResolutionFacts } from "../config/resolution-facts.js";
+import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
@@ -14,6 +15,7 @@ import {
   resolveHookSessionKey,
   normalizeAgentPayload,
   normalizeWakePayload,
+  publishHooksTokenEnvKey,
   resolveHooksConfig,
 } from "./hooks.js";
 
@@ -126,6 +128,29 @@ describe("gateway hooks helpers", () => {
     expect(resolveHooksConfig({ hooks: { enabled: true, token: "${LITERAL_VALUE}" } })?.token).toBe(
       "${LITERAL_VALUE}",
     );
+  });
+
+  test("an env-sourced hook token is withheld from host exec children", () => {
+    const env = { PATH: "/usr/bin:/bin", HOOK_SECRET: "synthetic-hook-secret" };
+    const resolution = resolveConfigForRead(
+      { hooks: { enabled: true, token: "${HOOK_SECRET}" } },
+      env,
+    );
+    const cfg = resolution.resolvedConfigRaw as OpenClawConfig;
+    setConfigResolutionFacts(cfg, resolution.resolutionFacts);
+    const hooks = resolveHooksConfig(cfg);
+    expect(hooks?.tokenEnvKey).toBe("HOOK_SECRET");
+    // Literal tokens have no env source to withhold.
+    expect(resolveHooksConfig(hookConfig())?.tokenEnvKey).toBeUndefined();
+    try {
+      publishHooksTokenEnvKey(hooks);
+      expect(sanitizeHostExecEnv({ baseEnv: env })).not.toHaveProperty("HOOK_SECRET");
+      // Reloading to hooks without an env source releases the name again.
+      publishHooksTokenEnvKey(resolveHooksConfig(hookConfig()));
+      expect(sanitizeHostExecEnv({ baseEnv: env }).HOOK_SECRET).toBe("synthetic-hook-secret");
+    } finally {
+      publishHooksTokenEnvKey(null);
+    }
   });
 
   test("resolveHooksConfig rejects root path", () => {

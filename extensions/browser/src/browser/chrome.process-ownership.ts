@@ -78,23 +78,6 @@ export function processCommandHasFlag(
   return values.length === 1 && values[0] === value;
 }
 
-function commandLineMatchesManagedChrome(params: {
-  command: { argv: string[] | null; text: string };
-  exe: BrowserExecutable;
-  profile: ResolvedBrowserProfile;
-  userDataDir: string;
-}): boolean {
-  return (
-    isChromeExecutableFamilyMatch(params.command.text, params.exe) &&
-    processCommandHasFlag(
-      params.command,
-      "remote-debugging-port",
-      String(params.profile.cdpPort),
-    ) &&
-    processCommandHasFlag(params.command, "user-data-dir", params.userDataDir)
-  );
-}
-
 function parseLinuxTcpListenInodesForPort(table: string, port: number): Set<string> {
   const expectedPort = port.toString(16).toUpperCase().padStart(4, "0");
   const inodes = new Set<string>();
@@ -295,12 +278,11 @@ export function readOwnedManagedChromeIdentity(params: {
   if (
     !command ||
     (params.headlessShellOnly && !headlessShellExecutable(command)) ||
-    !commandLineMatchesManagedChrome({
-      command,
-      exe: params.exe,
-      profile: params.profile,
-      userDataDir: params.userDataDir,
-    })
+    !(
+      isChromeExecutableFamilyMatch(command.text, params.exe) &&
+      processCommandHasFlag(command, "remote-debugging-port", String(params.profile.cdpPort)) &&
+      processCommandHasFlag(command, "user-data-dir", params.userDataDir)
+    )
   ) {
     return null;
   }

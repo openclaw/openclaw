@@ -1,7 +1,9 @@
 import type { Selectable } from "kysely";
+import type { CronJobCreate } from "../cron/types.js";
 import { getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import type { ClawCronJob } from "./manifest-contract.js";
 
@@ -14,7 +16,7 @@ export type PersistedClawCronRef = {
   declarationKey: string;
   schedulerJobId?: string;
   status: "pending" | "complete" | "failed" | "removed";
-  job: ClawCronJob;
+  job: ClawCronJob | { automation: CronJobCreate };
   error?: string;
   createdAtMs: number;
   updatedAtMs: number;
@@ -41,11 +43,7 @@ function rowToClawCronRef(row: CronRefRow): PersistedClawCronRef {
 }
 
 export function readAllClawCronRefsInDatabase(db: EngineConnection): PersistedClawCronRef[] {
-  if (
-    !db /* sqlite-allow-raw: read-only Claw cron table-existence probe. */
-      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'claw_cron_refs'")
-      .get()
-  ) {
+  if (!tableExists(db, "claw_cron_refs")) {
     return [];
   }
   const query = getNodeSqliteKysely<CronRefDatabase>(db)

@@ -1,14 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { findFilesByName } from "./scenario-runtime-find-files.js";
+import { findMatrixStateDatabases } from "./scenario-runtime-find-files.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
-const MATRIX_SYNC_STORE_FILENAME = "bot-storage.json";
 const MATRIX_PLUGIN_ID = "matrix";
 const MATRIX_SYNC_CACHE_NAMESPACE = "sync-cache";
 const MATRIX_STATE_POLL_INTERVAL_MS = 100;
@@ -20,62 +17,10 @@ const MATRIX_SYNC_CACHE_CHUNK_BYTES = 24_000;
 type MatrixSyncStoreCursor = {
   cursor: string;
   pathname: string;
-  source: "json" | "sqlite";
-  stateKey?: string;
+  stateKey: string;
 };
 
 type MatrixStateIdentity = { accountId: string; userId: string };
-
-async function readJsonFile(pathname: string): Promise<unknown> {
-  return JSON.parse(await fs.readFile(pathname, "utf8")) as unknown;
-}
-
-async function writeJsonFile(pathname: string, value: unknown) {
-  await fs.writeFile(pathname, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
-function readPersistedMatrixSyncCursor(parsed: unknown): string | null {
-  if (!isRecord(parsed)) {
-    return null;
-  }
-  const savedSync = parsed.savedSync;
-  if (isRecord(savedSync) && typeof savedSync.nextBatch === "string") {
-    return savedSync.nextBatch;
-  }
-  if (typeof parsed.next_batch === "string") {
-    return parsed.next_batch;
-  }
-  return null;
-}
-
-function writePersistedMatrixSyncCursor(parsed: unknown, cursor: string): unknown {
-  if (!isRecord(parsed)) {
-    throw new Error("Matrix sync store was not a JSON object");
-  }
-  const savedSync = parsed.savedSync;
-  if (isRecord(savedSync) && typeof savedSync.nextBatch === "string") {
-    return {
-      ...parsed,
-      savedSync: {
-        ...savedSync,
-        nextBatch: cursor,
-      },
-    };
-  }
-  if (typeof parsed.nextBatch === "string") {
-    return {
-      ...parsed,
-      nextBatch: cursor,
-    };
-  }
-  if (typeof parsed.next_batch === "string") {
-    return {
-      ...parsed,
-      next_batch: cursor,
-    };
-  }
-  throw new Error("Matrix sync store did not contain a persisted sync cursor");
-}
 
 function parsePluginStateJson(raw: unknown): unknown {
   if (typeof raw !== "string") {
@@ -98,7 +43,7 @@ function readMatrixSyncCacheFromRows(rows: Array<{ entryKey?: unknown; valueJson
   const entries: Array<{
     cursor: string;
     stateKey: string;
-    sync: unknown;
+    sync: Record<string, unknown>;
   }> = [];
   for (const [entryKey, rawMeta] of rowsByKey) {
     if (!entryKey.endsWith(":meta") || !isRecord(rawMeta) || rawMeta.kind !== "meta") {
@@ -126,9 +71,8 @@ function readMatrixSyncCacheFromRows(rows: Array<{ entryKey?: unknown; valueJson
     }
     try {
       const sync: unknown = JSON.parse(chunks.join(""));
-      const cursor = readPersistedMatrixSyncCursor({ savedSync: sync });
-      if (cursor) {
-        entries.push({ cursor, stateKey, sync });
+      if (isRecord(sync) && typeof sync.nextBatch === "string" && sync.nextBatch) {
+        entries.push({ cursor: sync.nextBatch, stateKey, sync });
       }
     } catch {
       continue;
@@ -140,20 +84,13 @@ function readMatrixSyncCacheFromRows(rows: Array<{ entryKey?: unknown; valueJson
 async function readMatrixSyncCacheCursorsFromSqlite(
   params: MatrixStateIdentity & { stateDir: string },
 ): Promise<MatrixSyncStoreCursor[]> {
-  const databasePaths = await findFilesByName({
-    filename: "openclaw.sqlite",
-    rootDir: params.stateDir,
-    maxDepth: 10,
-  });
+  const databasePaths = await findMatrixStateDatabases(params.stateDir);
   const cursors: MatrixSyncStoreCursor[] = [];
   for (const databasePath of databasePaths) {
     try {
       const db = openNodeSqliteDatabase(databasePath, { readOnly: true });
       try {
-        const metadata = await readMatrixStorageMetadata(
-          path.dirname(path.dirname(databasePath)),
-          db,
-        );
+        const metadata = readMatrixStorageMetadata(db);
         if (!matchesMatrixStateIdentity(metadata, params)) {
           continue;
         }
@@ -170,7 +107,7 @@ async function readMatrixSyncCacheCursorsFromSqlite(
           valueJson?: unknown;
         }>;
         for (const { cursor, stateKey } of readMatrixSyncCacheFromRows(rows)) {
-          cursors.push({ cursor, pathname: databasePath, source: "sqlite", stateKey });
+          cursors.push({ cursor, pathname: databasePath, stateKey });
         }
       } finally {
         db.close();
@@ -202,7 +139,7 @@ function chunkMatrixSyncCacheJson(value: string): string[] {
   return chunks;
 }
 
-async function rewriteMatrixSyncCacheRows(params: {
+export async function rewriteMatrixSyncStoreCursor(params: {
   cursor: string;
   pathname: string;
   stateKey: string;
@@ -233,9 +170,7 @@ async function rewriteMatrixSyncCacheRows(params: {
     if (!cursorEntry) {
       throw new Error("Matrix sync cache did not contain a persisted sync cursor");
     }
-    const syncJson = JSON.stringify(
-      writePersistedMatrixSyncCursor(cursorEntry.sync, params.cursor),
-    );
+    const syncJson = JSON.stringify({ ...cursorEntry.sync, nextBatch: params.cursor });
     const nextGeneration = randomUUID().replaceAll("-", "");
     const nextChunks = chunkMatrixSyncCacheJson(syncJson);
     const now = Date.now();
@@ -283,32 +218,7 @@ async function rewriteMatrixSyncCacheRows(params: {
   }
 }
 
-export async function rewriteMatrixSyncStoreCursor(params: {
-  cursor: string;
-  pathname: string;
-  source?: "json" | "sqlite";
-  stateKey?: string;
-}) {
-  if (params.source === "sqlite" || params.stateKey) {
-    if (!params.stateKey) {
-      throw new Error("Matrix sync cache rewrite requires a state key");
-    }
-    await rewriteMatrixSyncCacheRows({
-      cursor: params.cursor,
-      pathname: params.pathname,
-      stateKey: params.stateKey,
-    });
-    return;
-  }
-  const parsed = await readJsonFile(params.pathname);
-  await writeJsonFile(params.pathname, writePersistedMatrixSyncCursor(parsed, params.cursor));
-}
-
 export async function deleteMatrixSyncStoreCursor(params: MatrixSyncStoreCursor) {
-  if (params.source !== "sqlite" || !params.stateKey) {
-    await fs.rm(params.pathname, { force: true });
-    return;
-  }
   const db = openNodeSqliteDatabase(params.pathname);
   try {
     db.prepare(
@@ -327,41 +237,15 @@ export async function deleteMatrixSyncStoreCursor(params: MatrixSyncStoreCursor)
   }
 }
 
-async function readMatrixStorageMetadata(
-  storageRootDir: string,
-  openDatabase?: ReturnType<typeof openNodeSqliteDatabase>,
-): Promise<unknown> {
-  let db = openDatabase;
-  const legacyMetadataPath = path.join(storageRootDir, "storage-meta.json");
-  try {
-    if (!db) {
-      const databasePath = path.join(storageRootDir, "state", "openclaw.sqlite");
-      try {
-        await fs.access(databasePath);
-      } catch (error) {
-        // SAFETY: fs.access rejects with Node errno errors; only ENOENT permits legacy metadata.
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          return await readJsonFile(legacyMetadataPath);
-        }
-        throw error;
-      }
-      db = openNodeSqliteDatabase(databasePath, { readOnly: true });
-    }
-    const row = db
-      .prepare(
-        `SELECT value_json AS valueJson FROM plugin_state_entries
+function readMatrixStorageMetadata(db: ReturnType<typeof openNodeSqliteDatabase>): unknown {
+  const row = db
+    .prepare(
+      `SELECT value_json AS valueJson FROM plugin_state_entries
           WHERE plugin_id = ? AND namespace = ? AND entry_key = ?
             AND (expires_at IS NULL OR expires_at > ?)`,
-      )
-      .get(MATRIX_PLUGIN_ID, "storage-meta", "current", Date.now());
-    // Current SQLite identity wins over stale sidecars, including a mismatch.
-    // Legacy metadata remains readable only until the Matrix doctor migrates it.
-    return row ? parsePluginStateJson(row.valueJson) : await readJsonFile(legacyMetadataPath);
-  } finally {
-    if (db && db !== openDatabase) {
-      db.close();
-    }
-  }
+    )
+    .get(MATRIX_PLUGIN_ID, "storage-meta", "current", Date.now());
+  return row ? parsePluginStateJson(row.valueJson) : undefined;
 }
 
 function matchesMatrixStateIdentity(metadata: unknown, identity: MatrixStateIdentity): boolean {
@@ -370,25 +254,6 @@ function matchesMatrixStateIdentity(metadata: unknown, identity: MatrixStateIden
     metadata.accountId === identity.accountId &&
     metadata.userId === identity.userId
   );
-}
-
-async function resolveMatrixSyncStoreFile(params: MatrixStateIdentity & { stateDir: string }) {
-  const candidates = await findFilesByName({
-    filename: MATRIX_SYNC_STORE_FILENAME,
-    rootDir: params.stateDir,
-  });
-  for (const pathname of candidates) {
-    try {
-      if (
-        matchesMatrixStateIdentity(await readMatrixStorageMetadata(path.dirname(pathname)), params)
-      ) {
-        return pathname;
-      }
-    } catch {
-      continue;
-    }
-  }
-  return null;
 }
 
 export async function waitForMatrixSyncStoreWithCursor(params: {
@@ -403,7 +268,6 @@ export async function waitForMatrixSyncStoreWithCursor(params: {
     accountId: params.accountId ?? params.context.sutAccountId ?? DEFAULT_ACCOUNT_ID,
     userId: params.userId ?? params.context.sutUserId,
   };
-  let lastPath: string | null = null;
   while (Date.now() - startedAt < params.timeoutMs) {
     const [sqliteCursor] = await readMatrixSyncCacheCursorsFromSqlite({
       ...identity,
@@ -412,22 +276,9 @@ export async function waitForMatrixSyncStoreWithCursor(params: {
     if (sqliteCursor) {
       return sqliteCursor;
     }
-    const pathname = await resolveMatrixSyncStoreFile({
-      ...identity,
-      stateDir: params.stateDir,
-    });
-    lastPath = pathname;
-    if (pathname) {
-      const cursor = readPersistedMatrixSyncCursor(await readJsonFile(pathname));
-      if (cursor) {
-        return { cursor, pathname, source: "json" as const };
-      }
-    }
     await sleep(MATRIX_STATE_POLL_INTERVAL_MS);
   }
-  throw new Error(
-    `timed out waiting for Matrix sync store cursor under ${params.stateDir}; last path ${lastPath ?? "<none>"}`,
-  );
+  throw new Error(`timed out waiting for Matrix sync store cursor under ${params.stateDir}`);
 }
 
 async function hasPersistedMatrixIngressCompletion(params: {
@@ -435,11 +286,7 @@ async function hasPersistedMatrixIngressCompletion(params: {
   eventId: string;
   stateDir: string;
 }): Promise<string | null> {
-  const databasePaths = await findFilesByName({
-    filename: "openclaw.sqlite",
-    rootDir: params.stateDir,
-    maxDepth: 10,
-  });
+  const databasePaths = await findMatrixStateDatabases(params.stateDir);
   for (const databasePath of databasePaths) {
     try {
       const db = openNodeSqliteDatabase(databasePath, { readOnly: true });

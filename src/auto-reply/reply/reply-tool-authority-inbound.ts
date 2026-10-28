@@ -1,7 +1,14 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
-import { captureRequesterOrigin } from "../../agents/requester-origin.js";
+import {
+  assertAdmittedRunOperatorAuthority,
+  type AdmittedRunOperatorAuthority,
+} from "../../agents/admitted-run-context.js";
+import type { ReplyToolAuthorityCaller } from "../../agents/harness/host-private-capabilities.js";
+import {
+  captureRequesterOrigin,
+  resolveRequesterPrincipalKey,
+} from "../../agents/requester-origin.js";
 import { resolveRequesterConversationToolPolicy } from "../../agents/requester-tool-policy.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
@@ -20,10 +27,91 @@ import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
 import { getRequesterProfile } from "../requester-profile.js";
 import { shouldUseFromAsSenderFallback } from "../sender-identity.js";
 import type { RuntimeMsgContext } from "../templating.js";
+import { MessageInjectionRequesterMismatchError } from "./message-injection-authority.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
 
-export function applyReplyToolAuthorityRequester(
+/** Keep execution settings with their owner while projecting current caller and policy facts. */
+export function projectReplyToolAuthorityInput(
+  snapshot: ReplyToolAuthorityInput,
+  caller: ReplyToolAuthorityCaller | undefined,
+  requesterPrincipalKey: string | undefined,
+): ReplyToolAuthorityInput {
+  const continuation = caller && "kind" in caller ? caller : undefined;
+  const participant: ReplyToolAuthorityOverlay | ReplyToolAuthorityRequester | undefined =
+    caller && "kind" in caller
+      ? { ...caller.caller, traceAuthorized: snapshot.run.traceAuthorized === true }
+      : caller;
+  const incomingRequester =
+    participant && !("requesterOrigin" in participant) && participant.allowCollaborativeSteering
+      ? resolveRequesterPrincipalKey({
+          ...participant,
+          messageChannel: participant.originatingChannel,
+        })
+      : undefined;
+  if (
+    participant &&
+    !("requesterOrigin" in participant) &&
+    participant.allowCollaborativeSteering &&
+    requesterPrincipalKey &&
+    incomingRequester &&
+    incomingRequester !== requesterPrincipalKey &&
+    (!participant.inputProvenance || participant.inputProvenance.kind === "external_user") &&
+    isSameReplyToolAuthorityConversation(snapshot, participant)
+  ) {
+    if (participant.operatorAuthority) {
+      assertAdmittedRunOperatorAuthority(participant.operatorAuthority);
+      participant.operatorAuthority.assertCurrent();
+    }
+    return snapshot;
+  }
+  const incoming = !participant
+    ? snapshot
+    : "requesterOrigin" in participant
+      ? applyReplyToolAuthorityRequester(snapshot, participant)
+      : continuation
+        ? applyReplyToolAuthorityCaller(snapshot, participant)
+        : applyReplyToolAuthorityOverlay(snapshot, participant);
+  if (
+    participant &&
+    (!requesterPrincipalKey ||
+      requesterPrincipalKey !==
+        resolveRequesterPrincipalKey({
+          ...incoming.run,
+          messageChannel: incoming.originatingChannel,
+          operatorAuthority: incoming.operatorAuthority,
+        }))
+  ) {
+    throw new MessageInjectionRequesterMismatchError();
+  }
+  if (continuation && isSameReplyToolAuthorityConversation(snapshot, continuation.caller)) {
+    // Guidance continues this execution; it does not grant a new set of tools or destinations.
+    // The caller binding still checks both live authorities and the incumbent policy.
+    return snapshot;
+  }
+  return continuation
+    ? {
+        ...incoming,
+        run: {
+          ...incoming.run,
+          config: captureRuntimeConfig(continuation.config),
+          // Trace output belongs to the executing turn, not its arriving caller.
+          traceAuthorized: snapshot.run.traceAuthorized,
+          // Discovery can retain available capabilities; it cannot add tools or destinations.
+          clientCaps: (snapshot.run.clientCaps ?? []).every((cap) =>
+            incoming.run.clientCaps?.includes(cap),
+          )
+            ? snapshot.run.clientCaps
+            : incoming.run.clientCaps,
+          gatewayUiCommandTarget: snapshot.run.gatewayUiCommandTarget
+            ? incoming.run.gatewayUiCommandTarget
+            : undefined,
+        },
+      }
+    : incoming;
+}
+
+function applyReplyToolAuthorityRequester(
   snapshot: ReplyToolAuthorityInput,
   requester: ReplyToolAuthorityRequester,
 ): ReplyToolAuthorityInput {
@@ -42,7 +130,26 @@ export function applyReplyToolAuthorityRequester(
   };
 }
 
-export function applyReplyToolAuthorityOverlay(
+function applyReplyToolAuthorityOverlay(
+  snapshot: ReplyToolAuthorityInput,
+  overlay: ReplyToolAuthorityOverlay,
+): ReplyToolAuthorityInput {
+  const projected = applyReplyToolAuthorityCaller(snapshot, overlay);
+  return {
+    ...projected,
+    run: {
+      ...projected.run,
+      conversationToolPolicy: overlay.conversationToolPolicy,
+      inputProvenance: overlay.inputProvenance,
+      trustedInternalHandoff: overlay.trustedInternalHandoff,
+      scheduledToolPolicy: overlay.scheduledToolPolicy,
+      runtimePluginToolGrant: overlay.runtimePluginToolGrant,
+    },
+  };
+}
+
+/** A joining caller revalidates permissions without replacing the execution's policy origin. */
+function applyReplyToolAuthorityCaller(
   snapshot: ReplyToolAuthorityInput,
   overlay: ReplyToolAuthorityOverlay,
 ): ReplyToolAuthorityInput {
@@ -62,7 +169,6 @@ export function applyReplyToolAuthorityOverlay(
       messageProvider: overlay.messageProvider,
       chatType: overlay.chatType,
       agentAccountId: overlay.agentAccountId,
-      conversationToolPolicy: overlay.conversationToolPolicy,
       conversationId: overlay.conversationId,
       messageThreadId: overlay.messageThreadId,
       groupId: overlay.groupId,
@@ -76,10 +182,6 @@ export function applyReplyToolAuthorityOverlay(
       senderE164: overlay.senderE164,
       senderIsOwner: overlay.senderIsOwner,
       gitContributorProfileId: overlay.gitContributorProfileId,
-      inputProvenance: overlay.inputProvenance,
-      trustedInternalHandoff: overlay.trustedInternalHandoff,
-      scheduledToolPolicy: overlay.scheduledToolPolicy,
-      runtimePluginToolGrant: overlay.runtimePluginToolGrant,
       traceAuthorized: overlay.traceAuthorized,
       approvalReviewerDeviceId: overlay.approvalReviewerDeviceId,
       clientCaps: overlay.clientCaps,
@@ -172,9 +274,17 @@ export function resolveInboundConversationToolPolicy(params: {
 }
 
 /** Session sharing alone does not establish that two inputs belong to the same conversation. */
-export function isSameReplyToolAuthorityConversation(
+function isSameReplyToolAuthorityConversation(
   snapshot: ReplyToolAuthorityInput,
-  caller: ReplyToolAuthorityOverlay,
+  caller: Pick<
+    ReplyToolAuthorityOverlay,
+    | "messageProvider"
+    | "originatingChannel"
+    | "conversationId"
+    | "sessionKey"
+    | "agentAccountId"
+    | "messageThreadId"
+  >,
 ): boolean {
   const execution = snapshot.run;
   const channel = normalizeMessageChannel(execution.messageProvider ?? snapshot.originatingChannel);

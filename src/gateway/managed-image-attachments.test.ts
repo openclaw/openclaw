@@ -2,7 +2,6 @@
 // operator authorization for generated image artifacts attached to gateway replies.
 import fs from "node:fs/promises";
 import http from "node:http";
-import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { maxBytesForKind } from "@openclaw/media-core/constants";
@@ -17,11 +16,14 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { createNoisyPngBuffer, createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import { resolveExistingAgentSessionStoreTargetsReadOnlyResult } from "../config/sessions/targets-read-availability.worker.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   completeSessionDelivery,
@@ -54,13 +56,13 @@ import {
   prepareAgentSessionStore,
   prepareManagedSessionStore as seedManagedSessionStore,
   replaceTestSessionEntry,
+  requestManagedImageHttp,
   requireAttachmentIdFromUrl,
   requireBlock,
   requireManagedOriginalPath,
   TINY_PNG_BASE64,
   usePreparedManagedImageState,
   writeSource,
-  type RequestResult,
 } from "./managed-image-attachments.test-support.js";
 import {
   attachManagedImageRecordsToMessage,
@@ -193,6 +195,63 @@ function mediaPath(fixture: { sessionKey: string; attachmentId: string }) {
   return `/api/chat/media/outgoing/${encodeURIComponent(fixture.sessionKey)}/${fixture.attachmentId}/full`;
 }
 
+function mediaMessage(fixture: Parameters<typeof mediaPath>[0], type = "image") {
+  const url = mediaPath(fixture);
+  return assistantMessage([{ type, url, openUrl: url }]);
+}
+
+function expectManagedImageBlock(
+  blocks: Record<string, unknown>[],
+  alt: string,
+  secrets: string[],
+) {
+  expect(blocks).toHaveLength(1);
+  const block = requireBlock(blocks);
+  expect(block).toMatchObject({ type: "image", alt });
+  expect(block.url).toContain("/api/chat/media/outgoing/agent%3Amain%3Amain/");
+  expect(block.openUrl).toContain("/full");
+  expect(block.url).toBe(block.openUrl);
+  for (const secret of secrets) {
+    expect(JSON.stringify(block)).not.toContain(secret);
+  }
+  return requireAttachmentIdFromUrl(block.url);
+}
+
+function playbackFixture(stateDir: string) {
+  return createFixture(stateDir, {
+    filename: "voice.caf",
+    contentType: "audio/x-caf",
+    body: Buffer.from("caff-original"),
+  });
+}
+
+async function expectRetained(
+  stateDir: string,
+  fixture: Awaited<ReturnType<typeof createFixture>>,
+) {
+  expect(await readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
+  await fs.access(fixture.originalPath);
+}
+
+async function expectDeleted(stateDir: string, fixture: Awaited<ReturnType<typeof createFixture>>) {
+  expect(await readManagedImageRecord(fixture.attachmentId, stateDir)).toBeNull();
+  await expectPathMissing(fixture.originalPath);
+}
+
+async function seedSession(
+  stateDir: string,
+  agentId: string,
+  sessionKey: string,
+  sessionId: string,
+  storePath?: string,
+) {
+  await replaceTestSessionEntry(
+    { agentId, env: { ...process.env, OPENCLAW_STATE_DIR: stateDir }, sessionKey, storePath },
+    { sessionId, updatedAt: Date.now() },
+  );
+  closeOpenClawAgentDatabasesForTest();
+}
+
 function useManagedImageState(prefix: string, bindState: (stateDir: string) => void): void {
   usePreparedManagedImageState({
     prefix,
@@ -272,44 +331,17 @@ async function requestManagedImage(params: {
     })();
   });
 
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address() as AddressInfo;
-
+  const origin = await listenLoopback(server);
   try {
-    const result = await new Promise<RequestResult>((resolve, reject) => {
-      const req = http.request(
-        {
-          host: "127.0.0.1",
-          port: address.port,
-          path: params.pathName,
-          method: params.method ?? "GET",
-          headers: params.headers,
-        },
-        (res) => {
-          void (async () => {
-            const chunks: Buffer[] = [];
-            for await (const chunk of res) {
-              chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-            }
-            resolve({
-              statusCode: res.statusCode ?? 0,
-              headers: res.headers,
-              body: Buffer.concat(chunks),
-            });
-          })();
-        },
-      );
-      req.on("error", reject);
-      req.end();
-    });
-
+    const result = await requestManagedImageHttp(
+      origin,
+      params.pathName,
+      params.method,
+      params.headers,
+    );
     return { result, auth };
   } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await closeHttpServer(server);
   }
 }
 
@@ -440,10 +472,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       contentType: "audio/mpeg",
       body,
     });
-    const canonicalPath = mediaPath({ sessionKey, attachmentId });
-    const transcriptMessages = [
-      assistantMessage([{ type: "audio", url: canonicalPath, openUrl: canonicalPath }]),
-    ];
+    const transcriptMessages = [mediaMessage({ sessionKey, attachmentId }, "audio")];
     mockSessionEntry(path.join(stateDir, "gateway-sessions.json"));
     readSessionMessagesMock.mockResolvedValue(transcriptMessages);
     const preparedSource = await resolveManagedOutgoingImageArtifactDownload({
@@ -474,9 +503,10 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.headers["content-disposition"]).toContain(
       "filename*=UTF-8''%E9%9F%B3%E5%A3%B0%2520.mp3",
     );
-    expect(result.statusCode).toBe(206);
-    expect(result.headers["content-type"]).toBe("audio/mpeg");
-    expect(result.headers["content-range"]).toBe(`bytes 9-13/${body.byteLength}`);
+    expect(result).toMatchObject({
+      statusCode: 206,
+      headers: { "content-type": "audio/mpeg", "content-range": `bytes 9-13/${body.byteLength}` },
+    });
     expect(result.body.toString("utf8")).toBe("audio");
     const wrongAttachmentId = "22222222-2222-4222-8222-222222222222";
     const wrong = await requestManagedImage({
@@ -491,15 +521,11 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
 
   it("returns 202 while a managed playback transcode is preparing", async () => {
     resolvePlaybackTranscodeMock.mockResolvedValueOnce({ kind: "preparing" });
-    const { attachmentId, sessionKey } = await createFixture(stateDir, {
-      filename: "voice.caf",
-      contentType: "audio/x-caf",
-      body: Buffer.from("caff-original"),
-    });
+    const fixture = await playbackFixture(stateDir);
 
     const { result } = await requestManagedImage({
       stateDir,
-      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full?playback=1`,
+      pathName: `${mediaPath(fixture)}?playback=1`,
       authResponse: { authMethod: "token" },
       scopes: ["operator.admin"],
     });
@@ -510,11 +536,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
   });
 
   it("closes the opened managed-media descriptor when playback resolution rejects", async () => {
-    const { attachmentId, sessionKey, originalPath } = await createFixture(stateDir, {
-      filename: "voice.caf",
-      contentType: "audio/x-caf",
-      body: Buffer.from("caff-original"),
-    });
+    const { attachmentId, sessionKey, originalPath } = await playbackFixture(stateDir);
     authorizeGatewayHttpRequestOrReplyMock.mockImplementation(async ({ res }) =>
       bindHttpResponseAuthority({ ok: true, authMethod: "token" }, res, () => true),
     );
@@ -540,7 +562,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       await expect(
         handleManagedOutgoingImageHttpRequest(
           {
-            url: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full?playback=1`,
+            url: `${mediaPath({ sessionKey, attachmentId })}?playback=1`,
             method: "GET",
             headers: {},
           } as http.IncomingMessage,
@@ -565,34 +587,33 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       extension: ".m4a",
     } as const;
     resolvePlaybackTranscodeMock.mockResolvedValueOnce(playback);
-    const { attachmentId, sessionKey } = await createFixture(stateDir, {
-      filename: "voice.caf",
-      contentType: "audio/x-caf",
-      body: Buffer.from("caff-original"),
-    });
+    const fixture = await playbackFixture(stateDir);
+    const requestPlayback = (options: Partial<Parameters<typeof requestManagedImage>[0]> = {}) =>
+      requestManagedImage({
+        stateDir,
+        pathName: `${mediaPath(fixture)}?playback=1`,
+        authResponse: { authMethod: "token" },
+        ...options,
+      });
 
-    const { result } = await requestManagedImage({
-      stateDir,
-      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full?playback=1`,
-      authResponse: { authMethod: "token" },
-      headers: { range: "bytes=11-15" },
-    });
+    const { result } = await requestPlayback({ headers: { range: "bytes=11-15" } });
 
-    expect(result.statusCode).toBe(206);
-    expect(result.headers["content-type"]).toBe("audio/mp4");
-    expect(result.headers["cache-control"]).toBe("private, no-cache");
+    expect(result).toMatchObject({
+      statusCode: 206,
+      headers: {
+        "content-type": "audio/mp4",
+        "cache-control": "private, no-cache",
+        "content-range": `bytes 11-15/${transcoded.byteLength}`,
+      },
+    });
     expect(result.headers.etag).toBeUndefined();
     expect(result.headers["last-modified"]).toBeUndefined();
     expect(result.headers["content-disposition"]).toContain('filename="voice.m4a"');
-    expect(result.headers["content-range"]).toBe(`bytes 11-15/${transcoded.byteLength}`);
     expect(result.body.toString("utf8")).toBe("audio");
 
     for (const method of ["GET", "HEAD"]) {
       resolvePlaybackTranscodeMock.mockResolvedValueOnce(playback);
-      const exists = await requestManagedImage({
-        stateDir,
-        pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full?playback=1`,
-        authResponse: { authMethod: "token" },
+      const exists = await requestPlayback({
         method,
         headers: { "if-none-match": "*", range: "bytes=11-15" },
       });
@@ -606,10 +627,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
   it("serves compressed bounded 1600×800 renditions through local reads and the artifact ticket", async () => {
     const source = createSolidPngBuffer(1600, 800, { r: 24, g: 64, b: 128 });
     const { attachmentId, sessionKey } = await createFixture(stateDir, { body: source });
-    const canonicalPath = mediaPath({ sessionKey, attachmentId });
-    const transcriptMessages = [
-      assistantMessage([{ type: "image", url: canonicalPath, openUrl: canonicalPath }]),
-    ];
+    const transcriptMessages = [mediaMessage({ sessionKey, attachmentId })];
     mockSessionEntry(path.join(stateDir, "sessions.sqlite"));
     readSessionMessagesMock.mockResolvedValue(transcriptMessages);
     const preparedSource = await resolveManagedOutgoingImageArtifactDownload({
@@ -699,35 +717,20 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
   });
 
   it.each([
-    {
-      name: "non-owner trusted-proxy requests with self-declared session ownership",
-      method: "GET",
-      malformedSessionKey: false,
-      authResponse: { authMethod: "trusted-proxy", trustDeclaredOperatorScopes: true },
-      statusCode: 403,
-    },
-    {
-      name: "non-GET methods",
-      method: "POST",
-      malformedSessionKey: false,
-      authResponse: undefined,
-      statusCode: 405,
-    },
-    {
-      name: "malformed encoded session keys",
-      method: "GET",
-      malformedSessionKey: true,
-      authResponse: { authMethod: "device-token" },
-      statusCode: 404,
-    },
-  ])("rejects $name", async ({ method, malformedSessionKey, authResponse, statusCode }) => {
+    ["non-owner trusted-proxy requests", "GET", false, "trusted-proxy", 403],
+    ["non-GET methods", "POST", false, undefined, 405],
+    ["malformed encoded session keys", "GET", true, "device-token", 404],
+  ] as const)("rejects %s", async (_name, method, malformedSessionKey, authMethod, statusCode) => {
     const { attachmentId, sessionKey } = await createFixture(stateDir);
     const encodedSessionKey = malformedSessionKey ? "%E0%A4%A" : encodeURIComponent(sessionKey);
     const { result } = await requestManagedImage({
       stateDir,
       pathName: `/api/chat/media/outgoing/${encodedSessionKey}/${attachmentId}/full`,
       method,
-      authResponse,
+      authResponse: authMethod && {
+        authMethod,
+        trustDeclaredOperatorScopes: authMethod === "trusted-proxy" ? true : undefined,
+      },
       headers: { "x-openclaw-requester-session-key": sessionKey },
     });
 
@@ -792,6 +795,15 @@ describe("createManagedOutgoingImageBlocks", () => {
     ]);
   });
 
+  function requestImage(pathName: string, transcriptMessages?: Record<string, unknown>[]) {
+    return requestManagedImage({
+      stateDir,
+      pathName,
+      authResponse: { authMethod: "token" },
+      transcriptMessages,
+    });
+  }
+
   it("preserves safe generated image filenames in the record and HTTP response", async () => {
     const expectedName = "cover.png";
     const blocks = await createManagedOutgoingImageBlocksWithoutHostSql({
@@ -804,26 +816,23 @@ describe("createManagedOutgoingImageBlocks", () => {
     const block = requireBlock(blocks);
     const attachmentId = requireAttachmentIdFromUrl(block.url);
     expect(blocks).toHaveLength(1);
-    expect(block.type).toBe("image");
-    expect(block.alt).toBe("Generated image 1");
-    expect(block.mimeType).toBe("image/png");
+    expect(block).toMatchObject({
+      type: "image",
+      alt: "Generated image 1",
+      mimeType: "image/png",
+      artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`,
+      sizeBytes: Buffer.from(TINY_PNG_BASE64, "base64").byteLength,
+    });
     expect(block.url).toBe(block.openUrl);
     expect(String(block.url)).toMatch(/\/full$/);
 
-    expect(block.artifactId).toBe(`${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`);
-    expect(block.sizeBytes).toBe(Buffer.from(TINY_PNG_BASE64, "base64").byteLength);
     const record = await readManagedImageRecord(attachmentId, stateDir);
-    expect(record?.original.mediaSubdir).toBe(MANAGED_OUTGOING_ORIGINALS_SUBDIR);
-    expect(record?.original.mediaId).toMatch(/\.png$/);
-
-    expect(record?.original.filename).toBe(expectedName);
-
-    const { result } = await requestManagedImage({
-      stateDir,
-      pathName: String(block.url),
-      authResponse: { authMethod: "token" },
+    expect(record?.original).toMatchObject({
+      mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
+      mediaId: expect.stringMatching(/\.png$/),
+      filename: expectedName,
     });
-
+    const { result } = await requestImage(String(block.url));
     expect(result.statusCode).toBe(200);
     expect(result.headers["content-disposition"]).toContain(`filename="${expectedName}"`);
   });
@@ -851,12 +860,9 @@ describe("createManagedOutgoingImageBlocks", () => {
         .filename,
     ).toBe(expectedName);
 
-    const { result } = await requestManagedImage({
-      stateDir,
-      pathName,
-      authResponse: { authMethod: "token" },
-      transcriptMessages: [assistantMessage([{ type: kind, url: pathName, openUrl: pathName }])],
-    });
+    const { result } = await requestImage(pathName, [
+      assistantMessage([{ type: kind, url: pathName, openUrl: pathName }]),
+    ]);
 
     expect(result.statusCode).toBe(200);
     expect(result.headers["content-disposition"]).toContain(`filename="${expectedName}"`);
@@ -975,15 +981,8 @@ describe("createManagedOutgoingImageBlocks", () => {
   });
 
   it("rejects oversized image data urls before decoding the payload", async () => {
-    const oversizedDataUrl = "data:image/png;base64,AAAAAA==";
-
     await expect(
-      createImages([oversizedDataUrl], {
-        limits: {
-          ...DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS,
-          maxBytes: 3,
-        },
-      }),
+      createImages(["data:image/png;base64,AAAAAA=="], { limits: { maxBytes: 3 } }),
     ).rejects.toThrow(/Generated image 1.*byte limit/);
 
     await expectPathMissing(path.join(stateDir, "media", "outgoing", "records"));
@@ -1008,18 +1007,11 @@ describe("createManagedOutgoingImageBlocks", () => {
         localRoots: [path.join(stateDir, "workspace")],
       });
 
-      expect(blocks).toHaveLength(1);
-      const block = requireBlock(blocks);
-      expect(block.type).toBe("image");
-      expect(block.url).toContain("/api/chat/media/outgoing/agent%3Amain%3Amain/");
-      expect(block.openUrl).toContain("/full");
-      expect(block.url).toBe(block.openUrl);
-      expect(block.alt).toBe("dot.png");
-      expect(JSON.stringify(block)).not.toContain(sourcePath);
-      expect(JSON.stringify(block)).not.toContain("sig=secret");
-      expect(JSON.stringify(block)).not.toContain("preview");
-
-      const attachmentId = requireAttachmentIdFromUrl(block.url);
+      const attachmentId = expectManagedImageBlock(blocks, "dot.png", [
+        sourcePath,
+        "sig=secret",
+        "preview",
+      ]);
       const record = await readManagedImageRecord(attachmentId, stateDir);
       const originalPath = await requireManagedOriginalPath(stateDir, attachmentId);
       expect(record?.original.filename).toMatch(/\.png$/);
@@ -1039,14 +1031,11 @@ describe("createManagedOutgoingImageBlocks", () => {
       res.end(imageBuffer);
     });
 
-    await new Promise<void>((resolve) => {
-      upstream.listen(0, "127.0.0.1", resolve);
-    });
-    const address = upstream.address() as AddressInfo;
+    const origin = await listenLoopback(upstream);
 
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        const sourceUrl = `http://127.0.0.1:${address.port}/remote-cat.png?sig=secret`;
+        const sourceUrl = `${origin}/remote-cat.png?sig=secret`;
         const matchedUrls: string[] = [];
         const blocks = await withStoreRemoteFixture(
           { url: sourceUrl, onMatch: (url) => matchedUrls.push(url) },
@@ -1054,17 +1043,10 @@ describe("createManagedOutgoingImageBlocks", () => {
         );
         expect(matchedUrls).toEqual([sourceUrl]);
 
-        expect(blocks).toHaveLength(1);
-        const block = requireBlock(blocks);
-        expect(block.alt).toBe("remote-cat.png");
-        expect(block.type).toBe("image");
-        expect(block.url).toContain("/api/chat/media/outgoing/agent%3Amain%3Amain/");
-        expect(block.openUrl).toContain("/full");
-        expect(block.url).toBe(block.openUrl);
-        expect(JSON.stringify(block)).not.toContain("127.0.0.1");
-        expect(JSON.stringify(block)).not.toContain("sig=secret");
-
-        const attachmentId = requireAttachmentIdFromUrl(block.url);
+        const attachmentId = expectManagedImageBlock(blocks, "remote-cat.png", [
+          "127.0.0.1",
+          "sig=secret",
+        ]);
         const record = await readManagedImageRecord(attachmentId, stateDir);
         const originalPath = await requireManagedOriginalPath(stateDir, attachmentId);
         expect(originalPath).toContain(path.join(stateDir, "media", "outgoing", "originals"));
@@ -1073,9 +1055,7 @@ describe("createManagedOutgoingImageBlocks", () => {
         expect(await fs.readFile(originalPath)).toEqual(imageBuffer);
       });
     } finally {
-      await new Promise<void>((resolve, reject) => {
-        upstream.close((error) => (error ? reject(error) : resolve()));
-      });
+      await closeHttpServer(upstream);
     }
   });
 
@@ -1186,27 +1166,20 @@ describe("createManagedOutgoingImageBlocks", () => {
       contentType: "image/svg+xml",
       body,
     });
-    const pathName = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
-
-    const { result } = await requestManagedImage({
-      stateDir,
-      pathName,
-      method: "GET",
-      authResponse: { authMethod: "token" },
-      transcriptMessages: [
-        assistantMessage([
-          {
-            type: "attachment",
-            attachment: {
-              kind: "document",
-              label: "vector.svg",
-              mimeType: "image/svg+xml",
-              url: pathName,
-            },
+    const pathName = mediaPath({ sessionKey, attachmentId });
+    const { result } = await requestImage(pathName, [
+      assistantMessage([
+        {
+          type: "attachment",
+          attachment: {
+            kind: "document",
+            label: "vector.svg",
+            mimeType: "image/svg+xml",
+            url: pathName,
           },
-        ]),
-      ],
-    });
+        },
+      ]),
+    ]);
 
     expect(result.statusCode).toBe(404);
     expect(result.headers["content-disposition"]).toBeUndefined();
@@ -1279,12 +1252,7 @@ describe("createManagedOutgoingImageBlocks", () => {
 
     const attachment = (blocks[0] as { attachment?: { artifactId?: string; url?: string } })
       .attachment;
-    const { result } = await requestManagedImage({
-      stateDir,
-      pathName: attachment?.url ?? "",
-      authResponse: { authMethod: "token" },
-      transcriptMessages: [assistantMessage(blocks)],
-    });
+    const { result } = await requestImage(attachment?.url ?? "", [assistantMessage(blocks)]);
 
     expect(result.statusCode).toBe(200);
     expect(result.headers["content-type"]).toBe("application/pdf");
@@ -1336,6 +1304,15 @@ describe("attachManagedOutgoingImagesToMessage", () => {
 describe("cleanupManagedOutgoingImageRecords", () => {
   let stateDir: string;
 
+  function mockHistory(
+    sessionId = "sess-main",
+    sessionFile = "/tmp/sess-main.jsonl",
+    messages: Record<string, unknown>[] = [],
+  ) {
+    mockSessionEntry(path.join(stateDir, "gateway-sessions.json"), sessionId, sessionFile);
+    readSessionMessagesMock.mockReturnValue(messages);
+  }
+
   beforeEach(async () => {
     stateDir = tempDirs.make("managed-image-cleanup-");
     vi.clearAllMocks();
@@ -1368,8 +1345,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       }),
     ).toBe(true);
     const attached = await readManagedImageRecord(fixture.attachmentId, stateDir);
-    expect(attached?.messageId).toBe("msg-late");
-    expect(attached?.retentionClass).toBe("history");
+    expect(attached).toMatchObject({ messageId: "msg-late", retentionClass: "history" });
   });
 
   it("retains transient records referenced by pending prepared session delivery", async () => {
@@ -1418,11 +1394,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
 
   it("retries a durably claimed file deletion after a filesystem failure", async () => {
     const fixture = await createFixture(stateDir);
-    loadSessionEntryMock.mockReturnValue({
-      storePath: path.join(stateDir, "gateway-sessions.json"),
-      entry: { sessionId: "sess-main", sessionFile: "/tmp/sess-main.jsonl" },
-    });
-    readSessionMessagesMock.mockReturnValue([]);
+    mockHistory();
     const rmSpy = vi.spyOn(fs, "rm").mockRejectedValueOnce(new Error("synthetic rm failure"));
 
     try {
@@ -1495,8 +1467,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       cleanupManagedOutgoingImageRecords({ stateDir }),
     );
 
-    expect(await readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
-    await fs.access(fixture.originalPath);
+    await expectRetained(stateDir, fixture);
     expect(readSessionMessagesMock).not.toHaveBeenCalled();
   });
 
@@ -1506,12 +1477,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       sessionKey: "agent:retired:main",
     });
     const storePath = path.join(stateDir, "current-sessions.json");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    await replaceTestSessionEntry(
-      { agentId: "main", env, storePath, sessionKey: "agent:main:main" },
-      { sessionId: "current-session", updatedAt: Date.now() },
-    );
-    closeOpenClawAgentDatabasesForTest();
+    await seedSession(stateDir, "main", "agent:main:main", "current-session", storePath);
     const config = {
       session: { store: storePath },
       agents: {
@@ -1521,12 +1487,6 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       },
     };
     getRuntimeConfigMock.mockReturnValue(config);
-    expect(
-      resolveExistingAgentSessionStoreTargetsReadOnlyResult(config, "main", { env }),
-    ).toMatchObject({
-      available: true,
-      targets: [{ agentId: "main", storePath }],
-    });
     loadSessionEntryMock.mockReturnValue({ storePath, entry: undefined });
 
     await cleanupManagedOutgoingImageRecords({ stateDir });
@@ -1559,8 +1519,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       cleanupManagedOutgoingImageRecords({ stateDir }),
     );
 
-    expect(await readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
-    await fs.access(fixture.originalPath);
+    await expectRetained(stateDir, fixture);
     expect(loadSessionEntryMock).not.toHaveBeenCalled();
     expect(readSessionMessagesMock).not.toHaveBeenCalled();
   });
@@ -1574,34 +1533,20 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       attachmentId: "22222222-2222-4222-8222-222222222222",
       filename: "att-2.png",
     });
-    loadSessionEntryMock.mockReturnValue({
-      storePath: path.join(stateDir, "gateway-sessions.json"),
-      entry: { sessionId: "sess-main", sessionFile: "/tmp/sess-main.jsonl" },
-    });
-    readSessionMessagesMock.mockReturnValue([
-      {
-        __openclaw: { id: "msg-1" },
-        content: [
-          {
-            type: "image",
-            url: `/api/chat/media/outgoing/${encodeURIComponent(firstFixture.sessionKey)}/${firstFixture.attachmentId}/full`,
-            openUrl: `/api/chat/media/outgoing/${encodeURIComponent(firstFixture.sessionKey)}/${firstFixture.attachmentId}/full`,
-          },
-          {
-            type: "image",
-            url: `/api/chat/media/outgoing/${encodeURIComponent(secondFixture.sessionKey)}/${secondFixture.attachmentId}/full`,
-            openUrl: `/api/chat/media/outgoing/${encodeURIComponent(secondFixture.sessionKey)}/${secondFixture.attachmentId}/full`,
-          },
-        ],
-      },
+    mockHistory("sess-main", "/tmp/sess-main.jsonl", [
+      assistantMessage(
+        [firstFixture, secondFixture].map((fixture) => ({
+          type: "image",
+          url: mediaPath(fixture),
+          openUrl: mediaPath(fixture),
+        })),
+      ),
     ]);
 
     await cleanupManagedOutgoingImageRecords({ stateDir });
 
-    expect(await readManagedImageRecord(firstFixture.attachmentId, stateDir)).not.toBeNull();
-    expect(await readManagedImageRecord(secondFixture.attachmentId, stateDir)).not.toBeNull();
-    await fs.access(firstFixture.originalPath);
-    await fs.access(secondFixture.originalPath);
+    await expectRetained(stateDir, firstFixture);
+    await expectRetained(stateDir, secondFixture);
     expect(readSessionMessagesMock).toHaveBeenCalledTimes(1);
   });
 
@@ -1630,10 +1575,8 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       forceDeleteSessionRecords: true,
     });
 
-    expect(await readManagedImageRecord(deletedFixture.attachmentId, stateDir)).toBeNull();
-    await expectPathMissing(deletedFixture.originalPath);
-    expect(await readManagedImageRecord(retainedFixture.attachmentId, stateDir)).not.toBeNull();
-    await fs.access(retainedFixture.originalPath);
+    await expectDeleted(stateDir, deletedFixture);
+    await expectRetained(stateDir, retainedFixture);
   });
 
   it("retains other selected-agent global records during scoped cleanup", async () => {
@@ -1641,16 +1584,13 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       agents: { entries: { main: {}, work: {} } },
       session: { store: path.join(stateDir, "sessions.sqlite") },
     });
-    await replaceTestSessionEntry(
-      {
-        agentId: "main",
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-        sessionKey: "global",
-        storePath: path.join(stateDir, "sessions.sqlite"),
-      },
-      { sessionId: "sess-main-global", updatedAt: Date.now() },
+    await seedSession(
+      stateDir,
+      "main",
+      "global",
+      "sess-main-global",
+      path.join(stateDir, "sessions.sqlite"),
     );
-    closeOpenClawAgentDatabasesForTest();
     const retainedFixture = await createFixture(stateDir, {
       sessionKey: "global",
       agentId: "work",
@@ -1661,11 +1601,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       agentId: "main",
       attachmentId: "66666666-6666-4666-8666-666666666666",
     });
-    loadSessionEntryMock.mockReturnValue({
-      storePath: path.join(stateDir, "gateway-sessions.json"),
-      entry: { sessionId: "sess-main-global", sessionFile: "/tmp/global-main.jsonl" },
-    });
-    readSessionMessagesMock.mockReturnValue([]);
+    mockHistory("sess-main-global", "/tmp/global-main.jsonl");
 
     await cleanupManagedOutgoingImageRecords({
       stateDir,
@@ -1673,10 +1609,8 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       agentId: "main",
     });
 
-    expect(await readManagedImageRecord(deletedFixture.attachmentId, stateDir)).toBeNull();
-    expect(await readManagedImageRecord(retainedFixture.attachmentId, stateDir)).not.toBeNull();
-    await fs.access(retainedFixture.originalPath);
-    await expectPathMissing(deletedFixture.originalPath);
+    await expectDeleted(stateDir, deletedFixture);
+    await expectRetained(stateDir, retainedFixture);
   });
 
   it("uses the recorded owner for unscoped session keys", async () => {
@@ -1690,36 +1624,19 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       session: { store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json") },
     });
     prepareAgentSessionStore(stateDir, "work");
-    await replaceTestSessionEntry(
-      {
-        agentId: "work",
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-        sessionKey,
-      },
-      { sessionId: "sess-work", updatedAt: Date.now() },
-    );
-    closeOpenClawAgentDatabasesForTest();
+    await seedSession(stateDir, "work", sessionKey, "sess-work");
     loadSessionEntryMock.mockReturnValue({
       storePath: path.join(stateDir, "agents", "work", "sessions", "sessions.json"),
       entry: { sessionId: "sess-work", sessionFile: "/tmp/work.jsonl" },
     });
     readSessionMessagesMock.mockReturnValue([
-      {
-        __openclaw: { id: "msg-1" },
-        content: [
-          {
-            type: "image",
-            url: `/api/chat/media/outgoing/${fixture.sessionKey}/${fixture.attachmentId}/full`,
-          },
-        ],
-      },
+      assistantMessage([{ type: "image", url: mediaPath(fixture) }]),
     ]);
 
     await cleanupManagedOutgoingImageRecords({ stateDir });
 
     expect(readSessionMessagesMock).toHaveBeenCalled();
-    expect(await readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
-    await fs.access(fixture.originalPath);
+    await expectRetained(stateDir, fixture);
   });
 
   it("treats legacy unscoped global records as the configured default agent", async () => {
@@ -1728,29 +1645,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     });
     getRuntimeConfigMock.mockReturnValue(config);
     prepareAgentSessionStore(stateDir, "work");
-    await replaceTestSessionEntry(
-      {
-        agentId: "work",
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-        sessionKey: "global",
-      },
-      { sessionId: "sess-work-global", updatedAt: Date.now() },
-    );
-    closeOpenClawAgentDatabasesForTest();
-    expect(
-      resolveExistingAgentSessionStoreTargetsReadOnlyResult(config, "work", {
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      }),
-    ).toMatchObject({ available: true });
-    const { loadExactSessionEntryReadOnlyResult } =
-      await import("../config/sessions/session-accessor.sqlite-entry-availability.js");
-    expect(
-      loadExactSessionEntryReadOnlyResult({
-        agentId: "work",
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-        sessionKey: "global",
-      }),
-    ).toMatchObject({ found: true, value: { sessionKey: "global" } });
+    await seedSession(stateDir, "work", "global", "sess-work-global");
     const deletedFixture = await createFixture(stateDir, {
       sessionKey: "global",
       attachmentId: "88888888-8888-4888-8888-888888888888",
@@ -1760,11 +1655,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       agentId: "main",
       attachmentId: "99999999-9999-4999-8999-999999999999",
     });
-    loadSessionEntryMock.mockReturnValue({
-      storePath: path.join(stateDir, "gateway-sessions.json"),
-      entry: { sessionId: "sess-work-global", sessionFile: "/tmp/global-work.jsonl" },
-    });
-    readSessionMessagesMock.mockReturnValue([]);
+    mockHistory("sess-work-global", "/tmp/global-work.jsonl");
 
     await cleanupManagedOutgoingImageRecords({
       stateDir,
@@ -1773,10 +1664,8 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     });
 
     expect(readSessionMessagesMock).toHaveBeenCalled();
-    expect(await readManagedImageRecord(deletedFixture.attachmentId, stateDir)).toBeNull();
-    expect(await readManagedImageRecord(retainedFixture.attachmentId, stateDir)).not.toBeNull();
-    await expectPathMissing(deletedFixture.originalPath);
-    await fs.access(retainedFixture.originalPath);
+    await expectDeleted(stateDir, deletedFixture);
+    await expectRetained(stateDir, retainedFixture);
   });
 
   it("retains ownerless global records when no compatibility owner exists", async () => {
@@ -1793,8 +1682,7 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       sessionKey: "global",
     });
 
-    expect(await readManagedImageRecord(fixture.attachmentId, stateDir)).not.toBeNull();
-    await fs.access(fixture.originalPath);
+    await expectRetained(stateDir, fixture);
     expect(loadSessionEntryMock).not.toHaveBeenCalled();
     expect(readSessionMessagesMock).not.toHaveBeenCalled();
   });

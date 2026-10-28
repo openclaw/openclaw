@@ -8,7 +8,6 @@ import type {
 } from "../auto-reply/reply/reply-dispatcher.types.js";
 import type { PrepareAssistantTranscriptMessage } from "../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import type { InstallPolicyRequestKind as PluginInstallRequestKind } from "../security/install-policy.js";
 import type {
   PluginHookAgentContext,
@@ -30,18 +29,20 @@ import type {
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
 } from "./hook-gateway.types.js";
+import type { AsyncPluginHook } from "./hook-handler.types.js";
 import type {
+  PluginMessageHookHandlerMap,
+  PluginHookMessageContext,
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
-  PluginHookMessageContext,
-  PluginHookMessageReceivedEvent,
-  PluginHookMessageSendingEvent,
-  PluginHookMessageSendingResult,
-  PluginHookMessageSentEvent,
 } from "./hook-message.types.js";
 import type { PluginHookReplyDispatchEvent } from "./hook-reply-dispatch-event.types.js";
 import type { PluginHookSkillChangedEvent, PluginHookSkillContext } from "./hook-skill.types.js";
-import type { PluginJsonValue } from "./host-hook-json.js";
+import type {
+  PluginHookToolKind,
+  PluginHookToolInputKind,
+  PluginHookToolContext,
+} from "./hook-tool-context.types.js";
 import type {
   PluginAgentTurnPrepareEvent,
   PluginAgentTurnPrepareResult,
@@ -128,6 +129,7 @@ export const PLUGIN_HOOK_METADATA: Readonly<Record<PluginHookName, PluginHookMet
   before_compaction: { voidTimeoutMs: 30_000 },
   after_compaction: { voidTimeoutMs: 30_000 },
   before_reset: {},
+  before_channel_ingress: { conversationAccess: true, modifyingTimeoutMs: 15_000 },
   inbound_claim: {},
   channel_pairing_requested: { voidTimeoutMs: 2_000 },
   message_received: {},
@@ -525,46 +527,12 @@ export type PluginHookReplyPayloadSendingResult = {
   reason?: string;
 };
 
-export type PluginHookToolKind = "code_mode_exec";
-export type PluginHookToolInputKind = "javascript" | "typescript";
-
-/** Host-derived identity for the message requester that initiated a tool call. */
-export type PluginHookToolRequesterContext = {
-  /** Channel/plugin id, for example `discord` or `telegram`. */
-  readonly channel?: string;
-  /** Channel account used by the agent when multiple accounts are configured. */
-  readonly accountId?: string;
-  /** Channel-scoped sender id when the host received one. */
-  readonly senderId?: string;
-  /** True only when the host resolved the sender as an owner. */
-  readonly senderIsOwner?: boolean;
-  /** Provider-native role ids when the channel supplies them. */
-  readonly roleIds?: readonly string[];
-};
-
-export type PluginHookToolContext = {
-  agentId?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  runId?: string;
-  /** Aborts when the owning tool call is cancelled. Hook timeout expiry does not abort this signal. */
-  abortSignal?: AbortSignal;
-  trace?: DiagnosticTraceContext;
-  toolName: string;
-  /** Host-authoritative discriminator for tools that intentionally share names. */
-  toolKind?: PluginHookToolKind;
-  /** Host-authoritative input/runtime family for tools whose payloads need policy distinction. */
-  toolInputKind?: PluginHookToolInputKind;
-  toolCallId?: string;
-  getSessionExtension?: (namespace: string) => PluginJsonValue | undefined;
-  channelId?: string;
-  /**
-   * Message requester for this turn. Absent for non-message runs and harnesses
-   * that cannot prove requester identity. Authorization hooks should fail
-   * closed when a required field is absent.
-   */
-  requester?: PluginHookToolRequesterContext;
-};
+export type {
+  PluginHookToolKind,
+  PluginHookToolInputKind,
+  PluginHookToolRequesterContext,
+  PluginHookToolContext,
+} from "./hook-tool-context.types.js";
 
 export type PluginHookBeforeToolCallEvent = {
   toolName: string;
@@ -766,6 +734,7 @@ export type PluginHookBeforeInstallRequest = {
   requestedSpecifier?: string;
 };
 
+/** @public Part of the stable native plugin contract facade. */
 export type PluginHookBeforeInstallBuiltinScan = {
   status: "ok" | "error";
   scannedFiles: number;
@@ -843,12 +812,7 @@ export type PluginHookResolveExecEnvEvent = {
 
 export type PluginHookResolveExecEnvContext = PluginHookAgentContext;
 
-type AsyncPluginHook<Event, Context, Result = void> = (
-  event: Event,
-  ctx: Context,
-) => Promise<Result | void> | Result | void;
-
-export type PluginHookHandlerMap = {
+export type PluginHookHandlerMap = PluginMessageHookHandlerMap & {
   agent_turn_prepare: AsyncPluginHook<
     PluginAgentTurnPrepareEvent,
     PluginHookAgentContext,
@@ -906,13 +870,6 @@ export type PluginHookHandlerMap = {
     PluginHookReplyPayloadSendingContext,
     PluginHookReplyPayloadSendingResult
   >;
-  message_received: AsyncPluginHook<PluginHookMessageReceivedEvent, PluginHookMessageContext>;
-  message_sending: AsyncPluginHook<
-    PluginHookMessageSendingEvent,
-    PluginHookMessageContext,
-    PluginHookMessageSendingResult
-  >;
-  message_sent: AsyncPluginHook<PluginHookMessageSentEvent, PluginHookMessageContext>;
   before_tool_call: AsyncPluginHook<
     PluginHookBeforeToolCallEvent,
     PluginHookToolContext,

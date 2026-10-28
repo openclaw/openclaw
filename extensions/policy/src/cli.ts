@@ -55,7 +55,7 @@ export function registerPolicyCli(program: Command): void {
     .option("--agent <id>", "Agent id for relative policy workspace paths")
     .option("--json", "Emit JSON output")
     .action(async (options: PolicyCompareOptions) => {
-      process.exitCode = await runPolicyCommand(async () => {
+      process.exitCode = await runPolicyCommand(options, async () => {
         if (options.baseline === undefined || options.baseline.trim() === "") {
           throw new Error("Missing required --baseline value.");
         }
@@ -76,7 +76,7 @@ export function registerPolicyCli(program: Command): void {
     .option("--json", "Emit JSON output")
     .option("--severity-min <severity>", "Minimum severity: info, warning, or error")
     .action(async (options: PolicyCheckOptions) => {
-      process.exitCode = await runPolicyCommand(async () => {
+      process.exitCode = await runPolicyCommand(options, async () => {
         const report = await buildPolicyCheckReport(options, "policy check");
         writePolicyCheckReport(report, options);
         return report.exitCode;
@@ -92,14 +92,14 @@ export function registerPolicyCli(program: Command): void {
     .option("--interval-ms <ms>", "Polling interval in milliseconds")
     .option("--once", "Run one watch evaluation and exit")
     .action(async (options: PolicyWatchOptions) => {
-      process.exitCode = await runPolicyCommand(async () => {
+      process.exitCode = await runPolicyCommand(options, async () => {
         const intervalMs = normalizeWatchIntervalMs(options.intervalMs);
         let previousKey: string | undefined;
         for (;;) {
           const report = await buildPolicyCheckReport(options, "policy watch");
           const status = policyWatchStatus(report);
           const key = `${status}:${report.attestation?.attestationHash ?? ""}:${report.exitCode}`;
-          if (previousKey === undefined || previousKey !== key || options.once === true) {
+          if (previousKey !== key || options.once === true) {
             writePolicyWatchReport(report, status, options);
             previousKey = key;
           }
@@ -112,11 +112,19 @@ export function registerPolicyCli(program: Command): void {
     });
 }
 
-async function runPolicyCommand(run: () => Promise<number>): Promise<number> {
+async function runPolicyCommand(
+  options: { readonly json?: boolean },
+  run: () => Promise<number>,
+): Promise<number> {
   try {
     return await run();
   } catch (err) {
-    cliRuntime.error(err instanceof Error ? err.message : String(err));
+    const message = err instanceof Error ? err.message : String(err);
+    if (options.json === true || !process.stdout.isTTY) {
+      // Watch may have emitted reports already; keep its terminal error on one NDJSON line.
+      cliRuntime.writeJson({ ok: false, error: { type: "cli_error", message } }, 0);
+    }
+    cliRuntime.error(message);
     return 2;
   }
 }

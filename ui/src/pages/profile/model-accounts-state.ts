@@ -45,6 +45,7 @@ export class ModelAccountsState {
   nextCursor: string | undefined;
   inventoryLoading = false;
   inventoryError: string | null = null;
+  inventoryReceipt = { result: Promise.resolve<string | null>(null) };
   action: AccountAction | null = null;
   error: string | null = null;
   notice: "connected" | "cancelled" | "expired" | "selected" | "cleared" | null = null;
@@ -57,6 +58,19 @@ export class ModelAccountsState {
   connectFlow: (UsersAuthConnectStartResult & { step?: WizardStep }) | null = null;
   stepValue: unknown;
   statusUnavailable = false;
+  catalogReceipt = { result: Promise.resolve<string | null>(null) };
+  statusReceipt = { result: Promise.resolve<string | null>(null) };
+
+  private actionLifetime = Promise.withResolvers<void>();
+
+  get actionRetired() {
+    return this.actionLifetime.promise;
+  }
+
+  private retireAction() {
+    this.actionLifetime.resolve();
+    this.actionLifetime = Promise.withResolvers<void>();
+  }
 
   target: AccountTarget | null = null;
   generation = 0;
@@ -70,6 +84,7 @@ export class ModelAccountsState {
     readonly publish: () => void,
   ) {}
   dispose() {
+    this.actionLifetime.resolve();
     this.connected = false;
     this.generation += 1;
     this.target = null;
@@ -108,11 +123,15 @@ export class ModelAccountsState {
     if (sameTarget && !connectionChanged) {
       return;
     }
+    this.retireAction();
     this.generation += 1;
     this.stopPoll();
     this.inventoryRequest += 1;
     this.inventoryLoading = false;
     this.inventoryError = null;
+    this.inventoryReceipt = { result: Promise.resolve<string | null>(null) };
+    this.catalogReceipt = { result: Promise.resolve(null) };
+    this.statusReceipt = { result: Promise.resolve(null) };
     this.action = null;
     this.error = null;
     this.notice = null;
@@ -143,17 +162,23 @@ export class ModelAccountsState {
     }));
   }
 
-  async loadAccounts(cursor?: string) {
+  loadAccounts(cursor?: string): Promise<void> {
     const target = this.target;
     if (!target || !this.connected) {
-      return;
+      return Promise.resolve();
     }
     const request = ++this.inventoryRequest;
-    const isCurrent = () =>
-      this.connected && this.target === target && request === this.inventoryRequest;
     this.inventoryLoading = true;
     this.inventoryError = null;
+    const result = this.readAccounts(target, request, cursor);
+    this.inventoryReceipt = { result };
     this.publish();
+    return result.then(() => {});
+  }
+
+  private async readAccounts(target: AccountTarget, request: number, cursor?: string) {
+    const isCurrent = () =>
+      this.connected && this.target === target && request === this.inventoryRequest;
     try {
       const result = await target.client.request<UsersListModelAccountsResult>(
         "users.listModelAccounts",
@@ -164,10 +189,13 @@ export class ModelAccountsState {
         this.nextCursor = result.nextCursor;
         this.applyLinks(result.links);
       }
+      return null;
     } catch (error) {
       if (isCurrent()) {
         this.inventoryError = formatUiError(error);
+        return this.inventoryError;
       }
+      return null;
     } finally {
       if (isCurrent()) {
         this.inventoryLoading = false;
@@ -193,6 +221,7 @@ export class ModelAccountsState {
     ) {
       return;
     }
+    this.retireAction();
     const generation = ++this.generation;
     this.stopPoll();
     this.action = action;
@@ -220,14 +249,14 @@ export class ModelAccountsState {
 
   updateAccount(action: "link" | "unlink" | "select", value: string) {
     if (action === "link" && (!value || !this.target?.canAdmin)) {
-      return;
+      return undefined;
     }
     const methods = {
       link: "users.linkAuthProfile",
       unlink: "users.unlinkAuthProfile",
       select: "users.selectModelAccount",
     };
-    void this.runAction(
+    return this.runAction(
       "request",
       (target) =>
         target.client.request<UsersListAuthLinksResult>(methods[action], {
@@ -247,7 +276,7 @@ export class ModelAccountsState {
 
   openSignIn() {
     this.signIn = { providers: [], provider: "", method: "" };
-    void this.runAction(
+    const pending = this.runAction(
       "request",
       (target) =>
         target.client.request<UsersAuthConnectCatalogResult>("users.authConnect.catalog", {
@@ -257,6 +286,11 @@ export class ModelAccountsState {
         this.signIn = { providers: result.providers, provider: "", method: "" };
       },
     );
+    const generation = this.generation;
+    this.catalogReceipt = {
+      result: pending.then(() => (this.generation === generation ? this.error : null)),
+    };
+    this.publish();
   }
 
   selectProvider(provider: string) {
@@ -281,9 +315,9 @@ export class ModelAccountsState {
           provider.methods.some((method) => method.id === choice.method),
       )
     ) {
-      return;
+      return undefined;
     }
-    void this.runAction(
+    return this.runAction(
       "request",
       (target) =>
         target.client.request<UsersAuthConnectStartResult>("users.authConnect.start", {
@@ -331,9 +365,9 @@ export class ModelAccountsState {
   connectStatus(action: "cancel" | "status") {
     const flow = this.connectFlow;
     if (!flow) {
-      return;
+      return undefined;
     }
-    void this.runAction(
+    const pending = this.runAction(
       action === "status" ? "request" : action,
       (target) =>
         target.client.request<UsersAuthConnectStatusResult>(`users.authConnect.${action}`, {
@@ -342,19 +376,36 @@ export class ModelAccountsState {
         }),
       (result) => this.applyConnectStatus(result),
     );
+    if (action === "status") {
+      const generation = this.generation;
+      this.statusReceipt = {
+        result: pending.then(() => {
+          if (this.generation !== generation) {
+            return null;
+          }
+          if (this.error && this.connectFlow) {
+            this.statusUnavailable = true;
+            this.publish();
+          }
+          return this.error;
+        }),
+      };
+      this.publish();
+    }
+    return pending;
   }
 
   answerStep(stepId: string, value: unknown) {
     const flow = this.connectFlow;
     const step = flow?.step;
     if (!this.connected || !flow || !step || step.id !== stepId || step.type === "progress") {
-      return;
+      return undefined;
     }
     // Do not retain submitted secrets while the Gateway runs the provider-owned step.
     if (step.sensitive) {
       this.stepValue = undefined;
     }
-    void this.runAction(
+    return this.runAction(
       "answer",
       (target) =>
         target.client.request<UsersAuthConnectStatusResult>("users.authConnect.answer", {

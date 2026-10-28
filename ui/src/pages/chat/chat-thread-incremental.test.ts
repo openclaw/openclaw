@@ -5,6 +5,7 @@ import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import * as displayText from "../../lib/strip-thinking-tags.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
 import * as duplicatePreparation from "./chat-thread-duplicates.ts";
+import { createProps } from "./chat-thread.test-support.ts";
 import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
 
 function deepFreeze(value: unknown): void {
@@ -170,7 +171,13 @@ describe("incremental history build equivalence", () => {
 
     const groups = warmPrepended.filter((item) => item.kind === "group");
     const entries = groups.flatMap((group) => group.messages);
-    expect(entries.some((entry) => entry.duplicateCount === 2)).toBe(true);
+    expect(
+      entries.filter((entry) =>
+        normalizeMessage(entry.message).content.some(
+          (block) => block.type === "text" && block.text === "Needle repeated update",
+        ),
+      ),
+    ).toHaveLength(2);
     expect(
       entries.some((entry) =>
         normalizeMessage(entry.message).content.some((block) => block.type === "canvas"),
@@ -200,19 +207,14 @@ it("does not re-strip retained display payloads when older history is prepended"
   const strip = vi.spyOn(displayText, "stripThinkingTags");
   const preparation = vi.spyOn(duplicatePreparation, "prepareMessagesForGrouping");
   try {
-    const props: BuildChatItemsProps = {
+    const props = createProps({
       paneId: "prepend-work",
       sessionKey: "prepend-work",
       messages: [
         message("recent-user", "user", 10, "Recent request"),
         message("recent-answer", "assistant", 11, "Recent answer"),
       ],
-      toolMessages: [],
-      streamSegments: [],
-      stream: null,
-      streamStartedAt: null,
-      showToolCalls: true,
-    };
+    });
     buildCachedChatItems(props);
     strip.mockClear();
     preparation.mockClear();
@@ -245,16 +247,11 @@ it("recomputes shared reply attribution without annotating retained grouping seg
     const alice = message("alice", "user", 10, "Alice request", {
       __openclaw: { id: "alice", seq: 10, senderId: "alice", senderName: "Alice" },
     });
-    const props: BuildChatItemsProps = {
+    const props = createProps({
       paneId: "prepend-people",
       sessionKey: "prepend-people",
       messages: [alice, message("answer", "assistant", 11, "Alice answer")],
-      toolMessages: [],
-      streamSegments: [],
-      stream: null,
-      streamStartedAt: null,
-      showToolCalls: true,
-    };
+    });
     const answer = (items: ReturnType<typeof buildCachedChatItems>) =>
       items.findLast((item) => item.kind === "group" && item.role === "assistant");
     const initial = answer(buildCachedChatItems(props));
@@ -291,16 +288,9 @@ it("groups consecutive forwarded turns with linear source work", () => {
         provenance: { kind: "inter_session", sourceTool: "sessions_send" },
       }),
     );
-    const items = buildChatItems({
-      paneId: "forwarded-work",
-      sessionKey: "forwarded-work",
-      messages,
-      toolMessages: [],
-      streamSegments: [],
-      stream: null,
-      streamStartedAt: null,
-      showToolCalls: true,
-    });
+    const items = buildChatItems(
+      createProps({ paneId: "forwarded-work", sessionKey: "forwarded-work", messages }),
+    );
     expect(items.filter((item) => item.kind === "group")).toHaveLength(messages.length);
     expect(preparation.mock.calls.reduce((count, [source]) => count + source.length, 0)).toBe(
       messages.length,
@@ -319,16 +309,13 @@ it("retires superseded grouping snapshots when prepends extend a forwarded segme
       }),
     );
     const build = (count: number) =>
-      buildChatItems({
-        paneId: "forwarded-retention",
-        sessionKey: "forwarded-retention",
-        messages: messages.slice(-count),
-        toolMessages: [],
-        streamSegments: [],
-        stream: null,
-        streamStartedAt: null,
-        showToolCalls: true,
-      });
+      buildChatItems(
+        createProps({
+          paneId: "forwarded-retention",
+          sessionKey: "forwarded-retention",
+          messages: messages.slice(-count),
+        }),
+      );
     for (const count of [6, 12, 18, 24]) {
       expect(build(count).filter((item) => item.kind === "group")).toHaveLength(count);
     }

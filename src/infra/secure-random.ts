@@ -47,9 +47,6 @@ export function generateSecureFraction(): number {
 }
 
 /** Generates a cryptographically secure integer in `[0, maxExclusive)`. */
-export function generateSecureInt(maxExclusive: number): number;
-/** Generates a cryptographically secure integer in `[minInclusive, maxExclusive)`. */
-export function generateSecureInt(minInclusive: number, maxExclusive: number): number;
-export function generateSecureInt(a: number, b?: number): number {
-  return typeof b === "number" ? randomInt(a, b) : randomInt(a);
+export function generateSecureInt(maxExclusive: number): number {
+  return randomInt(maxExclusive);
 }

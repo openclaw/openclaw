@@ -9,6 +9,9 @@ read_when:
 
 ## Test performance tooling
 
+For a busy Gateway's New Session → ACK → first assistant delta → first tool
+start waterfall, use the [session-start measurement harness](/reference/session-start-measurement).
+
 - `pnpm test:perf:imports`: enables Vitest import-duration + import-breakdown reporting, while still using scoped lane routing for explicit file/directory targets. `pnpm test:perf:imports:changed` scopes the same profiling to files changed since `origin/main`.
 - `pnpm test:perf:changed:bench -- --ref <git-ref>` benchmarks the routed changed-mode path against the native root-project run for the same committed git diff; `pnpm test:perf:changed:bench -- --worktree` benchmarks the current worktree change set without committing first.
 - `pnpm test:perf:profile:main` writes a CPU profile for the Vitest main thread; `pnpm test:perf:profile:runner` writes CPU + heap profiles for each unit worker. Both print their output directory (a temporary directory by default). Use `-- --output-dir <dir>` or `OPENCLAW_VITEST_PROFILE_DIR` to retain profiles at a chosen location.
@@ -373,6 +376,9 @@ cache is warm.
 Workspace inventory inspection, raw manifest parsing and comparison, and bulk file
 hashing use a bounded computation pool on the Gateway and node. Decoded manifests
 are compared synchronously against typed entries without another inventory copy.
+Reconciliation prepares the source difference once and sends changed nodes and
+their ancestors to each preflight. Each preflight still inspects the target
+filesystem again before mutation or acceptance; it does not reuse local node state.
 Independent workspaces can progress while the main thread serves requests. The
 host owns session authority, workspace mutations, Git subprocesses, and durable
 acceptance; cancellation joins outstanding work before cleanup.
@@ -403,6 +409,19 @@ event-loop delay, memory, and HTTP latency from an external check. Worker task
 diagnostics distinguish queueing, input preparation, transfer, and execution.
 The HTTP check measures responsiveness of the computation's owning process;
 paired-node wire tests provide the full Gateway dispatch and reconciliation proof.
+
+Use `--scenarios reconcile --sizes 20000 --changed-files 100 --file-bytes 128`
+to measure sparse checkpoint updates through real Git patch application and
+accepted-manifest verification. This scenario creates real files sequentially
+and uses an in-memory journal adapter. It does not simulate a watcher trigger or
+measure a full Gateway. `--sampling-interval 32768` samples main-isolate allocations,
+including collected objects; run CPU comparisons separately with sampling disabled.
+
+For externally coordinated comparisons, seed each side with `--prepare-root <dir>`,
+then measure using `--reuse-root <dir>` and matching workload options. `--start-at`
+sets the epoch time for the first warm measurement, after cold and warmup calls.
+`--source-commit <sha>` permits a single archived source tree without Git metadata;
+the report labels that revision as operator-supplied and unverified.
 
 </Accordion>
 

@@ -228,7 +228,10 @@ it("continues a persistent upstream fork on its secondary home and native model 
     const binding = await startOrResumeThread({
       bindingStore,
       client: selected.client,
-      params: { ...attempt, authProfileId: connection.requestAuthProfileId },
+      params: {
+        ...attempt,
+        authProfileId: connection.usesSupervisionConnection ? undefined : attempt.authProfileId,
+      },
       cwd: root,
       appServer: connection.appServer,
       dynamicTools,

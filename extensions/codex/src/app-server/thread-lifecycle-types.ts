@@ -16,7 +16,6 @@ import type {
 } from "./session-binding.js";
 import type { CodexThreadConfigurationOptions } from "./thread-configuration-options.js";
 import type { CodexContextEngineThreadBootstrapProjection } from "./thread-context-engine.js";
-import type { CodexThreadLifecycleTimingOptions } from "./thread-lifecycle-timing.js";
 
 type CodexAppServerThreadLifecycle = {
   action: "started" | "resumed" | "forked";
@@ -109,7 +108,6 @@ export type CodexStartOrResumeThreadParams = Omit<
    * before `client` wrote thread state, so the caller may keep `client`.
    */
   onPrewriteHandoffCancelled?: () => void;
-  timing?: CodexThreadLifecycleTimingOptions;
 };
 
 export type CodexThreadResumePreparation = {

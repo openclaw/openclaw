@@ -8,6 +8,8 @@ title: "General troubleshooting"
 
 Triage front door. 2 minutes to a diagnosis, then jump to the deep page.
 
+For official OpenClaw support, visit [community.openclaw.ai](https://community.openclaw.ai/). See [Get support](/help/support) for safe diagnostics and separate bug and security reporting routes.
+
 ## First 60 seconds
 
 Run this ladder in order:
@@ -50,7 +52,7 @@ openclaw doctor
 
 Common causes:
 
-- `tools.profile: "minimal"` allows `session_status` and update-only `gateway`.
+- `tools.profile: "minimal"` allows `session_status` and `gateway` maintenance (`update.run`, `restart`, and `update.cleanup`), but not configuration reads.
 - `tools.profile: "messaging"` is narrow, for chat-only agents.
 - `tools.profile: "coding"` selects repo, file, shell, and runtime work.
 - `tools.profile: "full"` is the local onboarding default. It removes core profile

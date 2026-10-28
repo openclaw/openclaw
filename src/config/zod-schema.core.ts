@@ -348,6 +348,8 @@ const ModelProviderSchema = z.strictObject({
   agentRuntime: AgentRuntimePolicySchema,
   /** Optional local service to start before calling this provider. */
   localService: ModelProviderLocalServiceSchema,
+  /** Override locality for watchdog timing only, including localService-managed relays. */
+  remote: z.boolean().optional(),
   /** Secret-bearing headers merged into provider requests. */
   headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
   /** Whether default Authorization header injection is enabled. */
@@ -414,6 +416,7 @@ export const ModelsConfigSchema = z
     mode: z.union([z.literal("merge"), z.literal("replace")]).optional(),
     providers: ModelProvidersSchema.optional(),
     catalogRefresh: ModelCatalogRefreshConfigSchema,
+    usage: z.strictObject({ cacheTtlMs: z.number().int().nonnegative().optional() }).optional(),
   })
   .optional();
 

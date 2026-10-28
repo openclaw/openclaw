@@ -140,57 +140,65 @@ async function readNativeCredential(
   if (client.getRuntimeIdentity()?.codexHome !== home) {
     return undefined;
   }
-  const revision = client.getModelCatalogRevision();
-  const configured = await client.request<CodexConfigReadResponse>(
-    "config/read",
-    { includeLayers: false, cwd: home },
-    { signal },
-  );
-  const required = await client.request<CodexConfigRequirementsReadResponse>(
-    "configRequirements/read",
-    {},
-    { signal },
-  );
-  // The native requirements override configuration; File is the pinned dependency's default.
-  const mode =
-    required.requirements?.cli_auth_credentials_store ??
-    configured.config.cli_auth_credentials_store ??
-    "file";
-  let record: Record<string, unknown> | undefined;
-  if (mode === "file") {
-    record = await readAuthFile(home);
-  } else if ((mode === "keyring" || mode === "auto") && process.platform === "darwin") {
-    const encrypted = await readCodexExperimentalFeature(
-      (params) =>
-        client.request<CodexExperimentalFeatureListResponse>("experimentalFeature/list", params, {
-          signal,
-        }),
-      "secret_auth_storage",
+  // Startup can announce account/updated during inspection. Retry one invalidated
+  // snapshot within the same deadline, including native storage selection.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const revision = client.getModelCatalogRevision();
+    const configured = await client.request<CodexConfigReadResponse>(
+      "config/read",
+      { includeLayers: false, cwd: home },
+      { signal },
     );
-    if (encrypted !== false) {
+    const required = await client.request<CodexConfigRequirementsReadResponse>(
+      "configRequirements/read",
+      {},
+      { signal },
+    );
+    // The native requirements override configuration; File is the pinned dependency's default.
+    const mode =
+      required.requirements?.cli_auth_credentials_store ??
+      configured.config.cli_auth_credentials_store ??
+      "file";
+    let record: Record<string, unknown> | undefined;
+    if (mode === "file") {
+      record = await readAuthFile(home);
+    } else if ((mode === "keyring" || mode === "auto") && process.platform === "darwin") {
+      const encrypted = await readCodexExperimentalFeature(
+        (params) =>
+          client.request<CodexExperimentalFeatureListResponse>("experimentalFeature/list", params, {
+            signal,
+          }),
+        "secret_auth_storage",
+      );
+      if (encrypted !== false) {
+        return undefined;
+      }
+      record = await readDirectKeyring(home, signal);
+    }
+    signal.throwIfAborted();
+    if (!record) {
       return undefined;
     }
-    record = await readDirectKeyring(home, signal);
-  }
-  signal.throwIfAborted();
-  if (!record) {
-    return undefined;
-  }
-  const oauth = options.credentialKind === "api_key" ? undefined : parseOAuthCredential(record);
-  let apiKey = options.credentialKind === "oauth" ? undefined : parseApiKeyCredential(record);
-  if (apiKey) {
-    // Account lookup gates the API key only; legacy OAuth remains independently importable.
-    const account = await client
-      .request<CodexGetAccountResponse>("account/read", { refreshToken: false }, { signal })
-      .catch(() => undefined);
-    if (account?.account?.type !== "apiKey" || !account.requiresOpenaiAuth) {
-      apiKey = undefined;
+    const oauth = options.credentialKind === "api_key" ? undefined : parseOAuthCredential(record);
+    let apiKey = options.credentialKind === "oauth" ? undefined : parseApiKeyCredential(record);
+    if (apiKey) {
+      // Account lookup gates the API key only; legacy OAuth remains independently importable.
+      const account = await client
+        .request<CodexGetAccountResponse>("account/read", { refreshToken: false }, { signal })
+        .catch(() => undefined);
+      if (account?.account?.type !== "apiKey" || !account.requiresOpenaiAuth) {
+        apiKey = undefined;
+      }
+    }
+    signal.throwIfAborted();
+    if (client.getCloseError()) {
+      return undefined;
+    }
+    if (client.getModelCatalogRevision() === revision) {
+      return { ...(oauth ? { oauth } : {}), ...(apiKey ? { apiKey } : {}) };
     }
   }
-  signal.throwIfAborted();
-  return !client.getCloseError() && client.getModelCatalogRevision() === revision
-    ? { ...(oauth ? { oauth } : {}), ...(apiKey ? { apiKey } : {}) }
-    : undefined;
+  return undefined;
 }
 
 function jwtExpiry(token: string): number | undefined {

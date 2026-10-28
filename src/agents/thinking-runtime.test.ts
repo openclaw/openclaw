@@ -7,6 +7,7 @@ import {
 } from "./harness/registry.js";
 import { restoreRegisteredAgentHarnesses } from "./harness/registry.test-support.js";
 import type { AgentHarness } from "./harness/types.js";
+import { configFor } from "./model-auth.fixtures.test-support.js";
 import {
   hasResolvedThinkingCatalogEntry,
   resolveCandidateThinkingLevel,
@@ -147,16 +148,7 @@ describe("resolveEffectiveAgentRuntime", () => {
   it("resolves residual auto to OpenClaw when no plugin harness is registered", () => {
     expect(
       resolveEffectiveAgentRuntime({
-        cfg: {
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "http://127.0.0.1:8080/v1",
-                models: [],
-              },
-            },
-          },
-        },
+        cfg: configFor("openai", "http://127.0.0.1:8080/v1"),
         provider: "openai",
         modelId: "gpt-5.6-luna",
       }),
@@ -201,16 +193,7 @@ describe("resolveEffectiveAgentRuntime", () => {
 
     expect(
       resolveEffectiveAgentRuntime({
-        cfg: {
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "http://127.0.0.1:8080/v1",
-                models: [],
-              },
-            },
-          },
-        },
+        cfg: configFor("openai", "http://127.0.0.1:8080/v1"),
         provider: "openai",
         modelId: "gpt-5.6-luna",
       }),

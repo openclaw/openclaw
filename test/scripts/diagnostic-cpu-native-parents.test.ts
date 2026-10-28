@@ -2,38 +2,30 @@ import type { Profiler } from "node:inspector";
 import { describe, expect, it } from "vitest";
 import { attributeNativeCpuSamples } from "../../scripts/diagnostic-cpu-native-parents.mts";
 
-function node(
-  id: number,
-  functionName: string,
-  url = "",
-  children: number[] = [],
-): Profiler.ProfileNode {
-  return {
-    id,
-    callFrame: {
-      functionName,
-      url,
-      scriptId: url ? "1" : "0",
-      lineNumber: url ? 9 : -1,
-      columnNumber: url ? 0 : -1,
-    },
-    children,
-  };
-}
-
 function profile(): Profiler.Profile {
+  const nodes: [number, string, string?, number[]?][] = [
+    [1, "(root)", "", [2, 6, 7]],
+    [2, "start", "openclaw:src/logging/diagnostic-cpu-profile.ts", [3]],
+    [3, "post", "node:inspector", [4]],
+    [4, "[native]", "", [5]],
+    [5, "callback", "openclaw:src/callback.ts"],
+    [6, "(idle)"],
+    [7, "read", "openclaw:src/read.ts", [8]],
+    [8, "[native]", "", [9]],
+    [9, "[native]"],
+  ];
   return {
-    nodes: [
-      node(1, "(root)", "", [2, 6, 7]),
-      node(2, "start", "openclaw:src/logging/diagnostic-cpu-profile.ts", [3]),
-      node(3, "post", "node:inspector", [4]),
-      node(4, "[native]", "", [5]),
-      node(5, "callback", "openclaw:src/callback.ts"),
-      node(6, "(idle)"),
-      node(7, "read", "openclaw:src/read.ts", [8]),
-      node(8, "[native]", "", [9]),
-      node(9, "[native]"),
-    ],
+    nodes: nodes.map(([id, functionName, url = "", children = []]) => ({
+      id,
+      children,
+      callFrame: {
+        functionName,
+        url,
+        scriptId: url ? "1" : "0",
+        lineNumber: url ? 9 : -1,
+        columnNumber: url ? 0 : -1,
+      },
+    })),
     startTime: 0,
     endTime: 1_000_000,
     samples: [4, 6, 9, 5, 8],
@@ -51,15 +43,12 @@ describe("native CPU sample attribution", () => {
       nativePercent: 40,
       startupSampleMs: 0,
       workloadNativePercent: 40,
-      parents: [
-        { parent: "post node:inspector:10:1", nativeMs: 200, windowPercent: 20, nativePercent: 50 },
-        {
-          parent: "read openclaw:src/read.ts:10:1",
-          nativeMs: 200,
-          windowPercent: 20,
-          nativePercent: 50,
-        },
-      ],
+      parents: ["post node:inspector:10:1", "read openclaw:src/read.ts:10:1"].map((parent) => ({
+        parent,
+        nativeMs: 200,
+        windowPercent: 20,
+        nativePercent: 50,
+      })),
     });
   });
 
@@ -89,12 +78,11 @@ describe("native CPU sample attribution", () => {
   it("retains signed deltas, redacted JS ancestry and native labels from raw V8", () => {
     const value = profile();
     value.nodes[7]!.callFrame.functionName = "nativeMethod";
-    value.nodes[6]!.callFrame = {
-      ...value.nodes[6]!.callFrame,
+    Object.assign(value.nodes[6]!.callFrame, {
       functionName: "[redacted]",
       url: "",
       scriptId: "2",
-    };
+    });
     value.samples = [8, 9, 1];
     value.timeDeltas = [100_000, -10_000, 200_000];
     expect(attributeNativeCpuSamples(value)).toMatchObject({
@@ -107,7 +95,7 @@ describe("native CPU sample attribution", () => {
   it("reports native samples without JS ancestry and rejects missing timing or nodes", () => {
     const value = profile();
     value.nodes[0]!.children!.push(10);
-    value.nodes.push(node(10, "[native]"));
+    value.nodes.push({ ...value.nodes[8]!, id: 10 });
     value.samples = [10];
     value.timeDeltas = [100_000];
     expect(attributeNativeCpuSamples(value).parents[0]?.parent).toBe("(unattributed)");

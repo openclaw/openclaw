@@ -15,12 +15,14 @@ import {
   validateWorkerConnectRequestFrame,
   validateWorkerTranscriptCommitParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { WORKER_EXEC_APPROVAL_METHOD } from "../../../../packages/gateway-protocol/src/schema/worker-exec-approval.js";
 import {
   WORKER_GATEWAY_TOOL_METHODS,
   WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
 } from "../../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { WORKER_INFERENCE_METHODS } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS } from "../../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
+import { WORKER_TURN_ADMISSION_METHOD } from "../../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import { GATEWAY_STARTUP_RETRY_AFTER_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { isWorkerTranscriptFrameWithinBudget } from "../../../../packages/gateway-protocol/src/worker-transcript-budget.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
@@ -32,7 +34,9 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION } from "../../auth-rate-limit.js";
+import { withSerializedRateLimitAttempt } from "../../rate-limit-attempt-serialization.js";
 import type { GatewayConnectionWork } from "../../server-connection-work.js";
+import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
 import { runWorkerTurnAdmissionContinuation } from "../../worker-environments/placement-turn-claim-events.js";
 import { isReplayableWorkerTranscriptCommitError } from "../../worker-environments/transcript-commit-failure.js";
 import type { PublicWorkerIngressContext } from "../public-worker-ingress-context.js";
@@ -45,7 +49,6 @@ import {
   GatewayRpcDiagnostics,
   type GatewayRpcQueueTiming,
 } from "./request-diagnostics.js";
-import { runWorkerAdmissionBoundary } from "./worker-admission-boundary.js";
 import {
   dispatchWorkerRequest,
   type WorkerConnectionService,
@@ -56,15 +59,24 @@ import {
   workerProtocolError,
 } from "./worker-connection-frames.js";
 
+type WorkerAdmissionBoundaryResult =
+  | { ok: true; identity: WorkerConnectionIdentity }
+  | { ok: false; reason: WorkerProtocolCloseReason | "rate-limited" | "claim-rejected" };
+
 export type { WorkerConnectionService } from "./worker-connection-dispatch.js";
 
 type WorkerLogger = { warn(message: string): void };
 const MAX_QUEUED_WORKER_FRAMES = 16;
 const MAX_QUEUED_WORKER_BYTES = 32 * 1024 * 1024;
-const workerMethods = new Set<string>([...WORKER_PROTOCOL_METHODS, ...WORKER_INFERENCE_METHODS]);
+const workerMethods = new Set<string>([
+  ...WORKER_PROTOCOL_METHODS,
+  ...WORKER_INFERENCE_METHODS,
+  WORKER_TURN_ADMISSION_METHOD,
+]);
 
 type WorkerWsMessageHandlerParams = {
   socket: WebSocket;
+  transport: GatewayWsClient["socket"];
   connectionWork: GatewayConnectionWork;
   connId: string;
   service?: WorkerConnectionService;
@@ -173,13 +185,14 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       rejectAdmission({ id, reason: "protocol-mismatch" });
       return;
     }
-    const admission = await runWorkerAdmissionBoundary({
+    /** Serialize public credential checks and charge only failed admission attempts. */
+    const workerAdmissionInput = {
       service: params.service,
       admission: connect.admission,
       publicAdmission: params.publicAdmission,
-      claim: (identity) => {
+      claim: (identity: WorkerConnectionIdentity) => {
         const client: GatewayWsClient = {
-          socket: params.socket,
+          socket: params.transport,
           connect: {
             minProtocol: connect.minProtocol,
             maxProtocol: connect.maxProtocol,
@@ -200,7 +213,47 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
         }
         return true;
       },
-    });
+    };
+    const { clientIp, rateLimiter } = workerAdmissionInput.publicAdmission;
+    // Admission checks the credential before environment state, so an unavailable environment
+    // (Gateway starting, worker service absent, teardown) is a server-side outage, not a bad credential.
+    const chargeFailure = (reason: WorkerProtocolCloseReason) => {
+      if (reason !== "environment-unavailable") {
+        rateLimiter?.recordFailure(clientIp, AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION);
+      }
+    };
+    const run = async (): Promise<WorkerAdmissionBoundaryResult> => {
+      const rateCheck = rateLimiter?.check(clientIp, AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION);
+      if (rateCheck && !rateCheck.allowed) {
+        return { ok: false, reason: "rate-limited" };
+      }
+      const credentialAdmission =
+        (await workerAdmissionInput.service?.admitWorker(workerAdmissionInput.admission)) ??
+        ({ ok: false, reason: "environment-unavailable" } as const);
+      if (!credentialAdmission.ok) {
+        chargeFailure(credentialAdmission.reason);
+        return credentialAdmission;
+      }
+      const ownershipFailure = workerAdmissionInput.service?.validateWorkerConnection(
+        credentialAdmission.identity,
+      );
+      if (ownershipFailure) {
+        chargeFailure(ownershipFailure);
+        return { ok: false, reason: ownershipFailure };
+      }
+      if (!workerAdmissionInput.claim(credentialAdmission.identity)) {
+        return { ok: false, reason: "claim-rejected" };
+      }
+      rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION);
+      return credentialAdmission;
+    };
+    const admission = !rateLimiter
+      ? await run()
+      : await withSerializedRateLimitAttempt({
+          ip: clientIp,
+          scope: AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION,
+          run,
+        });
     if (!admission.ok) {
       if (admission.reason === "claim-rejected") {
         return;
@@ -283,8 +336,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
         }
       },
       Math.max(0, admission.identity.credentialExpiresAtMs - Date.now()),
-    );
-    expiryTimer.unref?.();
+    ).unref();
   };
 
   const handleMessage = async (
@@ -345,6 +397,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
     if (
       frameBytes > WORKER_PROTOCOL_MAX_PAYLOAD_BYTES &&
       parsed.method !== WORKER_INFERENCE_METHODS[0] &&
+      parsed.method !== WORKER_TURN_ADMISSION_METHOD &&
       !mediaTranscript
     ) {
       failConnection(1009);
@@ -403,7 +456,9 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       );
     };
     const isLongToolOperation =
-      parsed.method === "worker.computer" || parsed.method === WORKER_GATEWAY_TOOL_METHODS.invoke;
+      parsed.method === "worker.computer" ||
+      parsed.method === WORKER_GATEWAY_TOOL_METHODS.invoke ||
+      parsed.method === WORKER_EXEC_APPROVAL_METHOD;
     if (isLongToolOperation) {
       if (toolOperations.has(parsed.id)) {
         failConnection(1008);

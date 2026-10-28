@@ -8,7 +8,7 @@ import {
   type PublishFileExclusiveFailurePhase,
   type PublishFileExclusiveResult,
 } from "@openclaw/fs-safe/durability";
-import { FsSafeError } from "./fs-safe.js";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
 
 export {
   ensureDurableDirectory,

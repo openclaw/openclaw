@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -17,8 +17,8 @@ const WORKFLOW_CASES = (
   Object.assign(
     { name, scopedPath },
     compileScopeWorkflow(
-      `.github/workflows/${name === "shared-openclawkit" ? "macos" : name}-periphery.yml`,
-      name === "shared-openclawkit" ? "shared-scan" : "should-scan",
+      ".github/workflows/macos-periphery.yml",
+      name === "ios" ? "ios-scan" : name === "shared-openclawkit" ? "shared-scan" : "should-scan",
     ),
   ),
 );
@@ -27,6 +27,8 @@ const sharedWorkflow = WORKFLOW_CASES[2]!;
 type WorkflowStep = {
   id?: string;
   name?: string;
+  run?: string;
+  if?: string;
   with?: {
     "fetch-depth"?: number;
     script?: string;
@@ -35,7 +37,17 @@ type WorkflowStep = {
 
 type ScopeWorkflow = {
   on: { pull_request: { paths?: string[]; types: string[] } };
-  jobs: { scope: { steps: WorkflowStep[] } };
+  jobs: { scope: { steps: WorkflowStep[] } } & Record<
+    string,
+    {
+      name?: string;
+      needs?: string[] | string;
+      if?: string;
+      "runs-on"?: string;
+      outputs?: Record<string, string>;
+      steps?: WorkflowStep[];
+    }
+  >;
 };
 type ScopeFunction = (
   ...args: [unknown, unknown, unknown, NodeJS.Require, unknown]
@@ -47,6 +59,7 @@ type ScopeOptions = {
   draft?: boolean;
   eventName?: string;
   sharedOnly?: boolean;
+  iosOnly?: boolean;
   files?: Array<string | { filename: string; previous_filename?: string }>;
 };
 
@@ -111,20 +124,20 @@ async function runScope(
     { setOutput: (name: string, value: string) => outputs.set(name, value) },
     exec,
     require,
-    { env: { PERIPHERY_SHARED_ONLY: String(options.sharedOnly ?? false) } },
+    {
+      env: {
+        PERIPHERY_SHARED_ONLY: String(options.sharedOnly ?? false),
+        PERIPHERY_IOS_ONLY: String(options.iosOnly ?? false),
+      },
+    },
   );
   return outputs.get(fixture.outputName);
 }
 
 function makeRepo() {
   const root = tempDirs.make("openclaw-periphery-");
-  const git = (...args: string[]) => {
-    const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
-    if (result.status !== 0) {
-      throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
-    }
-    return result.stdout.trim();
-  };
+  const git = (...args: string[]) =>
+    execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
   const write = (relativePath: string, contents: string) => {
     const file = path.join(root, relativePath);
     mkdirSync(path.dirname(file), { recursive: true });
@@ -140,15 +153,16 @@ function makeRepo() {
   return { root, git, write, commit };
 }
 
-it.each(WORKFLOW_CASES)("uses the synthetic merge parent for $name scope", ({ workflow }) => {
-  const steps = workflow.jobs?.scope?.steps ?? [];
-  const checkout = steps.find((step) => step.name === "Checkout");
-
-  expect(workflow.on?.pull_request?.types).toContain("converted_to_draft");
-  expect(workflow.on?.pull_request?.paths).toBeUndefined();
-  expect(checkout?.with?.["fetch-depth"]).toBe(2);
-  expect(steps.some((step) => step.name === "Ensure base commit")).toBe(false);
-});
+it.each(WORKFLOW_CASES)(
+  "admits draft transitions and merge-parent history for $name",
+  ({ workflow }) => {
+    expect(workflow.on?.pull_request?.types).toContain("converted_to_draft");
+    expect(workflow.on?.pull_request?.paths).toBeUndefined();
+    expect(
+      workflow.jobs.scope.steps.find((step) => step.name === "Checkout")?.with?.["fetch-depth"],
+    ).toBe(2);
+  },
+);
 
 it.each(WORKFLOW_CASES)("selects only $name scope changes", async (fixture) => {
   const { scopedPath } = fixture;
@@ -158,7 +172,14 @@ it.each(WORKFLOW_CASES)("selects only $name scope changes", async (fixture) => {
   await check({ files: ["scripts/install-periphery.sh"] }, "true");
   await check({ files: ["docs/index.md"] }, "false");
   await check({ draft: true, files: [scopedPath] }, "false");
-  await check({ eventName: "workflow_dispatch", sharedOnly: fixture === sharedWorkflow }, "true");
+  await check(
+    {
+      eventName: "workflow_dispatch",
+      sharedOnly: fixture === sharedWorkflow,
+      iosOnly: fixture.name === "ios",
+    },
+    "true",
+  );
   await check({ files: [{ filename: "docs/Moved.swift", previous_filename: scopedPath }] }, "true");
   await expect(runScope(fixture, { diffExitCode: 128 })).rejects.toThrow(
     "git diff failed with exit code 128",
@@ -168,21 +189,13 @@ it.each(WORKFLOW_CASES)("selects only $name scope changes", async (fixture) => {
 it.each(WORKFLOW_CASES)(
   "excludes prose but keeps source, mixed changes, resources and renames for $name",
   async (fixture) => {
-    const { scopedPath, script } = fixture;
+    const { scopedPath } = fixture;
     const repo = makeRepo();
     const repoRoot = repo.root;
     repo.write("seed", "base\n");
     repo.commit();
-    const prosePaths = [...script.matchAll(/":\(exclude\)([^"]+)"/g)].flatMap((match) =>
-      match[1] ? [match[1]] : [],
-    );
-    const firstProsePath = prosePaths[0];
-    if (!firstProsePath) {
-      throw new Error(`missing prose exclusions in ${fixture.name}`);
-    }
-    for (const prosePath of prosePaths) {
-      repo.write(prosePath, "documentation\n");
-    }
+    const firstProsePath = fixture.name === "macos" ? "apps/macos/README.md" : "apps/ios/README.md";
+    repo.write(firstProsePath, "documentation\n");
     repo.commit();
     await expect(runScope(fixture, { repoRoot })).resolves.toBe("false");
 
@@ -211,18 +224,22 @@ it("selects shared scans from native protocol generator inputs", async () => {
   }
 });
 
-it("keeps app and shared-only admission independent in the canonical graph", async () => {
+it("keeps app, shared-only and iOS-only admission independent in the canonical graph", async () => {
   const appWorkflow = WORKFLOW_CASES[1]!;
-  for (const fixture of [appWorkflow, sharedWorkflow]) {
+  for (const fixture of [WORKFLOW_CASES[0]!, appWorkflow, sharedWorkflow]) {
     const shared = fixture === sharedWorkflow;
+    const ios = fixture.name === "ios";
     await expect(
       runScope(fixture, { files: ["apps/shared/OpenClawKit/Sources/Shared.swift"] }),
-    ).resolves.toBe(String(shared));
+    ).resolves.toBe(String(shared || ios));
     await expect(
       runScope(fixture, { eventName: "workflow_dispatch", sharedOnly: true }),
     ).resolves.toBe(String(shared));
+    await expect(
+      runScope(fixture, { eventName: "workflow_dispatch", iosOnly: true }),
+    ).resolves.toBe(String(ios));
     await expect(runScope(fixture, { eventName: "workflow_dispatch" })).resolves.toBe(
-      String(!shared),
+      String(!shared && !ios),
     );
   }
 });
@@ -253,3 +270,100 @@ it("ignores scoped files added only by base-branch drift", async () => {
   await expect(runScope(sharedWorkflow, { repoRoot })).resolves.toBe("false");
   expect(repo.git("diff", "--name-only", "HEAD^1", "HEAD")).toBe("docs/pr.md");
 });
+
+it("builds one iOS index for overlapping app and shared scope and retains two scan policies", async () => {
+  const change = { files: ["apps/ios/Sources/Example.swift"] };
+  const automatic = ["ios", "macos"]
+    .map(
+      (name) =>
+        parse(readFileSync(`.github/workflows/${name}-periphery.yml`, "utf8")) as ScopeWorkflow,
+    )
+    .filter((workflow) => workflow.on.pull_request);
+  const builds = automatic
+    .flatMap((workflow) => Object.values(workflow.jobs))
+    .flatMap((job) => job.steps ?? [])
+    .filter(
+      ({ run = "" }) =>
+        /xcodebuild[\s\S]*build-for-testing/u.test(run) ||
+        (/periphery scan/u.test(run) && !run.includes("--skip-build")),
+    );
+  expect(builds).toHaveLength(1);
+  await expect(runScope(WORKFLOW_CASES[0]!, change)).resolves.toBe("true");
+  await expect(runScope(sharedWorkflow, change)).resolves.toBe("true");
+  const jobs = WORKFLOW_CASES[0]!.workflow.jobs;
+  const producer = jobs["ios-index"]!;
+  expect(producer["runs-on"]).toBe("xcode-27");
+  const scans = producer.steps!.filter(({ run = "" }) => run.includes("periphery scan"));
+  expect(scans).toHaveLength(2);
+  for (const step of scans) {
+    expect(step.run).toContain("--skip-build");
+    expect(step.run).toContain(
+      '--index-store-path "$RUNNER_TEMP/shared-periphery-ios-derived/Index.noindex/DataStore"',
+    );
+    expect(step.if).toContain("!cancelled()");
+  }
+  expect(scans[0]!.run).toContain("--strict");
+  expect(scans[0]!.run).not.toContain("--report-include");
+  expect(scans[1]!.run).not.toContain("--strict");
+  expect(scans[1]!.run).toContain("--report-include '../shared/OpenClawKit/Sources/**'");
+  expect(scans[1]!.run).toContain(
+    "--retain-files '**/GenerateGatewayProtocol/GatewayModels.swift'",
+  );
+  for (const [name, variable, value, status] of [
+    ["scan-ios", "APP_FAILURE", "1", 1],
+    ["scan-ios-shared", "SCAN_STATUS", "0", 0],
+  ] as const) {
+    const result = spawnSync("/bin/bash", ["-c", jobs[name]!.steps![0]!.run!], {
+      env: { ...process.env, REPORT_COMPLETE: "true", [variable]: value },
+    });
+    expect(result.status).toBe(status);
+  }
+  expect(jobs.intersect!.needs).toContain("scan-ios-shared");
+  expect(jobs.intersect!.needs).not.toContain("scan-ios");
+});
+
+it.each(["ios", "macos"])(
+  "keeps %s app and shared report failures independent in their producer",
+  (platform) => {
+    const jobs = WORKFLOW_CASES[0]!.workflow.jobs;
+    const producer = jobs[`${platform}-index`]!;
+    const appJob = jobs[platform === "ios" ? "scan-ios" : "scan"]!;
+    const sharedJob = jobs[platform === "ios" ? "scan-ios-shared" : "scan-macos"]!;
+    const steps = Object.fromEntries(
+      ["build", "app-scan", "app-report", "app-upload", "shared-scan", "shared-upload"].map(
+        (id) => [id, { outcome: "success", outputs: {} as Record<string, string> }],
+      ),
+    );
+    const complete = (branch: "app" | "shared") => {
+      const expression = producer
+        .outputs![`${branch}-complete`]!.replace(/^\$\{\{\s*|\s*\}\}$/gu, "")
+        .replace(/steps\.([\w-]+)/gu, 'steps["$1"]');
+      return String(compileFunction(`return (${expression});`, ["steps"])(steps));
+    };
+    const enforce = (job: typeof appJob, branch: "app" | "shared", status = "0") =>
+      spawnSync("/bin/bash", ["-c", job.steps![0]!.run!], {
+        env: {
+          ...process.env,
+          PRODUCER_RESULT: "failure",
+          REPORT_COMPLETE: complete(branch),
+          APP_FAILURE: status,
+          SCAN_STATUS: status,
+        },
+      }).status;
+    for (const failed of ["app-scan", "app-report", "app-upload", "shared-scan", "shared-upload"]) {
+      steps[failed]!.outcome = "failure";
+      expect(enforce(appJob, "app"), failed).toBe(failed.startsWith("app-") ? 1 : 0);
+      expect(enforce(sharedJob, "shared"), failed).toBe(failed.startsWith("shared-") ? 1 : 0);
+      steps[failed]!.outcome = "success";
+    }
+    expect(enforce(appJob, "app", "1")).toBe(1);
+    expect(enforce(sharedJob, "shared")).toBe(0);
+    expect(enforce(appJob, "app")).toBe(0);
+    expect(enforce(sharedJob, "shared", "1")).toBe(1);
+    for (const missingBuild of ["failure", "skipped"]) {
+      steps.build!.outcome = missingBuild;
+      expect(enforce(appJob, "app")).toBe(1);
+      expect(enforce(sharedJob, "shared")).toBe(1);
+    }
+  },
+);

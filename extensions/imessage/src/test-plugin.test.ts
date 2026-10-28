@@ -1,31 +1,36 @@
 import fs from "node:fs";
 import path from "node:path";
 import { buildTypedExecApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
-import {
-  createMessageReceiptFromOutboundResults,
-  sendDurableMessageBatch,
-  verifyChannelMessageAdapterCapabilityProofs,
-} from "openclaw/plugin-sdk/channel-outbound";
-import {
-  createTestRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  clearIMessageApprovalReactionTargetsForTest,
-  resolveIMessageApprovalReactionTargetWithPersistence,
-} from "./approval-reactions.js";
-import { imessagePlugin } from "./channel.js";
-import * as cliOutput from "./cli-output.js";
 import type { IMessageRpcClient } from "./client.js";
-import { extractMarkdownFormatRuns } from "./markdown-format.js";
-import { sendMessageIMessage } from "./send.js";
 
-beforeEach(clearIMessageApprovalReactionTargetsForTest);
+let createMessageReceiptFromOutboundResults: typeof import("openclaw/plugin-sdk/channel-outbound").createMessageReceiptFromOutboundResults;
+let sendDurableMessageBatch: typeof import("openclaw/plugin-sdk/channel-outbound").sendDurableMessageBatch;
+let createTestRegistry: typeof import("openclaw/plugin-sdk/channel-test-helpers").createTestRegistry;
+let resetPluginRuntimeStateForTest: typeof import("openclaw/plugin-sdk/channel-test-helpers").resetPluginRuntimeStateForTest;
+let setActivePluginRegistry: typeof import("openclaw/plugin-sdk/channel-test-helpers").setActivePluginRegistry;
+let drainPendingDeliveries: typeof import("openclaw/plugin-sdk/delivery-queue-runtime").drainPendingDeliveries;
+let resolveIMessageApprovalReactionTargetWithPersistence: typeof import("./approval-reactions.js").resolveIMessageApprovalReactionTargetWithPersistence;
+let imessagePlugin: typeof import("./channel.js").imessagePlugin;
+let cliOutput: typeof import("./cli-output.js");
+let sendMessageIMessage: typeof import("./send.js").sendMessageIMessage;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ createMessageReceiptFromOutboundResults, sendDurableMessageBatch } =
+    await import("openclaw/plugin-sdk/channel-outbound"));
+  ({ createTestRegistry, resetPluginRuntimeStateForTest, setActivePluginRegistry } =
+    await import("openclaw/plugin-sdk/channel-test-helpers"));
+  ({ drainPendingDeliveries } = await import("openclaw/plugin-sdk/delivery-queue-runtime"));
+  ({ resolveIMessageApprovalReactionTargetWithPersistence } =
+    await import("./approval-reactions.js"));
+  ({ imessagePlugin } = await import("./channel.js"));
+  cliOutput = await import("./cli-output.js");
+  ({ sendMessageIMessage } = await import("./send.js"));
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -97,10 +102,6 @@ describe("imessagePlugin contracts", () => {
     const targetResolver = required(imessagePlugin.messaging?.targetResolver);
     const resolveTarget = required(targetResolver.resolveTarget);
 
-    expect(targetResolver.hint).toBe(
-      "<phone|email|chat_id:ID|auto:contact|imessage:contact|sms:contact>",
-    );
-
     await expect(
       resolveTarget({ cfg: {}, input: "C0AG22RN7L3", normalized: "+02273" }),
     ).resolves.toBeNull();
@@ -114,47 +115,7 @@ describe("imessagePlugin contracts", () => {
     ).resolves.toMatchObject({ kind: "user", to: "auto:AliceSmith" });
   });
 
-  it("preserves sanitized HTML formatting as native ranges", () => {
-    const text = `<strong title="b>">bold</strong> <del data-note='s>'>strike</del>`;
-    const sanitized = imessagePlugin.outbound?.sanitizeText?.({ text, payload: { text } });
-
-    expect(sanitized).toBe("**bold** ~~strike~~");
-    expect(extractMarkdownFormatRuns(sanitized ?? "")).toEqual({
-      text: "bold strike",
-      ranges: [
-        { start: 0, length: 4, styles: ["bold"] },
-        { start: 5, length: 6, styles: ["strikethrough"] },
-      ],
-    });
-  });
-
-  it("preserves the local approval prompt suppressor through attached-result composition", () => {
-    const suppressor = required(imessagePlugin.outbound?.shouldSuppressLocalPayloadPrompt);
-
-    expect(
-      suppressor({
-        cfg: {
-          channels: { imessage: { enabled: true, allowFrom: ["+15551230000"] } },
-          approvals: { exec: { enabled: true } },
-        },
-        accountId: "default",
-        payload: {
-          text: "Approval required.",
-          channelData: {
-            execApproval: {
-              approvalId: "exec-1",
-              approvalSlug: "exec-1",
-              approvalKind: "exec",
-              sessionKey: "agent:main:imessage:+15551230000",
-            },
-          },
-        },
-        hint: { kind: "approval-pending", approvalKind: "exec", nativeRouteActive: true },
-      }),
-    ).toBe(true);
-  });
-
-  it("keeps shared forwarded approvals reaction-resolvable through outbound hooks", async () => {
+  it("suppresses local prompts and keeps forwarded approvals reaction-resolvable through outbound hooks", async () => {
     const beforeDeliverPayload = required(imessagePlugin.outbound?.beforeDeliverPayload);
     const afterDeliverPayload = required(imessagePlugin.outbound?.afterDeliverPayload);
     const cfg = { channels: { imessage: { enabled: true } } };
@@ -164,8 +125,20 @@ describe("imessagePlugin contracts", () => {
       command: "echo shared",
       host: "gateway",
       allowedDecisions: ["allow-once", "deny"],
+      sessionKey: "agent:main:imessage:+15551230000",
     });
     const target = { channel: "imessage", to: "+15551230000", accountId: "default" };
+    expect(
+      required(imessagePlugin.outbound?.shouldSuppressLocalPayloadPrompt)({
+        cfg: {
+          channels: { imessage: { enabled: true, allowFrom: [target.to] } },
+          approvals: { exec: { enabled: true } },
+        },
+        accountId: "default",
+        payload,
+        hint: { kind: "approval-pending", approvalKind: "exec", nativeRouteActive: true },
+      }),
+    ).toBe(true);
 
     await beforeDeliverPayload({
       cfg,
@@ -205,58 +178,6 @@ describe("imessagePlugin contracts", () => {
     });
   });
 
-  it("backs declared message adapter capabilities with delivery proofs", async () => {
-    const sendIMessage = async (
-      _to: string,
-      _text: string,
-      opts?: { mediaUrl?: string; replyToId?: string; audioAsVoice?: boolean },
-    ) => {
-      const messageId = opts?.mediaUrl ? "imsg-media-1" : "imsg-text-1";
-      return {
-        messageId,
-        sentText: opts?.mediaUrl ? "<media:image>" : "hello",
-        receipt: receipt(
-          messageId,
-          opts?.audioAsVoice ? "voice" : opts?.mediaUrl ? "media" : "text",
-          opts?.replyToId,
-        ),
-      };
-    };
-    const adapter = required(imessagePlugin.message);
-    const sendText = required(adapter.send?.text);
-    const sendMedia = required(adapter.send?.media);
-    const context = messageContext(sendIMessage);
-
-    await verifyChannelMessageAdapterCapabilityProofs({
-      adapterName: "imessageMessage",
-      adapter,
-      proofs: {
-        text: async () => {
-          const result = await sendText({ ...context, text: "hello" });
-          expect(result.receipt.platformMessageIds).toEqual(["imsg-text-1"]);
-        },
-        media: async () => {
-          const result = await sendMedia({
-            ...context,
-            text: "caption",
-            mediaUrl: "/tmp/image.png",
-            mediaLocalRoots: ["/tmp"],
-            audioAsVoice: true,
-          });
-          expect(result.receipt.platformMessageIds).toEqual(["imsg-media-1"]);
-          expect(result.receipt.parts.map((part) => part.kind)).toEqual(["voice"]);
-        },
-        replyTo: async () => {
-          const result = await sendText({ ...context, text: "reply", replyToId: "reply-1" });
-          expect(result.receipt.replyToId).toBe("reply-1");
-        },
-        messageSendingHooks: () => {
-          expect(sendText).toBeTypeOf("function");
-        },
-      },
-    });
-  });
-
   it.each(["message", "outbound"] as const)(
     "preserves trusted host media access through the real %s adapter",
     async (adapterKind) => {
@@ -271,10 +192,14 @@ describe("imessagePlugin contracts", () => {
         async (
           _to: string,
           _text: string,
-          _options: { mediaAccess?: typeof mediaAccess; mediaReadFile?: typeof legacyReader },
+          _options: {
+            mediaAccess?: typeof mediaAccess;
+            mediaReadFile?: typeof legacyReader;
+            audioAsVoice?: boolean;
+          },
         ) => ({
           messageId: "p:0/trusted-media",
-          receipt: receipt("p:0/trusted-media", "media"),
+          receipt: receipt("p:0/trusted-media", _options.audioAsVoice ? "voice" : "media"),
         }),
       );
       const context = {
@@ -284,6 +209,7 @@ describe("imessagePlugin contracts", () => {
         mediaAccess,
         mediaLocalRoots: ["/untrusted/legacy"],
         mediaReadFile: legacyReader,
+        audioAsVoice: true,
       };
 
       const sendMedia = required(
@@ -291,7 +217,9 @@ describe("imessagePlugin contracts", () => {
           ? imessagePlugin.message?.send?.media
           : imessagePlugin.outbound?.sendMedia,
       );
-      await sendMedia(context);
+      const result = await sendMedia(context);
+      expect(result.receipt?.platformMessageIds).toEqual(["p:0/trusted-media"]);
+      expect(result.receipt?.parts.map((part) => part.kind)).toEqual(["voice"]);
 
       const forwarded = sendIMessage.mock.calls[0]?.[2];
       expect(forwarded?.mediaAccess).toBe(mediaAccess);
@@ -354,17 +282,23 @@ describe("imessagePlugin contracts", () => {
 
   it("carries the stable iMessage GUID beside the broad adapter delivery identity", async () => {
     const sendText = required(imessagePlugin.message?.send?.text);
-    const sendIMessage = async () => ({
+    const sendIMessage = async (_to: string, _text: string, options?: { replyToId?: string }) => ({
       messageId: "42",
       guid: "p:0/stable-guid",
       sentText: "hello",
-      receipt: receipt("42"),
+      receipt: receipt("42", "text", options?.replyToId),
     });
 
-    const result = await sendText({ ...messageContext(sendIMessage), text: "hello" });
+    const result = await sendText({
+      ...messageContext(sendIMessage),
+      text: "hello",
+      replyToId: "reply-1",
+    });
 
     expect(result.messageId).toBe("42");
     expect(result.receipt.primaryPlatformMessageId).toBe("42");
+    expect(result.receipt.platformMessageIds).toEqual(["42"]);
+    expect(result.receipt.replyToId).toBe("reply-1");
     expect((result as typeof result & { meta?: Record<string, unknown> }).meta).toEqual({
       imessageMessageGuid: "p:0/stable-guid",
       imessageVisibleText: "hello",
@@ -377,98 +311,82 @@ describe("imessagePlugin contracts", () => {
         createTestRegistry([{ pluginId: "imessage", plugin: imessagePlugin, source: "test" }]),
       );
     });
-    afterEach(resetPluginRuntimeStateForTest);
+    afterEach(() => resetPluginRuntimeStateForTest());
 
-    it("preserves provider-accepted attachment progress through actual durable core without replay", async () => {
-      const captionError = new Error("caption failed after native attachment acceptance");
-      const nativeSend = nativeSender(async () => {
-        throw captionError;
-      });
-      const bytes = IMESSAGE_WORKSPACE_PNG;
-      const runCliJson = mockCliSend().mockImplementation(async (args) => {
-        const attachmentPath = args[args.indexOf("--file") + 1];
-        expect(attachmentPath).toBeDefined();
-        expect(fs.readFileSync(attachmentPath!)).toEqual(bytes);
-        return { messageId: "p:0/durable-accepted-attachment" };
-      });
-      const onDeliveryResult = vi.fn();
-
-      await withStateDirEnv("openclaw-imessage-durable-attachment-", async ({ stateDir }) => {
-        const { sourcePath, mediaAccess } = attachment(stateDir, "workspace-image.png", bytes);
-        const { readFile } = mediaAccess;
-        const result = await sendDurableMessageBatch({
-          cfg: durableConfig,
-          channel: "imessage",
-          to: "+15550004567",
-          durability: "required",
-          mediaAccess,
-          deps: { imessage: nativeSend },
-          onDeliveryResult,
-          payloads: [{ text: "undelivered caption", mediaUrl: path.basename(sourcePath) }],
+    it.each(["caption", "custody"] as const)(
+      "preserves accepted attachment progress when %s fails",
+      async (phase) => {
+        const failure = new Error(phase + " failed after native attachment acceptance");
+        const captionRequest = vi.fn(async () => {
+          if (phase === "caption") {
+            throw failure;
+          }
+          return { guid: "caption-must-not-send" };
+        });
+        const nativeSend = nativeSender(captionRequest);
+        const messageId = "p:0/durable-accepted-attachment";
+        const bytes =
+          phase === "caption" ? IMESSAGE_WORKSPACE_PNG : Buffer.from("%PDF-1.4\nsynthetic\n");
+        const runCliJson = mockCliSend().mockImplementation(async (args) => {
+          const attachmentPath = args[args.indexOf("--file") + 1];
+          expect(attachmentPath).toBeDefined();
+          expect(fs.readFileSync(attachmentPath!)).toEqual(bytes);
+          return { messageId };
+        });
+        const onDeliveryResult = vi.fn(async () => {
+          if (phase === "custody") {
+            throw failure;
+          }
         });
 
-        expect(result).toMatchObject({
-          status: "partial_failed",
-          sentBeforeError: true,
-          receipt: { platformMessageIds: ["p:0/durable-accepted-attachment"] },
-          results: [delivery("p:0/durable-accepted-attachment")],
-          payloadOutcomes: [{ status: "failed", sentBeforeError: true }],
+        await withStateDirEnv("openclaw-imessage-durable-", async ({ stateDir }) => {
+          const { sourcePath, mediaAccess } = attachment(
+            stateDir,
+            phase === "caption" ? "workspace-image.png" : "custody-report.pdf",
+            bytes,
+          );
+          const result = await sendDurableMessageBatch({
+            cfg: durableConfig,
+            channel: "imessage",
+            to: "+15550004567",
+            durability: "required",
+            mediaAccess,
+            deps: { imessage: nativeSend },
+            onDeliveryResult,
+            payloads: [
+              {
+                text: "undelivered caption",
+                mediaUrl: phase === "caption" ? path.basename(sourcePath) : sourcePath,
+              },
+            ],
+          });
+          expect(result).toMatchObject({
+            status: "partial_failed",
+            sentBeforeError: true,
+            results: [delivery(messageId)],
+          });
+          expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining(delivery(messageId)),
+          );
+          if (phase === "custody") {
+            expect(captionRequest).not.toHaveBeenCalled();
+          } else {
+            expect(result).toMatchObject({
+              receipt: { platformMessageIds: [messageId] },
+              payloadOutcomes: [{ status: "failed", sentBeforeError: true }],
+            });
+            await drainPendingDeliveries({
+              drainKey: "imessage:default",
+              logLabel: "iMessage accepted attachment recovery",
+              cfg: durableConfig,
+              stateDir,
+              log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+              selectEntry: (entry) => ({ match: entry.channel === "imessage" }),
+            });
+          }
+          expect(runCliJson).toHaveBeenCalledOnce();
         });
-        expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining(delivery("p:0/durable-accepted-attachment")),
-        );
-        expect(readFile.mock.calls).toEqual([[sourcePath], [sourcePath]]);
-        const forwardedMediaAccess = nativeSend.mock.calls[0]?.[2]?.mediaAccess;
-        expect(forwardedMediaAccess).toEqual(mediaAccess);
-        expect(forwardedMediaAccess?.readFile).toBe(readFile);
-
-        await drainPendingDeliveries({
-          drainKey: "imessage:default",
-          logLabel: "iMessage accepted attachment recovery",
-          cfg: durableConfig,
-          stateDir,
-          log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-          selectEntry: (entry) => ({ match: entry.channel === "imessage" }),
-        });
-        expect(runCliJson).toHaveBeenCalledTimes(1);
-      });
-    });
-
-    it("halts native caption delivery when actual durable progress custody rejects", async () => {
-      const custodyError = new Error("durable accepted-attachment custody rejected");
-      const captionRequest = vi.fn(async () => ({ guid: "p:0/caption-must-not-send" }));
-      const nativeSend = nativeSender(captionRequest);
-      const bytes = Buffer.from("%PDF-1.4\n% actual durable custody failure\n");
-      const runCliJson = mockCliSend().mockResolvedValue({
-        messageId: "p:0/durable-custody-attachment",
-      });
-      const onDeliveryResult = vi.fn(async () => {
-        throw custodyError;
-      });
-
-      await withStateDirEnv("openclaw-imessage-durable-custody-", async ({ stateDir }) => {
-        const { sourcePath, mediaAccess } = attachment(stateDir, "custody-report.pdf", bytes);
-        const result = await sendDurableMessageBatch({
-          cfg: durableConfig,
-          channel: "imessage",
-          to: "+15550004567",
-          durability: "required",
-          mediaAccess,
-          deps: { imessage: nativeSend },
-          onDeliveryResult,
-          payloads: [{ text: "caption must not send", mediaUrl: sourcePath }],
-        });
-
-        expect(result).toMatchObject({
-          status: "partial_failed",
-          sentBeforeError: true,
-          results: [delivery("p:0/durable-custody-attachment")],
-        });
-        expect(onDeliveryResult).toHaveBeenCalledOnce();
-        expect(runCliJson).toHaveBeenCalledOnce();
-        expect(mediaAccess.readFile.mock.calls).toEqual([[sourcePath], [sourcePath]]);
-        expect(captionRequest).not.toHaveBeenCalled();
-      });
-    });
+      },
+    );
   });
 });

@@ -102,17 +102,34 @@ async function collectVaultCounts(vaultPath: string) {
   return { pageCounts, sourceCounts };
 }
 
-function buildWarnings(params: {
-  config: ResolvedMemoryWikiConfig;
-  bridgePublicArtifactCount: number | null;
-  vaultExists: boolean;
-  obsidianCommand: string | null;
-}): MemoryWikiStatusWarning[] {
-  const { config, bridgePublicArtifactCount, vaultExists, obsidianCommand } = params;
+export async function resolveMemoryWikiStatus(
+  config: ResolvedMemoryWikiConfig,
+  options?: MemoryWikiStatusOptions,
+) {
+  const agentId = resolveMemoryWikiVaultAgentId(config);
+  const vaultExists = await pathExists(config.vault.path);
+  const bridgePublicArtifactCount =
+    options?.appConfig &&
+    config.vaultMode === "bridge" &&
+    config.bridge.enabled &&
+    config.bridge.readMemoryArtifacts
+      ? filterMemoryWikiBridgeArtifacts({
+          config,
+          callerAgentId: options.callerAgentId,
+          artifacts: await listActiveMemoryPublicArtifacts({
+            cfg: options.appConfig,
+          }),
+        }).length
+      : null;
+  const obsidianProbe = await probeObsidianCli();
+  const counts = vaultExists
+    ? await collectVaultCounts(config.vault.path)
+    : createEmptyVaultCounts();
+
   const rules: Array<[boolean, MemoryWikiStatusWarning["code"], string]> = [
     [!vaultExists, "vault-missing", "Wiki vault has not been initialized yet."],
     [
-      config.obsidian.enabled && config.obsidian.useOfficialCli && !obsidianCommand,
+      config.obsidian.enabled && config.obsidian.useOfficialCli && !obsidianProbe.command,
       "obsidian-cli-missing",
       "Obsidian CLI is enabled in config but `obsidian` is not available on PATH.",
     ],
@@ -147,32 +164,6 @@ function buildWarnings(params: {
       "Private memory-core access is enabled outside unsafe-local mode.",
     ],
   ];
-  return rules.flatMap(([matches, code, message]) => (matches ? [{ code, message }] : []));
-}
-
-export async function resolveMemoryWikiStatus(
-  config: ResolvedMemoryWikiConfig,
-  options?: MemoryWikiStatusOptions,
-) {
-  const agentId = resolveMemoryWikiVaultAgentId(config);
-  const vaultExists = await pathExists(config.vault.path);
-  const bridgePublicArtifactCount =
-    options?.appConfig &&
-    config.vaultMode === "bridge" &&
-    config.bridge.enabled &&
-    config.bridge.readMemoryArtifacts
-      ? filterMemoryWikiBridgeArtifacts({
-          config,
-          callerAgentId: options.callerAgentId,
-          artifacts: await listActiveMemoryPublicArtifacts({
-            cfg: options.appConfig,
-          }),
-        }).length
-      : null;
-  const obsidianProbe = await probeObsidianCli();
-  const counts = vaultExists
-    ? await collectVaultCounts(config.vault.path)
-    : createEmptyVaultCounts();
 
   return {
     vaultScope: config.vault.scope,
@@ -195,21 +186,14 @@ export async function resolveMemoryWikiStatus(
     },
     pageCounts: counts.pageCounts,
     sourceCounts: counts.sourceCounts,
-    warnings: buildWarnings({
-      config,
-      bridgePublicArtifactCount,
-      vaultExists,
-      obsidianCommand: obsidianProbe.command,
-    }),
+    warnings: rules.flatMap(([matches, code, message]) => (matches ? [{ code, message }] : [])),
   };
 }
 
 export function buildMemoryWikiDoctorReport(status: MemoryWikiStatus) {
   const fixes = status.warnings.map((warning) => ({
     code: warning.code,
-    message: Object.hasOwn(STATUS_WARNING_FIXES, warning.code)
-      ? STATUS_WARNING_FIXES[warning.code]
-      : STATUS_WARNING_FIXES["unsafe-local-without-mode"],
+    message: STATUS_WARNING_FIXES[warning.code],
   }));
   return {
     healthy: status.warnings.length === 0,
@@ -219,12 +203,15 @@ export function buildMemoryWikiDoctorReport(status: MemoryWikiStatus) {
   };
 }
 
-export function renderMemoryWikiStatus(status: MemoryWikiStatus): string {
+export function renderMemoryWikiStatus(
+  status: MemoryWikiStatus,
+  text: (value: string) => string = String,
+): string {
   const lines = [
-    `Wiki vault mode: ${status.vaultMode}`,
-    `Vault scope: ${status.vaultScope}${status.agentId ? ` (${status.agentId})` : ""}`,
-    `Vault: ${status.vaultExists ? "ready" : "missing"} (${status.vaultPath})`,
-    `Render mode: ${status.renderMode}`,
+    `Wiki vault mode: ${text(status.vaultMode)}`,
+    `Vault scope: ${text(status.vaultScope)}${status.agentId ? ` (${text(status.agentId)})` : ""}`,
+    `Vault: ${status.vaultExists ? "ready" : "missing"} (${text(status.vaultPath)})`,
+    `Render mode: ${text(status.renderMode)}`,
     `Obsidian CLI: ${status.obsidianCli.available ? "available" : "missing"}${status.obsidianCli.requested ? " (requested)" : ""}`,
     `Bridge: ${status.bridge.enabled ? "enabled" : "disabled"}${status.bridgePublicArtifactCount !== null ? ` (${status.bridgePublicArtifactCount} exported artifact${status.bridgePublicArtifactCount === 1 ? "" : "s"})` : ""}`,
     `Unsafe local: ${status.unsafeLocal.allowPrivateMemoryCoreAccess ? `enabled (${status.unsafeLocal.pathCount} paths)` : "disabled"}`,
@@ -235,24 +222,27 @@ export function renderMemoryWikiStatus(status: MemoryWikiStatus): string {
   if (status.warnings.length > 0) {
     lines.push("", "Warnings:");
     for (const warning of status.warnings) {
-      lines.push(`- ${warning.message}`);
+      lines.push(`- ${text(warning.message)}`);
     }
   }
 
   return lines.join("\n");
 }
 
-export function renderMemoryWikiDoctor(report: MemoryWikiDoctorReport): string {
+export function renderMemoryWikiDoctor(
+  report: MemoryWikiDoctorReport,
+  text: (value: string) => string = String,
+): string {
   const lines = [
     report.healthy ? "Wiki doctor: healthy" : `Wiki doctor: ${report.warningCount} issue(s) found`,
     "",
-    renderMemoryWikiStatus(report.status),
+    renderMemoryWikiStatus(report.status, text),
   ];
 
   if (report.fixes.length > 0) {
     lines.push("", "Suggested fixes:");
     for (const fix of report.fixes) {
-      lines.push(`- ${fix.message}`);
+      lines.push(`- ${text(fix.message)}`);
     }
   }
 

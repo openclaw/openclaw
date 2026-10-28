@@ -1,7 +1,6 @@
 import type {
   ProviderReplayPolicy,
   ProviderReplayPolicyContext,
-  ProviderSanitizeReplayHistoryContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { buildStrictAnthropicReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -50,10 +49,4 @@ export function buildGithubCopilotReplayPolicy(
     // mutate that transcript instead.
     sanitizeToolCallIds: false,
   });
-}
-
-export function sanitizeGithubCopilotReplayHistory(ctx: ProviderSanitizeReplayHistoryContext) {
-  return ctx.modelApi === "openai-responses" || ctx.modelApi === "anthropic-messages"
-    ? stripCopilotAssistantThinkingMessages(ctx.messages)
-    : ctx.messages;
 }

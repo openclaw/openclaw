@@ -1,4 +1,4 @@
-import { registerListener } from "../../../src/shared/listeners.js";
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 import {
   clearSidebarAttentionDismissal,
   resolveSidebarAttentionKey,
@@ -39,13 +39,8 @@ type SidebarAttentionStoreOwnerConstructor = new (
 export type SidebarAttentionStore = ReturnType<typeof createSidebarAttentionStore>;
 
 export function createSidebarAttentionStore(sources: SidebarAttentionStoreSources) {
-  const listeners = new Set<() => void>();
+  const listeners = createChangeListeners();
   let owner: SidebarAttentionStoreOwner | null = null;
-  const publish = () => {
-    for (const listener of listeners) {
-      listener();
-    }
-  };
   // Settings intentionally mounts no Inbox, so dismissal retirement belongs to this eager facade.
   const synchronizeScopeUpgradeDismissal = () => {
     const snapshot = sources.gateway.snapshot;
@@ -67,13 +62,13 @@ export function createSidebarAttentionStore(sources: SidebarAttentionStoreSource
       return owner?.entries ?? [];
     },
     activate(Owner: SidebarAttentionStoreOwnerConstructor) {
-      owner ??= new Owner(sources, publish);
+      owner ??= new Owner(sources, listeners.publish);
       return owner.mentions;
     },
     dismiss(dismissal: SidebarAttentionDismissal) {
       owner?.dismiss(dismissal);
     },
-    subscribe: (listener: () => void) => registerListener(listeners, listener),
+    subscribe: listeners.subscribe,
     dispose() {
       stopGateway();
       stopScopeUpgrade();

@@ -250,14 +250,17 @@ export async function swapStagedPackageInstall(
     return messages;
   };
   const readBaseline = async () => {
-    hadPackage = await (native ? pathEntryExists(targetSwapRoot) : baseline.exists(targetSwapRoot));
-    previousVersion =
-      hadPackage && native
+    if (native) {
+      hadPackage = await pathEntryExists(targetSwapRoot);
+      previousVersion = hadPackage
         ? await readPackageVersionIfPresent(params.installTarget.packageRoot)
         : null;
-    if (hadPackage && !native) {
+    } else {
       try {
-        previousRoot = await baseline.rootEntry(targetSwapRoot);
+        hadPackage = await baseline.exists(targetSwapRoot);
+        if (hadPackage) {
+          previousRoot = await baseline.rootEntry(targetSwapRoot);
+        }
       } catch (error) {
         // Preserve the scan cause if the identity fallback also fails.
         baselineError = new Error("Baseline package scan failed", { cause: error });
@@ -272,6 +275,7 @@ export async function swapStagedPackageInstall(
         if (!previousIdentity) {
           throw error;
         }
+        hadPackage = true;
         warnings.push(
           `baseline package fingerprint incomplete (${error.message}); rollback requires the retained directory identity, package version and launchers; full package contents are unverified`,
         );
@@ -564,15 +568,22 @@ export async function swapStagedPackageInstall(
       }
     };
     const restoreShim = (shim: (typeof shims)[number]) => async (assertCurrent: () => void) => {
-      if (shim.backup) {
-        await copyPathEntry(
-          shim.backup,
-          shim.destination,
-          assertCurrent,
-          activation?.recordRestoredLauncher.bind(activation, path.basename(shim.destination)),
+      try {
+        if (shim.backup) {
+          await copyPathEntry(
+            shim.backup,
+            shim.destination,
+            assertCurrent,
+            activation?.recordRestoredLauncher.bind(activation, path.basename(shim.destination)),
+          );
+        } else {
+          await removePath(shim.destination, assertCurrent);
+        }
+      } catch (error) {
+        throw new Error(
+          `launcher ${shim.destination}${shim.backup ? ` from retained backup ${shim.backup}` : ""}: ${formatErrorMessage(error)}`,
+          { cause: error },
         );
-      } else {
-        await removePath(shim.destination, assertCurrent);
       }
     };
     if (activation) {
@@ -636,7 +647,10 @@ export async function swapStagedPackageInstall(
       }
       rollback.push(restorePackage);
       await replayLocalOverrides?.();
-      await activateStagedNpmPackageRoot(stagedSwapRoot, targetSwapRoot);
+      await activateStagedNpmPackageRoot(stagedSwapRoot, targetSwapRoot, undefined, {
+        assertCaller: params.assertCurrent,
+        warnings,
+      });
       activePackageRoot = targetPackageRoot;
       projectActivated = true;
       for (const shim of shims) {

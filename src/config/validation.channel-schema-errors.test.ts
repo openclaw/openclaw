@@ -2,6 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { validateConfigObjectRawWithPlugins } from "./validation.js";
 
 const malformedSchema = {
@@ -13,19 +14,15 @@ function createRegistry(origin: PluginManifestRecord["origin"]): PluginManifestR
   return {
     diagnostics: [],
     plugins: [
-      {
+      createPluginManifestRecordFixture({
         id: "schema-owner",
         channels: ["schema-channel"],
         channelConfigs: { "schema-channel": { schema: malformedSchema } },
-        cliBackends: [],
-        hooks: [],
         manifestPath: "/plugins/schema-owner/openclaw.plugin.json",
         origin,
-        providers: [],
         rootDir: "/plugins/schema-owner",
-        skills: [],
         source: "/plugins/schema-owner/index.js",
-      },
+      }),
     ],
   };
 }

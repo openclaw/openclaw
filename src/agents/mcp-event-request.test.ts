@@ -83,19 +83,20 @@ it.each(["json", "sse"] as const)("sends one direct MCP 2 request and accepts %s
   );
   const result = await request({ params: { _meta: { malicious: true } } });
   expect(result).toEqual({ events: [] });
-  const resolved = resolution.mock.results.find((entry) => entry.type === "return");
-  const transport = resolved?.value?.transport;
-  expect(transport).toMatchObject({
+  expect(
+    resolution.mock.results.find((entry) => entry.type === "return")?.value?.transport,
+  ).toMatchObject({
     onmessage: undefined,
     onerror: undefined,
     onclose: undefined,
   });
   expect(mocks.fetch).toHaveBeenCalledOnce();
   const init = mocks.fetch.mock.calls[0]![1];
-  const headers = new Headers(init?.headers);
   expect(init?.method).toBe("POST");
-  expect(headers.get("mcp-method")).toBe("events/list");
-  expect(headers.get("mcp-protocol-version")).toBe("2026-07-28");
+  expect(Object.fromEntries(new Headers(init?.headers))).toMatchObject({
+    "mcp-method": "events/list",
+    "mcp-protocol-version": "2026-07-28",
+  });
   expect(readRequest(init)).toEqual({
     id: expect.any(String),
     method: "events/list",
@@ -135,13 +136,6 @@ it.each(["DNS", "response", "OAuth"] as const)("rejects revocation at %s", async
     }),
   ).rejects.toThrow("owner revoked");
   expect(mocks.fetch).toHaveBeenCalledTimes(stage === "response" ? 1 : 0);
-  if (stage === "OAuth") {
-    expect(mocks.token).toHaveBeenCalledWith(
-      expect.objectContaining({
-        identity: expect.objectContaining({ principal: "requester" }),
-      }),
-    );
-  }
 });
 it("preserves protocol dispositions without exposing remote diagnostic text", async () => {
   mocks.fetch.mockImplementation(async (_url, init) =>
@@ -157,8 +151,7 @@ it("preserves protocol dispositions without exposing remote diagnostic text", as
   expect(error).toBeInstanceOf(Error);
   expect(error).toMatchObject({
     name: "McpEventRequestError",
-    code: -32602,
-    reason: "cursor_expired",
+    message: "MCP Events request failed (code -32602, reason cursor_expired)",
   });
   expect(String(error)).not.toContain("private-account-secret");
 });

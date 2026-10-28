@@ -160,6 +160,8 @@ export type AgentCommandOpts = {
   /** Startup awaits returned work; incidental synchronous return values are ignored. */
   onExecutionStarted?: () => unknown;
   extraSystemPrompt?: string;
+  /** Internal conversation-producer annotation, not accepted from public ingress. */
+  extraSystemPromptTurnContext?: { start: number; text: string };
   /** Conversation preparation owns silence guidance; required-reply enforcement is separate. */
   silentReplyPromptMode?: SilentReplyPromptMode;
   bootstrapContextMode?: "full" | "lightweight";
@@ -208,6 +210,8 @@ export type AgentCommandOpts = {
   cleanupCliLiveSessionOnRunEnd?: boolean;
   /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
   oneShotCliRun?: boolean;
+  /** Record a root session this run creates as a direct chat with its local operator. */
+  operatorDirectRoot?: boolean;
   /** Gateway-owned runs can late-bind plugin subagent and node runtime helpers. */
   allowGatewaySubagentBinding?: boolean;
   /** Opaque foreground fence transferred by Gateway after atomic session admission. */
@@ -285,6 +289,7 @@ export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = {
   operatorAuthority: undefined,
   requesterOrigin: undefined,
   privateCompletion: undefined,
+  extraSystemPromptTurnContext: undefined,
   replyExpectation: undefined,
   skillLibraryAuthoring: undefined,
   cronCreatorAuthorityCapability: undefined,
@@ -294,6 +299,7 @@ export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = {
   isTerminalOutcomeObserved: undefined,
   prepareAssistantTranscriptMessage: undefined,
   internalDeliverySuppressErrors: undefined,
+  operatorDirectRoot: undefined,
 } as const satisfies Partial<AgentCommandOpts>;
 
 type AgentCommandGatewayOnlyKey = Exclude<

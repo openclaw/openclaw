@@ -1,4 +1,4 @@
-import { registerListener } from "../../../src/shared/listeners.js";
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import type { buildLocalUserMessage } from "../pages/chat/user-message-content.ts";
 import type { CreationComposer } from "../pages/new-session/creation-composer.ts";
@@ -12,7 +12,7 @@ type Submission = {
   /** Logical client, not the hello object that rotates on reconnect. */
   owner: object;
 } & (
-  | { kind: "initial"; sessionId?: string; consumedByEventId?: string }
+  | { kind: "initial"; sessionId?: string }
   | { kind: "delivered"; deliveryKey: string; agentId?: string; sessionId?: string }
 );
 type RetainedInitialSubmission = Omit<Extract<Submission, { kind: "initial" }>, "message"> &
@@ -32,7 +32,10 @@ type PendingChatCreate = Readonly<{
   canDisplay: () => boolean;
   composer?: CreationComposer;
   displayName?: string;
+  /** Custom group requested by the create; its admitted row lands in that section. */
+  category?: string;
 }>;
+type AcceptedChatCreate = Omit<PendingChatCreate, "message" | "composer">;
 
 export type ApplicationChatSubmissions = ReturnType<typeof createChatSubmissions>;
 /** App-owned display bytes only. Delivery and retries stay with the outbox. */
@@ -40,12 +43,12 @@ export function createChatSubmissions() {
   const initial = new Map<string, RetainedChatSubmission>();
   // Only the foreground handoff owns a provisional display; accepted turns are separate.
   let pendingCreate: PendingChatCreate | undefined;
-  const createListeners = new Set<() => void>();
+  // Accepted metadata survives admission without retaining the draft's message or composer.
+  let acceptedCreate: AcceptedChatCreate | undefined;
+  const createListeners = createChangeListeners();
   const setPendingCreate = (pending: typeof pendingCreate) => {
     pendingCreate = pending;
-    for (const listener of createListeners) {
-      listener();
-    }
+    createListeners.publish();
   };
   let delivered = new WeakMap<object, Map<string, RetainedChatSubmission>>();
   const initialKey = (sessionKey: string) =>
@@ -77,7 +80,6 @@ export function createChatSubmissions() {
       previous.pendingRunId === submission.pendingRunId
     ) {
       // Replayed completion cannot revive a consumed/reset turn or discard its physical binding.
-      previous.consumedByEventId ??= submission.consumedByEventId;
       return previous;
     }
     if (!isInitial) {
@@ -109,6 +111,17 @@ export function createChatSubmissions() {
       return pendingCreate?.creation;
     },
     readCreate: () => (pendingCreate?.canDisplay() ? pendingCreate : undefined),
+    acceptCreate: (accepted: AcceptedChatCreate) => {
+      acceptedCreate = accepted;
+      createListeners.publish();
+    },
+    readAcceptedCreate: () => (acceptedCreate?.canDisplay() ? acceptedCreate : undefined),
+    retireAcceptedCreate: () => {
+      if (acceptedCreate) {
+        acceptedCreate = undefined;
+        createListeners.publish();
+      }
+    },
     readCreateMessage: (sessionKey: string) =>
       pendingCreate?.creation.sessionKey === sessionKey && pendingCreate.canDisplay()
         ? pendingCreate.message
@@ -117,7 +130,7 @@ export function createChatSubmissions() {
       pendingCreate?.creation.sessionKey === sessionKey && pendingCreate.canDisplay()
         ? pendingCreate.composer
         : undefined,
-    subscribeCreate: (listener: () => void) => registerListener(createListeners, listener),
+    subscribeCreate: createListeners.subscribe,
     readInitial,
     observeInitialSession: (sessionKey: string, owner: object | null, sessionId: string | null) => {
       const submission = readInitial(sessionKey, owner);
@@ -134,6 +147,7 @@ export function createChatSubmissions() {
     clear: () => {
       initial.clear();
       delivered = new WeakMap();
+      acceptedCreate = undefined;
       setPendingCreate(undefined);
     },
   };

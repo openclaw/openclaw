@@ -2,6 +2,7 @@ import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-c
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { getChildLogger } from "../logging/logger.js";
+import { readParsedField } from "../utils/string-readers.js";
 import type { TalkEvent, TalkEventType } from "./talk-events.js";
 
 // Delta events can arrive at audio/text chunk cadence; omitting them keeps logs useful
@@ -78,16 +79,5 @@ function firstFiniteTalkEventNumber(
   record: Record<string, unknown> | undefined,
   keys: readonly string[],
 ): number | undefined {
-  if (!record) {
-    return undefined;
-  }
-  for (const key of keys) {
-    const value = asNonNegativeFiniteNumber(record[key]);
-    if (value !== undefined) {
-      // Reject negative, NaN, and Infinity values before diagnostics/logging so
-      // provider bugs cannot poison aggregate Talk metrics.
-      return value;
-    }
-  }
-  return undefined;
+  return record && readParsedField(record, keys, asNonNegativeFiniteNumber);
 }

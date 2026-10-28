@@ -139,13 +139,13 @@ sandbox proxy described below.
   DB (`board_widgets`), served by a core gateway route
   (`/__openclaw__/board/<agentId>/<sessionKey>/<name>/`) that reads the DB.
   Pinning a transcript widget copies the bytes. Caps: 10 MiB of UTF-8 HTML per
-  document including the wrapper, 256 KiB per registered widget's source,
-  8 KiB per native widget's JSON props, and 48 widgets per board.
+  document including the wrapper, 8 KiB per native widget's JSON props, and
+  48 widgets per board.
 - **Update in place:** re-emitting a widget with the same `name` and content
   owner replaces its content, bumps `revision`, and broadcasts `board.changed`.
   Live views update that cell. Document widgets reload that iframe only.
   Changing the content owner requires removing the widget before creating its replacement.
-- **Byte freezing:** HTML and registered-source grants bind to the SHA-256
+- **Byte freezing:** HTML grants bind to the SHA-256
   digest of the approved content. Preserving a grant requires the same content
   scope, a matching approved digest, and a declaration that does not widen.
   Changed bytes require a new decision under the session's approval policy,
@@ -162,38 +162,11 @@ content kind:
 - `html` — agent-authored via `show_widget`, bytes in board storage.
 - `mcp-app` — a third-party MCP app view (`ui://` resource from a configured
   server) hosted inside the widget cell.
-- Registered plugin kinds — plugin-validated source rendered through the same
-  sandboxed document frame. The Canvas plugin registers `a2ui`. Core discovers
-  the active registry and never hardcodes plugin kind names.
 
 MCP apps do not define the widget model. Widgets gained the ability to host
 them. Identity, placement, pinning, grants, and the author-facing API stay
 OpenClaw's — so `show_widget` code stays as short as it is today and never
 needs to know the MCP Apps spec exists.
-
-Registered kinds use a small runtime Plugin SDK API. A registration owns the
-agent-facing kind name, source validation, capability-scoped renderer
-resources, and document-body composition. The Gateway validates source again
-at `board.widget.put`, stores it in the existing generic `plugin` descriptor
-envelope, and composes the framed document only after a ticketed board read.
-This keeps stored source out of board snapshots and avoids a database CHECK or
-schema-version change. Disabled plugins are absent from the registry, so new
-puts fail with an enable-and-retry error and existing cells render as disabled.
-
-The A2UI implementation composes a small document that references its renderer
-bundle. Ticketed board documents use the capability-scoped Gateway asset route.
-Inline documents load the same public static renderer from the sandbox origin.
-Core adds the same CSP, theme bridge, size reporter, and private-port host bridge
-used by HTML widgets. v0.8 and v0.9 use separate renderer bundles because their
-Lit custom elements share tag names but their processors and action contracts
-differ.
-
-A registered kind can expose public static renderer bytes through
-`resources.readPublicResource(path)`. The isolated listener serves only exact
-registered `resources.paths`, only for `GET` or `HEAD`, and rechecks the active
-plugin registry after reading. It does not proxy Gateway routes, credentials,
-or data. Canvas opts in its two A2UI bundles. This grants no widget network or
-host-tool capability.
 
 Shared hosting infrastructure:
 
@@ -229,15 +202,15 @@ Shared hosting infrastructure:
   This is independent of `connect-src` and host-tool grants. Third-party code
   runs with the widget's content and granted capabilities; asset URLs must not
   contain private data. See [Libraries and fonts](/tools/show-widget#libraries-and-fonts).
-- **Grants.** HTML and registered widgets declaring nothing render immediately
+- **Grants.** HTML widgets declaring nothing render immediately
   (sandboxed, `default-src 'none'`, prompt sends individually confirmed).
   Declared capabilities and interactive MCP Apps follow an explicit
   [session permission mode](/gateway/permission-modes). **Full access** grants.
   **Workspace** uses an AI reviewer and rejects anything it does not allow.
   **Guarded** shows **Allow**/**Reject**. **Read only** rejects. Without an
   explicit session mode, the equivalent configured exec approval policy applies.
-  Grants are per widget name and content scope. HTML and registered-source
-  updates preserve a grant only while the approved digest matches and the
+  Grants are per widget name and content scope. HTML updates preserve a grant
+  only while the approved digest matches and the
   declaration does not widen. Wrapper-authored board widgets forward user-clicked
   `http`/`https` new-tab links to the Control UI host. This ordinary navigation
   needs no grant and never grants iframe popup permissions.
@@ -403,8 +376,8 @@ agent, is shared with the widget/session audience.
 
 Author guidance is conditional on a usable connected agent identity, not a
 tool-construction-time check. `board.widget.put` verifies and revalidates that
-identity before saving HTML (including materialized Canvas documents) or
-registered widgets declaring this host capability. The same preparation owner
+identity before saving HTML (including materialized Canvas documents) declaring
+this host capability. The same preparation owner
 serves pinning and reads, including source-config preview-credential scrubbing
 and OAuth refresh. Caller cancellation and session mutation authorization are
 rechecked before persistence. Failure leaves existing content and grants intact.
@@ -466,7 +439,7 @@ Inline HTML and MCP App previews share a widget-card renderer that dispatches
 on content kind. Eligible previews expose the same **Pin to dashboard**
 affordance. Generated widget names let the card recognize an existing pin and
 avoid offering a duplicate. The renderer and pin paths live in
-`ui/src/pages/chat/components/widget-card.ts`.
+`ui/src/pages/chat/components/widget-card-view.tsx`.
 
 Widgets compose through grid adjacency: an agent-authored widget and an MCP App
 can occupy neighboring cells on one tab. Each keeps its own sandbox and bridge
@@ -592,10 +565,10 @@ client, one unambiguous matching current-channel presenter, or a persistent-sess
 automation whose server-authored tool policy explicitly allows pinned-only authoring:
 
 - `show_widget { title, widget_code?, report?, kind?, name?, pin?, size?, tab?, after?,
-  presentation?, capabilities? }` — create/update by name. `kind` defaults to `html` and its enum
-  includes active registered kinds. HTML and registered source use `widget_code`.
+  presentation?, capabilities? }` — create/update by name. `kind` accepts `html`,
+  which is the default. HTML uses `widget_code`.
   Native reports use `report` without `kind` or `widget_code`, require `pin: true`,
-  and render only on the board. For HTML and registered kinds, `pin` also places the widget on the board.
+  and render only on the board. For HTML, `pin` also places the widget on the board.
   Without `name`/`pin` it behaves exactly like today (inline, ephemeral).
   Headless scheduled authoring requires `pin: true`, cannot select a presentation
   target, and is unavailable to detached cron-run sessions.
@@ -628,8 +601,8 @@ agent is told about user tier-1 events via session notices, e.g.
   binding gating, rate limits), byte-frozen approval.
 - **Core owns widget hosting.** The canvas doc store, document wrapper, HTTP
   serving, and the `show_widget` tool live in core (`src/canvas/`). The Canvas
-  plugin owns the macOS node-panel presenter and the A2UI
-  dashboard content kind. The `pluginSurfaceUrls["canvas"]` advertisement and
+  plugin owns the macOS node-panel presenter. The `pluginSurfaceUrls["canvas"]`
+  advertisement and
   `/__openclaw__/canvas` paths are shipped native-client contracts and stay
   stable. Discord Activities register a contextual presenter behind core's
   shared `show_widget` tool.
@@ -639,7 +612,7 @@ agent is told about user tier-1 events via session notices, e.g.
 - Boards do not introduce a separate sharing or ACL model. Session visibility
   and membership use the existing session-sharing surface. Widget capability
   grants remain separate from membership.
-- Native macOS/iOS board rendering is through the embedded Control UI. The
+- Native Android, iOS, and macOS board rendering is through the embedded Control UI. The
   inline-widget path is unchanged.
-- Enabled plugins extend content kinds, data bindings, and action verbs through
+- Enabled plugins extend data bindings and action verbs through
   the existing registries.

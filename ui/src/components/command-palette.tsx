@@ -1,4 +1,4 @@
-import { onCleanup, Show } from "solid-js";
+import { onSettled, Show } from "solid-js";
 import { projectCallbackOwner } from "../lib/reactive/callback-owner.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { listen } from "../lib/reactive/listener.ts";
@@ -52,29 +52,31 @@ export const CommandPalette = defineSolidBridge<CommandPaletteProperties, Comman
         ),
       (owner) => owner,
     );
-    states.set(host, state);
-    Object.defineProperty(host, "isOpen", { configurable: true, get: () => state.open });
-    host.style.display = "contents";
-    const stops = [
-      context.gateway.subscribeEvents(state.handleGatewayEvent),
-      // Selection receipts retire the old agent's draft before another action can use it.
-      context.agentSelection.subscribe(state.handleAgentSelection),
-      listen(host.ownerDocument, "keydown", state.handleGlobalKeydown),
-    ];
-    state.connect();
-    const pending = pendingOpen.get(host);
-    if (pending) {
-      pendingOpen.delete(host);
-      state.openPalette(pending.input);
-    }
     // Event handlers read owner changes immediately, before Solid settles.
     const readProps = () => projection.read().readProps();
-    onCleanup(() => {
-      state.disconnect();
-      for (const stop of [...stops, ...draftStops]) {
-        stop();
+    onSettled(() => {
+      states.set(host, state);
+      Object.defineProperty(host, "isOpen", { configurable: true, get: () => state.open });
+      host.style.display = "contents";
+      const stops = [
+        context.gateway.subscribeEvents(state.handleGatewayEvent),
+        // Selection receipts retire the old agent's draft before another action can use it.
+        context.agentSelection.subscribe(state.handleAgentSelection),
+        listen(host.ownerDocument, "keydown", state.handleGlobalKeydown),
+      ];
+      state.connect();
+      const pending = pendingOpen.get(host);
+      if (pending) {
+        pendingOpen.delete(host);
+        state.openPalette(pending.input);
       }
-      states.delete(host);
+      return () => {
+        state.disconnect();
+        for (const stop of [...stops, ...draftStops]) {
+          stop();
+        }
+        states.delete(host);
+      };
     });
     return (
       <Show when={readProps().open}>

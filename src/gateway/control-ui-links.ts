@@ -1,8 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAdvertisedLanHostCore } from "../infra/advertised-lan-host.js";
 import {
-  inspectBestEffortPrimaryTailnetIPv4,
   pickBestEffortPrimaryLanIPv4,
+  pickBestEffortPrimaryTailnetIPv4,
 } from "../infra/network-discovery-display.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { isValidIPv4 } from "./net.js";
@@ -26,7 +26,7 @@ export function resolveControlUiLinks(
   const bind = params.bind ?? "loopback";
   const customBindHost = params.customBindHost?.trim();
   const advertisedLanHost = normalizeOptionalString(params.advertisedLanHost);
-  const { tailnetIPv4 } = inspectBestEffortPrimaryTailnetIPv4();
+  const tailnetIPv4 = pickBestEffortPrimaryTailnetIPv4();
   const host = (() => {
     if (bind === "custom" && customBindHost && isValidIPv4(customBindHost)) {
       return customBindHost;

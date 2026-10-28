@@ -74,12 +74,21 @@ Headless node hosts report the hardware model on macOS and Linux.
 Connected CLI node hosts and the macOS app report CPU count, load averages,
 memory, and home-volume disk capacity every 60 seconds, starting on connection.
 The Gateway exposes the latest snapshot as `hostStats` in `node.list` and
-`node.describe`. When received, it saves the snapshot on the paired node
-record, so offline nodes keep showing last-known stats with the original
-`updatedAtMs`. Connected nodes use live session stats. `openclaw nodes status`
-and `openclaw nodes describe` show a compact stats summary with a last-known age
-for offline nodes. Windows omits load averages, and unavailable disk capacity is
-omitted. See
+`node.describe`. Connected nodes use live session stats. The first snapshot is
+saved immediately on the paired node record; later snapshots are coalesced until
+five minutes after the last saved snapshot's receipt time. Disconnect and orderly
+Gateway shutdown save the final snapshot. A crash can lose roughly the last five
+minutes of telemetry while reports continue and writes succeed; delayed writes,
+storage failures, or missing reports can leave older stats.
+The five-minute checkpoint budget uses monotonic elapsed time, so wall-clock
+corrections do not move an armed deadline. Saved `updatedAtMs` values remain
+wall-clock timestamps.
+
+Offline nodes show the saved snapshot with its original `updatedAtMs`, including
+briefly showing the previous saved snapshot while a disconnect write completes.
+`openclaw nodes status` and `openclaw nodes describe` show a compact stats summary
+with a last-known age for offline nodes. Windows omits load averages, and
+unavailable disk capacity is omitted. See
 [Node host stats](/gateway/protocol/presence#node-host-stats) for the wire contract.
 
 ## Version skew and upgrade order

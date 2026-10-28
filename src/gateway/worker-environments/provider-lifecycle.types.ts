@@ -117,7 +117,13 @@ export type WorkerProviderLifecycleOptions = Omit<
     installation: WorkerInstallationArtifact,
     run: (signal: AbortSignal) => Promise<T>,
   ) => Promise<T>;
-  callProvider: <T>(environmentId: string, run: () => Promise<T>, timeoutMs?: number) => Promise<T>;
+  callProvider: <T>(
+    environmentId: string,
+    operationName: string,
+    run: () => Promise<T>,
+    timeoutMs?: number,
+    observationSignal?: AbortSignal,
+  ) => Promise<T>;
   isStopping: () => boolean;
   move: (
     record: WorkerEnvironmentRecord,

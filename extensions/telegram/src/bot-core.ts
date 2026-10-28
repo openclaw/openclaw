@@ -46,7 +46,7 @@ import {
   TelegramSpooledReplayProcessingError,
 } from "./bot-processing-outcome.js";
 import { createTelegramUpdateTracker } from "./bot-update-tracker.js";
-import { apiThrottler, Bot, type ApiClientOptions } from "./bot.runtime.js";
+import { Bot, type ApiClientOptions } from "./bot.runtime.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import {
   setTelegramCallbackQueryAnswerPromise,
@@ -109,7 +109,7 @@ export async function createTelegramBotCore(
     client,
     ...(opts.botInfo ? { botInfo: opts.botInfo } : {}),
   });
-  const accountThrottler = getOrCreateAccountThrottler(opts.token, apiThrottler);
+  const accountThrottler = getOrCreateAccountThrottler(opts.token);
   bot.api.config.use(accountThrottler.transformer);
   const sendChatActionHandler: TelegramSendChatActionHandler = {
     sendChatAction: (chatId, action, threadParams) =>
@@ -131,7 +131,6 @@ export async function createTelegramBotCore(
       typeof opts.updateOffset?.persistenceFloorUpdateId === "number"
         ? opts.updateOffset.persistenceFloorUpdateId
         : initialUpdateId,
-    ackPolicy: "after_agent_dispatch",
     ...(typeof opts.updateOffset?.onUpdateId === "function"
       ? { onAcceptedUpdateId: opts.updateOffset.onUpdateId }
       : {}),

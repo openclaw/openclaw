@@ -7,7 +7,6 @@ import type {
   RevokeDeviceTokenResult,
   RotateDeviceTokenResult,
 } from "./device-pairing-core.types.js";
-import { withDevicePairingLock } from "./device-pairing-lock.js";
 import { readCurrentPairedDevice } from "./device-pairing-store-readonly.js";
 import {
   reusablePairedDeviceToken,
@@ -56,36 +55,28 @@ export async function ensureDeviceToken(params: {
   scopes: string[];
   issuer?: DeviceAuthToken["issuer"];
   isIssuanceCurrent?: () => boolean;
-  baseDir?: string;
 }): Promise<DeviceAuthToken | null> {
-  const { baseDir, isIssuanceCurrent, ...input } = params;
-  return readCurrentPairedDevice(
-    input.deviceId,
-    (device) => {
-      if (isIssuanceCurrent?.() === false) {
-        return null;
-      }
-      const reusable = reusablePairedDeviceToken(device, input);
-      if (reusable) {
-        return reusable;
-      }
-      return executeDevicePairingMutation(
-        { type: "devicePairing.ensureToken", input: { ...input, nowMs: Date.now() } },
-        {
-          baseDir,
-          onAuthorityRefused: () => null,
-          assertCurrent: () => {
-            if (isIssuanceCurrent?.() === false) {
-              throw new DevicePairingAuthorityRefusedError(
-                "Device token issuance authority changed",
-              );
-            }
-          },
+  const { isIssuanceCurrent, ...input } = params;
+  return readCurrentPairedDevice(input.deviceId, (device) => {
+    if (isIssuanceCurrent?.() === false) {
+      return null;
+    }
+    const reusable = reusablePairedDeviceToken(device, input);
+    if (reusable) {
+      return reusable;
+    }
+    return executeDevicePairingMutation(
+      { type: "devicePairing.ensureToken", input: { ...input, nowMs: Date.now() } },
+      {
+        onAuthorityRefused: () => null,
+        assertCurrent: () => {
+          if (isIssuanceCurrent?.() === false) {
+            throw new DevicePairingAuthorityRefusedError("Device token issuance authority changed");
+          }
         },
-      );
-    },
-    baseDir,
-  );
+      },
+    );
+  });
 }
 
 export async function rotateDeviceToken(params: {
@@ -96,11 +87,9 @@ export async function rotateDeviceToken(params: {
   baseDir?: string;
 }): Promise<RotateDeviceTokenResult> {
   const { baseDir, ...input } = params;
-  return await withDevicePairingLock(() =>
-    executeDevicePairingMutation(
-      { type: "devicePairing.rotateToken", input: { ...input, nowMs: Date.now() } },
-      { baseDir },
-    ),
+  return await executeDevicePairingMutation(
+    { type: "devicePairing.rotateToken", input: { ...input, nowMs: Date.now() } },
+    { baseDir },
   );
 }
 
@@ -111,11 +100,9 @@ export async function revokeDeviceToken(params: {
   baseDir?: string;
 }): Promise<RevokeDeviceTokenResult> {
   const { baseDir, ...input } = params;
-  return await withDevicePairingLock(() =>
-    executeDevicePairingMutation(
-      { type: "devicePairing.revokeToken", input: { ...input, nowMs: Date.now() } },
-      { baseDir },
-    ),
+  return await executeDevicePairingMutation(
+    { type: "devicePairing.revokeToken", input: { ...input, nowMs: Date.now() } },
+    { baseDir },
   );
 }
 

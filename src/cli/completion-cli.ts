@@ -49,40 +49,9 @@ function createCompletionScriptGenerator(program: Command): (shell: CompletionSh
   };
 }
 
-async function writeCompletionCache(params: {
-  program: Command;
-  shells: CompletionShell[];
-  binName: string;
-}): Promise<void> {
-  const generateScript = createCompletionScriptGenerator(params.program);
-  for (const shell of params.shells) {
-    const script = generateScript(shell);
-    await publishOutputFileAtomically({
-      filePath: resolveCompletionCachePath(shell, params.binName),
-      tempPrefix: ".openclaw-completion-cache",
-      writeTemp: async (tempPath) => {
-        await fs.writeFile(tempPath, script, { encoding: "utf-8", flag: "wx" });
-      },
-    });
-  }
-}
-
 function writeCompletionRegistrationWarning(message: string): void {
   const diagnostic = `[completion] ${message}`;
   process.stderr.write(`${formatConsoleDiagnosticLine({ level: "warn", message: diagnostic })}\n`);
-}
-
-async function registerSubcommandsForCompletion(program: Command): Promise<void> {
-  for (const { name, entry } of getSubCliCompletionGroups()) {
-    try {
-      removeCommandGroupNames(program, entry);
-      await entry.register(program);
-    } catch (error) {
-      writeCompletionRegistrationWarning(
-        `skipping subcommand \`${name}\` while building completion cache: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  }
 }
 
 export function registerCompletionCli(program: Command) {
@@ -131,7 +100,16 @@ export function registerCompletionCli(program: Command) {
         }
       }
 
-      await registerSubcommandsForCompletion(program);
+      for (const { name, entry } of getSubCliCompletionGroups()) {
+        try {
+          removeCommandGroupNames(program, entry);
+          await entry.register(program);
+        } catch (error) {
+          writeCompletionRegistrationWarning(
+            `skipping subcommand \`${name}\` while building completion cache: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
 
       if (process.env[COMPLETION_SKIP_PLUGIN_COMMANDS_ENV] !== "1") {
         const { registerPluginCliCommandsFromValidatedConfig } = await import("../plugins/cli.js");
@@ -149,11 +127,18 @@ export function registerCompletionCli(program: Command) {
 
       if (options.writeState) {
         const writeShells = options.shell ? [shell] : [...COMPLETION_SHELLS];
-        await writeCompletionCache({
-          program,
-          shells: writeShells,
-          binName: program.name(),
-        });
+        const binName = program.name();
+        const generateScript = createCompletionScriptGenerator(program);
+        for (const writeShell of writeShells) {
+          const script = generateScript(writeShell);
+          await publishOutputFileAtomically({
+            filePath: resolveCompletionCachePath(writeShell, binName),
+            tempPrefix: ".openclaw-completion-cache",
+            writeTemp: async (tempPath) => {
+              await fs.writeFile(tempPath, script, { encoding: "utf-8", flag: "wx" });
+            },
+          });
+        }
       }
 
       if (options.install) {
@@ -216,10 +201,12 @@ function generateZshArgs(cmd: Command): string {
         opt.required || opt.optional
           ? `${opt.optional ? "::" : ":"}${opt.attributeName()}:${choices ? `(${choices})` : ""}`
           : "";
+      // `=` permits long-option values both after an equals sign and in the next word.
+      const optionSpec = (flag: string) => (argument && flag.startsWith("--") ? `${flag}=` : flag);
       if (alternate) {
-        return `"${visibility}(${name} ${alternate})"{${name},${alternate}}"[${desc}]${argument}"`;
+        return `"${visibility}(${name} ${alternate})"{${optionSpec(name)},${optionSpec(alternate)}}"[${desc}]${argument}"`;
       }
-      return `"${visibility}${name}[${desc}]${argument}"`;
+      return `"${visibility}${optionSpec(name)}[${desc}]${argument}"`;
     })
     .join(" \\\n    ");
 }
@@ -227,16 +214,6 @@ function generateZshArgs(cmd: Command): string {
 function escapeZshCompletionChoice(choice: string): string {
   // `_arguments` parses this list after zsh parses the surrounding double-quoted spec.
   return escapeZshDoubleQuotedDescription(choice.replace(/([\\\s:()[\]{}*?!|&;<>"'$`])/g, "\\$1"));
-}
-
-function generateZshSubcmdList(cmd: Command): string {
-  const list = visibleCompletionCommands(cmd)
-    .flatMap((c) => {
-      const desc = escapeZshDoubleQuotedDescription(c.description()).replace(/'/g, "'\\''");
-      return commandNameVariants(c).map((name) => `'${name}[${desc}]'`);
-    })
-    .join(" ");
-  return `"1: :_values 'command' ${list}"`;
 }
 
 function escapeZshDoubleQuotedDescription(description: string): string {
@@ -248,13 +225,20 @@ function generateZshCommandGroup(
   functionName: string,
   childPrefix = functionName,
 ): string {
+  const args = generateZshArgs(command);
+  const list = visibleCompletionCommands(command)
+    .flatMap((c) => {
+      const desc = escapeZshDoubleQuotedDescription(c.description()).replace(/'/g, "'\\''");
+      return commandNameVariants(c).map((name) => `'${name}[${desc}]'`);
+    })
+    .join(" ");
   return `${functionName}() {
   local -a commands
   local -a options
   
   _arguments -s -C \\
-    ${generateZshArgs(command)} \\
-    ${generateZshSubcmdList(command)} \\
+    ${args} \\
+    "1: :_values 'command' ${list}" \\
     "*::arg:->args"
 
   case $state in
@@ -391,7 +375,11 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
     }
 
     for ($i = 1; $i -lt $commandElements.Count; $i++) {
-        $element = $commandElements[$i].Extent.Text
+        $element = if ($commandElements[$i] -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+            $commandElements[$i].Value
+        } else {
+            $commandElements[$i].Extent.Text
+        }
         if ($i -eq $commandElements.Count - 1 -and $wordToComplete -ne "") { break }
         if ($element -like "-*") {
             $flag = ($element -split '=', 2)[0]

@@ -55,42 +55,29 @@ describe("config validation allowed-values metadata", () => {
   });
 
   it("adds an exclusive lower-bound hint", () => {
-    expect(
-      issueAt({ agents: { defaults: { maxConcurrent: 0 } } }, "agents.defaults.maxConcurrent")
-        .message,
-    ).toContain("(must be greater than 0)");
+    const issue = issueAt(
+      { agents: { defaults: { maxConcurrent: 0 } } },
+      "agents.defaults.maxConcurrent",
+    );
+    expect(issue.message).toContain("(must be greater than 0)");
   });
 
-  it.each([{ acp: { agent: "claude" }, extra: {}, path: "bindings.0.acp", key: "agent" }])(
-    "selects the matching ACP union branch at $path",
-    ({ acp, extra, path, key }) => {
-      expect(
-        issues({
-          bindings: [
-            {
-              type: "acp",
-              agentId: "test",
-              match: { channel: "discord", peer: { kind: "direct", id: "123" } },
-              acp,
-              ...extra,
-            },
-          ],
-        }),
-      ).toEqual([{ path, message: 'Unrecognized key: "' + key + '"' }]);
-    },
-  );
+  it("selects the matching ACP union branch at bindings.0.acp", () => {
+    const binding = {
+      type: "acp",
+      agentId: "test",
+      match: { channel: "discord", peer: { kind: "direct", id: "123" } },
+      acp: { agent: "claude" },
+    };
+    expect(issues({ bindings: [binding] })).toEqual([
+      { path: "bindings.0.acp", message: 'Unrecognized key: "agent"' },
+    ]);
+  });
 
   it("names the replacement for a removed provider and model API", () => {
-    const result = issues({
-      models: {
-        providers: {
-          "openai-codex": {
-            api: "openai-codex-responses",
-            models: [{ id: "gpt-5.5", api: "openai-codex-responses" }],
-          },
-        },
-      },
-    });
+    const api = "openai-codex-responses";
+    const providerConfig = { api, models: [{ id: "gpt-5.5", api }] };
+    const result = issues({ models: { providers: { "openai-codex": providerConfig } } });
     const provider = result.find((issue) => issue.path === "models.providers.openai-codex.api");
     expect(provider?.message).toContain('"openai-codex-responses" is a removed api id');
     expect(provider?.message).toContain('use "openai-chatgpt-responses"');

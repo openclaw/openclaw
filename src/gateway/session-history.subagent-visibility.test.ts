@@ -21,8 +21,8 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
+import { readChatHistoryPageKernel } from "./chat-history-page-kernel.js";
 import { readChatHistoryDelta } from "./server-methods/chat-history-delta.js";
-import { readChatHistoryPageKernel } from "./server-methods/chat-history-page-kernel.js";
 import { createPreparedSessionHistorySubagentProjection } from "./session-history-delta-visibility.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import { readSessionHistorySnapshotKernel } from "./session-history-snapshot.js";

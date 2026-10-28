@@ -1,4 +1,5 @@
-import { createXApiClient, type XApiClient, type XPost } from "../api.js";
+import type { XApiClient, XPost } from "../api.js";
+import { createXTestApi as createXApiClient } from "./api-client.js";
 
 export const post = (id: string): XPost => ({
   id,

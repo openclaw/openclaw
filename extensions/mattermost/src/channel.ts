@@ -9,11 +9,7 @@ import {
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
-  ChannelMessageToolDiscovery,
   ChannelOutboundContext,
-  ChannelThreadingContext,
-  ChannelThreadingToolContext,
-  ChannelToolSend,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { identityEntryAuthenticationClassifier } from "openclaw/plugin-sdk/channel-ingress-runtime";
@@ -28,7 +24,6 @@ import {
   createAttachedChannelResultAdapter,
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -105,12 +100,6 @@ function hasMattermostPresentationNavigation(presentation: MessagePresentation):
   );
 }
 
-function readMattermostPayloadData(payload: {
-  channelData?: Record<string, unknown>;
-}): Record<string, unknown> | undefined {
-  return asOptionalRecord(payload.channelData?.mattermost);
-}
-
 type MattermostDirectoryListParams = Parameters<
   NonNullable<NonNullable<ChannelPlugin["directory"]>["listGroups"]>
 >[0];
@@ -143,90 +132,6 @@ function listEnabledMattermostAccounts({
   ).filter((account) => account.enabled && account.botToken?.trim() && account.baseUrl?.trim());
 }
 
-function describeMattermostMessageTool({
-  cfg,
-  accountId,
-}: Parameters<
-  NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
->[0]): ChannelMessageToolDiscovery {
-  const enabledAccounts = listEnabledMattermostAccounts({ cfg, accountId });
-
-  const actions: ChannelMessageActionName[] = [];
-
-  if (enabledAccounts.length > 0) {
-    actions.push("send");
-  }
-
-  const actionsConfig = (cfg.channels?.mattermost as MattermostConfig | undefined)?.actions;
-  const baseMessages = actionsConfig?.messages;
-  const baseReactions = actionsConfig?.reactions;
-  const hasReactionCapableAccount = enabledAccounts.some((account) => {
-    const accountActions = account.config.actions;
-    return accountActions?.reactions ?? baseReactions ?? true;
-  });
-  if (hasReactionCapableAccount) {
-    actions.push("react");
-  }
-  const hasMessageCapableAccount = enabledAccounts.some(
-    (account) => account.config.actions?.messages ?? baseMessages ?? false,
-  );
-  if (hasMessageCapableAccount) {
-    actions.push("read");
-  }
-
-  return {
-    actions,
-    capabilities: enabledAccounts.length > 0 ? ["presentation"] : [],
-  };
-}
-
-function extractMattermostToolSend(args: Record<string, unknown>): ChannelToolSend | null {
-  if (normalizeOptionalString(args.action) !== "send") {
-    return null;
-  }
-  const to = normalizeOptionalString(args.to) ?? normalizeOptionalString(args.target);
-  if (!to) {
-    return null;
-  }
-  const threadId =
-    normalizeOptionalString(args.threadId) ??
-    normalizeOptionalString(args.replyToId) ??
-    normalizeOptionalString(args.replyTo);
-  const threadSuppressed = args.topLevel === true || args.threadId === null;
-  return {
-    to,
-    accountId: normalizeOptionalString(args.accountId),
-    ...(threadId ? { threadId } : {}),
-    ...(!threadId && !threadSuppressed ? { threadImplicit: true } : {}),
-    ...(threadSuppressed ? { threadSuppressed: true } : {}),
-  };
-}
-
-function resolveMattermostAutoThreadId(params: {
-  to: string;
-  replyToId?: string | null;
-  toolContext?: ChannelThreadingToolContext;
-}): string | undefined {
-  const replyToId = normalizeOptionalString(params.replyToId);
-  const context = params.toolContext;
-  const currentThreadId = normalizeOptionalString(context?.currentThreadTs);
-  const currentMessageId = normalizeMattermostThreadId(context?.currentMessageId);
-  const currentTarget = normalizeMattermostThreadTarget(context?.currentChannelId);
-  if (currentThreadId && currentTarget === normalizeMattermostThreadTarget(params.to)) {
-    if (replyToId === currentMessageId) {
-      return currentThreadId;
-    }
-    if (!replyToId) {
-      const replyToMode = context?.replyToMode;
-      const canInheritThread =
-        replyToMode === "all" ||
-        (replyToMode === "first" && context?.hasRepliedRef?.value !== true);
-      return canInheritThread ? currentThreadId : undefined;
-    }
-  }
-  return replyToId;
-}
-
 function normalizeMattermostThreadTarget(raw: string | undefined): string | undefined {
   const normalized = raw ? normalizeMattermostMessagingTarget(raw) : undefined;
   if (normalized) {
@@ -236,58 +141,8 @@ function normalizeMattermostThreadTarget(raw: string | undefined): string | unde
   return trimmed && /^[a-z0-9]{26}$/i.test(trimmed) ? `channel:${trimmed}` : undefined;
 }
 
-function matchesMattermostToolContextTarget(params: {
-  target: string;
-  toolContext: ChannelThreadingToolContext;
-}): boolean {
-  const target = normalizeMattermostThreadTarget(params.target);
-  if (!target) {
-    return false;
-  }
-  return [params.toolContext.currentChannelId, params.toolContext.currentMessagingTarget].some(
-    (currentTarget) => normalizeMattermostThreadTarget(currentTarget) === target,
-  );
-}
-
 function normalizeMattermostThreadId(value: string | number | undefined): string | undefined {
   return typeof value === "number" ? String(value) : normalizeOptionalString(value);
-}
-
-function buildMattermostThreadingToolContext(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  context: ChannelThreadingContext;
-  hasRepliedRef?: { value: boolean };
-}): ChannelThreadingToolContext {
-  const account = resolveMattermostAccount({
-    cfg: params.cfg,
-    accountId: params.accountId ?? resolveDefaultMattermostAccountId(params.cfg),
-  });
-  const chatType =
-    params.context.ChatType === "direct" ||
-    params.context.ChatType === "group" ||
-    params.context.ChatType === "channel"
-      ? params.context.ChatType
-      : "channel";
-  const configuredReplyToMode = resolveMattermostReplyToMode(account, chatType);
-  const currentThreadTs =
-    normalizeMattermostThreadId(params.context.MessageThreadId) ??
-    normalizeMattermostThreadId(params.context.TransportThreadId) ??
-    normalizeOptionalString(params.context.ReplyToId);
-  const currentMessageId = normalizeMattermostThreadId(params.context.CurrentMessageId);
-  const hasExistingThread =
-    Boolean(currentThreadTs) && (!currentMessageId || currentThreadTs !== currentMessageId);
-  const currentChannelId = params.context.To
-    ? normalizeMattermostMessagingTarget(params.context.To)
-    : undefined;
-  return {
-    currentChannelId,
-    currentThreadTs,
-    currentMessageId: params.context.CurrentMessageId,
-    replyToMode: hasExistingThread ? "all" : configuredReplyToMode,
-    hasRepliedRef: params.hasRepliedRef,
-    sameChannelThreadRequired: Boolean(currentThreadTs),
-  };
 }
 
 async function listMattermostDirectoryGroups(params: MattermostDirectoryListParams) {
@@ -307,8 +162,58 @@ async function listMattermostDirectoryPeers(params: MattermostDirectoryListParam
 const mattermostMessageActions: ChannelMessageActionAdapter = {
   providerOwnedReadGates: ["read"],
   readAuthorityActions: ["read"],
-  describeMessageTool: describeMattermostMessageTool,
-  extractToolSend: ({ args }) => extractMattermostToolSend(args),
+  describeMessageTool({ cfg, accountId }) {
+    const enabledAccounts = listEnabledMattermostAccounts({ cfg, accountId });
+
+    const actions: ChannelMessageActionName[] = [];
+
+    if (enabledAccounts.length > 0) {
+      actions.push("send");
+    }
+
+    const actionsConfig = (cfg.channels?.mattermost as MattermostConfig | undefined)?.actions;
+    const baseMessages = actionsConfig?.messages;
+    const baseReactions = actionsConfig?.reactions;
+    const hasReactionCapableAccount = enabledAccounts.some((account) => {
+      const accountActions = account.config.actions;
+      return accountActions?.reactions ?? baseReactions ?? true;
+    });
+    if (hasReactionCapableAccount) {
+      actions.push("react");
+    }
+    const hasMessageCapableAccount = enabledAccounts.some(
+      (account) => account.config.actions?.messages ?? baseMessages ?? false,
+    );
+    if (hasMessageCapableAccount) {
+      actions.push("read");
+    }
+
+    return {
+      actions,
+      capabilities: enabledAccounts.length > 0 ? ["presentation"] : [],
+    };
+  },
+  extractToolSend({ args }) {
+    if (normalizeOptionalString(args.action) !== "send") {
+      return null;
+    }
+    const to = normalizeOptionalString(args.to) ?? normalizeOptionalString(args.target);
+    if (!to) {
+      return null;
+    }
+    const threadId =
+      normalizeOptionalString(args.threadId) ??
+      normalizeOptionalString(args.replyToId) ??
+      normalizeOptionalString(args.replyTo);
+    const threadSuppressed = args.topLevel === true || args.threadId === null;
+    return {
+      to,
+      accountId: normalizeOptionalString(args.accountId),
+      ...(threadId ? { threadId } : {}),
+      ...(!threadId && !threadSuppressed ? { threadImplicit: true } : {}),
+      ...(threadSuppressed ? { threadSuppressed: true } : {}),
+    };
+  },
   prepareSendPayload: ({ ctx, payload }) => {
     if (ctx.action !== "send") {
       return null;
@@ -316,7 +221,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     const mediaUrl = resolveMattermostSendAttachmentMedia(ctx.params);
     const attachmentText =
       typeof ctx.params.attachmentText === "string" ? ctx.params.attachmentText : undefined;
-    const existingMattermostData = readMattermostPayloadData(payload);
+    const existingMattermostData = asOptionalRecord(payload.channelData?.mattermost);
     return {
       ...payload,
       ...(mediaUrl ? { mediaUrl, mediaUrls: [mediaUrl] } : {}),
@@ -412,7 +317,18 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       throw new Error("Mattermost reactions are disabled in config");
     }
 
-    const { postId, emojiName, remove } = parseMattermostReactActionParams(params);
+    const postId =
+      normalizeOptionalString(params.messageId) ?? normalizeOptionalString(params.postId);
+    if (!postId) {
+      throw new Error("Mattermost react requires messageId (post id)");
+    }
+
+    const emojiName = normalizeMattermostEmojiName(normalizeOptionalString(params.emoji));
+    if (!emojiName) {
+      throw new Error("Mattermost react requires emoji");
+    }
+
+    const remove = params.remove === true;
     // The runner preserves the caller's spelling in `target` and puts the
     // directory-resolved provider destination in `to` before dispatch.
     const authorizedTarget = normalizeOptionalString(params.to);
@@ -441,23 +357,11 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
   },
 };
 
-function parseMattermostReactActionParams(params: Record<string, unknown>) {
-  const postId =
-    normalizeOptionalString(params.messageId) ?? normalizeOptionalString(params.postId);
-  if (!postId) {
-    throw new Error("Mattermost react requires messageId (post id)");
-  }
-
-  const emojiName = normalizeMattermostEmojiName(normalizeOptionalString(params.emoji));
-  if (!emojiName) {
-    throw new Error("Mattermost react requires emoji");
-  }
-
-  return {
-    postId,
-    emojiName,
-    remove: params.remove === true,
-  };
+function hasUnsupportedMattermostAttachmentPayload(record: Record<string, unknown>): boolean {
+  return ["buffer", "base64"].some((key) => {
+    const value = record[key];
+    return typeof value === "string" ? Boolean(value.trim()) : value != null;
+  });
 }
 
 function resolveMattermostSendAttachmentMedia(params: Record<string, unknown>): string | undefined {
@@ -465,9 +369,7 @@ function resolveMattermostSendAttachmentMedia(params: Record<string, unknown>): 
   const candidates = sourceKeys.map((key) => readStringParam(params, key));
   candidates.push(...(readStringArrayParam(params, "mediaUrls") ?? []));
 
-  let hasUnsupportedAttachmentPayload = Boolean(
-    readStringParam(params, "buffer") ?? readStringParam(params, "base64"),
-  );
+  let hasUnsupportedAttachmentPayload = hasUnsupportedMattermostAttachmentPayload(params);
   if (Array.isArray(params.attachments)) {
     for (const attachment of params.attachments) {
       if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
@@ -476,9 +378,7 @@ function resolveMattermostSendAttachmentMedia(params: Record<string, unknown>): 
       const record = attachment as Record<string, unknown>;
       candidates.push(...sourceKeys.map((key) => readStringParam(record, key)));
       candidates.push(readStringParam(record, "url"));
-      hasUnsupportedAttachmentPayload ||= Boolean(
-        readStringParam(record, "buffer") ?? readStringParam(record, "base64"),
-      );
+      hasUnsupportedAttachmentPayload ||= hasUnsupportedMattermostAttachmentPayload(record);
     }
   }
 
@@ -566,7 +466,7 @@ const mattermostOutbound: ChannelOutboundAdapter = {
     };
   },
   sendPayload: async (ctx) => {
-    const mattermostData = readMattermostPayloadData(ctx.payload);
+    const mattermostData = asOptionalRecord(ctx.payload.channelData?.mattermost);
     const buttons = Array.isArray(mattermostData?.presentationButtons)
       ? mattermostData.presentationButtons
       : undefined;
@@ -775,7 +675,37 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
     },
   },
   threading: {
-    buildToolContext: buildMattermostThreadingToolContext,
+    buildToolContext(params) {
+      const account = resolveMattermostAccount({
+        cfg: params.cfg,
+        accountId: params.accountId ?? resolveDefaultMattermostAccountId(params.cfg),
+      });
+      const chatType =
+        params.context.ChatType === "direct" ||
+        params.context.ChatType === "group" ||
+        params.context.ChatType === "channel"
+          ? params.context.ChatType
+          : "channel";
+      const configuredReplyToMode = resolveMattermostReplyToMode(account, chatType);
+      const currentThreadTs =
+        normalizeMattermostThreadId(params.context.MessageThreadId) ??
+        normalizeMattermostThreadId(params.context.TransportThreadId) ??
+        normalizeOptionalString(params.context.ReplyToId);
+      const currentMessageId = normalizeMattermostThreadId(params.context.CurrentMessageId);
+      const hasExistingThread =
+        Boolean(currentThreadTs) && (!currentMessageId || currentThreadTs !== currentMessageId);
+      const currentChannelId = params.context.To
+        ? normalizeMattermostMessagingTarget(params.context.To)
+        : undefined;
+      return {
+        currentChannelId,
+        currentThreadTs,
+        currentMessageId: params.context.CurrentMessageId,
+        replyToMode: hasExistingThread ? "all" : configuredReplyToMode,
+        hasRepliedRef: params.hasRepliedRef,
+        sameChannelThreadRequired: Boolean(currentThreadTs),
+      };
+    },
     scopedAccountReplyToMode: {
       resolveAccount: (cfg, accountId) =>
         resolveMattermostAccount({
@@ -790,8 +720,35 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
             : "channel",
         ),
     },
-    resolveAutoThreadId: resolveMattermostAutoThreadId,
-    matchesToolContextTarget: matchesMattermostToolContextTarget,
+    resolveAutoThreadId(params) {
+      const replyToId = normalizeOptionalString(params.replyToId);
+      const context = params.toolContext;
+      const currentThreadId = normalizeOptionalString(context?.currentThreadTs);
+      const currentMessageId = normalizeMattermostThreadId(context?.currentMessageId);
+      const currentTarget = normalizeMattermostThreadTarget(context?.currentChannelId);
+      if (currentThreadId && currentTarget === normalizeMattermostThreadTarget(params.to)) {
+        if (replyToId === currentMessageId) {
+          return currentThreadId;
+        }
+        if (!replyToId) {
+          const replyToMode = context?.replyToMode;
+          const canInheritThread =
+            replyToMode === "all" ||
+            (replyToMode === "first" && context?.hasRepliedRef?.value !== true);
+          return canInheritThread ? currentThreadId : undefined;
+        }
+      }
+      return replyToId;
+    },
+    matchesToolContextTarget(params) {
+      const target = normalizeMattermostThreadTarget(params.target);
+      if (!target) {
+        return false;
+      }
+      return [params.toolContext.currentChannelId, params.toolContext.currentMessagingTarget].some(
+        (currentTarget) => normalizeMattermostThreadTarget(currentTarget) === target,
+      );
+    },
     resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit, replyDelivery }) => {
       const ambientThreadId = threadId != null ? String(threadId) : undefined;
       // Direct chats stay flat when their effective mode is off. Opted-in DMs

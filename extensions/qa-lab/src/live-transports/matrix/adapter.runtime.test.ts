@@ -1,6 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { setTimeout as sleep } from "node:timers/promises";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForMatrixQaObserverEvent } from "./adapter.runtime.js";
 import type { MatrixQaRoomObserver } from "./substrate/sync.js";
+
+vi.mock("node:timers/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers/promises")>()),
+  setTimeout: vi.fn(async () => undefined),
+}));
 
 function makeObserver(
   waitForOptionalRoomEvent: MatrixQaRoomObserver["waitForOptionalRoomEvent"],
@@ -13,13 +19,14 @@ function makeObserver(
 }
 
 describe("Matrix QA adapter observer recovery", () => {
+  afterEach(() => vi.clearAllMocks());
   it("retries a sync failure only during the explicit transport interruption window", async () => {
     let interrupted = true;
     const waitForOptionalRoomEvent = vi
       .fn<MatrixQaRoomObserver["waitForOptionalRoomEvent"]>()
       .mockRejectedValueOnce(new Error("homeserver unavailable"))
       .mockResolvedValueOnce({ matched: false, since: "s1" });
-    const sleepImpl = vi.fn(async () => {
+    vi.mocked(sleep).mockImplementationOnce(async () => {
       interrupted = false;
     });
 
@@ -29,12 +36,10 @@ describe("Matrix QA adapter observer recovery", () => {
         observer: makeObserver(waitForOptionalRoomEvent),
         predicate: () => true,
         roomId: "!room:matrix.test",
-        sleepImpl,
-        timeoutMs: 1_000,
       }),
     ).resolves.toEqual({ matched: false, since: "s1" });
     expect(waitForOptionalRoomEvent).toHaveBeenCalledTimes(2);
-    expect(sleepImpl).toHaveBeenCalledOnce();
+    expect(sleep).toHaveBeenCalledOnce();
   });
 
   it("preserves terminal observer failures outside the interruption window", async () => {
@@ -42,20 +47,16 @@ describe("Matrix QA adapter observer recovery", () => {
     const waitForOptionalRoomEvent = vi
       .fn<MatrixQaRoomObserver["waitForOptionalRoomEvent"]>()
       .mockRejectedValue(failure);
-    const sleepImpl = vi.fn(async () => undefined);
-
     await expect(
       waitForMatrixQaObserverEvent({
         isExpectedInterruption: () => false,
         observer: makeObserver(waitForOptionalRoomEvent),
         predicate: () => true,
         roomId: "!room:matrix.test",
-        sleepImpl,
-        timeoutMs: 1_000,
       }),
     ).rejects.toBe(failure);
     expect(waitForOptionalRoomEvent).toHaveBeenCalledOnce();
-    expect(sleepImpl).not.toHaveBeenCalled();
+    expect(sleep).not.toHaveBeenCalled();
   });
 
   it("retries a poll that started during interruption after readiness closes the window", async () => {
@@ -74,8 +75,6 @@ describe("Matrix QA adapter observer recovery", () => {
         observer: makeObserver(waitForOptionalRoomEvent),
         predicate: () => true,
         roomId: "!room:matrix.test",
-        sleepImpl: vi.fn(async () => undefined),
-        timeoutMs: 1_000,
       }),
     ).resolves.toEqual({ matched: false, since: "s2" });
     expect(waitForOptionalRoomEvent).toHaveBeenCalledTimes(2);

@@ -67,17 +67,15 @@ function expectUnverified(result: ReturnType<typeof runOwnerScript>, message: st
 async function fixture(
   files: Record<string, string>,
   bundled: Record<string, string> = {},
-  manifest: {
-    name: string;
-    version: string;
-    imports?: Record<string, string>;
-    exports?: Record<string, string>;
-  } = { name: "openclaw", version: "0.0.0" },
+  manifest: { imports?: Record<string, string>; exports?: Record<string, string> } = {},
 ) {
   const root = directories.make("windows-repair-package-owner-");
   const packageRoot = path.join(root, "package");
   await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
-  await fs.writeFile(path.join(packageRoot, "package.json"), JSON.stringify(manifest));
+  await fs.writeFile(
+    path.join(packageRoot, "package.json"),
+    JSON.stringify({ name: "openclaw", version: "0.0.0", ...manifest }),
+  );
   await writeFiles(path.join(packageRoot, "dist"), files);
   await writeFiles(path.join(packageRoot, "node_modules"), bundled);
   const lifecycleMarker = path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
@@ -283,8 +281,6 @@ it.each(["alias", "self", "absolute"])(
       },
       {},
       {
-        name: "openclaw",
-        version: "0.0.0",
         imports: { "#dep": "./dist/target/index.cjs" },
         exports: { "./dep": "./dist/target/index.cjs" },
       },

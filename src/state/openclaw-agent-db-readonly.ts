@@ -1,6 +1,13 @@
+import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
+import { sqlPublicationAnchor, type EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
+import {
+  getOpenClawAgentDatabaseIfOpen,
+  retainAgentDatabase,
+} from "./openclaw-agent-db-borrower.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -9,8 +16,6 @@ import {
   createOpenClawAgentDatabaseClaim,
   type OpenClawAgentDatabaseClaim,
 } from "./openclaw-agent-db-identity.js";
-import { retainAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
-import { withCommittedOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-companion.js";
 import {
   openOpenClawAgentDatabaseReadOnly,
   readOpenClawAgentDatabase,
@@ -23,12 +28,17 @@ import {
   retainCachedOpenClawAgentDatabaseReadOnly,
   withScopedOpenClawAgentDatabaseReadOnly,
   type OpenClawAgentDatabaseReadOnlyBehavior,
+  OpenClawAgentDatabaseReadOnlyScope,
 } from "./openclaw-agent-db-readonly-scope.js";
-import { getOpenClawAgentDatabaseIfOpen } from "./openclaw-agent-db.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
+
+const companions = resolveGlobalSingleton(
+  Symbol.for("openclaw.agentDatabaseReadOnlyCompanions"),
+  () => new WeakMap<EngineConnection, OpenClawAgentDatabaseReadOnlyScope>(),
+);
 
 export {
   openOpenClawAgentDatabaseReadOnly,
@@ -101,11 +111,20 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
     ? undefined
     : findOpenAgentDatabase({ ...options, agentId });
   if (processOpened?.db.isTransaction) {
-    return withCommittedOpenClawAgentDatabaseReadOnly(
-      processOpened,
-      operation,
-      { ...options, agentId },
-      behavior,
+    /** Keep committed reads separate from the writer using the ordinary reader lifecycle. */
+    const companionOptions = { ...options, agentId };
+    let scope = companions.get(processOpened.db);
+    if (!scope) {
+      scope = new OpenClawAgentDatabaseReadOnlyScope(true);
+      const owned = scope;
+      registerNodeSqliteDisposeCallback(sqlPublicationAnchor(processOpened.db), () =>
+        owned.close(),
+      );
+      companions.set(processOpened.db, scope);
+    }
+    const owned = scope;
+    return owned.run({ agentId: processOpened.agentId, path: processOpened.path }, () =>
+      owned.read(operation, companionOptions, behavior),
     );
   }
   if (!processOpened) {

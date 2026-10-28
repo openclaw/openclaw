@@ -8,6 +8,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
 import type { AgentWaitResult } from "../../agents/run-wait.types.js";
 import { readSubagentRunAnnounceResult } from "../../agents/subagents/announce/subagent-announce-output.js";
+import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
@@ -381,6 +382,12 @@ export function registerYieldedRequesterSettlementCase(
               ? previousWait.promise
               : completion.promise),
         );
+        await writeSubagentSessionEntry({
+          stateDir: root,
+          agentId: "main",
+          sessionKey: childSessionKey,
+          defaultSessionId: "spawned-child-session",
+        });
         await registerSubagentRun({
           runId: previousRunId,
           childSessionKey,

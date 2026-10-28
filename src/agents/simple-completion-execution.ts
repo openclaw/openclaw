@@ -15,6 +15,7 @@ import {
   createDiagnosticTraceContext,
   getActiveDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { isDiagnosticsTimelineEnabled } from "../infra/diagnostics-timeline.js";
 import {
   bindModelLlmRuntime,
   getModelCompletionOwner,
@@ -132,7 +133,10 @@ async function completePreparedModel(params: PreparedCompletionParams): Promise<
   if (strictReasoningTags) {
     reasoningTagTextPolicy.markStrict(completionOptions);
   }
-  if (!areDiagnosticsEnabledForProcess() || !hasInternalDiagnosticEventListeners()) {
+  if (
+    !isDiagnosticsTimelineEnabled({ config: params.cfg }) &&
+    (!areDiagnosticsEnabledForProcess() || !hasInternalDiagnosticEventListeners())
+  ) {
     return await completeSimple(
       completionModel,
       params.context,
@@ -156,11 +160,11 @@ async function completePreparedModel(params: PreparedCompletionParams): Promise<
       suppressPluginHooks: true,
     },
     options: completionOptions,
-    createObserver: (capturePromptStats) =>
+    createObserver: (capturePromptStats, captureByteStats) =>
       createModelObserver({
-        config: params.cfg,
         streamContext: params.context,
         capturePromptStats,
+        captureByteStats,
         suppressPluginHooks: true,
       }),
   });

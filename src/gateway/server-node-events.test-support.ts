@@ -2,10 +2,13 @@ import { vi } from "vitest";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import type { DurableMessageBatchSendResult } from "../channels/message/runtime.js";
+import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import type { HealthSummary } from "./health/types.js";
+import type { NodeEventContext } from "./server-node-events-types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import type { loadSessionEntryAsync as loadSessionEntryTypeAsync } from "./session-entry-load.test-support.js";
 import type { resolveGatewayModelSupportsImages } from "./session-utils.js";
@@ -33,7 +36,23 @@ export const buildSessionLookup = (
 const runtimeMocks = vi.hoisted(() => ({
   agentCommandFromIngress: vi.fn().mockResolvedValue(undefined),
   deleteMediaBuffer: vi.fn(async () => {}),
-  enqueueSystemEvent: vi.fn(),
+  enqueueSystemEventEntry: vi.fn(),
+  captureSessionEventTargetForHost: vi.fn(async (agentId: string, sessionKey: string) => ({
+    agentId,
+    sessionKey,
+    sessionId: `sid-${sessionKey}`,
+    generation: "node-event-test-generation",
+  })),
+  enqueueSessionEventForHost: vi.fn(() => ({
+    id: "node-event-test-receipt",
+    cancel: () => true,
+    accepted: Promise.resolve({ ok: true as const }),
+    settled: Promise.resolve({
+      status: "completed" as const,
+      executionStarted: true,
+      delivered: false,
+    }),
+  })),
   formatForLog: vi.fn((err: unknown) => (err instanceof Error ? err.message : String(err))),
   getRuntimeConfig: vi.fn(() => ({ session: { mainKey: "main" } })),
   INLINE_IMAGE_DURABLE_OMISSION_MARKER:
@@ -45,7 +64,6 @@ const runtimeMocks = vi.hoisted(() => ({
   parseMessageWithAttachments: vi.fn(),
   registerApnsRegistration: vi.fn(),
   updatePairedDevicePresence: vi.fn().mockResolvedValue(true),
-  requestHeartbeat: vi.fn(),
   resolveSystemMainSessionTarget: vi.fn(() => ({ agentId: "ops", sessionKey: "agent:ops:main" })),
   resolveChatAttachmentMaxBytes: vi.fn(() => 20 * 1024 * 1024),
   resolveGatewayModelSupportsImages: vi.fn(
@@ -122,9 +140,10 @@ vi.mock("../infra/device-pairing.js", async (importOriginal) => ({
   updatePairedDevicePresence: runtimeMocks.updatePairedDevicePresence,
 }));
 
-vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/heartbeat-wake.js")>()),
-  requestHeartbeat: runtimeMocks.requestHeartbeat,
+vi.mock("../auto-reply/reply/session-event-handoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../auto-reply/reply/session-event-handoff.js")>()),
+  captureSessionEventTargetForHost: runtimeMocks.captureSessionEventTargetForHost,
+  enqueueSessionEventForHost: runtimeMocks.enqueueSessionEventForHost,
 }));
 
 vi.mock("../infra/push-apns.js", async (importOriginal) => ({
@@ -134,7 +153,7 @@ vi.mock("../infra/push-apns.js", async (importOriginal) => ({
 
 vi.mock("../infra/system-events.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/system-events.js")>()),
-  enqueueSystemEvent: runtimeMocks.enqueueSystemEvent,
+  enqueueSystemEventEntry: runtimeMocks.enqueueSystemEventEntry,
 }));
 
 vi.mock("../media/store.js", async (importOriginal) => ({
@@ -191,5 +210,26 @@ export function makeNodeClient(connId: string, nodeId: string): GatewayWsClient 
       client: { id: "node-host", version: "1.0.0", platform: "linux", mode: "node" },
       device: { ...deviceProof, id: nodeId },
     } as GatewayWsClient["connect"],
+  };
+}
+
+export function buildNodeEventContext(overrides: Partial<NodeEventContext> = {}): NodeEventContext {
+  return {
+    deps: {} as CliDeps,
+    broadcast: () => {},
+    nodeSendToSession: () => {},
+    nodeSubscribe: () => {},
+    nodeUnsubscribe: () => {},
+    broadcastVoiceWakeChanged: () => {},
+    addChatRun: () => {},
+    removeChatRun: () => undefined,
+    dedupe: new Map(),
+    agentRunSeq: new Map(),
+    getHealthCache: () => null,
+    refreshHealthSnapshot: async () => ({}) as HealthSummary,
+    loadGatewayModelCatalog: async () => [],
+    authorizeNodeSystemRunEvent: () => false,
+    logGateway: { warn: () => {} },
+    ...overrides,
   };
 }

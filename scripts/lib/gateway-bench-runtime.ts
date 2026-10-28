@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { fileURLToPath } from "node:url";
 import { expectDefined } from "../../packages/normalization-core/src/expect.ts";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { delay } from "./gateway-bench-child.ts";
@@ -8,6 +9,19 @@ import { requestProbeStatus } from "./gateway-bench-probes.ts";
 import { parseStrictIntegerOption } from "./strict-integer-option.ts";
 
 export type SummaryStats = NonNullable<ReturnType<typeof summarizeNumbers>>;
+
+export function gatewayBenchCpuProfileArgs(directory?: string): string[] {
+  if (!directory) {
+    return [];
+  }
+  mkdirSync(directory, { recursive: true });
+  return [
+    "--cpu-prof",
+    `--cpu-prof-dir=${path.resolve(directory)}`,
+    "--import",
+    fileURLToPath(new URL("./gateway-bench-cpu-profile.mjs", import.meta.url)),
+  ];
+}
 export type InitialProbeResult = {
   firstErrorKind: string | null;
   firstRecoveryMs: number | null;
@@ -257,6 +271,7 @@ export function createGatewayBenchEnv(
     LANG: process.env.LANG ?? "en_US.UTF-8",
     LOGNAME: process.env.LOGNAME ?? "openclaw-bench",
     NO_COLOR: "1",
+    NODE_DISABLE_COMPILE_CACHE: process.env.NODE_DISABLE_COMPILE_CACHE,
     PATH: process.env.PATH,
     SHELL: process.env.SHELL,
     TMPDIR: process.env.TMPDIR,
@@ -276,6 +291,7 @@ export function writePluginFixtures(
   root: string,
   options: {
     activationOnStartup?: boolean | undefined;
+    nodePolicy?: boolean | undefined;
     count: number;
     providerCatalogStallMs?: number | undefined;
     providerStaticCatalogModelCount?: number | undefined;
@@ -319,7 +335,9 @@ export function writePluginFixtures(
       ? `const provider = ${JSON.stringify(provider)};\nmodule.exports = { id: ${JSON.stringify(id)}, register(api) { api.registerProvider({ id: ${JSON.stringify(STALLED_CATALOG_PROVIDER_ID)}, label: "Benchmark Catalog Stall", auth: [], catalog: { order: "simple", run: async () => { const stopAt = Date.now() + ${options.providerCatalogStallMs}; while (Date.now() < stopAt) {} return { provider }; } }, staticCatalog: { order: "simple", run: async () => ({ provider }) } }); } };\n`
       : stallsProviderStaticCatalog
         ? `const provider = ${JSON.stringify(provider)};\nmodule.exports = { id: ${JSON.stringify(id)}, register(api) { api.registerProvider({ id: ${JSON.stringify(STALLED_CATALOG_PROVIDER_ID)}, label: "Benchmark Static Catalog Stall", auth: [], staticCatalog: { order: "simple", run: async () => ({ provider }) } }); } };\n`
-        : `module.exports = { id: ${JSON.stringify(id)}, register() {} };\n`;
+        : options.nodePolicy
+          ? `module.exports = { id: ${JSON.stringify(id)}, register(api) { api.registerNodeInvokePolicy({ commands: [${JSON.stringify(`${id}.echo`)}], defaultPlatforms: ["linux"], handle: (ctx) => ctx.invokeNode() }); } };\n`
+          : `module.exports = { id: ${JSON.stringify(id)}, register() {} };\n`;
     writeFileSync(path.join(pluginDir, "index.cjs"), entrySource);
     if (stallsProviderStaticCatalog) {
       writeFileSync(
@@ -367,6 +385,7 @@ export function writeGatewayBenchConfig(
   },
 ): string {
   const agents = config.agents as { defaults?: Record<string, unknown> } | undefined;
+  const plugins = config.plugins as OpenClawConfig["plugins"];
   const merged = {
     ...config,
     ...(options.agentList
@@ -387,11 +406,14 @@ export function writeGatewayBenchConfig(
         }
       : {}),
     plugins: {
-      ...(config.plugins as Record<string, unknown> | undefined),
+      ...plugins,
       ...(options.pluginFixtures
         ? {
-            allow: options.pluginFixtures.pluginIds,
-            load: { paths: [options.pluginFixtures.pluginsDir] },
+            allow: [...(plugins?.allow ?? []), ...options.pluginFixtures.pluginIds],
+            load: {
+              ...plugins?.load,
+              paths: [...(plugins?.load?.paths ?? []), options.pluginFixtures.pluginsDir],
+            },
           }
         : {}),
     },
@@ -405,6 +427,7 @@ export function buildGatewayBenchChildArgs(
   entry: string,
   port: number,
   nodeOptions: string[] = [],
+  authMode: "none" | "token" | "trusted-proxy" = "none",
 ): string[] {
   return [
     ...nodeOptions,
@@ -416,7 +439,7 @@ export function buildGatewayBenchChildArgs(
     "--bind",
     "loopback",
     "--auth",
-    "none",
+    authMode,
     "--tailscale",
     "off",
     "--allow-unconfigured",
@@ -553,4 +576,126 @@ export function flushOutputLineBuffers(
       onLine(line, nowMs);
     }
   }
+}
+
+/** Source-only authority counts; keep this observer out of timing/allocation passes. */
+export function writeGatewayAuthorityCountsPreload(
+  destination: string,
+  active = false,
+  captureCallers = true,
+): void {
+  writeFileSync(
+    destination,
+    String.raw`
+import fs from "node:fs";
+import { registerHooks, syncBuiltinESMExports } from "node:module";
+import { isMainThread } from "node:worker_threads";
+if (isMainThread) {
+  const state = { active: ${active}, startedAtEpochMs: Date.now(), counts: {}, callers: {}, installed: {}, firstAuthPolicyStacks: [],
+    count(key) {
+      if (!this.active) return;
+      this.counts[key] = (this.counts[key] ?? 0) + 1;
+      if (${captureCallers} && (key.endsWith(".assertSettled") || key.endsWith(".readProfileAuthority"))) {
+        const caller = key + " <- " + new Error().stack.split("\n").slice(3, 6).join(" <- ").trim();
+        this.callers[caller] = (this.callers[caller] ?? 0) + 1;
+      }
+      if (${captureCallers} && (key === "session-source-authority.assertSources" ||
+          key === "operator-run-recovery.assertRecoveryCurrent" ||
+          key === "cron-delivery-attempt-fence.assertCurrent" ||
+          key === "server-cron.isAgentAvailable")) {
+        const limit = Error.stackTraceLimit;
+        Error.stackTraceLimit = 64;
+        const caller = key + " <- " + new Error().stack.split("\n").slice(2).join(" <- ").trim();
+        Error.stackTraceLimit = limit;
+        this.callers[caller] = (this.callers[caller] ?? 0) + 1;
+      }
+      if (${captureCallers} && key === "auth-policy.stableStringify" && this.firstAuthPolicyStacks.length < 8)
+        this.firstAuthPolicyStacks.push(new Error("auth-policy stringify caller").stack);
+    } };
+  globalThis[Symbol.for("openclaw.benchmark.authorityCounts")] = state;
+  const statSync = fs.statSync;
+  fs.statSync = function (...args) { state.count("filesystem.statSync"); return statSync.apply(this, args); };
+  syncBuiltinESMExports();
+  const owners = new Set([
+    "session-source-authority", "admitted-run-context", "operator-run-authority",
+    "session-delivery-generation", "session-entry-source-authority", "session-event-handoff",
+    "session-tool-overrides", "auth-policy", "sqlite-worker-identity",
+    "user-profile-events", "user-profile-authority", "operator-run-recovery", "user-profiles-internal",
+    "server-cron", "cron-operator-source", "cron-delivery-attempt-fence"
+  ]);
+  registerHooks({ load(url, context, nextLoad) {
+    const loaded = nextLoad(url, context);
+    const owner = url.endsWith("/cron/service/delivery-attempt-fence.ts")
+      ? "cron-delivery-attempt-fence"
+      : url.match(/\/([^/]+)\.ts$/)?.[1];
+    if (!owners.has(owner)) return loaded;
+    // A matched baseline/candidate source overlay runs before this observer.
+    const raw = loaded.format === "module-typescript" ? loaded.source : fs.readFileSync(new URL(url));
+    if (raw == null) throw new Error("Authority overlay omitted source: " + owner);
+    let source = typeof raw === "string" ? raw : new TextDecoder().decode(raw);
+    const installed = {};
+    const count = (kind) => {
+      const key = owner + "." + kind;
+      installed[key] = (installed[key] ?? 0) + 1;
+      return "__authorityCounts.count(" + JSON.stringify(key) + ");";
+    };
+    if (owner === "server-cron") {
+      source = source.replace(/isAgentAvailable: \(agentId, facts\) =>([\s\S]*?),\n    resolveSessionStorePath,/,
+        (_match, expression) => "isAgentAvailable: (agentId, facts) => {" + count("isAgentAvailable") + "return " + expression + "; },\n    resolveSessionStorePath,");
+    }
+    source = source.replace(/const (assert\w*) = \((?:[^()]|\([^()]*\))*\) => \{/g,
+      (match, name) => match + count(name));
+    source = source.replace(/function (assert\w+)\([^{}]*\)(?::[^{}]+)? \{/g,
+      (match, name) => match + count(name));
+    if (owner === "operator-run-recovery") {
+      source = source.replace(/assertPolicy = \(\) => \{/g,
+        (match) => match + count("assertPolicy"));
+    }
+    if (owner === "user-profiles-internal") {
+      source = source.replace(/(readCurrentFacts|readCurrentRevision)\(this: void[^)]*\) \{/g,
+        (match, name) => match + count(name));
+      source = source.replace(/function projectUserProfileGitHubFacts\([^{}]+\{/g,
+        (match) => match + count("projectUserProfileGitHubFacts"));
+    }
+    if (owner === "user-profile-events") {
+      source = source.replace(/assertSettled\(this: void, profileIds: string \| readonly string\[\]\): void \{/g,
+        (match) => match + count("assertSettled"));
+    }
+    if (owner === "user-profile-authority") {
+      source = source.replace(/function readProfileAuthority\([^{}]+\{/g,
+        (match) => match + count("readProfileAuthority"));
+    }
+    if (owner === "session-source-authority") {
+      source = source.replace(/\(\) => \{\s*const scoped = sessionSourceScopes/g,
+        (match) => match.replace("{", "{" + count("composedAssertion")));
+    }
+    if (owner === "session-entry-source-authority") {
+      source = source.replace(/async prepareSessionSource\(\): Promise<PreparedSessionSourceAuthority> \{/g,
+        (match) => match + count("prepareSessionSource"));
+    }
+    if (owner === "operator-run-authority" || owner === "admitted-run-context") {
+      source = source.replace(/\(assertSource(?:s)?\) => \{/g,
+        (match) => match + count("composedGuard"));
+    }
+    if (owner === "sqlite-worker-identity" || owner === "auth-policy" || owner === "session-tool-overrides") {
+      const callee = owner === "sqlite-worker-identity" ? "statSync" : "stableStringify";
+      source = source.replace(new RegExp("\\b" + callee + "\\(", "g"), () =>
+        "(" + count(callee).slice(0, -1) + ", " + callee + ")(");
+    }
+    if (owner === "sqlite-worker-identity") {
+      source = source.replace(/realpathSync\.native\(/g, () =>
+        "(" + count("realpathSync.native").slice(0, -1) + ", realpathSync.native)(");
+    }
+    if (owner === "session-tool-overrides") {
+      if (!source.includes("  const intersectMap =")) throw new Error("Tool intersection observation source changed");
+      source = source.replace("  const intersectMap =", () => "  " + count("intersectSessionToolOverrides") + "const intersectMap =");
+    }
+    if (!Object.keys(installed).length) throw new Error("Authority observation source changed: " + owner);
+    state.installed[owner] = installed;
+    return { ...loaded, format: "module-typescript",
+      source: 'const __authorityCounts = globalThis[Symbol.for("openclaw.benchmark.authorityCounts")];\n' + source };
+  } });
+}
+`,
+  );
 }

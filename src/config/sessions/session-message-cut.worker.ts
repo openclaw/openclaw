@@ -15,25 +15,18 @@ import { runSessionNativeBindingTransaction } from "./session-native-binding.wor
 import type { SessionForkMessageCutCommit } from "./session-parent-fork.types.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 
-export function commitSessionMessageCut(
-  input: SessionMessageCutCommit,
-  context: AgentWorkerOperationContext,
-) {
-  return commitMessageCut(input, context);
-}
-
 export function commitSessionForkMessageCut(
   input: SessionForkMessageCutCommit,
   context: AgentWorkerOperationContext,
 ) {
-  return commitMessageCut(
+  return commitSessionMessageCut(
     { agentId: input.agentId, intent: input.intent },
     context,
     input.sourceRepositoryWorkspaceId,
   );
 }
 
-function commitMessageCut(
+export function commitSessionMessageCut(
   input: Omit<SessionMessageCutCommit, "intent"> & { intent: SessionMessageCutIntent },
   context: AgentWorkerOperationContext,
   sourceRepositoryWorkspaceId?: string,

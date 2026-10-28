@@ -109,6 +109,10 @@ Source files must be valid UTF-8. Malformed input is rejected without replacing 
 
 Imported source pages carry provenance frontmatter (`sourceType: local-file`, `sourcePath`, `ingestedAt`). Ingest always recompiles the vault afterward.
 
+Concurrent `wiki ingest` and Gateway bridge imports targeting the same vault wait
+for each other's source writes and compilation to finish. Ingest waits up to five
+minutes for a busy vault before reporting a lock timeout.
+
 Flags: `--title <title>` overrides the source title (default: derived from the filename).
 
 ### `wiki okf import <path>`
@@ -209,6 +213,11 @@ Apply narrow mutations without freeform page surgery:
 
 Both accept `--source-id`, `--contradiction`, `--question` (each repeatable), `--confidence <n>` (0-1), and `--status <status>`. `apply metadata` also accepts `--clear-confidence` to remove a stored confidence value. This is the supported way to evolve wiki pages so managed generated blocks stay intact.
 
+For `apply synthesis`, pass the summary with `--body <text>` or `--body-file <path>`.
+Body files must be regular files containing nonempty UTF-8 text. Symlinks to
+regular files are supported. FIFOs and other special files, blank files, and
+invalid UTF-8 are rejected before changing the existing synthesis page.
+
 ### `wiki bridge import`
 
 Import public memory artifacts from the active memory plugin into bridge-backed source pages. Use this in `bridge` mode to pull the latest exported memory artifacts into the wiki vault.
@@ -238,6 +247,10 @@ A non-dry-run import that changes any page records an import run id, printed in 
 Malformed UTF-8 exports are rejected before the vault is initialized or imported
 pages are changed. If the error names an invalid export, download a fresh ChatGPT
 export and retry the import.
+
+Export files and existing source pages must resolve to regular files. Named pipes
+and other special files are rejected without waiting for data. Replace the affected
+path with a regular file and retry.
 
 Re-imports preserve handwritten Notes, including literal marker examples inside a complete Notes block. If a Notes marker is missing, restore it before retrying; the import leaves the affected page unchanged.
 

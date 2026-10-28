@@ -1,3 +1,4 @@
+import { runWithAsyncStore } from "../shared/async-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import {
@@ -38,7 +39,8 @@ export async function runPluginCleanupScope<T>(values: readonly object[], run: (
     ]),
   );
   try {
-    return await pluginInvocationContext.run(
+    return await runWithAsyncStore(
+      pluginInvocationContext,
       {
         lookup: (instance) => {
           const binding = bindings.get(instance);
@@ -60,19 +62,20 @@ export class PluginInvocationScope {
   private readonly bindings = new Map<PluginInstanceHandle, PluginInvocationBinding>();
   private readonly consumers = new Map<PluginInstanceHandle, PluginInstanceConsumer>();
   private closed = false;
-  private readonly consumerKind: "work" | "custody";
 
   constructor(
     readonly registry: PluginRegistry,
     instances: Iterable<PluginInstanceHandle>,
     options: { retained?: boolean; parent?: PluginInvocationScope; kind?: "work" | "custody" } = {},
   ) {
-    this.consumerKind = options.kind ?? "work";
+    const consumerKind = options.kind ?? "work";
     try {
       for (const instance of new Set(instances)) {
         if (options.retained) {
           const acquire = () =>
-            instance.retainConsumer((run) => this.run(run), registry, this.consumerKind);
+            instance.retainConsumer((run) => this.run(run), registry, consumerKind, {
+              reason: "invocation-scope",
+            });
           const parent = options.parent?.consumer(instance);
           const consumer = parent ? parent.run(acquire) : acquire();
           this.consumers.set(instance, consumer);
@@ -117,7 +120,7 @@ export class PluginInvocationScope {
 
   run<T>(run: () => T): T {
     this.assertOpen();
-    return pluginInvocationContext.run(this, run);
+    return runWithAsyncStore(pluginInvocationContext, this, run);
   }
 
   wrap<T>(value: T): T {
@@ -131,7 +134,11 @@ export class PluginInvocationScope {
   /** Transfer custody before revoking callbacks captured by ordinary engine operations. */
   beginCleanup(): { scope: PluginInvocationScope; release: () => Promise<void> } {
     this.assertOpen();
-    const cleanup = new PluginInvocationScope(this.registry, this.bindings.keys());
+    // Retained scopes install teardown bindings below, not temporary ordinary views.
+    const cleanup = new PluginInvocationScope(
+      this.registry,
+      this.consumers.size === 0 ? this.bindings.keys() : [],
+    );
     const finished = createDeferredCore();
     // Retirement may already await these exact consumers. Revoke their callbacks
     // now, but keep their physical completion until the cleanup owner drains.

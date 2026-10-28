@@ -18,10 +18,8 @@ import {
 } from "../../config/sessions.js";
 import { rollbackPluginOwnedSessionEntryLifecycle } from "../../config/sessions/session-accessor.js";
 import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
-import {
-  withSessionActorStorage,
-  type SessionActorStorageBinding,
-} from "../../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
+import type { SessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { assertCapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
@@ -59,7 +57,7 @@ import {
   SessionLifecycleWorkspaceRecoveryError,
   type SessionLifecycleDrain,
 } from "./sessions-lifecycle-drain.js";
-import { isAgentMainSessionKey, requireSessionKey } from "./sessions-shared.js";
+import { isAgentMainSessionKey, requireSessionKey, sessionLog } from "./sessions-shared.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -338,6 +336,32 @@ async function deleteGatewaySessionInScope(
     ];
     let drain: SessionLifecycleDrain | undefined;
     let worktreePreserved: PreservedSessionWorktree | undefined;
+    let published = false;
+    const publishDeletion = (deletion: Awaited<ReturnType<typeof deleteSessionEntryLifecycle>>) => {
+      const response: SessionsDeleteResult = {
+        ok: true,
+        key: target.canonicalKey,
+        deleted: deletion.deleted,
+        archived: deletion.archivedTranscripts.map((entry) => entry.archivedPath),
+        ...(worktreePreserved ? { worktreePreserved } : {}),
+      };
+      if (published) {
+        return response;
+      }
+      published = true;
+      onDeleted?.(response);
+      if (deletion.deleted) {
+        emitSessionsChanged(context, {
+          sessionKey: target.canonicalKey,
+          sessionId: deletion.deletedSessionId,
+          agentId: target.agentId,
+          reason: "delete",
+        });
+        // The storage owner published the exact removal; this notification refreshes the list.
+        emitSessionsChanged(context, { reason: "delete" }, { preparedPublication: true });
+      }
+      return response;
+    };
     const deleteCurrent = async () => {
       try {
         const current = assertCurrent();
@@ -514,6 +538,12 @@ async function deleteGatewaySessionInScope(
               // this fence opens, so a same-key successor cannot be mistaken for it.
               const deletedSessionKey = target.canonicalKey ?? key;
               await handleSessionStateSessionDeleted(deletedSessionKey, requestedAgentId);
+              // The absent session plus its retained registry binding survive a crash.
+              // Keep this mutation and request lifetime through lossless cleanup, but
+              // acknowledge archived cleanup once the visible deletion is committed.
+              if (p.archivedOnly === true && !incognito) {
+                publishDeletion(result);
+              }
               worktreePreserved = await removeSessionWorktree({
                 id: deletedWorktreeId,
                 sessionKey: deletedSessionKey,
@@ -548,24 +578,7 @@ async function deleteGatewaySessionInScope(
       }
       return { ok: false, error: error.error };
     }
-    const response: SessionsDeleteResult = {
-      ok: true,
-      key: target.canonicalKey,
-      deleted: deletion.deleted,
-      archived: deletion.archivedTranscripts.map((entry) => entry.archivedPath),
-      ...(worktreePreserved ? { worktreePreserved } : {}),
-    };
-    onDeleted?.(response);
-    if (deletion.deleted) {
-      emitSessionsChanged(context, {
-        sessionKey: target.canonicalKey,
-        sessionId: deletion.deletedSessionId,
-        agentId: target.agentId,
-        reason: "delete",
-      });
-      // The storage owner published the exact removal; this notification refreshes the list.
-      emitSessionsChanged(context, { reason: "delete" }, { preparedPublication: true });
-    }
+    const response = publishDeletion(deletion);
     return { ok: true, result: response };
   } finally {
     durableRead?.release();
@@ -581,13 +594,25 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
     if (!requireSessionKey(params.key, respond)) {
       return;
     }
-    const result = await deleteGatewaySession({
-      ...options,
-      params,
-      onDeleted: (response) => respond(true, response, undefined),
-    });
-    if (!result.ok) {
-      respond(false, undefined, result.error);
+    let replied = false;
+    try {
+      const result = await deleteGatewaySession({
+        ...options,
+        params,
+        onDeleted: (response) => {
+          respond(true, response, undefined);
+          replied = true;
+        },
+      });
+      if (!result.ok && !replied) {
+        respond(false, undefined, result.error);
+      }
+    } catch (error) {
+      if (!replied) {
+        throw error;
+      }
+      // The deletion is durable; failed cleanup stays registered for maintenance.
+      sessionLog.warn(`sessions.delete: post-reply cleanup failed: ${formatErrorMessage(error)}`);
     }
   },
 };

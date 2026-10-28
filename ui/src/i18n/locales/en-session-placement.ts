@@ -4,6 +4,10 @@ import { en } from "./en.ts";
 // Shared session menus and lazy placement surfaces register their placement copy.
 const enSessionPlacement = {
   sessionsView: {
+    moveFrom: "From",
+    moveServerCloud: "Server & cloud",
+    moveShowMore: "Show more",
+    moveShowLess: "Show less",
     placementFactService: "Service",
     placementFactProfile: "Profile",
     placementFactMachine: "Machine",

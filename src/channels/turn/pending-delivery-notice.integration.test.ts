@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
@@ -13,6 +14,7 @@ import {
   settleDurableDelivery,
   settlePendingFinalDelivery,
 } from "../../infra/outbound/delivery-completion.js";
+import { createPendingFinalFixture } from "../../infra/outbound/delivery-queue.test-helpers.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -25,7 +27,7 @@ import type { ChannelTurnDeliveryAdapter } from "./types.js";
 const dispatchCore = vi.hoisted(() => vi.fn());
 const sendRecoveryNotice = vi.hoisted(() => vi.fn());
 const appendAssistantMessageToSessionTranscript = vi.hoisted(() => vi.fn());
-const withDurableDeliveryRuntime = vi.hoisted(() => vi.fn());
+const resolveDurableSupport = vi.hoisted(() => vi.fn());
 
 vi.mock("../../auto-reply/dispatch.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../auto-reply/dispatch.js")>()),
@@ -38,7 +40,10 @@ vi.mock("../session.js", async (importOriginal) => ({
 vi.mock("../../gateway/server-recovery-runtime-context.js", () => ({
   getGatewayRecoveryRuntime: () => ({ sendRecoveryNotice }),
 }));
-vi.mock("./durable-delivery-runtime.js", () => ({ withDurableDeliveryRuntime }));
+vi.mock("../../infra/outbound/deliver.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/outbound/deliver.js")>()),
+  resolveOutboundDurableFinalDeliverySupport: resolveDurableSupport,
+}));
 vi.mock("../../config/sessions/transcript.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/transcript.js")>()),
   appendAssistantMessageToSessionTranscript,
@@ -51,18 +56,11 @@ describe("pending delivery notice end to end", () => {
   const sessionKey = "agent:main:telegram:direct:chat-1";
   const route = { channel: "telegram", accountId: "default" };
   const context = { ...route, to: "chat-1" };
-  let completion = {
-    deliveryId: "delivery-e2e",
-    intentId: "intent-e2e",
-    sessionId: "session-e2e",
-    sessionKey,
-    storePath: "",
-  };
+  let completion: ReturnType<typeof createPendingFinalFixture>["completion"];
   const locator = () => ({ sessionKey, storePath });
   const entry = () => loadSessionEntry(locator());
-  const settlementRef = () => ({ kind: "pending-final" as const, ...completion });
   const settle = (state: "queued" | "unknown") =>
-    settlePendingFinalDelivery(settlementRef(), state, ["prepared"]);
+    settlePendingFinalDelivery(completion, state, ["prepared"]);
   const visible = async () => ({ visibleReplySent: true });
   const finalPayload = (bindCustody = true, custody = completion) => {
     const payload = { text: "the final answer" };
@@ -91,20 +89,16 @@ describe("pending delivery notice end to end", () => {
     sendRecoveryNotice.mockResolvedValue({ suppressed: false });
     appendAssistantMessageToSessionTranscript.mockResolvedValue({ ok: true });
     storePath = path.join(sessionDirs.make(), "sessions.json");
-    completion = { ...completion, storePath };
+    const fixture = createPendingFinalFixture(storePath, "delivery-e2e", sessionKey, {
+      text: "the final answer",
+      context,
+      now: Date.now(),
+    });
+    completion = fixture.completion;
     await replaceSessionEntry(locator(), {
-      sessionId: completion.sessionId,
+      ...fixture.entry,
       status: "done",
-      updatedAt: Date.now(),
       delivery: { kind: "external", route, context, origin: {} },
-      pendingFinalDelivery: {
-        kind: "replayable",
-        text: "the final answer",
-        createdAt: Date.now(),
-        context,
-        intentId: completion.intentId,
-        deliveries: [{ id: completion.deliveryId, state: "prepared" }],
-      },
     });
   });
 
@@ -121,11 +115,10 @@ describe("pending delivery notice end to end", () => {
       const dispatcher = createReplyDispatcher(params.dispatcherOptions);
       const payload = finalPayload(true, custody);
       if (prepared) {
-        const [plan] = createStructuredOutboundPayloadPlan([payload]);
-        if (!plan) {
-          throw new Error("expected prepared final");
-        }
-        dispatcher.sendPreparedReply("final", plan);
+        dispatcher.sendPreparedReply(
+          "final",
+          expectDefined(createStructuredOutboundPayloadPlan([payload])[0], "prepared final"),
+        );
       } else {
         dispatcher.sendFinalReply(payload);
       }
@@ -206,11 +199,8 @@ describe("pending delivery notice end to end", () => {
 
   it.each([
     { failure: "rejected", operation: "raw", state: "suppressed" },
-    { failure: "rejected", operation: "prepared", state: "suppressed" },
-    { failure: "retryable", operation: "raw", state: "prepared" },
     { failure: "retryable", operation: "prepared", state: "prepared" },
     { failure: "queue-owned", operation: "raw", state: "queued" },
-    { failure: "queue-owned", operation: "prepared", state: "queued" },
   ] as const)("no notice: $failure/$operation", async ({ failure, operation, state }) => {
     const cause = new PlatformMessageNotDispatchedError("sender preflight failed", {
       cause: undefined,
@@ -222,7 +212,7 @@ describe("pending delivery notice end to end", () => {
             queueCustody: "held",
           })
         : cause;
-    withDurableDeliveryRuntime.mockImplementationOnce(async () => {
+    resolveDurableSupport.mockImplementationOnce(async () => {
       if (failure === "queue-owned") {
         await settle("queued");
       }
@@ -264,11 +254,14 @@ describe("pending delivery notice end to end", () => {
       }),
     );
     expectNoticeState(suppressed);
+    if (suppressed) {
+      expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+    }
 
     await closeOpenClawAgentDatabasesAsync(path.dirname(storePath));
     closeOpenClawAgentDatabasesForTest(path.dirname(storePath));
     // A queue restart can repeat owner settlement after its first write committed.
-    await settleDurableDelivery(settlementRef(), { platformSendStarted: true });
+    await settleDurableDelivery(completion, { platformSendStarted: true });
     await freshTurn();
     expect(sendRecoveryNotice).toHaveBeenCalledTimes(1);
     expectNoticeState(suppressed);

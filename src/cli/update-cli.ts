@@ -360,6 +360,12 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     .option("--dry-run", "Inspect recovery metadata without writes", false)
     .option("--json", "Output one JSON result; never implies consent", false)
     .option("--yes", "Acknowledge permanent loss of the selected rollback originals", false)
+    .option(
+      "--include-unmanifested <path>",
+      "Explicitly select one known unmanifested original or orphan capture (repeatable)",
+      (value: string, previous: string[]) => [...previous, value],
+      [],
+    )
     .action(
       createUpdateLeafAction(
         async (opts, command) => {
@@ -379,6 +385,11 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
               Boolean(opts.dryRun) || Boolean(inheritOptionFromParent<boolean>(command, "dryRun")),
             json: Boolean(opts.json) || inheritedUpdateJson(command),
             yes: Boolean(opts.yes) || Boolean(inheritOptionFromParent<boolean>(command, "yes")),
+            ...(Array.isArray(opts.includeUnmanifested) &&
+            opts.includeUnmanifested.every((value) => typeof value === "string") &&
+            opts.includeUnmanifested.length > 0
+              ? { includeUnmanifested: opts.includeUnmanifested }
+              : {}),
           });
         },
         { supportsDryRun: true },
@@ -441,7 +452,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     .command("status")
     .description("Show update channel and version status")
     .option("--json", "Output result as JSON", false)
-    .option("--timeout <seconds>", "Timeout for update checks in seconds (default: 3)")
+    .option("--timeout <seconds>", "Check timeout (default: shared 30s; longer values extend it)")
     .addHelpText(
       "after",
       () =>

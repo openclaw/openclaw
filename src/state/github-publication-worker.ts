@@ -3,6 +3,11 @@ import {
   bindGitHubPublicationSource,
   type GitHubPublicationSourceCapability,
 } from "../gateway/github-publication-source.js";
+import { placementAuthorityOwnerFor } from "../gateway/worker-environments/placement-authority-owner.js";
+import {
+  isPublishedPlacementTurnClaimCurrent,
+  readPlacementReplica,
+} from "../gateway/worker-environments/placement-turn-authority.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
@@ -96,6 +101,29 @@ export function createGitHubPublicationWorkerScope(context: OpenClawStateWorkerC
         return facts as PublicationMutationReceipt;
       };
       return enqueue(async () => {
+        if (
+          commandSnapshot.type === "githubPublications.shared" &&
+          commandSnapshot.input.operation === "defer" &&
+          commandSnapshot.input.selection.kind === "orphaned"
+        ) {
+          const owner = placementAuthorityOwnerFor(context.admission.identity);
+          // A release after this snapshot leaves its receipt for the next recovery pass.
+          commandSnapshot.input.selection.localClaims = [...owner.localClaimSessions].flatMap(
+            (sessionId) => {
+              const claim = owner.placements.get(sessionId)?.placement?.turnClaim;
+              return claim?.owner === "local" && claim.ownerEpoch === null
+                ? [
+                    {
+                      sessionId,
+                      claimId: claim.claimId,
+                      runId: claim.runId,
+                      placementGeneration: claim.generation,
+                    },
+                  ]
+                : [];
+            },
+          );
+        }
         let retainedSource: GitHubPublicationSourceCapability | undefined;
         try {
           let binding: ReturnType<typeof bindGitHubPublicationSource> | undefined;
@@ -103,7 +131,33 @@ export function createGitHubPublicationWorkerScope(context: OpenClawStateWorkerC
             assertCurrent();
             retainedSource = typeof source === "function" ? await source() : source;
             assertCurrent();
-            binding = bindGitHubPublicationSource(retainedSource);
+            const request =
+              commandSnapshot.type === "githubPublications.insert" &&
+              commandSnapshot.input.kind === "shared"
+                ? commandSnapshot.input.input
+                : undefined;
+            const claim = request?.claim;
+            binding = bindGitHubPublicationSource(
+              retainedSource,
+              request && claim?.owner.kind === "local" && claim.owner.environmentId === undefined
+                ? () => {
+                    const placement = readPlacementReplica(
+                      context.admission.identity,
+                      claim.sessionId,
+                    )?.placement;
+                    if (
+                      placement?.state !== "local" ||
+                      placement.agentId !== request.request.agentId ||
+                      placement.sessionKey !== request.request.sessionKey ||
+                      !isPublishedPlacementTurnClaimCurrent(context.admission.identity, claim)
+                    ) {
+                      throw new Error(
+                        "GitHub publication turn authority changed before recording.",
+                      );
+                    }
+                  }
+                : undefined,
+            );
             if (
               binding.context.admission.databasePath !== context.admission.databasePath ||
               binding.context.admission.identity.key !== context.admission.identity.key ||

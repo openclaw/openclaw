@@ -1,11 +1,14 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, describe, it, vi } from "vitest";
+import { createEffect, createRoot, flush } from "solid-js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import { createApplicationConfigCapability } from "../../app/config.ts";
 import {
   createGatewayStoreTestStore,
   stubGatewayStoreTestGlobals,
 } from "../../app/gateway-store.test-support.ts";
+import { createGatewayHarness } from "../../test-helpers/app-sidebar.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { verifyApplicationProjection } from "./application-test-support.ts";
 import { projectAgentSelection, projectApplicationConfig, projectGateway } from "./application.ts";
 
@@ -13,7 +16,7 @@ beforeEach(() => stubGatewayStoreTestGlobals());
 afterEach(() => vi.unstubAllGlobals());
 
 describe("application projections", () => {
-  it("reads and replaces the Gateway owner without retaining its old selection", async () => {
+  it("isolates Gateway owners and releases each consumer independently", async () => {
     await verifyApplicationProjection({
       create: () => {
         const { gateway } = createGatewayStoreTestStore();
@@ -28,6 +31,63 @@ describe("application projections", () => {
       initial: "main",
       updated: "agent:main:projected",
     });
+  });
+
+  it("shares one Gateway observation across independent render consumers", () => {
+    const initialClient = createTestGatewayClient(async () => ({}));
+    const replacementClient = createTestGatewayClient(async () => ({}));
+    const harness = createGatewayHarness(initialClient);
+    const { gateway } = harness;
+    const nativeSubscribe = gateway.subscribe.bind(gateway);
+    const release = vi.fn();
+    const subscribe = vi.spyOn(gateway, "subscribe").mockImplementation((notify) => {
+      const stop = nativeSubscribe(notify);
+      return () => {
+        release();
+        stop();
+      };
+    });
+    const first = projectGateway(gateway);
+    const second = projectGateway(gateway);
+    const seen: Array<typeof initialClient | null> = [];
+    const stopFirst = createRoot((dispose) => {
+      createEffect(
+        () => first.read().snapshot.client,
+        () => {},
+      );
+      return dispose;
+    });
+    const stopSecond = createRoot((dispose) => {
+      createEffect(
+        () => second.read().snapshot.client,
+        (client) => {
+          seen.push(client);
+        },
+      );
+      return dispose;
+    });
+    flush();
+    try {
+      expect(second).toBe(first);
+      expect(subscribe).toHaveBeenCalledOnce();
+      harness.publish({ client: replacementClient });
+      expect(second.read().snapshot.client).toBe(replacementClient);
+      flush();
+      expect(seen).toEqual([initialClient, replacementClient]);
+      stopFirst();
+      flush();
+      expect(release).not.toHaveBeenCalled();
+      harness.publish({ client: initialClient });
+      flush();
+      expect(seen.at(-1)).toBe(initialClient);
+      stopSecond();
+      flush();
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      stopFirst();
+      stopSecond();
+      subscribe.mockRestore();
+    }
   });
 
   it("projects accepted bootstrap configuration", async () => {

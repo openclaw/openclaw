@@ -225,11 +225,11 @@ export function registerWaitingStatusCases({
       expect(draft.push.mock.calls).toEqual([[{ ...item, phase: "update", status: "running" }]]);
       const lifecycle = createMediaGenerationTaskLifecycle("image");
       if (delivered) {
-        lifecycle.completeTaskRun({ handle, provider: "fixture", model: "fixture", count: 1 });
+        lifecycle.completeTaskRun({ handle, count: 1 });
         expect(draft.retire).toHaveBeenCalledOnce();
       } else {
         // An undelivered result keeps the card as the chat's visible outcome.
-        lifecycle.failTaskRun({ handle, error: new Error("provider failed") });
+        lifecycle.failTaskRun({ handle });
         expect(draft.push.mock.calls.at(-1)).toEqual([{ ...item, phase: "end", status: "failed" }]);
         expect(draft.retire).not.toHaveBeenCalled();
       }

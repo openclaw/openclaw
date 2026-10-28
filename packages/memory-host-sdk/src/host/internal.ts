@@ -94,7 +94,7 @@ function expandHomePath(value: string): string {
   return value;
 }
 
-type NormalizedExtraMemoryPath = { path: string; pattern?: string };
+type NormalizedExtraMemoryPath = { path: string; pattern?: string; evergreen?: true };
 
 export function normalizeExtraMemoryPathEntries(
   workspaceDir: string,
@@ -107,6 +107,9 @@ export function normalizeExtraMemoryPathEntries(
     };
     if (typeof entry !== "string") {
       normalized.pattern = entry.pattern?.replaceAll("\\", "/");
+      if (entry.evergreen === true) {
+        normalized.evergreen = true;
+      }
     }
     return normalized;
   });

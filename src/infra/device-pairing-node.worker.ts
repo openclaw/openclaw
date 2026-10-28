@@ -302,13 +302,21 @@ export const nodePairingOperations = {
         };
       });
     },
+    { pairedDeviceId: (input) => input.nodeId },
   ),
   "node.recordDisconnection": devicePairingMutation(
-    (input: GenerationInput & { connectedAtMs: number; disconnectedAtMs: number }) =>
+    (
+      input: GenerationInput & {
+        connectedAtMs: number;
+        disconnectedAtMs: number;
+        hostStats?: NodeHostStats;
+      },
+    ) =>
       updateNodeSurface(
         input,
         (surface) => ({
           ...surface,
+          ...(input.hostStats ? { lastHostStats: input.hostStats } : {}),
           lastDisconnectedAtMs: Math.max(
             surface.lastDisconnectedAtMs ?? input.disconnectedAtMs,
             input.disconnectedAtMs,
@@ -318,16 +326,21 @@ export const nodePairingOperations = {
           surface.lastConnectedAtMs === input.connectedAtMs &&
           !(input.disconnectedAtMs < input.connectedAtMs),
       ),
+    { pairedDeviceId: (input) => input.nodeId },
   ),
   "node.recordHostStats": devicePairingMutation(
     (input: GenerationInput & { hostStats: NodeHostStats }) =>
       updateNodeSurface(input, (surface) => ({ ...surface, lastHostStats: input.hostStats })),
+    { pairedDeviceId: (input) => input.nodeId },
   ),
-  "node.updateBins": devicePairingMutation((input: GenerationInput & { bins: string[] }) =>
-    updateNodeSurface(input, (surface) => ({ ...surface, bins: input.bins })),
+  "node.updateBins": devicePairingMutation(
+    (input: GenerationInput & { bins: string[] }) =>
+      updateNodeSurface(input, (surface) => ({ ...surface, bins: input.bins })),
+    { pairedDeviceId: (input) => input.nodeId },
   ),
   "node.updateSessionHost": devicePairingMutation(
     (input: GenerationInput & { sessionHost: boolean }) =>
       updateNodeSurface(input, (surface) => ({ ...surface, sessionHost: input.sessionHost })),
+    { pairedDeviceId: (input) => input.nodeId },
   ),
 } satisfies WorkerOperationHandlers;

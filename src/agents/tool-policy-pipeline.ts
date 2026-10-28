@@ -174,11 +174,21 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
         const warningEntries = [...warnableGatedCoreEntries, ...otherEntries];
         if (warningEntries.length > 0) {
           const entries = warningEntries.join(", ");
-          const suffix = describeUnknownAllowlistSuffix({
-            hasGatedCoreEntries: warnableGatedCoreEntries.length > 0,
-            hasOtherEntries: otherEntries.length > 0,
-            unavailableCoreToolReason: step.unavailableCoreToolReason,
-          });
+          const hasGatedCoreEntries = warnableGatedCoreEntries.length > 0;
+          const hasOtherEntries = otherEntries.length > 0;
+          const unavailableCoreToolReason = step.unavailableCoreToolReason?.trim();
+          const unavailableCoreDetail = unavailableCoreToolReason
+            ? `These entries are shipped core tools but unavailable here: ${unavailableCoreToolReason}.`
+            : "These entries are shipped core tools but unavailable in the current runtime/provider/model/config.";
+          const mixedUnavailableCoreDetail = unavailableCoreToolReason
+            ? `Some entries are shipped core tools but unavailable here: ${unavailableCoreToolReason}; other entries won't match any tool unless the plugin is enabled.`
+            : "Some entries are shipped core tools but unavailable in the current runtime/provider/model/config; other entries won't match any tool unless the plugin is enabled.";
+          const suffix =
+            hasGatedCoreEntries && hasOtherEntries
+              ? mixedUnavailableCoreDetail
+              : hasGatedCoreEntries
+                ? unavailableCoreDetail
+                : "These entries won't match any tool unless the plugin is enabled.";
           const warning = `tools: ${step.label} allowlist contains unknown entries (${entries}). ${suffix}`;
           if (rememberBoundedKey(seenToolPolicyWarnings, warning, MAX_TOOL_POLICY_WARNING_CACHE)) {
             params.warn(warning);
@@ -207,23 +217,4 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
     });
   }
   return filtered;
-}
-
-function describeUnknownAllowlistSuffix(params: {
-  hasGatedCoreEntries: boolean;
-  hasOtherEntries: boolean;
-  unavailableCoreToolReason?: string;
-}): string {
-  const unavailableCoreToolReason = params.unavailableCoreToolReason?.trim();
-  const unavailableCoreDetail = unavailableCoreToolReason
-    ? `These entries are shipped core tools but unavailable here: ${unavailableCoreToolReason}.`
-    : "These entries are shipped core tools but unavailable in the current runtime/provider/model/config.";
-  const mixedUnavailableCoreDetail = unavailableCoreToolReason
-    ? `Some entries are shipped core tools but unavailable here: ${unavailableCoreToolReason}; other entries won't match any tool unless the plugin is enabled.`
-    : "Some entries are shipped core tools but unavailable in the current runtime/provider/model/config; other entries won't match any tool unless the plugin is enabled.";
-  return params.hasGatedCoreEntries && params.hasOtherEntries
-    ? mixedUnavailableCoreDetail
-    : params.hasGatedCoreEntries
-      ? unavailableCoreDetail
-      : "These entries won't match any tool unless the plugin is enabled.";
 }

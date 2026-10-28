@@ -17,7 +17,7 @@ describe("Android release shell wrapper arguments", () => {
       bundle,
       "#!/usr/bin/env bash\n" +
         '[[ "$BUNDLE_GEMFILE" == "$OPENCLAW_FASTLANE_EXPECTED_GEMFILE" ]] || exit 91\n' +
-        '[[ "${1:-}" == "_4.0.22_" ]] || exit 92\n' +
+        '[[ "${1:-}" == "_4.0.23_" ]] || exit 92\n' +
         '[[ "${2:-}" != "check" ]] || exit 0\n' +
         '[[ "${2:-}" == "exec" && "${3:-}" == "fastlane" ]] || exit 93\n' +
         'printf "bundle:%s\\n" "$*" >> "$OPENCLAW_FASTLANE_TEST_TRACE"\n',
@@ -51,7 +51,7 @@ describe("Android release shell wrapper arguments", () => {
     const trace = existsSync(tracePath) ? readFileSync(tracePath, "utf8") : "";
 
     expect(result.status).toBe(0);
-    expect(trace).toContain("bundle:_4.0.22_ exec fastlane android release_preflight");
+    expect(trace).toContain("bundle:_4.0.23_ exec fastlane android release_preflight");
     expect(trace).not.toContain("direct:");
   });
 });

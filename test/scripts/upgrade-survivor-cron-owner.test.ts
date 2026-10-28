@@ -1,15 +1,13 @@
-import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { readJson, runProcess, writeJson } from "./upgrade-survivor-shard.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const helper = path.resolve("scripts/e2e/lib/upgrade-survivor/cron-owner-doctor.mjs");
-const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8"));
-const writeJson = (file: string, value: unknown) => writeFileSync(file, JSON.stringify(value));
 
 function fixture(candidateProjection = false, baselineVersion = "2026.9.4") {
   const runtime = tempDirs.make("cron-owner-published-fixture-");
@@ -61,17 +59,18 @@ it.each([
   "seeds published %s with candidate projection=%s only when supported",
   (baselineVersion, candidateProjection) => {
     const f = fixture(candidateProjection, baselineVersion);
-    const result = spawnSync(resolveTestNodeExecPath(), [helper, "seed"], {
-      encoding: "utf8",
-      timeout: 10_000,
-      env: {
+    const result = runProcess(
+      resolveTestNodeExecPath(),
+      [helper, "seed"],
+      {
         ...process.env,
         OPENCLAW_STATE_DIR: f.state,
         OPENCLAW_CONFIG_PATH: f.configPath,
         OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: f.runtime,
         OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: f.artifacts,
       },
-    });
+      10_000,
+    );
     using db = new DatabaseSync(f.databasePath, { readOnly: true });
     if (candidateProjection && baselineVersion === "2026.9.4") {
       expect(result.status).not.toBe(0);
@@ -132,7 +131,7 @@ it.skipIf(process.platform === "win32").each([false, true])(
     const end = source.indexOf('\nif [ "$SCENARIO" = "dreaming-cron-doctor" ]; then\n', start);
     expect(start).toBeGreaterThan(0);
     expect(end).toBeGreaterThan(start);
-    const result = spawnSync(
+    const result = runProcess(
       "/bin/bash",
       [
         "-c",
@@ -154,11 +153,8 @@ phase() {
 ${source.slice(start, end)}
 `,
       ],
-      {
-        encoding: "utf8",
-        timeout: 10_000,
-        env: { ...process.env, UNIT_ROOT: root, UNIT_FAIL_ASSERTION: failAssertion ? "1" : "0" },
-      },
+      { ...process.env, UNIT_ROOT: root, UNIT_FAIL_ASSERTION: failAssertion ? "1" : "0" },
+      10_000,
     );
     const phases = readFileSync(events, "utf8").trim().split("\n");
     const ordered = (...names: string[]) => {

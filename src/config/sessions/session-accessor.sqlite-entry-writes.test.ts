@@ -25,7 +25,7 @@ import { loadExactSessionEntry } from "./session-accessor.sqlite-entry.js";
 import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
-import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.kernel.js";
 import type { SessionEntry } from "./types.js";
 
 function entryFixture(state: OpenClawTestState, sessionId: string) {
@@ -265,7 +265,7 @@ it.each(["entry", "target"] as const)(
         requireNativeSqliteDatabase(database.db),
         ["participants", "windows", "metadata", "watermarks"],
         (query) =>
-          /^select\b.*\bfrom "session_participants"/iu.test(query)
+          /^select "session_key", "identity_namespace".*\bfrom "session_participants"/iu.test(query)
             ? "participants"
             : query.includes('from "session_windows" where "session_id" =')
               ? "windows"
@@ -278,6 +278,8 @@ it.each(["entry", "target"] as const)(
       try {
         runOpenClawAgentWriteTransaction((writer) => {
           const fresh = readSnapshot(writer);
+          expect(sql.counts.participants).toBe(0);
+          expect(sql.counts.metadata).toBe(selection === "entry" ? 1 : 2);
           const mutation = patchEntry(writer, fresh, {
             lastRunError: "updated",
             skillsSnapshot: {
@@ -357,7 +359,9 @@ it.each(["entry", "target"] as const)(
             .prepare("DELETE FROM session_members WHERE session_key = ?")
             .run(scope.sessionKey);
           writer.db.prepare("DELETE FROM board_tabs WHERE session_key = ?").run(scope.sessionKey);
+          const participantsBeforeRead = sql.counts.participants;
           const changed = readSnapshot(writer);
+          expect(sql.counts.participants).toBe(participantsBeforeRead);
           const changedMutation = patchEntry(writer, changed, {
             lastRunError: "after side-table writes",
           });

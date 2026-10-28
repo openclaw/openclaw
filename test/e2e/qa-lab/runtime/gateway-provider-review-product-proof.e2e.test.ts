@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { zstdDecompressSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
@@ -9,6 +10,7 @@ import { isInternalRuntimeContextCarrierText } from "../../../../extensions/qa-l
 import { buildDeviceAuthPayloadV3 } from "../../../../packages/gateway-client/src/device-auth.js";
 import { rawDataToString } from "../../../../packages/gateway-client/src/websocket-data.js";
 import type { ResponseFrame } from "../../../../packages/gateway-protocol/src/schema/frames.js";
+import { isRetryableGatewayStartupUnavailableError } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -117,11 +119,21 @@ async function connectOperator(gateway: OpenClawTestInstance, email: string, sig
     return result.promise;
   };
   const call = async (method: string, params: unknown): Promise<unknown> => {
-    const result = await request(method, params);
-    if (!result.ok) {
-      throw new Error(`${method}: ${JSON.stringify(result.error)}`);
+    for (;;) {
+      const result = await request(method, params);
+      if (result.ok) {
+        return result.payload;
+      }
+      const retryAfterMs = result.error?.retryAfterMs;
+      if (
+        !isRetryableGatewayStartupUnavailableError(result.error) ||
+        typeof retryAfterMs !== "number"
+      ) {
+        throw new Error(`${method}: ${JSON.stringify(result.error)}`);
+      }
+      // HTTP readiness does not wait for saved-input recovery to release chat.send.
+      await delay(retryAfterMs, undefined, { signal });
     }
-    return result.payload;
   };
   const close = async () => {
     signal.removeEventListener("abort", abort);

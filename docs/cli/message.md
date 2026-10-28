@@ -74,6 +74,9 @@ Every action accepts: `--channel <name>`, `--account <id>`, `--json`,
 `--dry-run`, `--verbose`. Actions that take a destination also accept
 `-t, --target <dest>`.
 
+Human-readable summaries and tables neutralize terminal control sequences from
+channel-provided text before styling. `--json` retains the original channel data.
+
 An explicitly empty or whitespace-only `--account` value is rejected. Omit the
 option to use the existing default or bound account, including when a shell
 variable is empty. Nonblank account values keep their existing selection rules.

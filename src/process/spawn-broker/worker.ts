@@ -3,6 +3,7 @@ import { Socket } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { getProcessInstanceStartTime } from "../../shared/pid-alive.js";
 import { spawnWithInheritedOomScore } from "../linux-oom-score.js";
@@ -162,12 +163,7 @@ function shutdown(): void {
         ...[...owned.values()].map(stopChild),
         resources?.close(),
       ]);
-      const failures = outcomes.flatMap((outcome) =>
-        outcome.status === "rejected" ? [outcome.reason] : [],
-      );
-      if (failures.length) {
-        throw new AggregateError(failures, "Spawn broker native cleanup failed");
-      }
+      throwSettledAggregate(outcomes, "Spawn broker native cleanup failed");
       // Native owners have settled. Only abandoned members of our private group
       // remain; never signal the broker or tear down its isolate during cleanup.
       await drainCurrentBrokerProcessGroup();

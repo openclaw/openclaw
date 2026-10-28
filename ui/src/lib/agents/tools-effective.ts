@@ -1,33 +1,18 @@
-import type {
-  ModelCatalogEntry,
-  SessionsListResult,
-  ToolsEffectiveResult,
-} from "../../api/types.ts";
+import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import {
   normalizeChatModelOverrideValue,
   resolvePreferredServerChatModelValue,
 } from "../chat/model-ref.ts";
-import { formatUiError } from "../format-error.ts";
 import type { SessionCapability } from "../sessions/index.ts";
-import { resolveAgentIdFromSessionKey } from "../sessions/session-key.ts";
 
-export type ToolsEffectiveState = {
+export type ToolsEffectiveModelState = {
   chatModelCatalog?: ModelCatalogEntry[];
-  client: {
-    request<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T>;
-  } | null;
-  connected: boolean;
   sessions: Pick<SessionCapability, "state">;
   sessionsResult?: SessionsListResult | null;
-  toolsEffectiveError: string | null;
-  toolsEffectiveLoading: boolean;
-  toolsEffectiveLoadingKey?: string | null;
-  toolsEffectiveResult: ToolsEffectiveResult | null;
-  toolsEffectiveResultKey?: string | null;
 };
 
 export function buildToolsEffectiveRequestKey(
-  state: Pick<ToolsEffectiveState, "sessions" | "sessionsResult" | "chatModelCatalog">,
+  state: ToolsEffectiveModelState,
   params: { agentId: string; sessionKey: string },
 ): string {
   const resolvedAgentId = params.agentId.trim();
@@ -36,87 +21,8 @@ export function buildToolsEffectiveRequestKey(
   return `${resolvedAgentId}:${resolvedSessionKey}:model=${modelKey || "(default)"}`;
 }
 
-export async function loadToolsEffective(
-  state: ToolsEffectiveState,
-  params: { agentId: string; sessionKey: string },
-  options: {
-    onError?: (error: unknown) => string;
-  } = {},
-) {
-  const client = state.client;
-  const resolvedAgentId = params.agentId.trim();
-  const resolvedSessionKey = params.sessionKey.trim();
-  const requestKey = buildToolsEffectiveRequestKey(state, {
-    agentId: resolvedAgentId,
-    sessionKey: resolvedSessionKey,
-  });
-  if (
-    !client ||
-    !state.connected ||
-    !resolvedAgentId ||
-    !resolvedSessionKey ||
-    (state.toolsEffectiveLoading && state.toolsEffectiveLoadingKey === requestKey)
-  ) {
-    return;
-  }
-  state.toolsEffectiveLoading = true;
-  state.toolsEffectiveLoadingKey = requestKey;
-  state.toolsEffectiveResultKey = null;
-  state.toolsEffectiveError = null;
-  state.toolsEffectiveResult = null;
-  const outcome = await client
-    .request<ToolsEffectiveResult>("tools.effective", {
-      agentId: resolvedAgentId,
-      sessionKey: resolvedSessionKey,
-    })
-    .then(
-      (result) => ({ result }),
-      (error: unknown) => ({ error }),
-    );
-  if (state.client !== client || state.toolsEffectiveLoadingKey !== requestKey) {
-    return;
-  }
-  state.toolsEffectiveLoadingKey = null;
-  state.toolsEffectiveLoading = false;
-  if ("error" in outcome) {
-    state.toolsEffectiveError = options.onError?.(outcome.error) ?? formatUiError(outcome.error);
-  } else {
-    state.toolsEffectiveResultKey = requestKey;
-    state.toolsEffectiveResult = outcome.result;
-  }
-}
-
-export function resetToolsEffectiveState(state: ToolsEffectiveState) {
-  state.toolsEffectiveResult = null;
-  state.toolsEffectiveResultKey = null;
-  state.toolsEffectiveError = null;
-  state.toolsEffectiveLoading = false;
-  state.toolsEffectiveLoadingKey = null;
-}
-
-export function refreshVisibleToolsEffectiveForCurrentSession(
-  state: ToolsEffectiveState & {
-    agentsPanel?: string;
-    agentsSelectedId?: string | null;
-    sessionKey?: string;
-  },
-): Promise<void> | undefined {
-  const resolvedSessionKey = state.sessionKey?.trim();
-  if (!resolvedSessionKey || state.agentsPanel !== "tools" || !state.agentsSelectedId) {
-    return undefined;
-  }
-  const sessionAgentId = resolveAgentIdFromSessionKey(resolvedSessionKey);
-  if (state.agentsSelectedId !== sessionAgentId) {
-    return undefined;
-  }
-  return loadToolsEffective(state, {
-    agentId: sessionAgentId,
-    sessionKey: resolvedSessionKey,
-  });
-}
-
 function resolveEffectiveToolsModelKey(
-  state: Pick<ToolsEffectiveState, "sessions" | "sessionsResult" | "chatModelCatalog">,
+  state: ToolsEffectiveModelState,
   sessionKey: string,
 ): string {
   if (!sessionKey) {

@@ -102,7 +102,6 @@ describe("action client helpers", () => {
       cfg: TEST_CFG,
       timeoutMs: undefined,
       accountId: undefined,
-      startClient: false,
       role: "transient",
     });
   });

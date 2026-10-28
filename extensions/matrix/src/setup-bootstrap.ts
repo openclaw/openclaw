@@ -5,19 +5,11 @@ import { resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import { bootstrapMatrixVerification } from "./matrix/actions/verification.js";
 import type { CoreConfig } from "./types.js";
 
-type MatrixSetupVerificationBootstrapResult = {
-  attempted: boolean;
-  success: boolean;
-  recoveryKeyCreatedAt: string | null;
-  backupVersion: string | null;
-  error?: string;
-};
-
 export async function maybeBootstrapNewEncryptedMatrixAccount(params: {
   previousCfg: CoreConfig;
   cfg: CoreConfig;
   accountId: string;
-}): Promise<MatrixSetupVerificationBootstrapResult> {
+}) {
   const accountConfig = resolveMatrixAccountConfig({
     cfg: params.cfg,
     accountId: params.accountId,

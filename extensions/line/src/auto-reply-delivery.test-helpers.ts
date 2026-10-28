@@ -1,31 +1,20 @@
-// Shared fixtures for LINE auto-reply delivery tests.
-import type { messagingApi } from "@line/bot-sdk";
 import * as replyRuntime from "openclaw/plugin-sdk/reply-runtime";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
-import { afterEach, vi, type Mock } from "vitest";
+import { afterEach, vi } from "vitest";
 import { lineResult } from "./channel.sendPayload.test-support.js";
 import * as markdown from "./markdown-to-line.js";
 import * as media from "./outbound-media.js";
 import * as send from "./send.js";
 import * as templates from "./template-messages.js";
 
-export type LineAutoReplyDeps = {
+export type LineAutoReplyDeps = Pick<
+  typeof send,
+  "replyMessageLine" | "pushMessagesLine" | "createFlexMessage" | "createLocationMessage"
+> & {
   buildTemplateMessageFromPayload: typeof templates.buildTemplateMessageFromPayload;
   processLineMessage: typeof markdown.processLineMessage;
   chunkMarkdownText: typeof replyRuntime.chunkMarkdownText;
-  replyMessageLine: typeof send.replyMessageLine;
-  pushMessagesLine: typeof send.pushMessagesLine;
-  createFlexMessage: typeof send.createFlexMessage;
   buildMediaMessage: typeof media.buildLineMediaMessage;
-  createLocationMessage: typeof send.createLocationMessage;
-};
-
-type LineAutoReplyTestDeps = {
-  replyMessageLine: Mock<LineAutoReplyDeps["replyMessageLine"]>;
-  buildMediaMessage: (
-    ...args: Parameters<LineAutoReplyDeps["buildMediaMessage"]>
-  ) => Promise<messagingApi.Message>;
-  pushMessagesLine: Mock<LineAutoReplyDeps["pushMessagesLine"]>;
 };
 
 const moduleMocks: Array<{ mockRestore(): void }> = [];
@@ -47,16 +36,12 @@ export const baseDeliveryParams = {
   textLimit: 5000,
 };
 
-export const createFlexMessage = (
-  altText: string,
-  contents: messagingApi.FlexContainer,
-): messagingApi.FlexMessage => ({
+export const createFlexMessage: LineAutoReplyDeps["createFlexMessage"] = (altText, contents) => ({
   type: "flex",
   altText,
   contents,
 });
 
-/** LINE's wire shape for label-only quick replies, as the plugin builds them. */
 export const createQuickReply = (...labels: string[]) => ({
   items: labels.map((label) => ({
     type: "action" as const,
@@ -70,12 +55,7 @@ export const createImageMessage = (url: string) => ({
   previewImageUrl: url,
 });
 
-const createLocationMessage: LineAutoReplyDeps["createLocationMessage"] = (location) => ({
-  type: "location" as const,
-  ...location,
-});
-
-export function createDeps(overrides?: Partial<LineAutoReplyDeps>): LineAutoReplyTestDeps {
+export function createDeps(overrides?: Partial<LineAutoReplyDeps>) {
   moduleMocks.push(mockPinnedHostnameResolution());
   const replyMessageLine = vi.fn<LineAutoReplyDeps["replyMessageLine"]>(async () => {});
   const buildMediaMessage = vi.fn(media.buildLineMediaMessage);
@@ -90,7 +70,7 @@ export function createDeps(overrides?: Partial<LineAutoReplyDeps>): LineAutoRepl
     pushMessagesLine,
     createFlexMessage,
     buildMediaMessage,
-    createLocationMessage,
+    createLocationMessage: (location) => ({ type: "location", ...location }),
     ...overrides,
   };
 
@@ -100,26 +80,14 @@ export function createDeps(overrides?: Partial<LineAutoReplyDeps>): LineAutoRepl
     vi
       .spyOn(templates, "buildTemplateMessageFromPayload")
       .mockImplementation(deps.buildTemplateMessageFromPayload),
-  );
-  moduleMocks.push(
     vi.spyOn(markdown, "processLineMessage").mockImplementation(deps.processLineMessage),
-  );
-  moduleMocks.push(
     vi.spyOn(replyRuntime, "chunkMarkdownText").mockImplementation(deps.chunkMarkdownText),
-  );
-  moduleMocks.push(vi.spyOn(send, "replyMessageLine").mockImplementation(deps.replyMessageLine));
-  moduleMocks.push(vi.spyOn(send, "pushMessagesLine").mockImplementation(deps.pushMessagesLine));
-  moduleMocks.push(vi.spyOn(send, "createFlexMessage").mockImplementation(deps.createFlexMessage));
-  moduleMocks.push(
+    vi.spyOn(send, "replyMessageLine").mockImplementation(deps.replyMessageLine),
+    vi.spyOn(send, "pushMessagesLine").mockImplementation(deps.pushMessagesLine),
+    vi.spyOn(send, "createFlexMessage").mockImplementation(deps.createFlexMessage),
     vi.spyOn(media, "buildLineMediaMessage").mockImplementation(deps.buildMediaMessage),
-  );
-  moduleMocks.push(
     vi.spyOn(send, "createLocationMessage").mockImplementation(deps.createLocationMessage),
   );
 
-  return {
-    replyMessageLine,
-    buildMediaMessage,
-    pushMessagesLine,
-  };
+  return { replyMessageLine, buildMediaMessage, pushMessagesLine };
 }

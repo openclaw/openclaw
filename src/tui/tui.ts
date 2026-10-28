@@ -20,6 +20,7 @@ import { captureRuntimeConfigAsyncReader, type OpenClawConfig } from "../config/
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import type { GatewayLockIdentity } from "../infra/gateway-lock.js";
 import { resolveCurrentOpenClawCliInvocation } from "../infra/openclaw-cli-invocation.js";
@@ -364,11 +365,6 @@ export function stopTuiSafely(stop: () => void): void {
   }
 }
 
-type TerminalLossEmitter = {
-  on(event: "close" | "end", listener: () => void): unknown;
-  off(event: "close" | "end", listener: () => void): unknown;
-};
-
 export function isTuiTerminalLossError(error: unknown): boolean {
   const err = asOptionalObjectRecord(error);
   if (err?.code === "EIO" || err?.code === "EPIPE") {
@@ -381,13 +377,8 @@ export function isTuiTerminalLossError(error: unknown): boolean {
   );
 }
 
-export function installTuiTerminalLossExitHandler(
-  requestExit: () => void,
-  targets: { stdin?: TerminalLossEmitter; stdout?: TerminalLossEmitter } = {
-    stdin: process.stdin,
-    stdout: process.stdout,
-  },
-): () => void {
+export function installTuiTerminalLossExitHandler(requestExit: () => void): () => void {
+  const { stdin, stdout } = process;
   let requested = false;
   const requestOnce = (): void => {
     if (requested) {
@@ -403,14 +394,14 @@ export function installTuiTerminalLossExitHandler(
     requestOnce();
     return true;
   });
-  targets.stdin?.on("end", requestOnce);
-  targets.stdin?.on("close", requestOnce);
-  targets.stdout?.on("close", requestOnce);
+  stdin.on("end", requestOnce);
+  stdin.on("close", requestOnce);
+  stdout.on("close", requestOnce);
   return () => {
     removeUncaughtExceptionHandler();
-    targets.stdin?.off("end", requestOnce);
-    targets.stdin?.off("close", requestOnce);
-    targets.stdout?.off("close", requestOnce);
+    stdin.off("end", requestOnce);
+    stdin.off("close", requestOnce);
+    stdout.off("close", requestOnce);
   };
 }
 
@@ -1343,12 +1334,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
           authChildClosed,
           autocompleteReady,
         ]);
-        const failures = results.flatMap((outcome) =>
-          outcome.status === "rejected" ? [outcome.reason] : [],
-        );
-        if (failures.length > 0) {
-          throw new AggregateError(failures, "TUI command cleanup failed");
-        }
+        throwSettledAggregate(results, "TUI command cleanup failed");
       },
       stopClient: () => client.stop(),
       stopTui: () => drainAndStopTuiSafely(tui),

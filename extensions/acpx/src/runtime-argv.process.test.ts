@@ -45,8 +45,6 @@ async function prepareWrappers(
   return prepareAcpxCodexAuthConfig({
     pluginConfig,
     stateDir: root,
-    resolveInstalledCodexAcpBinPath: async () => script,
-    resolveInstalledClaudeAcpBinPath: async () => script,
   });
 }
 

@@ -42,7 +42,6 @@ import { readPreparedGatewayIngressAttribution } from "../ingress-attribution.js
 import { resolveRequestClientIpFromHeaders } from "../net.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import {
-  HOOK_FAN_OUT_RESPONSE_DEADLINE_MS,
   HookWakeUnavailableError,
   sendAgentResult,
   sendFanOutResult,
@@ -97,12 +96,9 @@ export function createHooksRequestHandler(
     port: number;
     logHooks: ReturnType<typeof createSubsystemLogger>;
     getClientIpConfig?: () => HookClientIpConfig;
-    fanoutResponseDeadlineMs?: number;
   } & HookDispatchers,
 ): HooksRequestHandler {
   const { getHooksConfig, logHooks, dispatchAgentHook, dispatchWakeHook, getClientIpConfig } = opts;
-  const fanoutResponseDeadlineMs =
-    opts.fanoutResponseDeadlineMs ?? HOOK_FAN_OUT_RESPONSE_DEADLINE_MS;
   const hookReplayCache = new Map<string, HookReplayEntry>();
   const hookAuthLimiter = createGatewayAuthRateLimiter(
     {
@@ -697,7 +693,6 @@ export function createHooksRequestHandler(
           }
           const settled = await settleFanOutDispatches(
             dispatches.map((dispatch) => Promise.resolve(dispatch())),
-            fanoutResponseDeadlineMs,
           );
           sendFanOutResult(res, settled, wakeResult);
           return true;

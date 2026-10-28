@@ -44,10 +44,6 @@ type NodeInvokeFailure =
       requestSent?: boolean;
     };
 
-type NodeSystemRunInvokeResult =
-  | { ok: true; raw: unknown }
-  | { ok: false; failure: NodeInvokeFailure };
-
 /** Only NOT_CONNECTED plus explicit pre-dispatch provenance proves a retry cannot duplicate work. */
 function classifyNodeInvokeFailure(error: unknown): NodeInvokeFailure {
   const errorRecord = asNullableRecord(error);
@@ -195,7 +191,7 @@ export async function invokeNodeSystemRun(params: {
   signal?: AbortSignal;
   scopes?: OperatorScope[];
   source?: SessionSourceAssertion;
-}): Promise<NodeSystemRunInvokeResult> {
+}): Promise<{ ok: true; raw: unknown } | { ok: false; failure: NodeInvokeFailure }> {
   try {
     const callOptions: Parameters<typeof callGatewayTool>[3] =
       params.scopes || params.signal || params.source

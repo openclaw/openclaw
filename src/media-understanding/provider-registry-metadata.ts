@@ -18,6 +18,7 @@ export function resolveAutoMediaKeyProvidersFromRegistry(params: {
   capability: MediaUnderstandingCapability;
   providerRegistry: Map<string, MediaUnderstandingProvider>;
 }): string[] {
+  /* oxlint-disable unicorn/no-array-sort -- This function only sorts its private flatMap result. */
   return [...params.providerRegistry.values()]
     .filter(
       (provider) =>
@@ -30,7 +31,7 @@ export function resolveAutoMediaKeyProvidersFromRegistry(params: {
         ? [{ provider, priority }]
         : [];
     })
-    .toSorted(
+    .sort(
       (left, right) =>
         left.priority - right.priority || left.provider.id.localeCompare(right.provider.id),
     )

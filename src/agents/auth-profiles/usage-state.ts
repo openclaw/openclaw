@@ -44,6 +44,7 @@ export function resetAuthProfileFailureState(
     errorCount: 0,
     ...clearedWindows,
     failureCounts: undefined,
+    lastRateLimitAt: undefined,
     // A sibling model succeeding does not replenish this model's quota.
     ...(successfulModel && existing.cooldownModel && existing.cooldownModel !== successfulModel
       ? {
@@ -53,6 +54,7 @@ export function resetAuthProfileFailureState(
           cooldownModel: existing.cooldownModel,
           errorCount: existing.errorCount,
           failureCounts: existing.failureCounts,
+          lastRateLimitAt: existing.lastRateLimitAt,
         }
       : {}),
     ...overrides,
@@ -294,16 +296,12 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
       }
     }
 
-    // Reset the aggregate counter when ALL cooldowns have expired so unrelated
-    // failures get a fair retry window. Only the rate-limit-specific counter
-    // survives a half-open probe; success still clears it. Preserves
-    // lastFailureAt for other failures' decay check in computeNextProfileUsageStats.
+    // Reset error counters when ALL cooldowns have expired so the profile gets
+    // a fair retry window. Preserves lastFailureAt for the failure-window decay
+    // check and lastRateLimitAt until a request succeeds.
     if (profileMutated && !resolveProfileUnusableUntil(stats)) {
       stats.errorCount = 0;
-      const rateLimitFailureCount = stats.failureCounts?.rate_limit;
-      stats.failureCounts = rateLimitFailureCount
-        ? { rate_limit: rateLimitFailureCount }
-        : undefined;
+      stats.failureCounts = undefined;
     }
 
     if (profileMutated) {

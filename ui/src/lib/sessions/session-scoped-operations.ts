@@ -1,7 +1,9 @@
+import type { GatewaySessionMessageSubscriptionOptions } from "@openclaw/gateway-client/browser";
 import type {
   SessionsRecoverParams,
   SessionsRecoverResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { takeEarlyGatewaySubscription } from "../../api/gateway-boot.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   SessionsBranchesListResult,
@@ -17,12 +19,14 @@ import { buildSessionRequestParams } from "./session-requests.ts";
 import type {
   SessionCompactResult,
   SessionConnectionOwner,
+  SessionGateway,
   SessionMessageSubscription,
   SessionRefreshOutcome,
 } from "./session-types.ts";
 
 type SessionScopedOperationsHost = {
   connection: SessionConnectionOwner;
+  gateway: SessionGateway;
   reconcileMutation: (agentId?: string | null) => Promise<SessionRefreshOutcome>;
   notifyCreated: (key: string) => void;
   reportError: (error: unknown) => void;
@@ -51,50 +55,6 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
   const ownedSubscriptions = new Set<SessionMessageSubscription>();
   let disposed = false;
 
-  const recover = async (params: SessionsRecoverParams): Promise<SessionsRecoverResult | null> => {
-    const scope = host.connection.capture();
-    if (!scope) {
-      return null;
-    }
-    try {
-      const result = await scope.client.request<SessionsRecoverResult>("sessions.recover", params);
-      if (!result?.key?.trim() || !result?.sessionId?.trim()) {
-        throw new Error("sessions.recover returned no session identity");
-      }
-      if (!host.connection.isCurrent(scope)) {
-        return null;
-      }
-      if (!areUiSessionKeysEquivalent(result.key, params.key)) {
-        host.notifyCreated(result.key);
-      }
-      await host.reconcileMutation(params.agentId);
-      return host.connection.isCurrent(scope) ? result : null;
-    } catch (error) {
-      if (host.connection.isCurrent(scope)) {
-        host.reportError(error);
-      }
-      return null;
-    }
-  };
-
-  const compact = async (
-    key: string,
-    options: { agentId?: string | null } = {},
-  ): Promise<SessionCompactResult> => {
-    const scope = host.connection.capture();
-    if (!scope) {
-      throw new Error("Session compaction requires an active Gateway connection");
-    }
-    const result = await scope.client.request<SessionCompactResult>(
-      "sessions.compact",
-      buildSessionRequestParams(key, options.agentId),
-    );
-    if (!host.connection.isCurrent(scope)) {
-      throw new Error("Session compaction completed on a replaced Gateway connection");
-    }
-    return result;
-  };
-
   const requestCurrent = async <T>(method: string, params: unknown): Promise<T | null> => {
     const scope = host.connection.capture();
     if (!scope) {
@@ -115,10 +75,15 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
       ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
     });
 
-  const getFile = (key: string, path: string, options: { agentId?: string | null } = {}) =>
+  const getFile = (
+    key: string,
+    path: string,
+    options: { agentId?: string | null; messageEntryId?: string } = {},
+  ) =>
     requestCurrent<SessionWorkspaceGetResult>("sessions.files.get", {
       sessionKey: key,
       path,
+      ...(options.messageEntryId ? { messageEntryId: options.messageEntryId } : {}),
       ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
     });
 
@@ -126,13 +91,18 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     key: string,
     path: string,
     content: string,
-    options: { agentId?: string | null; expectedHash: string },
+    options: {
+      agentId?: string | null;
+      expectedHash: string;
+      expectedSource?: SessionWorkspaceGetResult["source"];
+    },
   ) =>
     requestCurrent<SessionWorkspaceSetResult>("sessions.files.set", {
       sessionKey: key,
       path,
       content,
       expectedHash: options.expectedHash,
+      ...(options.expectedSource !== undefined ? { expectedSource: options.expectedSource } : {}),
       ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
     });
 
@@ -140,38 +110,6 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     const runtime = subscriptionRuntime ?? (await preloadSessionMessageSubscriptions());
     await runtime.releaseGatewaySessionMessageSubscription(subscription);
     ownedSubscriptions.delete(subscription);
-  };
-
-  const subscribeMessages = async (
-    key: string,
-    options: { agentId?: string | null; includeApprovals?: boolean; mode?: "narration" } = {},
-  ): Promise<SessionMessageSubscription> => {
-    const scope = host.connection.capture();
-    if (!scope || disposed) {
-      throw new Error("Session message subscription requires an active Gateway connection");
-    }
-    const normalizedKey = key.trim();
-    const agentId = options.agentId?.trim() ? normalizeAgentId(options.agentId) : null;
-    const { mode, includeApprovals } = options;
-    const runtime = subscriptionRuntime ?? (await preloadSessionMessageSubscriptions());
-    if (disposed || !host.connection.isCurrent(scope)) {
-      throw new Error("Session message subscription completed on a replaced Gateway connection");
-    }
-    const subscription = await runtime
-      .getGatewaySessionMessageSubscriptionCoordinator(scope.client, {
-        keysEquivalent: areUiSessionKeysEquivalent,
-      })
-      .acquire(normalizedKey, {
-        agentId,
-        ...(includeApprovals ? { includeApprovals: true } : {}),
-        ...(mode ? { mode } : {}),
-      });
-    ownedSubscriptions.add(subscription);
-    if (disposed || !host.connection.isCurrent(scope)) {
-      await unsubscribeMessages(subscription).catch(() => undefined);
-      throw new Error("Session message subscription completed on a replaced Gateway connection");
-    }
-    return subscription;
   };
 
   const requestCommittedMutation = async <T>(
@@ -230,15 +168,106 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     );
 
   return {
-    compact,
+    async compact(
+      key: string,
+      options: { agentId?: string | null } = {},
+    ): Promise<SessionCompactResult> {
+      const scope = host.connection.capture();
+      if (!scope) {
+        throw new Error("Session compaction requires an active Gateway connection");
+      }
+      const result = await scope.client.request<SessionCompactResult>(
+        "sessions.compact",
+        buildSessionRequestParams(key, options.agentId),
+      );
+      if (!host.connection.isCurrent(scope)) {
+        throw new Error("Session compaction completed on a replaced Gateway connection");
+      }
+      return result;
+    },
     forkAtMessage,
     getFile,
     listBranches,
     listFiles,
-    recover,
+    async recover(params: SessionsRecoverParams): Promise<SessionsRecoverResult | null> {
+      const scope = host.connection.capture();
+      if (!scope) {
+        return null;
+      }
+      try {
+        const result = await scope.client.request<SessionsRecoverResult>(
+          "sessions.recover",
+          params,
+        );
+        if (!result?.key?.trim() || !result?.sessionId?.trim()) {
+          throw new Error("sessions.recover returned no session identity");
+        }
+        if (!host.connection.isCurrent(scope)) {
+          return null;
+        }
+        if (!areUiSessionKeysEquivalent(result.key, params.key)) {
+          host.notifyCreated(result.key);
+        }
+        await host.reconcileMutation(params.agentId);
+        return host.connection.isCurrent(scope) ? result : null;
+      } catch (error) {
+        if (host.connection.isCurrent(scope)) {
+          host.reportError(error);
+        }
+        return null;
+      }
+    },
     rewind,
     setFile,
-    subscribeMessages,
+    async subscribeMessages(
+      key: string,
+      options: GatewaySessionMessageSubscriptionOptions = {},
+      startup?: { beforeHello?: true },
+    ): Promise<SessionMessageSubscription> {
+      const scope = host.connection.capture();
+      const beforeHello =
+        startup?.beforeHello === true && host.gateway.snapshot.phase !== "connected";
+      const client = beforeHello ? host.gateway.snapshot.client : scope?.client;
+      if (!client || disposed) {
+        throw new Error("Session message subscription requires an active Gateway connection");
+      }
+      const dispatch = client.connectSent;
+      const isCurrent = () =>
+        !disposed &&
+        (beforeHello
+          ? host.gateway.snapshot.client === client && client.connectSent === dispatch
+          : scope !== null && host.connection.isCurrent(scope));
+      if (beforeHello && (!(await dispatch) || !isCurrent())) {
+        throw new Error("Session message subscription completed on a replaced Gateway connection");
+      }
+      const normalizedKey = key.trim();
+      const agentId = options.agentId?.trim() ? normalizeAgentId(options.agentId) : null;
+      const { mode, includeApprovals, initialHistory } = options;
+      const runtime = subscriptionRuntime ?? (await preloadSessionMessageSubscriptions());
+      if (!isCurrent()) {
+        throw new Error("Session message subscription completed on a replaced Gateway connection");
+      }
+      const early = takeEarlyGatewaySubscription(client, normalizedKey, options);
+      const subscription =
+        (early ? await early : null) ??
+        (await runtime
+          .getGatewaySessionMessageSubscriptionCoordinator(client, {
+            keysEquivalent: areUiSessionKeysEquivalent,
+          })
+          .acquire(normalizedKey, {
+            agentId,
+            ...(includeApprovals ? { includeApprovals: true } : {}),
+            ...(mode ? { mode } : {}),
+            ...(initialHistory ? { initialHistory } : {}),
+          }));
+      ownedSubscriptions.add(subscription);
+      if (!isCurrent() || (beforeHello && host.gateway.snapshot.phase !== "connected")) {
+        // Retire admission before hello can reuse it; the coordinator retains pending cleanup.
+        void unsubscribeMessages(subscription).catch(() => undefined);
+        throw new Error("Session message subscription completed on a replaced Gateway connection");
+      }
+      return subscription;
+    },
     switchBranch,
     unsubscribeMessages,
     retireConnection: (previousClient: GatewayBrowserClient | null) => {

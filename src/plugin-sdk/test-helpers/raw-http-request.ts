@@ -1,30 +1,16 @@
-/**
- * Raw-socket HTTP request driver for webhook tests.
- *
- * `fetch` cannot express a server that answers while the sender is still uploading and
- * then closes: undici surfaces the failed upload and discards the response it already
- * received. Body-limit rejections are exactly that shape, so asserting them needs a
- * client that reports the status line and the connection outcome independently.
- */
+// Unlike fetch, retain early rejection responses even when the upload fails mid-body.
 import net from "node:net";
 
+const CRLF = Buffer.from("\r\n");
+
 export type RawHttpResult = {
-  /** First line of the response, or an empty string when the server sent nothing. */
   statusLine: string;
-  /** Lowercase response header names and their final values. */
   headers: Record<string, string>;
-  /** Response body after the header block. */
   body: string;
-  /** True when the server closed the connection rather than leaving it open. */
   closedByServer: boolean;
 };
 
-/**
- * Reassembles a chunked response body so callers can assert the payload the server sent.
- *
- * Chunk sizes count bytes, so the scan stays on the Buffer: decoding first would make a
- * multi-byte character consume one slice position and misplace every later boundary.
- */
+// Chunk sizes count bytes, not decoded characters; scan before UTF-8 decoding.
 function decodeChunkedBody(raw: Buffer): Buffer {
   const parts: Buffer[] = [];
   let offset = 0;
@@ -44,30 +30,20 @@ function decodeChunkedBody(raw: Buffer): Buffer {
 }
 
 export async function postRawWebhook(params: {
-  /** Absolute URL of the webhook endpoint. */
   url: string;
-  /** Request body. */
   body: string;
   headers?: Record<string, string>;
   /** How long to keep the socket open before reporting it as retained. */
   idleTimeoutMs?: number;
-  /**
-   * Send the body incrementally instead of in one write, so the server decides while the
-   * upload is still active rather than from the declared length alone.
-   */
+  /** Incremental upload: let the server reject before the body finishes. */
   chunk?: { bytes: number; intervalMs: number };
-  /** Content-Length to declare; defaults to the body's real length. */
   contentLength?: number;
-  /**
-   * Send with chunked transfer encoding and no Content-Length, so a size limit can only be
-   * detected from the bytes that actually arrive rather than from a declared length.
-   */
+  /** Omit Content-Length to exercise limits on received bytes, not declared length. */
   chunkedEncoding?: boolean;
 }): Promise<RawHttpResult> {
   const target = new URL(params.url);
   const port = Number(target.port);
   const payload = Buffer.from(params.body, "utf-8");
-  const idleTimeoutMs = params.idleTimeoutMs ?? 2_000;
   const headerLines = Object.entries(params.headers ?? {})
     .map(([name, value]) => `${name}: ${value}\r\n`)
     .join("");
@@ -90,9 +66,7 @@ export async function postRawWebhook(params: {
         return;
       }
       settled = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
+      clearTimeout(timer);
       socket.destroy();
       const raw = Buffer.concat(received);
       const headerEnd = raw.indexOf("\r\n\r\n", 0, "latin1");
@@ -100,72 +74,55 @@ export async function postRawWebhook(params: {
         headerEnd === -1 ? raw.toString("latin1") : raw.toString("latin1", 0, headerEnd);
       const rawBody = headerEnd === -1 ? Buffer.alloc(0) : raw.subarray(headerEnd + 4);
       const chunked = /transfer-encoding:\s*chunked/i.test(headBlock);
+      const [statusLine = "", ...responseHeaders] = headBlock.split("\r\n");
       const headers = Object.fromEntries(
-        headBlock
-          .split("\r\n")
-          .slice(1)
-          .map((line) => {
-            const separator = line.indexOf(":");
-            return [line.slice(0, separator).toLowerCase(), line.slice(separator + 1).trim()];
-          }),
+        responseHeaders.map((line) => {
+          const separator = line.indexOf(":");
+          return [line.slice(0, separator).toLowerCase(), line.slice(separator + 1).trim()];
+        }),
       );
       resolve({
-        statusLine: (headBlock.split("\r\n")[0] ?? "").trim(),
+        statusLine: statusLine.trim(),
         headers,
         body: (chunked ? decodeChunkedBody(rawBody) : rawBody).toString("utf-8"),
         closedByServer,
       });
     };
 
-    // Chunk framing is ASCII and the body is raw bytes. Writing them together through a
-    // string would re-encode every byte above 0x7f after its length was already declared.
-    const writeBody = (slice: Buffer) => {
-      if (!params.chunkedEncoding) {
-        socket.write(slice);
-        return;
-      }
-      socket.write(`${slice.length.toString(16)}\r\n`);
-      socket.write(slice);
-      socket.write("\r\n");
-    };
+    // Frame raw bytes without re-encoding non-ASCII payloads through a string.
+    const frameChunk = (data: Buffer) =>
+      Buffer.concat([Buffer.from(data.length.toString(16) + "\r\n"), data, CRLF]);
+    const writeBody = (data: Buffer) =>
+      socket.write(params.chunkedEncoding ? frameChunk(data) : data);
 
     socket.on("connect", () => {
       socket.write(head);
-      if (!params.chunk) {
-        writeBody(payload);
-        if (params.chunkedEncoding) {
-          socket.write("0\r\n\r\n");
+      const incremental = Boolean(params.chunk);
+      const { bytes = payload.length, intervalMs = 0 } = params.chunk ?? {};
+      let offset = 0;
+      const pump = () => {
+        if (settled || socket.destroyed) {
+          return;
         }
-      } else {
-        const { bytes, intervalMs } = params.chunk;
-        let offset = 0;
-        const pump = () => {
-          if (settled || socket.destroyed) {
-            return;
-          }
-          if (offset >= payload.length) {
-            if (params.chunkedEncoding) {
-              socket.write(`0\r\n\r\n`);
-            }
-            return;
-          }
+        const hasBody = offset < payload.length;
+        if (!incremental || hasBody) {
           const end = Math.min(offset + bytes, payload.length);
           writeBody(payload.subarray(offset, end));
           offset = end;
+        }
+        if (incremental && hasBody) {
           setTimeout(pump, intervalMs).unref?.();
-        };
-        pump();
-      }
-      // Only the idle timeout reports a retained connection; a server that answers and
-      // closes always reaches "close" below.
-      timer = setTimeout(() => settle(false), idleTimeoutMs);
+        } else if (params.chunkedEncoding) {
+          socket.write("0\r\n\r\n");
+        }
+      };
+      pump();
+      // Only the idle timeout reports a retained connection.
+      timer = setTimeout(() => settle(false), params.idleTimeoutMs ?? 2_000);
       timer.unref?.();
     });
-    socket.on("data", (chunk: Buffer) => {
-      received.push(chunk);
-    });
-    // Rejecting mid-upload makes the write fail on this side; the response may already be
-    // buffered, so wait for "close" rather than settling on the write error.
+    socket.on("data", (chunk: Buffer) => received.push(chunk));
+    // A mid-upload error may follow buffered response bytes; settle only on close.
     socket.on("error", () => {});
     socket.on("close", () => settle(true));
   });

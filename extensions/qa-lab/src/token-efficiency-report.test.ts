@@ -5,7 +5,6 @@ import type {
   RuntimeParityCell,
   RuntimeParityResult,
   RuntimeParityToolCall,
-  RuntimeParityUsagePolicy,
 } from "./runtime-parity.js";
 import {
   buildTokenEfficiencyReport,
@@ -31,6 +30,7 @@ type CellFixture = Omit<RuntimeParityCell, "runtime">;
 function makeCell(
   cellUsage: RuntimeParityCell["usage"] = usage(100, 20),
   toolCalls: RuntimeParityToolCall[] = [],
+  turns?: RuntimeParityCell["usage"][],
 ): CellFixture {
   return {
     transcriptBytes: '{"role":"assistant"}\n',
@@ -39,6 +39,7 @@ function makeCell(
     usage: cellUsage,
     wallClockMs: 10,
     bootStateLines: [],
+    ...(turns ? { cacheDiagnostics: buildRuntimeParityCacheDiagnostics(turns) } : {}),
   };
 }
 
@@ -46,7 +47,7 @@ function makeRuntimeParity(
   scenarioId: string,
   openclaw: CellFixture,
   codex: CellFixture,
-  runtimeParityUsage?: RuntimeParityUsagePolicy,
+  runtimeParityUsage?: RuntimeParityResult["runtimeParityUsage"],
 ): RuntimeParityResult {
   return {
     scenarioId,
@@ -78,35 +79,15 @@ function liveReport(...params: Parameters<typeof makeRuntimeParity>) {
 }
 
 describe("token efficiency report", () => {
-  it("fails live reports on positive Codex token increases over the threshold", () => {
-    const report = liveReport(
-      "runtime-tool-fs-read",
-      makeCell(usage(72_000, 381), [makeToolCall("fs.read"), makeToolCall("fs.read")]),
-      makeCell(
-        usage(118_000, 1_489),
-        Array.from({ length: 40 }, () => makeToolCall("fs.read")),
-      ),
-    );
-
-    expect(report.pass).toBe(false);
-    expect(report.aggregate.flaggedScenarios).toEqual(["runtime-tool-fs-read"]);
-    expect(report.rows[0]).toMatchObject({
-      classification: "regression",
-      flagged: true,
-      toolsUsed: ["fs.read"],
-    });
-    expect(report.failures).toEqual([
-      "runtime-tool-fs-read token delta=+65.1% exceeds 15.0% Codex increase threshold",
-    ]);
-  });
-
   it("detects a real cache regression even when cached-inclusive totals hide it", () => {
-    const openclaw = makeCell(usage(7_403, 220, 435_810, 415_492, 12_695));
-    const codex = makeCell(usage(25_894, 220, 495_710, 445_189, 24_407));
-    codex.cacheDiagnostics = buildRuntimeParityCacheDiagnostics([
-      usage(3, 11, 24_421, 0, 24_407),
-      usage(24_448, 11, 24_459, 0, 0),
+    const openclaw = makeCell(usage(7_403, 220, 435_810, 415_492, 12_695), [
+      makeToolCall("fs.read"),
     ]);
+    const codex = makeCell(
+      usage(25_894, 220, 495_710, 445_189, 24_407),
+      [makeToolCall("fs.read"), makeToolCall("fs.read")],
+      [usage(3, 11, 24_421, 0, 24_407), usage(24_448, 11, 24_459, 0, 0)],
+    );
 
     const report = liveReport("first-hour-cache-miss", openclaw, codex);
 
@@ -114,6 +95,7 @@ describe("token efficiency report", () => {
     expect(report.rows[0]).toMatchObject({
       classification: "regression",
       flagged: true,
+      toolsUsed: ["fs.read"],
       openclaw: { processedTokens: 20_318, cacheReadTokens: 415_492 },
       codex: {
         processedTokens: 50_521,
@@ -123,6 +105,9 @@ describe("token efficiency report", () => {
       },
     });
     expect(report.rows[0]?.deltaPercent).toBeGreaterThan(145);
+    expect(report.failures).toEqual([
+      "first-hour-cache-miss token delta=+148.7% exceeds 15.0% Codex increase threshold",
+    ]);
     expect(report.aggregate.codex).toMatchObject({
       processedTokens: 50_521,
       cacheMissCount: 1,
@@ -148,11 +133,11 @@ describe("token efficiency report", () => {
   });
 
   it("does not certify incomplete cache-write telemetry with unaccounted cache input", () => {
-    const codex = makeCell(usage(100, 20, 1_120, 100, 200));
-    codex.cacheDiagnostics = buildRuntimeParityCacheDiagnostics([
-      usage(3, 11, 314, 100, 200),
-      usage(97, 9, 806),
-    ]);
+    const codex = makeCell(
+      usage(100, 20, 1_120, 100, 200),
+      [],
+      [usage(3, 11, 314, 100, 200), usage(97, 9, 806)],
+    );
 
     const report = liveReport("incomplete-cache-write-telemetry", makeCell(), codex);
 
@@ -168,58 +153,60 @@ describe("token efficiency report", () => {
     ]);
   });
 
-  it("keeps mixed post-warm telemetry unknown without discarding measured misses", () => {
-    const codex = makeCell(usage(1_053, 33, 2_086, 0, 1_000));
-    codex.cacheDiagnostics = buildRuntimeParityCacheDiagnostics([
-      usage(3, 11, 1_014, 0, 1_000),
-      usage(1_050, 11, 1_061, 0, 0),
-      usage(0, 11),
-    ]);
+  it.each([
+    {
+      name: "mixed-cache-telemetry",
+      cell: makeCell(
+        usage(1_053, 33, 2_086, 0, 1_000),
+        [],
+        [usage(3, 11, 1_014, 0, 1_000), usage(1_050, 11, 1_061, 0, 0), usage(0, 11)],
+      ),
+      misses: [{ turn: 2, inputTokens: 1_050, cacheRead: 0, cacheWrite: 0 }],
+      unmeasured: [3],
+      markdown: "turn 2 (1050 input); unmeasured turns 3",
+    },
+    {
+      name: "partial-warm-telemetry",
+      cell: makeCell(undefined, [], [usage(3, 11, 1_014, undefined, 1_000), usage(100, 11)]),
+      misses: null,
+      unmeasured: [2],
+      markdown: "N/A (unmeasured turns 2)",
+    },
+  ])(
+    "preserves unknown $name without discarding measured misses",
+    ({ name, cell, misses, unmeasured, markdown }) => {
+      const report = liveReport(name, makeCell(), cell);
+      if (name === "partial-warm-telemetry") {
+        expect(report.pass).toBe(true);
+      }
+      expect(report).toMatchObject({
+        rows: [{ codex: { cacheMisses: misses, unmeasuredPostWarmTurns: unmeasured } }],
+        aggregate: { codex: { cacheMissCount: null, cacheMissInputTokens: null } },
+      });
+      expect(renderTokenEfficiencyMarkdownReport(report)).toContain(markdown);
+    },
+  );
 
-    const report = liveReport("mixed-cache-telemetry", makeCell(), codex);
-
-    expect(report.rows[0]?.codex).toMatchObject({
-      cacheMisses: [{ turn: 2, inputTokens: 1_050, cacheRead: 0, cacheWrite: 0 }],
-      unmeasuredPostWarmTurns: [3],
-    });
-    expect(report.aggregate.codex).toMatchObject({
-      cacheMissCount: null,
-      cacheMissInputTokens: null,
-    });
-    expect(renderTokenEfficiencyMarkdownReport(report)).toContain(
-      "turn 2 (1050 input); unmeasured turns 3",
-    );
-  });
-
-  it("preserves unmeasured warm turns when only partial cache telemetry is available", () => {
-    const codex = makeCell();
-    codex.cacheDiagnostics = buildRuntimeParityCacheDiagnostics([
-      usage(3, 11, 1_014, undefined, 1_000),
-      usage(100, 11),
-    ]);
-
-    const report = liveReport("partial-warm-telemetry", makeCell(), codex);
-
-    expect(report.pass).toBe(true);
-    expect(report.rows[0]?.codex).toMatchObject({
-      cacheMisses: null,
-      unmeasuredPostWarmTurns: [2],
-    });
-    expect(report.aggregate.codex).toMatchObject({
-      cacheMissCount: null,
-      cacheMissInputTokens: null,
-    });
-    expect(renderTokenEfficiencyMarkdownReport(report)).toContain("N/A (unmeasured turns 2)");
-  });
-
-  it("keeps live zero-usage rows failing instead of passing as neutral", () => {
-    const report = liveReport("missing-live-usage", makeCell(usage(0)), makeCell(usage(0)));
-
+  it.each([
+    [
+      "zero",
+      usage(0),
+      usage(0),
+      ["openclaw live usage totalTokens=0", "codex live usage totalTokens=0"],
+    ],
+    [
+      "fractional",
+      usage(100.5),
+      usage(101),
+      [
+        "openclaw live usage inputTokens must be a non-negative integer",
+        "openclaw live usage totalTokens must be a non-negative integer",
+      ],
+    ],
+  ] as const)("rejects %s live token usage", (name, openclaw, codex, failures) => {
+    const report = liveReport(name, makeCell(openclaw), makeCell(codex));
     expect(report.pass).toBe(false);
-    expect(report.failures).toEqual([
-      "missing-live-usage openclaw live usage totalTokens=0",
-      "missing-live-usage codex live usage totalTokens=0",
-    ]);
+    expect(report.failures).toEqual(failures.map((failure) => `${name} ${failure}`));
   });
 
   it("keeps completed measurements but fails a live report with an incomplete pair", () => {
@@ -247,20 +234,6 @@ describe("token efficiency report", () => {
     expect(renderTokenEfficiencyMarkdownReport(report)).toContain("- Verdict: fail");
   });
 
-  it("fails live reports with non-integer token usage evidence", () => {
-    const report = liveReport(
-      "fractional-live-usage",
-      makeCell(usage(100.5)),
-      makeCell(usage(101)),
-    );
-
-    expect(report.pass).toBe(false);
-    expect(report.failures).toEqual([
-      "fractional-live-usage openclaw live usage inputTokens must be a non-negative integer",
-      "fractional-live-usage openclaw live usage totalTokens must be a non-negative integer",
-    ]);
-  });
-
   it("keeps empty mock runtime summaries skipped as non-live estimates", () => {
     const report = buildTokenEfficiencyReport({
       summary: makeSummary([], "mock-openai"),
@@ -277,12 +250,11 @@ describe("token efficiency report", () => {
       ),
     });
 
-    expect(report).toMatchObject({ status: "estimated", pass: true });
-    expect(report.aggregate.flaggedScenarios).toEqual([]);
-    expect(report.rows[0]).toMatchObject({
-      usageSource: "mock-estimate",
-      classification: "regression",
-      flagged: false,
+    expect(report).toMatchObject({
+      status: "estimated",
+      pass: true,
+      aggregate: { flaggedScenarios: [] },
+      rows: [{ usageSource: "mock-estimate", classification: "regression", flagged: false }],
     });
   });
 

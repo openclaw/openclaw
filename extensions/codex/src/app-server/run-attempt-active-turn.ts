@@ -9,10 +9,7 @@ import {
 import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
-import {
-  composeSessionTranscriptWriteAssertion,
-  hasPromptImageInput,
-} from "openclaw/plugin-sdk/session-transcript-runtime";
+import { composeSessionTranscriptWriteAssertion } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { terminateCodexBackgroundTerminals } from "./attempt-client-cleanup.js";
 import { isTerminalTurnStatus } from "./attempt-notifications.js";
@@ -20,6 +17,7 @@ import {
   CodexSteeringAcceptedUnconfirmedError,
   createCodexQuestionInputHandlers,
   createCodexSteeringQueue,
+  shouldCancelCodexQuestionForImage,
   type CodexQuestionInputAuthority as InputAuthority,
   type CodexSteeringQueueOptions,
   type CodexSteeringPreparation,
@@ -43,7 +41,7 @@ import { mapCodexAppServerRemoteWorkspacePath } from "./remote-workspace-path.js
 import { restoreCodexAttemptCompactionContext } from "./run-attempt-compaction.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
-import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import type { CodexStartedTurn } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
@@ -57,7 +55,7 @@ import { buildCodexUserInput } from "./user-input.js";
 import { buildResolvedCodexUserPromptMessage } from "./user-prompt-message.js";
 
 export function activateCodexAttemptTurn(
-  resources: CodexAttemptResources,
+  resources: StartedCodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
   lifecycle: CodexAttemptLifecycleController,
   notifications: CodexAttemptNotificationController,
@@ -343,7 +341,7 @@ export function activateCodexAttemptTurn(
     workspaceOnly,
     localRoots: workspaceOnly
       ? undefined
-      : getAgentScopedMediaLocalRoots(params.config ?? {}, sessionAgentId),
+      : getAgentScopedMediaLocalRoots(params.config ?? {}, sessionAgentId, params.workspaceDir),
     sandbox:
       connection.sandbox?.enabled && connection.sandbox.fsBridge
         ? { root: connection.sandbox.workspaceDir, bridge: connection.sandbox.fsBridge }
@@ -415,7 +413,8 @@ export function activateCodexAttemptTurn(
       // is recorded only once Codex accepts it, so a rejected steer cannot replay.
       const transcriptItems = items.filter(
         (item) =>
-          item.isInboundUserMessage === true || item.userTurnTranscriptRecorder !== undefined,
+          (item.isInboundUserReply ?? item.isInboundUserMessage) === true ||
+          item.userTurnTranscriptRecorder !== undefined,
       );
       if (transcriptItems.length === 0) {
         return;
@@ -446,7 +445,7 @@ export function activateCodexAttemptTurn(
         assertSteeringActive();
       }
       for (const item of transcriptItems) {
-        if (item.isInboundUserMessage === false) {
+        if ((item.isInboundUserReply ?? item.isInboundUserMessage) === false) {
           continue;
         }
         const recorder = item.userTurnTranscriptRecorder;
@@ -494,7 +493,7 @@ export function activateCodexAttemptTurn(
       optionsLocal?.onQueueSettled?.();
       return undefined;
     }
-    if (optionsLocal?.isInboundUserMessage === true && hasPromptImageInput(optionsLocal)) {
+    if (shouldCancelCodexQuestionForImage(optionsLocal)) {
       assertSteeringActive();
       try {
         await cancelPendingUserInput("image-reply", assertCurrent, authorityKind, preparation);
@@ -519,8 +518,8 @@ export function activateCodexAttemptTurn(
       unconfirmed = error;
     }
     const recorder =
-      optionsLocal?.isInboundUserMessage === false
-        ? optionsLocal.userTurnTranscriptRecorder
+      (optionsLocal?.isInboundUserReply ?? optionsLocal?.isInboundUserMessage) === false
+        ? optionsLocal?.userTurnTranscriptRecorder
         : undefined;
     if (recorder) {
       recorder.markSentToProvider?.();
@@ -558,6 +557,7 @@ export function activateCodexAttemptTurn(
   const handle = {
     kind: "embedded" as const,
     runId: params.runId,
+    terminalReplyExpectation: params.terminalReplyExpectation,
     startedAtMs: params.startedAtMs,
     toolAuthorityFingerprint: params.toolAuthorityFingerprint,
     supportsCrossProfileSteering: true,
@@ -594,17 +594,14 @@ export function activateCodexAttemptTurn(
       deadlines.ownsExecutionWait() &&
       resourceState.turnRoute?.signal.aborted === false &&
       !state.completed &&
-      !state.terminalTurnNotificationQueued &&
-      state.activeAppServerTurnRequests === 0 &&
-      state.activeLocalProjections === 0,
+      !state.terminalTurnNotificationQueued,
     isAbortable: () =>
       !terminalState.terminalOutcomeFrozen || terminalState.sharedAbortAllowedAfterTerminalOutcome,
     isCompacting: () => projectorRef.current?.isCompacting() ?? false,
-    // queueMessage resolves only after Codex echoes the steered userMessage completion.
-    // Gateway-owned turns rely on that boundary before finalizing adoption.
+    // Transcript-waiting calls await Codex's steered userMessage completion.
+    // Queue-only calls retain receiver custody after acknowledging acceptance.
     supportsTranscriptCommitWait: true,
     supportsQueueMessageImages: params.model.input.includes("image"),
-    terminalReplyExpectation: params.terminalReplyExpectation,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     cancel: () => abortExplicitly("cancelled"),

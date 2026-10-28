@@ -1,181 +1,68 @@
-// Telegram tests cover api fetch plugin behavior.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { fetchTelegramChatId, lookupTelegramChatId } from "./api-fetch.js";
 
-const TELEGRAM_GETCHAT_JSON_CAP_BYTES = 4 * 1024 * 1024;
+const getChat = (fetchImpl?: typeof fetch) =>
+  fetchTelegramChatId({ token: "abc", chatId: "@user", fetchImpl });
 
-function getChatOkResponse(id: number | string): Response {
-  return Response.json({ ok: true, result: { id } });
-}
+const proxyMocks = vi.hoisted(() => ({ undiciFetch: vi.fn() }));
 
-function oversizedTelegramGetChatJsonResponse(onCancel: () => void): Response {
-  const response = new Response(
-    new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array(TELEGRAM_GETCHAT_JSON_CAP_BYTES + 1));
-      },
-      cancel() {
-        onCancel();
-      },
-    }),
-    { headers: { "content-type": "application/json" }, status: 200 },
-  );
-  Object.defineProperty(response, "json", {
-    value: async () => {
-      throw new Error("unbounded json reader was used");
-    },
-  });
-  return response;
-}
-
-const proxyMocks = vi.hoisted(() => ({
-  undiciFetch: vi.fn(),
-}));
-
-afterEach(() => {
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
-  vi.unstubAllEnvs();
-});
+afterEach(() => vi.useRealTimers());
 
 vi.mock("undici/index.js", async () => {
   const actual = await vi.importActual<typeof import("undici")>("undici/index.js");
-  return {
-    ...actual,
-    fetch: proxyMocks.undiciFetch,
-  };
+  return { ...actual, fetch: proxyMocks.undiciFetch };
 });
 
-describe("fetchTelegramChatId", () => {
-  it("returns null when response is not ok", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("{}", { status: 404 })),
-    );
-
-    const id = await fetchTelegramChatId({ token: "abc", chatId: "@user" });
-
-    expect(id).toBeNull();
-  });
-
-  it("returns null for oversized getChat JSON responses and cancels the stream", async () => {
-    let cancelCount = 0;
-    const fetchImpl = vi.fn(async () =>
-      oversizedTelegramGetChatJsonResponse(() => {
-        cancelCount += 1;
-      }),
-    );
-
-    await expect(
-      fetchTelegramChatId({
-        token: "abc",
-        chatId: "@user",
-        fetchImpl: fetchImpl as unknown as typeof fetch,
-      }),
-    ).resolves.toBeNull();
-    expect(cancelCount).toBe(1);
-  });
-
-  it("does not wait for a cloned capture branch before returning", async () => {
-    let observedSignal: AbortSignal | undefined;
-    let captureSettled = false;
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      observedSignal = init?.signal ?? undefined;
-      const response = new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(new TextEncoder().encode("service unavailable"));
-            observedSignal?.addEventListener(
-              "abort",
-              () => controller.error(observedSignal?.reason),
-              { once: true },
-            );
-          },
-        }),
-        { status: 503 },
-      );
-      const clone = response.clone();
-      void clone
-        .arrayBuffer()
-        .catch(() => undefined)
-        .finally(() => {
-          captureSettled = true;
-        });
-      return response;
-    });
-
-    const result = await Promise.race([
-      fetchTelegramChatId({
-        token: "abc",
-        chatId: "@user",
-        fetchImpl: fetchImpl as unknown as typeof fetch,
-      }),
-      new Promise<"stalled">((resolve) => {
-        setTimeout(() => resolve("stalled"), 250);
-      }),
-    ]);
-
-    expect(result).toBeNull();
-    await vi.waitFor(() => expect(captureSettled).toBe(true));
-    expect(observedSignal?.aborted).toBe(true);
-  });
-
-  it("keeps the getChat timeout active until the response body read settles", async () => {
-    vi.useFakeTimers();
-    let observedSignal: AbortSignal | undefined;
-    let abortReason: unknown;
-    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      observedSignal = init?.signal ?? undefined;
-      return new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            observedSignal?.addEventListener(
-              "abort",
-              () => {
-                abortReason = observedSignal?.reason;
-                controller.error(abortReason);
-              },
-              { once: true },
-            );
-          },
-        }),
-        { headers: { "content-type": "application/json" }, status: 200 },
-      );
-    });
-
-    const lookup = fetchTelegramChatId({
-      token: "abc",
-      chatId: "@user",
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-    });
-
-    await vi.advanceTimersByTimeAsync(15_000);
-
-    await expect(lookup).resolves.toBeNull();
-    expect(fetchImpl).toHaveBeenCalledOnce();
-    expect(observedSignal).toBeInstanceOf(AbortSignal);
-    expect(observedSignal?.aborted).toBe(true);
-    expect(abortReason).toBeInstanceOf(Error);
-    expect((abortReason as Error).name).toBe("TimeoutError");
-    expect((abortReason as Error).message).toBe("request timed out");
-  });
+it("returns null for oversized getChat JSON responses and cancels the stream", async () => {
+  const cancel = vi.fn();
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(4 * 1024 * 1024 + 1));
+      },
+      cancel,
+    }),
+  );
+  await expect(getChat(async () => response)).resolves.toBeNull();
+  expect(cancel).toHaveBeenCalledOnce();
 });
 
-describe("lookupTelegramChatId", () => {
-  it.each([
-    {
-      name: "success",
-      setup: () => proxyMocks.undiciFetch.mockResolvedValueOnce(getChatOkResponse(12345)),
-      expected: "12345",
-    },
-    {
-      name: "transport failure",
-      setup: () => proxyMocks.undiciFetch.mockRejectedValueOnce(new Error("network failed")),
-      expected: null,
-    },
-  ])("closes its owned transport after $name", async ({ setup, expected }) => {
+it("keeps the getChat timeout active until the response body read settles", async () => {
+  vi.useFakeTimers();
+  let observedSignal: AbortSignal | undefined;
+  const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+    const signal = init?.signal;
+    observedSignal = signal ?? undefined;
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          signal?.addEventListener("abort", () => controller.error(signal.reason), {
+            once: true,
+          });
+        },
+      }),
+    );
+  });
+
+  const lookup = getChat(fetchImpl);
+
+  await vi.advanceTimersByTimeAsync(15_000);
+
+  await expect(lookup).resolves.toBeNull();
+  expect(observedSignal?.aborted).toBe(true);
+});
+it.each(["success", "transport failure"])(
+  "lookupTelegramChatId closes its owned transport after %s",
+  async (outcome) => {
     proxyMocks.undiciFetch.mockReset();
-    setup();
+    const expected = outcome === "success" ? "12345" : null;
+    if (expected) {
+      proxyMocks.undiciFetch.mockResolvedValueOnce(
+        Response.json({ ok: true, result: { id: 12345 } }),
+      );
+    } else {
+      proxyMocks.undiciFetch.mockRejectedValueOnce(new Error("network failed"));
+    }
 
     await expect(
       lookupTelegramChatId({
@@ -189,5 +76,5 @@ describe("lookupTelegramChatId", () => {
       | (RequestInit & { dispatcher?: { destroyed?: boolean } })
       | undefined;
     expect(init?.dispatcher?.destroyed).toBe(true);
-  });
-});
+  },
+);

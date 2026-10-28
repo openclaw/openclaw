@@ -195,54 +195,6 @@ function matchesNodeConnectionFilter(
   );
 }
 
-function mergePairedNodeWithEffectiveNode(
-  paired: PairedNode | undefined,
-  effective: NodeListNode,
-): PairedNodeListRow {
-  return {
-    ...paired,
-    ...effective,
-    createdAtMs: paired?.createdAtMs,
-    // node.list can record a connection newer than the separate pairing snapshot.
-    lastConnectedAtMs:
-      effective.lastConnectedAtMs ?? paired?.lastConnectedAtMs ?? effective.connectedAtMs,
-    displayName: effective.displayName ?? paired?.displayName,
-    platform: effective.platform ?? paired?.platform,
-    version: effective.version ?? paired?.version,
-    coreVersion: effective.coreVersion ?? paired?.coreVersion,
-    uiVersion: effective.uiVersion ?? paired?.uiVersion,
-    remoteIp: effective.remoteIp ?? paired?.remoteIp,
-    permissions: effective.permissions ?? paired?.permissions,
-    approvedAtMs: effective.approvedAtMs ?? paired?.approvedAtMs,
-  };
-}
-
-function mergePairedNodesWithEffectiveNodes(
-  paired: PairedNode[],
-  effectiveNodes: NodeListNode[] | null,
-): PairedNodeListRow[] {
-  if (effectiveNodes === null) {
-    return paired;
-  }
-  const pairedById = new Map(paired.map((node) => [node.nodeId, node]));
-  const seen = new Set<string>();
-  const rows: PairedNodeListRow[] = [];
-  for (const effective of effectiveNodes) {
-    const pairedNode = pairedById.get(effective.nodeId);
-    if (!pairedNode && effective.paired !== true) {
-      continue;
-    }
-    seen.add(effective.nodeId);
-    rows.push(mergePairedNodeWithEffectiveNode(pairedNode, effective));
-  }
-  for (const node of paired) {
-    if (!seen.has(node.nodeId)) {
-      rows.push(node);
-    }
-  }
-  return rows;
-}
-
 async function tryReadNodeList(opts: NodesRpcOpts): Promise<NodeListNode[] | null> {
   try {
     return parseNodeList(await callNodeDiagnosticsGatewayCli("node.list", opts, {}));
@@ -517,7 +469,42 @@ export function registerNodesStatusCommands(nodes: Command) {
           const effectiveNodes = hasFilters
             ? parseNodeList(await callNodeDiagnosticsGatewayCli("node.list", opts, {}))
             : await tryReadNodeList(opts);
-          const effectivePairedRows = mergePairedNodesWithEffectiveNodes(paired, effectiveNodes);
+          let effectivePairedRows: PairedNodeListRow[] = paired;
+          if (effectiveNodes !== null) {
+            const pairedById = new Map(paired.map((node) => [node.nodeId, node]));
+            const seen = new Set<string>();
+            effectivePairedRows = [];
+            for (const effective of effectiveNodes) {
+              const pairedNode = pairedById.get(effective.nodeId);
+              if (!pairedNode && effective.paired !== true) {
+                continue;
+              }
+              seen.add(effective.nodeId);
+              effectivePairedRows.push({
+                ...pairedNode,
+                ...effective,
+                createdAtMs: pairedNode?.createdAtMs,
+                // node.list can record a connection newer than the separate pairing snapshot.
+                lastConnectedAtMs:
+                  effective.lastConnectedAtMs ??
+                  pairedNode?.lastConnectedAtMs ??
+                  effective.connectedAtMs,
+                displayName: effective.displayName ?? pairedNode?.displayName,
+                platform: effective.platform ?? pairedNode?.platform,
+                version: effective.version ?? pairedNode?.version,
+                coreVersion: effective.coreVersion ?? pairedNode?.coreVersion,
+                uiVersion: effective.uiVersion ?? pairedNode?.uiVersion,
+                remoteIp: effective.remoteIp ?? pairedNode?.remoteIp,
+                permissions: effective.permissions ?? pairedNode?.permissions,
+                approvedAtMs: effective.approvedAtMs ?? pairedNode?.approvedAtMs,
+              });
+            }
+            for (const node of paired) {
+              if (!seen.has(node.nodeId)) {
+                effectivePairedRows.push(node);
+              }
+            }
+          }
           const filteredPaired = effectivePairedRows.filter((node) =>
             matchesNodeConnectionFilter(node, connectedOnly, sinceMs, now),
           );

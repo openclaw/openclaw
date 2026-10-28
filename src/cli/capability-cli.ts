@@ -32,7 +32,19 @@ const capabilityCommandGroups = [
   ],
 ] as const;
 
-function registerCapabilityListAndInspect(capability: Command): void {
+export async function registerCapabilityCli(
+  program: Command,
+  argv: string[] = process.argv,
+): Promise<void> {
+  removeCommandByName(program, "infer");
+  removeCommandByName(program, "capability");
+
+  const capability = program
+    .command("infer")
+    .alias("capability")
+    .description("Run provider-backed inference commands through a stable CLI surface")
+    .addHelpText("after", () => formatDocsHelp("/cli/infer"));
+
   capability
     .command("list")
     .description("List capability IDs and supported transports")
@@ -62,12 +74,7 @@ function registerCapabilityListAndInspect(capability: Command): void {
         return entry;
       }),
     );
-}
 
-async function registerCapabilityDomainCommands(
-  capability: Command,
-  argv: string[],
-): Promise<void> {
   // Root log levels are normalized after registration. Reuse that view for selection,
   // leaving help and unknown options ahead of a domain on the complete-tree path.
   const selectionArgv = normalizeRootLogLevelArgv(argv);
@@ -96,21 +103,4 @@ async function registerCapabilityDomainCommands(
   for (const register of registrars) {
     register(capability);
   }
-}
-
-export async function registerCapabilityCli(
-  program: Command,
-  argv: string[] = process.argv,
-): Promise<void> {
-  removeCommandByName(program, "infer");
-  removeCommandByName(program, "capability");
-
-  const capability = program
-    .command("infer")
-    .alias("capability")
-    .description("Run provider-backed inference commands through a stable CLI surface")
-    .addHelpText("after", () => formatDocsHelp("/cli/infer"));
-
-  registerCapabilityListAndInspect(capability);
-  await registerCapabilityDomainCommands(capability, argv);
 }

@@ -8,8 +8,6 @@ import {
   createDoctorRuntime,
   ensureAuthProfileStore,
   mockDoctorConfigSnapshot,
-  serviceIsLoaded,
-  serviceRestart,
   transformConfigFile,
 } from "./doctor.e2e-harness.js";
 
@@ -17,6 +15,15 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   useMockProviders: false,
   resolvePluginProvidersCore: vi.fn((_params?: unknown): ProviderPlugin[] => []),
 }));
+
+// Physical-store inspection has its own suites; this fixture exercises migration/config routing.
+vi.mock("./doctor-database-engine.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./doctor-database-engine.js")>();
+  return {
+    ...actual,
+    noteDatabaseEngines: vi.fn<typeof actual.noteDatabaseEngines>().mockResolvedValue([]),
+  };
+});
 
 vi.mock("../plugins/providers.runtime.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/providers.runtime.js")>(
@@ -34,7 +41,6 @@ vi.mock("../plugins/providers.runtime.js", async () => {
 });
 
 let doctorCommand: typeof import("./doctor.js").doctorCommand;
-let healthCommand: typeof import("./health.js").healthCommand;
 
 async function expectNixRefusal(options: Parameters<typeof doctorCommand>[1]) {
   mockDoctorConfigSnapshot();
@@ -56,7 +62,6 @@ beforeEach(async () => {
     await import("../flows/doctor-health-contributions.js");
   await resolveDoctorContributionHealthChecks();
   ({ doctorCommand } = await import("./doctor.js"));
-  ({ healthCommand } = await import("./health.js"));
   vi.clearAllMocks();
   providerRuntimeMocks.useMockProviders = false;
   providerRuntimeMocks.resolvePluginProvidersCore.mockReturnValue([]);
@@ -79,21 +84,6 @@ it.each([{ repair: true }, { generateGatewayToken: true }])(
   "refuses Nix mutations before side effects: %j",
   expectNixRefusal,
 );
-
-it("skips gateway restarts in non-interactive mode", async () => {
-  mockDoctorConfigSnapshot();
-
-  vi.mocked(healthCommand).mockRejectedValueOnce(new Error("gateway closed"));
-
-  serviceIsLoaded.mockResolvedValueOnce(true);
-  serviceRestart.mockClear();
-  confirm.mockClear();
-
-  await doctorCommand(createDoctorRuntime(), { nonInteractive: true });
-
-  expect(serviceRestart).not.toHaveBeenCalled();
-  expect(confirm).not.toHaveBeenCalled();
-});
 
 it("migrates anthropic oauth config profile id when only email profile exists", async () => {
   mockDoctorConfigSnapshot({

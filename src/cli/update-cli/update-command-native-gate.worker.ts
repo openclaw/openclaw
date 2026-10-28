@@ -1,0 +1,82 @@
+import { spawn } from "node:child_process";
+
+async function main() {
+  try {
+    const [expectedBytesText, command, ...args] = process.argv.slice(2);
+    const expectedBytes = Number(expectedBytesText);
+    if (!Number.isSafeInteger(expectedBytes) || expectedBytes <= 0 || !command) {
+      throw new Error("Native command admission rejected");
+    }
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    for await (const chunk of process.stdin) {
+      bytes += chunk.length;
+      if (bytes > expectedBytes) {
+        throw new Error("Native command admission rejected");
+      }
+      chunks.push(chunk);
+    }
+    if (bytes !== expectedBytes) {
+      throw new Error("Native command admission rejected");
+    }
+    const admission: unknown = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(Buffer.concat(chunks)),
+    );
+    if (
+      !Array.isArray(admission) ||
+      admission.length !== 2 ||
+      typeof admission[0] !== "string" ||
+      !/^[0-9a-f-]{36}$/.test(admission[0])
+    ) {
+      throw new Error("Native command admission rejected");
+    }
+    const [ticket, nodeOptions] = admission;
+    if (
+      nodeOptions !== null &&
+      (!Array.isArray(nodeOptions) ||
+        nodeOptions.length !== 2 ||
+        typeof nodeOptions[0] !== "string" ||
+        typeof nodeOptions[1] !== "string" ||
+        nodeOptions[1].includes("\0") ||
+        (process.platform === "win32" ? nodeOptions[0].toUpperCase() : nodeOptions[0]) !==
+          "NODE_OPTIONS")
+    ) {
+      throw new Error("Native command admission rejected");
+    }
+    const env = { ...process.env };
+    if (nodeOptions !== null) {
+      env[nodeOptions[0]] = nodeOptions[1];
+    }
+    const child = spawn(command, args, {
+      env,
+      stdio: ["ignore", "inherit", "inherit"],
+      detached: false,
+      windowsHide: true,
+    });
+    let spawnFailed = false;
+    child.once("error", (error) => {
+      spawnFailed = true;
+      const code =
+        "code" in error && typeof error.code === "string" && /^[A-Z0-9_]+$/.test(error.code)
+          ? error.code
+          : "_";
+      process.stderr.write("native-spawn-error:" + ticket + ":" + code);
+      process.exitCode = 1;
+    });
+    child.once("close", (code, signal) => {
+      if (spawnFailed) {
+        return;
+      }
+      if (signal) {
+        process.kill(process.pid, signal);
+      } else {
+        process.exitCode = code ?? 1;
+      }
+    });
+  } catch {
+    process.stdin.destroy();
+    process.exitCode = 1;
+  }
+}
+
+await main();

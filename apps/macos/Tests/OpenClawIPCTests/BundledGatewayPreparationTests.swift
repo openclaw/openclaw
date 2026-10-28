@@ -52,7 +52,7 @@ struct BundledGatewayPreparationTests {
             try """
             #!/bin/sh
             if [ "$#" -eq 1 ] && [ "$1" = --version ]; then
-              printf '%s\n' 'v24.16.0'
+              printf '%s\n' 'v24.22.1'
               exit 0
             fi
             for argument in "$@"; do
@@ -71,7 +71,8 @@ struct BundledGatewayPreparationTests {
               exit 1
             fi
             printf '%s\n' '\(updatedVersion)' > "$OPENCLAW_PREPARATION_FIXTURE_ROOT/version"
-            printf '%s\n' '{"status":"ok","before":{"version":"2026.8.1"},"after":{"version":"\(updatedVersion)"}}'
+            printf '%s' '{"status":"ok","coreUpdate":"completed",'
+            printf '%s\n' '"before":{"version":"2026.8.1"},"after":{"version":"\(updatedVersion)"}}'
             """.write(to: node, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: node.path)
             try PropertyListSerialization.data(

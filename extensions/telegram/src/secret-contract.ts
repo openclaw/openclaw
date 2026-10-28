@@ -1,3 +1,4 @@
+import { hasConfiguredAccountValue } from "openclaw/plugin-sdk/account-core";
 import {
   collectConditionalChannelFieldAssignments,
   createChannelSecretContract,
@@ -10,6 +11,11 @@ export const channelSecrets = createChannelSecretContract({
   channelKey: "telegram",
   account: ["botToken", "webhookSecret"],
   channel: ["botToken", "webhookSecret"],
+  // Mirrors the implicit default that account listing starts from root or env credentials.
+  hasImplicitDefaultAccount: ({ channel, context }) =>
+    hasConfiguredAccountValue(channel.botToken) ||
+    hasConfiguredAccountValue(channel.tokenFile) ||
+    hasConfiguredAccountValue(context.env.TELEGRAM_BOT_TOKEN),
   collect(params) {
     const { channel: telegram } = params;
     const baseTokenFile = normalizeOptionalString(telegram.tokenFile) ?? "";

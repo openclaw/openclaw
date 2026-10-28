@@ -5,6 +5,11 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import type { WorkerOperations } from "../../state/worker-operation-registry.js";
 import type { PreparedEnvironmentSelection } from "./environment-record.js";
+import {
+  placementAuthorityOwnerFor,
+  reserveLocalPlacementMutation,
+  withLocalPlacementTurn,
+} from "./placement-authority-owner.js";
 import type { WorkerPlacementAuthorization } from "./placement-authorization.js";
 import type { PlacementLifecycleReceipt } from "./placement-lifecycle.types.js";
 import type { placementLifecycleOperations } from "./placement-lifecycle.worker.js";
@@ -49,7 +54,8 @@ export function createPlacementLifecycleWorkerOps(runtime: {
   onRetired: (sessionId: string) => void;
 }) {
   const context = captureOpenClawStateWorkerContext({ path: runtime.path });
-  const execute = (
+  const owner = placementAuthorityOwnerFor(context.admission.identity);
+  const executeDurable = (
     command: SqliteWorkerCommand<Operations>,
     assertCurrent?: WorkerPlacementAuthorization,
     assertNewSource?: (placement: WorkerSessionPlacementRecord) => void,
@@ -102,6 +108,23 @@ export function createPlacementLifecycleWorkerOps(runtime: {
         const facts = readReceipt(committed);
         if (!facts) {
           throw new Error("Worker placement lifecycle receipt has a different session");
+        }
+        facts.placement = withLocalPlacementTurn(owner, facts.sessionId, facts.placement);
+        if (captured.type === "workerPlacements.retire" && facts.changed === false) {
+          const current = owner.placements.get(facts.sessionId)?.placement;
+          if (current) {
+            if (
+              current.state !== captured.input.expectedState ||
+              current.generation !== captured.input.expectedGeneration
+            ) {
+              throw new Error(
+                `Worker session placement ${facts.sessionId} changed before retirement`,
+              );
+            }
+            facts.retired = captured.input.expectedState;
+            facts.retiredIdentity = current;
+            facts.changed = true;
+          }
         }
         if (
           facts.joined ||
@@ -170,6 +193,32 @@ export function createPlacementLifecycleWorkerOps(runtime: {
       },
     });
     return mutation.run((scope) => scope.execute(captured));
+  };
+  const execute = async (
+    command: SqliteWorkerCommand<Operations>,
+    assertCurrent?: WorkerPlacementAuthorization,
+    assertNewSource?: (placement: WorkerSessionPlacementRecord) => void,
+  ) => {
+    const sessionId = required(command.input.sessionId, "session id");
+    const turnClaim = owner.placements.get(sessionId)?.placement?.turnClaim;
+    if (
+      owner.localClaimSessions.has(sessionId) &&
+      turnClaim?.owner === "local" &&
+      turnClaim.ownerEpoch === null &&
+      !(command.type === "workerPlacements.startDispatch" && !command.input.expectedPlacement)
+    ) {
+      throw new Error(`Cannot change session ${sessionId} during an active turn`);
+    }
+    const release = reserveLocalPlacementMutation(owner, sessionId);
+    try {
+      const receipt = await executeDurable(command, assertCurrent, assertNewSource);
+      if (receipt.placement) {
+        receipt.placement = withLocalPlacementTurn(owner, sessionId, receipt.placement);
+      }
+      return receipt;
+    } finally {
+      release();
+    }
   };
   const placement = (receipt: PlacementLifecycleReceipt) => {
     if (!receipt.placement) {

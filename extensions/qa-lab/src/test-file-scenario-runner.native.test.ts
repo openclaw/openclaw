@@ -3,14 +3,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateQaEvidenceSummaryJson } from "./evidence-summary.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
-import {
-  runQaTestFileScenarios,
-  type QaScenarioCommandExecution,
-} from "./test-file-scenario-runner.js";
+import type { QaScenarioCommandExecution } from "./test-file-scenario-command-lifecycle.js";
 import {
   QA_TEST_RUNNER_DEFAULTS,
   createScenarioRunnerTestHarness,
   makeTestFileScenario,
+  runQaTestFileScenariosWithCommand as runQaTestFileScenarios,
   writeNativeVitestReport,
 } from "./test-file-scenario-runner.test-support.js";
 

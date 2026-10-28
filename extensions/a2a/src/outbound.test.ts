@@ -1,5 +1,7 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { withEnv, withStateDirEnv } from "openclaw/plugin-sdk/test-env";
@@ -7,17 +9,19 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 import { sendA2aChannelText } from "./outbound.js";
 import type { A2aCoreConfig, A2aPeerConfig } from "./types.js";
 
-function createA2aOutboundConfig(
-  peer: A2aPeerConfig = { token: "inbound-token", url: "https://hermes.example/a2a/v1" },
-): A2aCoreConfig {
+function expectPermanentPreDispatchRejection(failure: unknown, message: RegExp | string) {
+  expect(failure).toBeInstanceOf(PlatformMessageNotDispatchedError);
+  expect((failure as PlatformMessageNotDispatchedError).retryable).toBe(false);
+  expect((failure as Error).message).toMatch(message);
+}
+
+function createA2aOutboundConfig(overrides: Partial<A2aPeerConfig> = {}): A2aCoreConfig {
+  const peer = { token: "inbound-token", url: "https://hermes.example/a2a/v1", ...overrides };
   return { channels: { a2a: { enabled: true, peers: { hermes: peer } } } };
 }
 
-/** Outbound A2A bodies are always serialized JSON strings; assert that before parsing. */
 function parseA2aRequestBody(body: BodyInit | null | undefined): Record<string, unknown> {
-  if (typeof body !== "string") {
-    throw new Error(`expected a serialized A2A request body, got ${typeof body}`);
-  }
+  assert(typeof body === "string", "expected a serialized A2A request body");
   return JSON.parse(body) as Record<string, unknown>;
 }
 
@@ -28,6 +32,7 @@ const send = (
 const rpcError = (code = -32601, message = "Method not found") =>
   Response.json({ jsonrpc: "2.0", error: { code, message } });
 const rpcTask = (id: string) => Response.json({ jsonrpc: "2.0", result: { task: { id } } });
+let fetchMock: Mock<typeof fetch>;
 
 function revokeDuringFetch(response: Response) {
   let current = true;
@@ -36,11 +41,11 @@ function revokeDuringFetch(response: Response) {
       throw new Error("source authority revoked");
     }
   });
-  const fetch = vi.spyOn(globalThis, "fetch").mockImplementationOnce(async () => {
+  fetchMock.mockImplementationOnce(async () => {
     current = false;
     return response;
   });
-  return { handoff, fetch };
+  return handoff;
 }
 
 const guardedFetch = ssrfRuntime.fetchWithSsrFGuard;
@@ -58,6 +63,7 @@ async function trackGuardedFetch(params: Parameters<typeof guardedFetch>[0]) {
 }
 
 beforeEach(() => {
+  fetchMock = vi.spyOn(globalThis, "fetch");
   releases.length = 0;
   completedReleases = 0;
   vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(trackGuardedFetch);
@@ -70,52 +76,41 @@ afterEach(async () => {
     }
     expect(completedReleases).toBe(releases.length);
   } finally {
-    try {
-      // Failed lifecycle assertions must still dispose the real guard timers.
-      await Promise.all(releases.map(({ cleanup }) => cleanup()));
-    } finally {
-      vi.restoreAllMocks();
-    }
+    // Failed lifecycle assertions must still dispose the real guard timers.
+    await Promise.all(releases.map(({ cleanup }) => cleanup())).finally(() => vi.restoreAllMocks());
   }
 });
 
 describe("A2A outbound channel delivery", () => {
   it("rechecks handoff authority before the compatibility retry", async () => {
-    const { handoff, fetch } = revokeDuringFetch(rpcError());
+    const handoff = revokeDuringFetch(rpcError());
 
     await expect(send(undefined, handoff)).rejects.toThrow("source authority revoked");
-    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledOnce();
     expect(handoff).toHaveBeenCalledTimes(2);
   });
 
   it("preserves an accepted result when authority closes after request dispatch", async () => {
-    const { handoff, fetch } = revokeDuringFetch(rpcTask("accepted-task-1"));
+    const handoff = revokeDuringFetch(rpcTask("accepted-task-1"));
 
-    await expect(send(undefined, handoff)).resolves.toMatchObject({
-      messageId: "accepted-task-1",
-    });
-    expect(fetch).toHaveBeenCalledOnce();
+    await expect(send(undefined, handoff)).resolves.toMatchObject({ messageId: "accepted-task-1" });
+    expect(fetchMock).toHaveBeenCalledOnce();
     expect(handoff).toHaveBeenCalledOnce();
   });
 
   it("retries the legacy dotted method exactly once when canonical dispatch is unavailable", async () => {
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(rpcError())
-      .mockImplementationOnce(async () => {
-        expect(completedReleases).toBe(1);
-        return rpcTask("legacy-task-1");
-      });
-    const assertDirectAdapterHandoff = vi.fn();
-
-    await expect(send(undefined, assertDirectAdapterHandoff)).resolves.toMatchObject({
-      messageId: "legacy-task-1",
+    fetchMock.mockResolvedValueOnce(rpcError()).mockImplementationOnce(async () => {
+      expect(completedReleases).toBe(1);
+      return rpcTask("legacy-task-1");
     });
+    const handoff = vi.fn();
+
+    await expect(send(undefined, handoff)).resolves.toMatchObject({ messageId: "legacy-task-1" });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const methods = fetchMock.mock.calls.map(([, init]) => parseA2aRequestBody(init?.body).method);
     expect(methods).toEqual(["SendMessage", "message/send"]);
-    expect(assertDirectAdapterHandoff).toHaveBeenCalledTimes(2);
+    expect(handoff).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[0]?.[1]?.headers).not.toHaveProperty("authorization");
   });
 
@@ -123,17 +118,13 @@ describe("A2A outbound channel delivery", () => {
     [-32000, "peer unavailable", 1],
     [-32601, "Method not found", 2],
   ] as const)("bounds retries for RPC error %s", async (code, message, attempts) => {
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
-      .mockImplementation(async () => rpcError(code, message));
+    fetchMock.mockImplementation(async () => rpcError(code, message));
     await expect(send()).rejects.toThrow(message);
     expect(fetchMock).toHaveBeenCalledTimes(attempts);
   });
 
   it("returns its generated message ID when the peer omits a task ID", async () => {
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(Response.json({ jsonrpc: "2.0", result: {} }));
+    fetchMock.mockResolvedValue(Response.json({ jsonrpc: "2.0", result: {} }));
 
     const result = await send();
     const request = parseA2aRequestBody(fetchMock.mock.calls[0]?.[1]?.body) as {
@@ -142,47 +133,42 @@ describe("A2A outbound channel delivery", () => {
     expect(result.messageId).toBe(request.params.message.messageId);
   });
 
-  it("rejects missing outbound peer URLs before making an HTTP request", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch");
-    const cfg = createA2aOutboundConfig({ token: "inbound-token" });
-
-    await expect(send(cfg)).rejects.toThrow("peer hermes has no url configured for outbound A2A");
+  it("rejects missing outbound peer URLs as a permanent pre-dispatch rejection", async () => {
+    const failure = await send(createA2aOutboundConfig({ url: undefined })).catch(
+      (error: unknown) => error,
+    );
+    expectPermanentPreDispatchRejection(
+      failure,
+      "peer hermes has no url configured for outbound A2A",
+    );
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("surfaces transport and malformed peer-response failures", async () => {
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
+    fetchMock
       .mockResolvedValueOnce(Response.json({}, { status: 503 }))
       .mockResolvedValueOnce(Response.json({ error: { code: "invalid" } }))
-      .mockResolvedValueOnce(new Response("{invalid JSON"))
       .mockResolvedValueOnce(Response.json({}));
 
     await expect(send()).rejects.toThrow("HTTP 503");
     await expect(send()).rejects.toThrow("invalid A2A JSON-RPC response");
-    await expect(send()).rejects.toThrow("peer hermes A2A response: malformed JSON response");
     await expect(send()).rejects.toThrow("A2A response without a result");
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("does not retain reflected outbound credentials in malformed responses", async () => {
     const outboundToken = "outbound-secret-token";
-    const cfg = createA2aOutboundConfig({
-      token: "inbound-token",
-      outboundToken,
-      url: "https://hermes.example/a2a/v1",
-    });
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    fetchMock.mockResolvedValue(
       new Response(`{"reflected":"${outboundToken}"`, {
         headers: { "content-type": "application/json" },
       }),
     );
 
-    const failure = await send(cfg).catch((error: unknown) => error);
+    const failure = await send(createA2aOutboundConfig({ outboundToken })).catch(
+      (error: unknown) => error,
+    );
 
-    if (!(failure instanceof Error)) {
-      throw new Error("expected malformed peer response to reject");
-    }
+    assert(failure instanceof Error, "expected malformed peer response to reject");
     expect(failure.message).toBe("peer hermes A2A response: malformed JSON response");
     expect(failure.cause).toBeUndefined();
     expect(fetchMock).toHaveBeenCalledOnce();
@@ -190,23 +176,21 @@ describe("A2A outbound channel delivery", () => {
   it("refuses to send, and performs no network I/O, when the authored outboundToken did not resolve", async () => {
     await withStateDirEnv("a2a-outbound-unresolved-", async ({ stateDir }) => {
       const configPath = path.join(stateDir, "openclaw.json");
-      const peer = {
-        token: "inbound-token",
-        url: "https://hermes.example/a2a/v1",
-        outboundToken: "${OPENCLAW_A2A_OUTBOUND_TEST_UNSET}",
-      };
       fs.writeFileSync(
         configPath,
-        JSON.stringify({ channels: { a2a: { peers: { hermes: peer } } } }),
+        JSON.stringify(
+          createA2aOutboundConfig({ outboundToken: "${OPENCLAW_A2A_OUTBOUND_TEST_UNSET}" }),
+        ),
       );
       const cfg = withEnv(
         { OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_A2A_OUTBOUND_TEST_UNSET: undefined },
         () => getRuntimeConfig({ pin: false }),
       );
 
-      await expect(sendA2aChannelText({ cfg, to: "a2a:hermes", text: "hello" })).rejects.toThrow(
-        /outboundToken reference did not resolve/,
+      const failure = await sendA2aChannelText({ cfg, to: "a2a:hermes", text: "hello" }).catch(
+        (error: unknown) => error,
       );
+      expectPermanentPreDispatchRejection(failure, /outboundToken reference did not resolve/);
       expect(ssrfRuntime.fetchWithSsrFGuard).not.toHaveBeenCalled();
     });
   });

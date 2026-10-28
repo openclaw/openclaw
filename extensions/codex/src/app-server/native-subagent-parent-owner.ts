@@ -9,6 +9,10 @@ import {
   notifyNativeModelSourceWaiters,
 } from "./native-subagent-model-source.js";
 import type {
+  ChildState,
+  KnownChild,
+  NativeSubagentsReadRequest,
+  NativeSubagentsSnapshot,
   NativeModelBinding,
   NativeModelSource,
   NativePendingChild,
@@ -17,6 +21,7 @@ import type {
   ParentRegistrationHandle,
   ParentState,
 } from "./native-subagent-monitor-types.js";
+import { matchesNativeAssignmentLifecycle } from "./native-subagent-pending-assignments.js";
 import type { CodexNativeSubagentSubmissionOwner } from "./native-subagent-submission-owner.js";
 import { isJsonObject, type CodexServerNotification } from "./protocol.js";
 
@@ -24,6 +29,7 @@ export type NativeParentRegistration = Pick<
   ParentState,
   | "parentThreadId"
   | "requesterSessionKey"
+  | "requesterStorePath"
   | "completionScope"
   | "historyOwner"
   | "submissionStore"
@@ -55,7 +61,10 @@ type ParentDependencies = {
   assertAdmissionCurrent?: (params: NativeParentRegistration) => void;
   runtime: Pick<NativeSubagentMonitorRuntime, "captureAgentHarnessCompletionCustody">;
   assignments: Pick<CodexNativeSubagentAssignmentInventory, "restore" | "drain">;
-  submissions: Pick<CodexNativeSubagentSubmissionOwner, "restore" | "bind" | "drain">;
+  submissions: Pick<
+    CodexNativeSubagentSubmissionOwner,
+    "restore" | "bind" | "drain" | "observeHookAcknowledgement" | "settleWrites"
+  >;
   closes: Pick<CodexNativeSubagentCloseOwner, "bind" | "prune" | "settlements">;
   deliverDetached: (state: ParentState) => void;
   drainAdmissions: (state: ParentState, owner: ParentOwner, turnId: string) => void;
@@ -236,6 +245,7 @@ export async function registerNativeSubagentParent(
       throw new Error("Codex parent registration was cancelled before admission");
     }
     dependencies.assertAdmissionCurrent?.(params);
+    state.requesterStorePath ??= params.requesterStorePath;
     state.completionScope ??= params.completionScope;
     state.historyOwner ??= params.historyOwner;
     state.submissionStore ??= params.submissionStore;
@@ -269,6 +279,21 @@ export async function registerNativeSubagentParent(
   let settlement: Promise<void> | undefined;
   return {
     ready,
+    observeSubmissionAcknowledgement: async (receipt, assertCurrent) => {
+      assertCurrent();
+      if (!registered || !isCurrent() || registeredState.owners.get(ownerKey) !== owner) {
+        throw new Error("Codex native submission parent registration is no longer current");
+      }
+      // Native children inherit this hook command, but their receipts belong to their own sender.
+      if (receipt.senderThreadId && receipt.senderThreadId !== parentThreadId) {
+        return;
+      }
+      if (owner.turnId && owner.turnId !== receipt.parentTurnId) {
+        throw new Error("Codex native submission parent registration is no longer current");
+      }
+      dependencies.submissions.observeHookAcknowledgement(registeredState, receipt, owner);
+      await dependencies.submissions.settleWrites(registeredState);
+    },
     bindTurn: (turnIdInput, mapping) => {
       const turnId = turnIdInput.trim();
       if (!turnId || dependencies.states.get(parentThreadId) !== registeredState) {
@@ -373,4 +398,114 @@ export async function registerNativeSubagentParent(
       return settlement;
     },
   };
+}
+
+/** Projects retained native observations; it never creates sessions or execution authority. */
+export function readNativeSubagentObservations(
+  request: NativeSubagentsReadRequest,
+  dependencies: {
+    states: ReadonlyMap<string, ParentState>;
+    children: ReadonlyMap<string, ChildState>;
+    knownChildren: ReadonlyMap<string, KnownChild>;
+    isCurrent(state: ParentState): boolean;
+  },
+): NativeSubagentsSnapshot {
+  request.assertCurrent();
+  const matches = (state: ParentState) =>
+    dependencies.isCurrent(state) &&
+    !state.preparing &&
+    state.agentId === request.agentId &&
+    state.requesterSessionKey === request.sessionKey &&
+    state.requesterStorePath === request.storePath &&
+    state.historyOwner?.sessionId === request.sessionId &&
+    state.historyOwner.lifecycleRevision === request.lifecycleRevision &&
+    matchesNativeAssignmentLifecycle(state.historyOwner, request.historyOwner);
+  const source = dependencies.states.get(request.parentThreadId);
+  if (!source || !matches(source)) {
+    return undefined;
+  }
+  const parents = new Set([...dependencies.states.values()].filter(matches));
+  const children: NonNullable<NativeSubagentsSnapshot>["children"] = [];
+  let truncated = false;
+  for (const [id, known] of dependencies.knownChildren) {
+    if (!parents.has(known.parent)) {
+      continue;
+    }
+    const current = dependencies.children.get(known.assignment.runId);
+    const turnId = known.turnId ?? known.assignment.nativeTurnId;
+    const state =
+      (current?.nativeTurnId === turnId ? current?.nativeTurnState : undefined) ??
+      (turnId ? known.observedTurns.get(turnId)?.state : undefined);
+    // A discovered child without an observed turn is not evidence of running or completion.
+    if (!state) {
+      continue;
+    }
+    if (children.length === 128) {
+      truncated = true;
+      break;
+    }
+    const agentPath = [...known.agentPaths].find((candidate) => candidate !== id);
+    children.push({
+      id,
+      label: (agentPath ?? id).slice(0, 256),
+      status: state === "active" ? "running" : state,
+    });
+  }
+  request.assertCurrent();
+  return { coverage: "live", children, truncated };
+}
+
+// This requester still owns these completions across native parent-thread rotation.
+// This completion query is separate from read-only observations of terminal turns.
+export function listNativePendingChildren(
+  parents: readonly ParentState[],
+  children: ReadonlyMap<string, ChildState>,
+  knownChildren: ReadonlyMap<string, KnownChild>,
+): NativePendingChild[] {
+  const parentThreadIds = new Set(
+    parents
+      .filter((state) => state.requesterSessionKey && state.completionScope)
+      .map((state) => state.parentThreadId),
+  );
+  const pending: NativePendingChild[] = [];
+  for (const child of children.values()) {
+    if (
+      !parentThreadIds.has(child.parentThreadId) ||
+      child.settledWithoutCompletion ||
+      child.nativeCompletionDelivered ||
+      (child.terminal && !child.pendingCompletion)
+    ) {
+      continue;
+    }
+    // Codex V2 names a child by its agent path; V1 by the thread id in the run id.
+    const label = [...(knownChildren.get(child.childThreadId)?.agentPaths ?? [])].find(
+      (path) => path !== child.childThreadId,
+    );
+    pending.push({
+      runId: child.runId,
+      childSessionKey: child.runId,
+      ...(label ? { label } : {}),
+      state: child.terminal ? "completing" : "running",
+      wakeArmed: false,
+    });
+  }
+  return pending;
+}
+
+export function listNativeRequesterParents(
+  states: ReadonlyMap<string, ParentState>,
+  source: ParentState,
+): ParentState[] {
+  return [...states.values()].filter(
+    (state) =>
+      state === source ||
+      Boolean(
+        source.requesterSessionKey &&
+        state.requesterSessionKey === source.requesterSessionKey &&
+        state.agentId === source.agentId &&
+        source.historyOwner &&
+        state.historyOwner &&
+        matchesNativeAssignmentLifecycle(source.historyOwner, state.historyOwner),
+      ),
+  );
 }

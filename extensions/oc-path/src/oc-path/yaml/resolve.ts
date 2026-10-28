@@ -15,7 +15,7 @@ type YamlOcPathMatch =
       | { readonly kind: "scalar"; readonly value: unknown }
       | { readonly kind: "map" }
       | { readonly kind: "seq" }
-      | { readonly kind: "pair"; readonly key: string; readonly value: unknown }
+      | { readonly kind: "pair"; readonly value: unknown }
     ));
 
 export function resolveYamlOcPath(ast: YamlAst, path: OcPath): YamlOcPathMatch | null {
@@ -52,7 +52,7 @@ function walkNode(
     return null;
   }
   let seg = unquoteSeg(rawSeg);
-  if (seg.length === 0) {
+  if (rawSeg.length === 0) {
     return null;
   }
 
@@ -77,7 +77,6 @@ function walkNode(
       return {
         kind: "pair",
         node: pair.value,
-        key: seg,
         value: pair.value.value,
         path: childWalked,
       };

@@ -1,13 +1,11 @@
 /** Classifies prepared error facts without resolving provider runtime. */
-import {
-  inspectTlsCertificateError,
-  matchesContextOverflowMessage,
-} from "@openclaw/ai/internal/shared";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+import { matchesContextOverflowMessage } from "../../../packages/ai/src/utils/overflow.js";
+import { inspectTlsCertificateError } from "../../infra/tls-certificate-errors.js";
 import {
   extractLeadingHttpStatus,
   isGenericProviderInternalError,
@@ -275,6 +273,17 @@ export function classifyFailoverSignalCore(
       errorType: signal.errorType,
     };
     providerPluginReason = classifyProviderError?.(context) ?? null;
+    // Native transports can keep provider prose only in the bounded body
+    // details. Let the same owner interpret it before generic HTTP policy.
+    if (!providerPluginReason) {
+      for (const detail of signal.details ?? []) {
+        providerPluginReason =
+          classifyProviderError?.({ ...context, errorMessage: detail }) ?? null;
+        if (providerPluginReason) {
+          break;
+        }
+      }
+    }
   }
   const tlsCertificateError = inspectTlsCertificateError(signal);
   if (!providerPluginReason && tlsCertificateError && inferredStatus === undefined) {

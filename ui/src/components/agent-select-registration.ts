@@ -1,4 +1,5 @@
-import type { AgentSelectElement, AgentSelectOption } from "./agent-select.ts";
+import type { AgentSelectOption } from "./agent-select-types.ts";
+import type { AgentSelectElement } from "./agent-select.tsx";
 import "./agent-select.tsx";
 
 declare global {

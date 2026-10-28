@@ -55,16 +55,23 @@ async function captureFace(face: HTMLElement) {
   await image.decode();
   const context = canvasContext(image.width, image.height);
   context.drawImage(image, 0, 0);
-  return { image, context };
+  return { image, context, bounds: face.getBoundingClientRect() };
 }
 
-async function paintedCounterLuminance(face: HTMLElement): Promise<number> {
-  const { image, context } = await captureFace(face);
+function paintedCounterLuminance(
+  face: HTMLElement,
+  { image, context, bounds }: Awaited<ReturnType<typeof captureFace>>,
+): number {
   // Sample below the text, clear of the unread badge and circular border.
-  const scale = image.height / face.getBoundingClientRect().height;
+  const scale = image.width / bounds.width;
+  const rect = face.getBoundingClientRect();
   return pixelLuminance(
-    context.getImageData(Math.floor(image.width / 2), Math.floor(image.height - 3 * scale), 1, 1)
-      .data,
+    context.getImageData(
+      Math.floor((rect.left + rect.width / 2 - bounds.left) * scale),
+      Math.floor((rect.bottom - 3 - bounds.top) * scale),
+      1,
+      1,
+    ).data,
   );
 }
 
@@ -185,7 +192,8 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
     BUILTIN_THEME_IDS.flatMap((theme) =>
       modes.flatMap((mode) =>
         (theme === "claw" ? [2, 3, 5, 12, 13] : [12]).flatMap((ownerCount) =>
-          (theme === "claw"
+          // Run/unread share fixed geometry; retain the avatar pair and widest overflow.
+          (theme === "claw" && (ownerCount === 2 || ownerCount === 13)
             ? ["present", "running", "away", "unread"]
             : ["present", "away"]
           ).flatMap((presence) =>
@@ -200,54 +208,62 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
     "lays out $ownerCount owners: $theme/$mode, $presence, pinned=$pinned",
     async ({ theme, mode, ownerCount, presence, pinned }) => {
       await applyTheme(theme, mode);
-      const { sidebar, row, indicator } = sidebarFixture(pinned);
-      const [ownerViewing, setOwnerViewing] = createSignal<boolean | undefined>(
-        presence === "away" ? false : undefined,
-      );
-      mountSolid(
-        () =>
-          renderSessionLeadingState({
-            session: {
-              ...runningRow("agent:main:shared"),
-              label: "Shared session",
-              renameValue: "Shared session",
-              hasActiveRun: presence === "running",
-              unread: presence === "unread",
-              participants,
-              participantCount: ownerCount - 1,
-            },
-            ownerActor: { ...ada, identity },
-            attribution: "owned",
-            get ownerViewing() {
-              return ownerViewing();
-            },
-          }).leadingIndicator,
-        { container: indicator },
-      );
-      // Contrast is measured at each interaction endpoint, outside its transition.
-      row.style.transition = "none";
-      const chip = sidebar.querySelector<HTMLElement>("openclaw-session-owner-chip")!;
-      await readyAvatars(chip);
-      const stack = chip.querySelector<HTMLElement>(".session-owner-stack")!;
-      const primary = chip.querySelector<HTMLElement>(".session-owner-stack__front")!;
-      const peer = chip.querySelector<HTMLElement>(
-        ownerCount === 2
-          ? ".session-owner-stack__back .viewer-avatar"
-          : ".session-owner-stack__overflow",
-      )!;
-      expect(primary.getAttribute("aria-label")).toBe("Owned by Ada");
-      expect(primary.textContent?.trim()).toBe("A");
-      expect(stack.getAttribute("aria-label")).toBe(
-        ownerCount === 2 ? "Owned by Ada · with Bob" : `Owned by Ada · +${ownerCount - 1} more`,
-      );
-      for (const state of ["idle", "hover", "active", "selected"]) {
-        if (state === "hover") {
-          await userEvent.hover(row, { force: true });
-        } else if (state === "idle" || state === "active") {
-          await userEvent.unhover(row, { force: true });
+      const { sidebar, row: firstRow } = sidebarFixture(pinned);
+      const rowMarkup = firstRow.innerHTML;
+      const rows = ["idle", "hover", "active", "selected"].map((state, index) => {
+        const row = index === 0 ? firstRow : document.createElement("div");
+        if (index > 0) {
+          row.className = firstRow.className;
+          row.innerHTML = rowMarkup;
+          firstRow.parentElement!.append(row);
         }
+        // Measure each interaction endpoint outside its transition.
+        row.style.transition = "none";
         row.classList.toggle("sidebar-recent-session--active", state === "active");
         row.classList.toggle("sidebar-recent-session--selected", state === "selected");
+        const [ownerViewing, setOwnerViewing] = createSignal<boolean | undefined>(
+          presence === "away" ? false : undefined,
+        );
+        mountSolid(
+          () =>
+            renderSessionLeadingState({
+              session: {
+                ...runningRow("agent:main:shared"),
+                label: "Shared session",
+                renameValue: "Shared session",
+                hasActiveRun: presence === "running",
+                unread: presence === "unread",
+                participants,
+                participantCount: ownerCount - 1,
+              },
+              ownerActor: { ...ada, identity },
+              attribution: "owned",
+              get ownerViewing() {
+                return ownerViewing();
+              },
+            }).leadingIndicator,
+          { container: row.querySelector<HTMLElement>(".sidebar-session-indicator")! },
+        );
+        const chip = row.querySelector<HTMLElement>("openclaw-session-owner-chip")!;
+        const stack = chip.querySelector<HTMLElement>(".session-owner-stack")!;
+        const primary = chip.querySelector<HTMLElement>(".session-owner-stack__front")!;
+        const peer = chip.querySelector<HTMLElement>(
+          ownerCount === 2
+            ? ".session-owner-stack__back .viewer-avatar"
+            : ".session-owner-stack__overflow",
+        )!;
+        return { state, row, stack, primary, peer, setOwnerViewing };
+      });
+      await readyAvatars(sidebar);
+      await userEvent.hover(rows[1]!.row, { force: true });
+      // One real browser capture contains all four states; sample each counter's pixels below.
+      const capture = ownerCount > 2 && presence !== "away" ? await captureFace(sidebar) : null;
+      for (const { state, row, stack, primary, peer } of rows) {
+        expect(primary.getAttribute("aria-label")).toBe("Owned by Ada");
+        expect(primary.textContent?.trim()).toBe("A");
+        expect(stack.getAttribute("aria-label")).toBe(
+          ownerCount === 2 ? "Owned by Ada · with Bob" : `Owned by Ada · +${ownerCount - 1} more`,
+        );
         expect(row.matches(":hover")).toBe(state === "hover");
         if (
           theme === "claw" &&
@@ -326,7 +342,7 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
           getComputedStyle(sidebar).backgroundColor,
           getComputedStyle(row, "::after").backgroundColor,
         );
-        const counterLuminance = await paintedCounterLuminance(peer);
+        const counterLuminance = paintedCounterLuminance(peer, capture!);
         const textLuminance = renderedLuminance(style.color);
         expect(
           contrastRatio(counterLuminance, rowLuminance),
@@ -337,6 +353,7 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
           `${theme} ${state} text`,
         ).toBeGreaterThanOrEqual(4.5);
       }
+      const { row, primary, peer, setOwnerViewing } = rows[0]!;
       if (theme === "claw" && presence === "away" && ownerCount === 3) {
         setOwnerViewing(true);
         flush();
@@ -345,7 +362,6 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
           .toEqual([0, 1].map(() => ({ opacity: "1", filter: "none" })));
       }
       if (presence === "present") {
-        row.classList.remove("sidebar-recent-session--selected");
         row.style.zoom = "4";
         await expectCenteredInk(ownerCount === 2 ? primary : peer);
       }

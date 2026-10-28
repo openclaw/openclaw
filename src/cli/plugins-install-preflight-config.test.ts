@@ -10,6 +10,7 @@ import {
   resolvePluginInstallInvalidConfigPolicy,
   type PluginInstallRequestContext,
 } from "../plugins/install-config.js";
+import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 import { resolvePluginInstallPreactionRequest } from "./plugin-install-config-policy.js";
 import { resolvePluginInstallPreflight } from "./plugins-install-preflight.js";
 
@@ -61,20 +62,17 @@ describe("selected bundled install config recovery", () => {
         for (const name of [".git", "src", "extensions"]) {
           fs.mkdirSync(path.join(root, name));
         }
-        fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+        writeFixtureJsonSync(path.join(root, "package.json"), { name: "openclaw" });
         fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: []\n");
       }
-      fs.writeFileSync(
-        path.join(localPath, "package.json"),
-        JSON.stringify({
-          name: "@fixture/recovery",
-          openclaw: { install: { allowInvalidConfigRecovery } },
-        }),
-      );
-      fs.writeFileSync(
-        path.join(localPath, "openclaw.plugin.json"),
-        JSON.stringify({ id: pluginId, configSchema: { type: "object", properties: {} } }),
-      );
+      writeFixtureJsonSync(path.join(localPath, "package.json"), {
+        name: "@fixture/recovery",
+        openclaw: { install: { allowInvalidConfigRecovery } },
+      });
+      writeFixtureJsonSync(path.join(localPath, "openclaw.plugin.json"), {
+        id: pluginId,
+        configSchema: { type: "object", properties: {} },
+      });
       mocks.bundled.clear();
       mocks.bundled.set(pluginId, { pluginId, localPath, npmSpec: "@fixture/recovery" });
       const config = { channels: { [pluginId]: { token: "preserved" } } };

@@ -42,6 +42,7 @@ import {
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { createOperationalRunInstanceRef } from "../../operational-run-instance.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "../announce/subagent-announce-overrides.test-support.js";
 import * as announce from "../announce/subagent-announce.js";
@@ -50,7 +51,11 @@ import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
-import { registerCompletedFollowupAuthorityTests } from "./subagent-registry.completed-followup-authority.test-support.js";
+import {
+  operatorFixture,
+  retainedOperatorFixture,
+  registerCompletedFollowupAuthorityTests,
+} from "./subagent-registry.completed-followup-authority.test-support.js";
 import {
   adoptSubagentRunForRequesterTurn,
   registerSubagentRun,
@@ -136,32 +141,6 @@ function registration(
     expectsCompletionMessage: true,
     ...overrides,
   };
-}
-
-function operatorFixture(profileName: string, attachAccess = true) {
-  const context = createContext();
-  const resolveGatewayContext = () => context;
-  context.resolveGatewayContext = resolveGatewayContext;
-  const client = createOperatorClient({ profileName, scopes: ["operator.write"] });
-  const revoked = new AbortController();
-  const sourceAuthority = {
-    signal: revoked.signal,
-    assertCurrent: () => revoked.signal.throwIfAborted(),
-  };
-  if (attachAccess) {
-    client.internal = { operatorAccessAuthority: sourceAuthority };
-  }
-  return { context, resolveGatewayContext, client, revoked, sourceAuthority };
-}
-
-async function retainedOperatorFixture(profileName: string) {
-  const fixture = operatorFixture(profileName, false);
-  const source = expectDefined(
-    await operatorCapture.captureGatewayOperatorRunAuthority(fixture),
-    "operator registration source",
-  );
-  fixture.client.internal = { operatorRunAuthority: source.authority };
-  return { ...fixture, source };
 }
 
 beforeEach(() => {
@@ -253,12 +232,11 @@ describe("registered completion source custody", () => {
               },
             ),
           );
-          await Promise.race([
+          await awaitGateBeforeSettlement(
             entered.promise,
-            pending.then(() => {
-              throw new Error("Registration completed without entering worker persistence");
-            }),
-          ]);
+            pending,
+            "Registration completed without entering worker persistence",
+          );
           expect(subagentRuns.has(runId)).toBe(false);
           expect(callGateway).not.toHaveBeenCalled();
           current = transition !== "before commit";
@@ -354,12 +332,11 @@ describe("registered completion source custody", () => {
         (error: unknown) => ({ error }),
       );
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           entered.promise,
-          outcome.then(() => {
-            throw new Error("Registration did not reach its native ACK gate");
-          }),
-        ]);
+          outcome,
+          "Registration did not reach its native ACK gate",
+        );
         expect(loadSubagentRegistryFromSqlite().has(params.runId)).toBe(true);
         expect(subagentRuns.has(params.runId)).toBe(false);
         revoked.abort(new Error("operator source revoked after commit"));
@@ -422,8 +399,7 @@ describe("registered completion source custody", () => {
         const { context, client, revoked } = operatorFixture("registered-final-delivery");
         context.getRuntimeConfig = () => cfg;
         const terminal = createDeferredCore<unknown>();
-        const beforeSend = createDeferredCore();
-        const releaseSend = createDeferredCore();
+        const sendGate = createEnteredGate();
         const flowCompleted = createDeferredCore<announce.SubagentAnnounceFlowOutcome>();
         let announcement: ReturnType<typeof announce.runSubagentAnnounceFlow> | undefined;
         const actualAnnounce = announce.runSubagentAnnounceFlow;
@@ -451,10 +427,7 @@ describe("registered completion source custody", () => {
             id: "discord",
             send: {
               lifecycle: {
-                beforeSendAttempt: async () => {
-                  beforeSend.resolve();
-                  await releaseSend.promise;
-                },
+                beforeSendAttempt: sendGate.wait,
               },
               text: sendText,
             },
@@ -515,7 +488,7 @@ describe("registered completion source custody", () => {
           });
           await withinTest(
             awaitGateBeforeSettlement(
-              beforeSend.promise,
+              sendGate.entered,
               flowCompleted.promise,
               "Registered completion did not reach its final outbound adapter",
             ),
@@ -526,7 +499,7 @@ describe("registered completion source custody", () => {
           if (authority === "revoked") {
             revoked.abort(new Error("registered completion operator revoked"));
           }
-          releaseSend.resolve();
+          sendGate.release();
           await withinTest(flowCompleted.promise, signal);
           await settleSubagentRegistryPersistenceWork(() => settleRoots(true));
           const stored = expectDefined(
@@ -543,7 +516,7 @@ describe("registered completion source custody", () => {
           failures.push(error);
         } finally {
           terminal.resolve({ status: "pending" });
-          releaseSend.resolve();
+          sendGate.release();
           const settled = await Promise.allSettled([announcement]);
           failures.push(
             ...settled.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),

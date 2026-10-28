@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { classifyGatewayProbePath } from "../gateway/gateway-http-route-contracts.js";
 import { isOperatorScope } from "../gateway/operator-scopes.js";
 import type { ControlUiLinkReaderMetadata } from "../shared/control-ui-link-reader.js";
+import { isPluginInlineViewVersion } from "../shared/plugin-inline-view.js";
 import {
   isPluginJsonValue,
   normalizeHostHookString,
@@ -81,6 +82,7 @@ const controlUiSurfaces = new Set<PluginControlUiDescriptor["surface"]>([
   "tab",
   "widget",
   "link-reader",
+  "inline",
 ]);
 const reservedTabSlugs = new Set([
   "api",
@@ -179,8 +181,20 @@ export function createControlUiRegistrar(state: PluginRegistryState) {
       );
       return;
     }
+    if (surface === "inline" && !isPluginInlineViewVersion(descriptor.version)) {
+      reportRegistrationError(
+        record,
+        "Inline view version must be an integer from 1 to 65535: " + id,
+      );
+      return;
+    }
     const existing = registry.controlUiDescriptors.find(
-      (entry) => entry.pluginId === record.id && entry.descriptor.id === id,
+      (entry) =>
+        entry.pluginId === record.id &&
+        entry.descriptor.id === id &&
+        (surface !== "inline" ||
+          entry.descriptor.surface !== "inline" ||
+          entry.descriptor.version === descriptor.version),
     );
     if (existing) {
       reportRegistrationError(record, `control UI descriptor already registered: ${id}`);
@@ -222,9 +236,11 @@ export function createControlUiRegistrar(state: PluginRegistryState) {
         ? "page"
         : surface === "widget"
           ? "widget"
-          : surface === "link-reader"
-            ? "link-reader"
-            : undefined;
+          : surface === "inline"
+            ? "inline"
+            : surface === "link-reader"
+              ? "link-reader"
+              : undefined;
     // Missing declarations are advisory: metadata never grants or denies a UI registration.
     if (capability && record.uiCapabilities && !record.uiCapabilities.includes(capability)) {
       state.reportRegistrationWarning(
@@ -238,7 +254,9 @@ export function createControlUiRegistrar(state: PluginRegistryState) {
         descriptor: {
           ...descriptor,
           id,
-          surface,
+          ...(descriptor.surface === "inline"
+            ? { surface: descriptor.surface, version: descriptor.version }
+            : { surface: descriptor.surface ?? "session", version: undefined }),
           ...(linkReader ? { linkReader } : {}),
           label,
           ...(description !== undefined ? { description } : {}),

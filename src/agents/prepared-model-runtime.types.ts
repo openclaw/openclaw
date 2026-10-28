@@ -177,6 +177,12 @@ export type PreparedModelRuntimeLeaseOptions = {
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
   abortSignal?: AbortSignal;
+  /**
+   * A plugin-runtime refresh continuation already ran tools on
+   * the previous generation, so it waits for every pending reload to settle
+   * instead of failing after the usual three publication gates.
+   */
+  waitForReplacementPublication?: boolean;
   /** Pure planning against admitted facts; requested selections remain explicit and additive. */
   deriveRuntimePluginSelections?: (context: {
     config: OpenClawConfig;
@@ -282,12 +288,13 @@ export type PreparedModelRuntimeOwner = {
   /** Source-bound attempt status, including failure before any inventory was published. */
   catalogAttempt?: PreparedModelCatalogAttempt;
   refreshError?: Error;
-  /** Demand may recheck a failed catalog-worker replacement; scheduled demand gets one attempt. */
+  /** Demand may recheck a failed publication; scheduled demand gets one attempt. */
   catalogRecovery?: {
     error: Error;
     scheduledAttempted: boolean;
     retryAfter: number;
     replacementGateId?: PreparedModelRuntimeReplacementGateId;
+    pending?: Promise<void>;
   };
   /** The configured publication owner recovers when an idle Gateway lender retires. */
   onPluginGenerationRetired?: () => void;

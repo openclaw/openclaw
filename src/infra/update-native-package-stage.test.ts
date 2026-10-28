@@ -51,7 +51,8 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
     async (layout) =>
       withTestDir({ prefix: "native-package-stage-" }, async (base) => {
         const grouped = layout === "pnpm11" || layout === "pnpm12";
-        const manager = layout.startsWith("bun") ? "bun" : "pnpm";
+        const bun = layout.startsWith("bun");
+        const manager = bun ? "bun" : "pnpm";
         const project = join(
           base,
           layout === "bun-launcher" ? "Bun ' install" : "",
@@ -141,7 +142,7 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
         );
         expect(await output(externalLauncher)).toBe("external");
         const launcher = join(stage.binDir, "openclaw");
-        if (layout.startsWith("bun")) {
+        if (bun) {
           await fs.symlink(relative(stage.binDir, candidateEntry), launcher);
           if (layout === "bun-launcher") {
             installBunCliLauncher({
@@ -183,7 +184,7 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
         await fs.copyFile(externalLauncher, join(liveBinDir, "shared"));
         await fs.rm(stage.binDir, { recursive: true });
         expect(await output(join(liveBinDir, "openclaw"))).toBe(
-          layout.startsWith("bun") ? "candidate" : "bin-runtime\ncandidate",
+          bun ? "candidate" : "bin-runtime\ncandidate",
         );
         if (layout === "pnpm12") {
           expect(await output(join(liveBinDir, "openclaw"), ["win"])).toBe("candidate");

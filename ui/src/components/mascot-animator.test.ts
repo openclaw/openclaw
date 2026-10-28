@@ -1,63 +1,39 @@
 // @vitest-environment node
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MascotAnimator } from "./mascot-animator.ts";
-import { staticMascotPose, type MascotMood, type MascotPose } from "./mascot-pose.ts";
-
-const MOODS: MascotMood[] = [
-  "idle",
-  "curious",
-  "thinking",
-  "working",
-  "happy",
-  "celebrating",
-  "sad",
-  "sleepy",
-  "attentive",
-];
+import { MASCOT_MOODS, staticMascotPose, type MascotPose } from "./mascot-pose.ts";
 
 function expectPoseInBounds(pose: MascotPose): void {
-  expect(pose.floatOffset).toBeGreaterThanOrEqual(-12);
-  expect(pose.floatOffset).toBeLessThanOrEqual(2);
-  expect(pose.antennaDegrees).toBeGreaterThanOrEqual(-14);
-  expect(pose.antennaDegrees).toBeLessThanOrEqual(14);
-  expect(pose.antennaDroop).toBeGreaterThanOrEqual(0);
-  expect(pose.antennaDroop).toBeLessThanOrEqual(1);
-  expect(pose.leftClawDegrees).toBeGreaterThanOrEqual(-45);
-  expect(pose.leftClawDegrees).toBeLessThanOrEqual(45);
-  expect(pose.rightClawDegrees).toBeGreaterThanOrEqual(-45);
-  expect(pose.rightClawDegrees).toBeLessThanOrEqual(45);
-  expect(pose.eyeGlowOpacity).toBeGreaterThanOrEqual(0);
-  expect(pose.eyeGlowOpacity).toBeLessThanOrEqual(1);
-  expect(pose.glowScale).toBeGreaterThanOrEqual(0.5);
-  expect(pose.glowScale).toBeLessThanOrEqual(1.6);
-  expect(pose.leftEyeOpenness).toBeGreaterThanOrEqual(0);
-  expect(pose.leftEyeOpenness).toBeLessThanOrEqual(1);
-  expect(pose.rightEyeOpenness).toBeGreaterThanOrEqual(0);
-  expect(pose.rightEyeOpenness).toBeLessThanOrEqual(1);
-  expect(pose.happyEyes).toBeGreaterThanOrEqual(0);
-  expect(pose.happyEyes).toBeLessThanOrEqual(1);
-  expect(pose.gaze.x).toBeGreaterThanOrEqual(-1.2);
-  expect(pose.gaze.x).toBeLessThanOrEqual(1.2);
-  expect(pose.gaze.y).toBeGreaterThanOrEqual(-1.2);
-  expect(pose.gaze.y).toBeLessThanOrEqual(1.2);
-  expect(pose.mouthCurve).toBeGreaterThanOrEqual(-1);
-  expect(pose.mouthCurve).toBeLessThanOrEqual(1);
-  expect(pose.mouthOpen).toBeGreaterThanOrEqual(0);
-  expect(pose.mouthOpen).toBeLessThanOrEqual(1);
-  expect(pose.mouthRound).toBeGreaterThanOrEqual(0);
-  expect(pose.mouthRound).toBeLessThanOrEqual(1);
-  expect(pose.hardHat).toBeGreaterThanOrEqual(0);
-  expect(pose.hardHat).toBeLessThanOrEqual(1);
-  expect(pose.bodyTilt).toBeGreaterThanOrEqual(-8);
-  expect(pose.bodyTilt).toBeLessThanOrEqual(8);
-  expect(pose.bodyStretch).toBeGreaterThanOrEqual(0.86);
-  expect(pose.bodyStretch).toBeLessThanOrEqual(1.05);
+  for (const [value, min, max] of [
+    [pose.floatOffset, -12, 2],
+    [pose.antennaDegrees, -14, 14],
+    [pose.leftClawDegrees, -45, 45],
+    [pose.rightClawDegrees, -45, 45],
+    [pose.glowScale, 0.5, 1.6],
+    [pose.gaze.x, -1.2, 1.2],
+    [pose.gaze.y, -1.2, 1.2],
+    [pose.mouthCurve, -1, 1],
+    [pose.bodyTilt, -8, 8],
+    [pose.bodyStretch, 0.86, 1.05],
+    [pose.antennaDroop, 0, 1],
+    [pose.eyeGlowOpacity, 0, 1],
+    [pose.leftEyeOpenness, 0, 1],
+    [pose.rightEyeOpenness, 0, 1],
+    [pose.happyEyes, 0, 1],
+    [pose.mouthOpen, 0, 1],
+    [pose.mouthRound, 0, 1],
+    [pose.hardHat, 0, 1],
+  ] as const) {
+    expect(value).toBeGreaterThanOrEqual(min);
+    expect(value).toBeLessThanOrEqual(max);
+  }
 }
 
 describe("MascotAnimator", () => {
   it("keeps every mood inside drawable channel bounds for 30 seconds", () => {
-    for (const [index, mood] of MOODS.entries()) {
-      const animator = new MascotAnimator(1_000 + index);
+    for (const [index, mood] of MASCOT_MOODS.entries()) {
+      using _ = vi.spyOn(Date, "now").mockReturnValue(1_000 + index);
+      const animator = new MascotAnimator();
       animator.setMood(mood, 0);
       for (let frame = 0; frame <= 30 * 30; frame += 1) {
         expectPoseInBounds(animator.poseAt(frame / 30));
@@ -66,23 +42,22 @@ describe("MascotAnimator", () => {
   });
 
   it("cancels stale gestures when the mood changes", () => {
-    // Begin as idle (queues the hello wave at +0.9s), then switch mood before
-    // it fires — mirrors the element lifecycle where firstUpdated precedes the
-    // first `updated()` mood application.
-    const animator = new MascotAnimator(9);
+    // Change mood before idle's queued hello wave at +0.9s.
+    using _ = vi.spyOn(Date, "now").mockReturnValue(9);
+    const animator = new MascotAnimator();
     animator.poseAt(0);
     animator.setMood("thinking", 0.1);
 
     for (let frame = 3; frame <= 4 * 30; frame += 1) {
       const pose = animator.poseAt(frame / 30);
-      // The wave raises the right claw far past anything thinking's base loop
-      // (claw ~0°) or a scheduled claw snap (-8°) can produce.
+      // A stale wave exceeds thinking's base loop and claw snap (-8°).
       expect(pose.rightClawDegrees).toBeGreaterThan(-15);
     }
   });
 
   it("overlays and clears the composer tease expression", () => {
-    const animator = new MascotAnimator(17);
+    using _ = vi.spyOn(Date, "now").mockReturnValue(17);
+    const animator = new MascotAnimator();
     animator.setMood("idle", 0);
     animator.setTease(true, 0);
 
@@ -93,9 +68,6 @@ describe("MascotAnimator", () => {
     expect(cleared.mouthRound).toBe(0);
     expect(cleared.gaze).not.toEqual({ x: 0, y: 0.6 });
   });
-});
-
-describe("staticMascotPose", () => {
   it("preserves the identifying expression for each motionless mood", () => {
     expect(staticMascotPose("thinking").gaze.y).toBeLessThan(0);
     expect(staticMascotPose("working")).toMatchObject({ hardHat: 1, rightClawDegrees: -28 });

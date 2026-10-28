@@ -13,6 +13,8 @@ export type SandboxRegistryEntry = {
   configHash?: string;
   /** Original provider workspace, retained so pending cleanup can replay the same request. */
   workspaceDir?: string;
+  /** Allocation-owned classification used when recovering managed projection writes. */
+  workspaceSource?: "managed-worktree";
   /** Provisioning and removal state for backends that retain unfinished allocations. */
   runtimeState?: "pending" | "ready" | "removing" | "removing-pending";
 };

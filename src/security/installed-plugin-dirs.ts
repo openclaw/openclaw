@@ -33,24 +33,16 @@ export async function listInstalledPluginDirs(params: {
   onReadError?: (error: unknown) => void;
 }): Promise<{ extensionsDir: string; pluginDirs: string[] }> {
   const extensionsDir = path.join(params.stateDir, "extensions");
-  const st = await fs.stat(extensionsDir).catch((err: unknown) => {
+  const entries = await fs.readdir(extensionsDir, { withFileTypes: true }).catch((err: unknown) => {
     const code = (err as NodeJS.ErrnoException | null)?.code;
     if (code !== "ENOENT" && code !== "ENOTDIR") {
       params.onReadError?.(err);
     }
-    return null;
-  });
-  if (!st?.isDirectory()) {
-    return { extensionsDir, pluginDirs: [] };
-  }
-  const entries = await fs.readdir(extensionsDir, { withFileTypes: true }).catch((err: unknown) => {
-    params.onReadError?.(err);
     return [];
   });
   const pluginDirs = entries
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
-    .filter((name) => !shouldIgnoreInstalledPluginDirName(name))
-    .filter(Boolean);
+    .filter((name) => !shouldIgnoreInstalledPluginDirName(name));
   return { extensionsDir, pluginDirs };
 }

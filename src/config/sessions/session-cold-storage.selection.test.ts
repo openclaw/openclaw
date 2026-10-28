@@ -60,21 +60,14 @@ afterAll(async () => {
 function delayPreparation() {
   const entered = createDeferred();
   const release = createDeferred();
-  const run = archiveWorkers.runSqliteTranscriptArchiveWorkerOperation;
-  const worker = vi
-    .spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation")
-    .mockImplementation(async (params) => {
-      const result = await run(params);
-      if (
-        params.expectedMessageType === "done" &&
-        "operation" in params.workerData &&
-        params.workerData.operation === "cold-prepare"
-      ) {
-        entered.resolve();
-        await release.promise;
-      }
-      return result;
-    });
+  const run = archiveWorkers.prepareSqliteColdArchiveBatch;
+  vi.spyOn(archiveWorkers, "prepareSqliteColdArchiveBatch").mockImplementation(async (...args) => {
+    const result = await run(...args);
+    entered.resolve();
+    await release.promise;
+    return result;
+  });
+  const worker = vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation");
   return { entered, release, worker };
 }
 
@@ -231,7 +224,7 @@ it.each([
 it("propagates selection failure without a mutation or synchronous fallback", async () => {
   const failure = new Error("Cold selection worker refused");
   const worker = vi
-    .spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation")
+    .spyOn(archiveWorkers, "prepareSqliteColdArchiveBatch")
     .mockRejectedValueOnce(failure);
   const observer = observeParentSqlite();
   try {

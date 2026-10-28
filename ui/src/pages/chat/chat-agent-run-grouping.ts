@@ -4,22 +4,23 @@ import type { MessageGroup, SystemEventGroup } from "../../lib/chat/chat-types.t
 import {
   assistantMessageCanOwnTurnActions,
   assistantMessageIsInterrupted,
+  groupEndsRunInFailure,
   resolveAssistantReplyPhase,
 } from "./chat-assistant-reply.ts";
-import {
-  groupEndsRunInFailure,
-  joinActivityRuns,
-  type ActivityRunRenderItem,
-  type CompletedTurnRenderItem,
-  type StreamRunRenderItem,
-  type WorkGroupRenderItem,
-} from "./chat-thread-grouping.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
   chatItemStartsDisplayTurn,
   chatItemStartsUserTurn,
   hasForwardedSource,
+  assistantGroupIsIndependentBoundary,
 } from "./chat-turn-boundary.ts";
+import {
+  joinActivityRuns,
+  type ActivityRunRenderItem,
+  type CompletedTurnRenderItem,
+  type StreamRunRenderItem,
+  type WorkGroupRenderItem,
+} from "./chat-turn-presentation.ts";
 
 type AgentRunFramePart =
   | MessageGroup
@@ -104,8 +105,10 @@ function completedFrameActionOwner(
   const messages = parts
     .flatMap(chatItemGroups)
     .flatMap((group) => (group.role === "assistant" ? group.messages : []));
-  const explicit = messages.findLast(({ message }) =>
-    assistantMessageCanOwnTurnActions(message, true),
+  const explicit = messages.findLast(
+    (source) =>
+      source.presentationOwnsFooter !== false &&
+      assistantMessageCanOwnTurnActions(source.actionMessage ?? source.message, true),
   );
   if (explicit) {
     return explicit;
@@ -115,7 +118,11 @@ function completedFrameActionOwner(
     return null;
   }
   const last = lastPart.messages.at(-1);
-  return last && assistantMessageCanOwnTurnActions(last.message) ? last : null;
+  return last &&
+    last.presentationOwnsFooter !== false &&
+    assistantMessageCanOwnTurnActions(last.actionMessage ?? last.message)
+    ? last
+    : null;
 }
 
 export function agentRunFrameActiveStatusParts(
@@ -276,7 +283,12 @@ export function coalesceAgentRunFrames(
       presentationBoundaryKey = boundaryGroup.key;
       segmentId = undefined;
       const nextBoundaryId = groupBoundaryId(boundaryGroup);
-      if (boundaryGroup.role === "user" || hasForwardedSource(boundaryGroup) || !nextBoundaryId) {
+      if (
+        boundaryGroup.role === "user" ||
+        hasForwardedSource(boundaryGroup) ||
+        assistantGroupIsIndependentBoundary(boundaryGroup) ||
+        !nextBoundaryId
+      ) {
         result.push(item);
         boundaryId = nextBoundaryId;
         continue;

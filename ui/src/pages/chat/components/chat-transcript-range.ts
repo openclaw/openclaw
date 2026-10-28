@@ -36,9 +36,9 @@ export function previewTranscriptRowKeys(
   preview.setOptions({
     ...preview.options,
     count: nextKeys.length,
-    getItemKey: (index) => nextKeys[index] ?? `missing:${index}`,
+    getItemKey: (index) => nextKeys[index]!,
   });
-  return new Set(preview.getVirtualIndexes().flatMap((index) => nextKeys[index] ?? []));
+  return new Set(preview.getVirtualIndexes().map((index) => nextKeys[index]!));
 }
 
 export function leavingTranscriptMcpAppRows(

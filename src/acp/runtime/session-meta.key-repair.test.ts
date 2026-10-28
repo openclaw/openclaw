@@ -1,8 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
-import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { withDoctorSqliteMaintenanceLock } from "../../commands/doctor-sqlite-maintenance-lock.js";
 import {
   loadExactSessionEntry,
@@ -37,7 +36,7 @@ const entry = {
   updatedAt: 100,
 };
 const meta = createAcpMeta({ agent: "harness" });
-const noRepairs = { found: 0, repaired: 0, scannedRows: 1, warnings: [] };
+const noRepairs = { found: 0, repaired: 0, warnings: [] };
 const repaired = { found: 1, repaired: 1, warnings: [], backups: [expect.any(String)] };
 const withState = (run: (state: OpenClawTestState) => Promise<void>) =>
   withOpenClawTestState({ scenario: "empty" }, run);
@@ -51,12 +50,8 @@ const sourceRow = (db: EngineConnection, sessionKey: string) =>
   db.prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?").get(sessionKey);
 
 function expectBackup(file: string, check: (db: DatabaseSync) => void) {
-  const backup = new DatabaseSync(file, { readOnly: true });
-  try {
-    check(backup);
-  } finally {
-    backup.close();
-  }
+  using backup = new DatabaseSync(file, { readOnly: true });
+  check(backup);
 }
 
 const bind = (env: NodeJS.ProcessEnv, sessionKey = key, agentId = "harness") =>
@@ -83,25 +78,6 @@ const seed = (env: NodeJS.ProcessEnv, sessionKey: string, options: MigrationOpti
     ...options,
   });
 
-it.each([undefined, "full"] as const)("inspects ACP integrity mode %s", (integrityCheck) =>
-  withState(async ({ env }) => {
-    stateDatabase.openOpenClawStateDatabase({ env });
-    const reads = observeSqliteReadSql(StatementSync.prototype);
-    try {
-      const report = await repair(env, { apply: false, authority: undefined, integrityCheck });
-      expect(report.warnings).toEqual([]);
-      expect(reads.queries).toContain(
-        integrityCheck === "full" ? "PRAGMA integrity_check;" : "PRAGMA quick_check;",
-      );
-      expect(reads.queries).not.toContain(
-        integrityCheck === "full" ? "PRAGMA quick_check;" : "PRAGMA integrity_check;",
-      );
-    } finally {
-      reads.restore();
-    }
-  }),
-);
-
 it.each([
   { source: key, binding: entry.lifecycleRevision, conflicting: true },
   { source: alias, binding: undefined, conflicting: false },
@@ -109,10 +85,7 @@ it.each([
   "repairs $source (binding=$binding, conflicting=$conflicting)",
   ({ source, binding, conflicting }) =>
     withState(async ({ env, stateDir }) => {
-      expect(await repair(env, { apply: false, authority: undefined })).toEqual({
-        ...noRepairs,
-        scannedRows: 0,
-      });
+      expect(await repair(env, { apply: false, authority: undefined })).toEqual(noRepairs);
       expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
       bind(env);
       seed(env, source, { lifecycleRevision: binding });
@@ -127,7 +100,6 @@ it.each([
       const report = {
         ...noRepairs,
         found: 1,
-        scannedRows: conflicting ? 2 : 1,
         warnings: conflicting ? [expect.stringContaining("conflicting payloads retained")] : [],
       };
       expect(await repair(env, { apply: false, authority: undefined })).toEqual(report);
@@ -200,43 +172,42 @@ it.each(["revoked-authority", "changed-source", "changed-binding"])(
       let active = true;
       let injected = false;
       const originalWrite = stateDatabase.runOpenClawStateWriteTransaction;
-      const write = vi
-        .spyOn(stateDatabase, "runOpenClawStateWriteTransaction")
-        .mockImplementation((operation, options) => {
-          if (!injected) {
-            injected = true;
-            if (condition === "changed-source") {
-              db.prepare(
-                "UPDATE acp_sessions SET runtime_session_name = ? WHERE session_key = ?",
-              ).run("changed-runtime", alias);
-            } else if (condition === "changed-binding") {
-              replaceSessionEntrySync(
-                { agentId: "harness", sessionKey: key, env },
-                { ...entry, lifecycleRevision: "replacement-revision" },
-              );
-            } else {
-              active = false;
-            }
-          }
-          return originalWrite(operation, options);
-        });
-      try {
-        const pendingRepair = repair(env, {
-          authority: {
-            assertCurrent() {
-              if (!active) {
-                throw new Error("maintenance authority revoked");
+      using mocks = new DisposableStack();
+      mocks.use(
+        vi
+          .spyOn(stateDatabase, "runOpenClawStateWriteTransaction")
+          .mockImplementation((operation, options) => {
+            if (!injected) {
+              injected = true;
+              if (condition === "changed-source") {
+                db.prepare(
+                  "UPDATE acp_sessions SET runtime_session_name = ? WHERE session_key = ?",
+                ).run("changed-runtime", alias);
+              } else if (condition === "changed-binding") {
+                replaceSessionEntrySync(
+                  { agentId: "harness", sessionKey: key, env },
+                  { ...entry, lifecycleRevision: "replacement-revision" },
+                );
+              } else {
+                active = false;
               }
-            },
+            }
+            return originalWrite(operation, options);
+          }),
+      );
+      const pendingRepair = repair(env, {
+        authority: {
+          assertCurrent() {
+            if (!active) {
+              throw new Error("maintenance authority revoked");
+            }
           },
-        });
-        if (condition === "revoked-authority") {
-          await expect(pendingRepair).rejects.toThrow("maintenance authority revoked");
-        } else {
-          expect(await pendingRepair).toMatchObject(retained("changed"));
-        }
-      } finally {
-        write.mockRestore();
+        },
+      });
+      if (condition === "revoked-authority") {
+        await expect(pendingRepair).rejects.toThrow("maintenance authority revoked");
+      } else {
+        expect(await pendingRepair).toMatchObject(retained("changed"));
       }
       expect(rows(db)).toEqual(
         condition === "changed-source"
@@ -256,9 +227,9 @@ it.each([
     const { db } = stateDatabase.openOpenClawStateDatabase({ env });
     const before = rows(db);
     const storeSessionKey = resolveSqliteSessionKey(sessionKey, "main");
-    const input = { cfg, env, agentId: "main", sessionKey: storeSessionKey, entry };
-    expect(readAcpSessionMetaForEntry(input)).toBeUndefined();
-    const result = await repair(env);
+    const result = await repair(env, {
+      integrityCheck: sessionKey === "global" ? undefined : "full",
+    });
     expect(result).toMatchObject(repaired);
     expectBackup(result.backups![0]!, (backup) => expect(rows(backup)).toEqual(before));
     expect(fs.statSync(result.backups![0]!).mode & 0o777).toBe(0o600);
@@ -268,7 +239,6 @@ it.each([
         session_key: buildAcpDatabaseSessionKey(storeSessionKey, "main"),
       },
     ]);
-    expect(readAcpSessionMetaForEntry(input)).toEqual(meta);
     expect(readAcpSessionEntry({ cfg, env, agentId: "main", sessionKey })?.acp).toEqual(meta);
     expect(await repair(env)).toEqual(noRepairs);
   }),
@@ -375,9 +345,9 @@ it.each(["keys", "embedded"])(
         }
       };
       const createSnapshot = snapshots.createVerifiedSqliteSnapshot;
-      const snapshot = vi
-        .spyOn(snapshots, "createVerifiedSqliteSnapshot")
-        .mockImplementation(async (options) => {
+      using mocks = new DisposableStack();
+      mocks.use(
+        vi.spyOn(snapshots, "createVerifiedSqliteSnapshot").mockImplementation(async (options) => {
           rewrite(true);
           try {
             return await createSnapshot({
@@ -390,17 +360,14 @@ it.each(["keys", "embedded"])(
           } finally {
             rewrite(false);
           }
-        });
-      try {
-        const result = await repair(env);
-        expect(result).toMatchObject(retained("backup does not match the planned"));
-        expect(result.backups ?? []).toEqual([]);
-        expect(rows(shared.db)).toEqual(originalRows);
-        expect(sourceRow(agent.db, sessionKey)).toEqual({ entry_json: originalJson });
-        expect(rows(shared.db, "migration_sources")).toEqual([]);
-      } finally {
-        snapshot.mockRestore();
-      }
+        }),
+      );
+      const result = await repair(env);
+      expect(result).toMatchObject(retained("backup does not match the planned"));
+      expect(result.backups ?? []).toEqual([]);
+      expect(rows(shared.db)).toEqual(originalRows);
+      expect(sourceRow(agent.db, sessionKey)).toEqual({ entry_json: originalJson });
+      expect(rows(shared.db, "migration_sources")).toEqual([]);
     }),
 );
 

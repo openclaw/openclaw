@@ -1,23 +1,17 @@
 import {
-  applyOpenAIResponsesPayloadPolicy,
-  resolveOpenAIResponsesPayloadPolicy,
+  applyOpenAIResponsesPayloadPolicy as apply,
+  resolveOpenAIResponsesPayloadPolicy as resolve,
 } from "@openclaw/ai/transports";
 import { describe, expect, it } from "vitest";
 
-function policy(
-  model: Parameters<typeof resolveOpenAIResponsesPayloadPolicy>[0],
-  options?: Parameters<typeof resolveOpenAIResponsesPayloadPolicy>[1],
-) {
-  return resolveOpenAIResponsesPayloadPolicy(
-    { api: "openai-responses", provider: "openai", ...model },
-    options,
-  );
+function policy(model: Parameters<typeof resolve>[0], options?: Parameters<typeof resolve>[1]) {
+  return resolve({ api: "openai-responses", provider: "openai", ...model }, options);
 }
 
 describe("openai responses payload policy", () => {
   it("does not coerce partial context windows for compaction thresholds", () => {
     const payload = {} satisfies Record<string, unknown>;
-    applyOpenAIResponsesPayloadPolicy(
+    apply(
       payload,
       policy(
         { id: "gpt-5.4", baseUrl: "https://api.openai.com/v1", contextWindow: "200000tokens" },
@@ -42,17 +36,15 @@ describe("openai responses payload policy", () => {
       prompt_cache_retention: "24h",
     } satisfies Record<string, unknown>;
 
-    applyOpenAIResponsesPayloadPolicy(payload, resolved);
+    apply(payload, resolved);
 
-    expect(payload).not.toHaveProperty("store");
-    expect(payload).not.toHaveProperty("prompt_cache_key");
-    expect(payload).not.toHaveProperty("prompt_cache_retention");
+    expect(payload).toEqual({});
   });
 
   it("keeps disabled reasoning payloads on native OpenAI responses models that support none", () => {
     const payload = { reasoning: { effort: "none" } } satisfies Record<string, unknown>;
 
-    applyOpenAIResponsesPayloadPolicy(
+    apply(
       payload,
       policy({ id: "gpt-5.4", baseUrl: "https://api.openai.com/v1" }, { storeMode: "disable" }),
     );
@@ -68,7 +60,7 @@ describe("openai responses payload policy", () => {
     ({ compat, keepsNone }) => {
       const payload = { reasoning: { effort: "none" } } satisfies Record<string, unknown>;
 
-      applyOpenAIResponsesPayloadPolicy(
+      apply(
         payload,
         policy(
           { id: "gpt-5.6-luna", baseUrl: "https://proxy.example.com/v1", compat },
@@ -88,21 +80,10 @@ describe("openai responses payload policy", () => {
     });
     expect(resolved.shouldStripInputStatus).toBe(true);
 
+    const content = [{ type: "output_text", text: "Hello", status: "nested-domain-value" }];
     const payload = {
       input: [
-        {
-          type: "message",
-          role: "assistant",
-          content: [
-            {
-              type: "output_text",
-              text: "Hello",
-              annotations: [],
-              status: "nested-domain-value",
-            },
-          ],
-          status: "completed",
-        },
+        { type: "message", role: "assistant", content, status: "completed" },
         { type: "function_call", call_id: "call_1", name: "test", arguments: "{}" },
         {
           type: "reasoning",
@@ -111,58 +92,44 @@ describe("openai responses payload policy", () => {
         },
       ],
     };
-    applyOpenAIResponsesPayloadPolicy(payload, resolved);
+    apply(payload, resolved);
     expect((payload.input[0] as Record<string, unknown>).status).toBeUndefined();
     expect((payload.input[2] as Record<string, unknown>).status).toBeUndefined();
-    expect((payload.input[0] as { content: Array<{ status?: string }> }).content[0]?.status).toBe(
-      "nested-domain-value",
-    );
+    expect(payload.input[0]?.content).toEqual([
+      { type: "output_text", text: "Hello", status: "nested-domain-value" },
+    ]);
   });
 
-  it("never promotes store for a custom endpoint without the explicit continuation opt-in", () => {
-    const resolved = policy(
-      { provider: "omniroute", baseUrl: "https://omniroute.example.com/v1" },
-      { storeMode: "provider-policy" },
-    );
-    expect(resolved).toMatchObject({ explicitContinuationOptIn: false, explicitStore: undefined });
-  });
-
-  it("promotes store for a custom endpoint once the operator opts a model in explicitly", () => {
+  it.each([
+    [false, undefined, false, undefined],
+    [true, undefined, true, true],
+    [true, "openai-chatgpt-responses", false, false],
+  ] as const)("resolves continuation opt-in=%s for api=%s", (optIn, api, expectedOptIn, store) => {
     const resolved = policy(
       {
         provider: "omniroute",
         baseUrl: "https://omniroute.example.com/v1",
-        compat: { supportsResponsesContinuation: true },
+        ...(api
+          ? { api, provider: "openai", baseUrl: "https://chatgpt.com/backend-api/codex" }
+          : {}),
+        ...(optIn ? { compat: { supportsResponsesContinuation: true } } : {}),
       },
-      { storeMode: "provider-policy" },
+      { storeMode: api ? "disable" : "provider-policy" },
     );
-    expect(resolved).toMatchObject({ explicitContinuationOptIn: true, explicitStore: true });
+    expect(resolved).toMatchObject({
+      explicitContinuationOptIn: expectedOptIn,
+      explicitStore: store,
+    });
   });
 
-  it.each(["https://proxy.example.com/v1"])(
-    "honors explicit no-store for an opted-in model at %s",
-    (baseUrl) => {
-      const resolved = policy(
-        { baseUrl, compat: { supportsResponsesContinuation: true } },
-        { storeMode: "disable" },
-      );
-      const payload = { store: true };
-      applyOpenAIResponsesPayloadPolicy(payload, resolved);
-      expect(resolved.explicitContinuationOptIn).toBe(true);
-      expect(payload.store).toBe(false);
-    },
-  );
-
-  it("never lets the continuation opt-in flip ChatGPT/Codex store:false to true", () => {
-    // The broad Responses API predicate includes ChatGPT, whose no-store contract is separate.
+  it("honors explicit no-store for an opted-in proxy model", () => {
     const resolved = policy(
-      {
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-        compat: { supportsResponsesContinuation: true },
-      },
+      { baseUrl: "https://proxy.example.com/v1", compat: { supportsResponsesContinuation: true } },
       { storeMode: "disable" },
     );
-    expect(resolved).toMatchObject({ explicitContinuationOptIn: false, explicitStore: false });
+    const payload = { store: true };
+    apply(payload, resolved);
+    expect(resolved.explicitContinuationOptIn).toBe(true);
+    expect(payload.store).toBe(false);
   });
 });

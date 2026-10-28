@@ -25,6 +25,7 @@ import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent
 import type { ReplyBackendQueueMessageResult } from "../../sessions/session-controller.contracts.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
 import { captureSessionControllerSourceSettlement } from "../../sessions/session-controller.mailbox.js";
+import { expectNoCalls as expectNotCalled } from "../../test-utils/mock-call-assertions.js";
 import { runReplyQuestionInput } from "./agent-runner-question-input.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import {
@@ -164,12 +165,11 @@ describe("question response custody through reply adoption", () => {
       const firstSteer = startSteer(key, first, operation, followup);
       let waitingSteer: ReturnType<typeof startSteer> | undefined;
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           backendEntered.promise,
-          firstSteer.then(() => {
-            throw new Error("first steer did not reach backend injection");
-          }),
-        ]);
+          firstSteer,
+          "first steer did not reach backend injection",
+        );
         waitingSteer = startSteer(key, second, operation, followup);
         await secondDeferred.promise;
         source.abort(new Error("cancel source waiting for predecessor acceptance"));
@@ -178,9 +178,7 @@ describe("question response custody through reply adoption", () => {
         ).resolves.toBe("handled");
         expect(abandoned).toHaveBeenCalledOnce();
         expect(settled).toHaveBeenCalledOnce();
-        expect(adopted).not.toHaveBeenCalled();
-        expect(firstAdopted).not.toHaveBeenCalled();
-        expect(firstAbandoned).not.toHaveBeenCalled();
+        expectNotCalled(adopted, firstAdopted, firstAbandoned);
         expect(queueMessage.mock.calls.map(([message]) => message)).toEqual(["first input"]);
         expect(
           enqueueFollowupRun(
@@ -246,19 +244,16 @@ describe("question response custody through reply adoption", () => {
             false,
           );
         try {
-          await Promise.race([
+          await awaitGateBeforeSettlement(
             accepted.promise,
-            adoption.then(() => {
-              throw new Error("steering finished before backend acceptance");
-            }),
-          ]);
+            adoption,
+            "steering finished before backend acceptance",
+          );
           if (confirmation !== "backend-error") {
             source.abort(new Error("source released while accepted input awaits confirmation"));
           }
           // The injection owner still holds this input; cancellation must not make it replayable.
-          expect(abandoned).not.toHaveBeenCalled();
-          expect(settled).not.toHaveBeenCalled();
-          expect(adopted).not.toHaveBeenCalled();
+          expectNotCalled(abandoned, settled, adopted);
           expect(tryDuplicate()).toBe(false);
           expect(followup).not.toHaveBeenCalled();
           const siblingSource = new AbortController();
@@ -283,8 +278,7 @@ describe("question response custody through reply adoption", () => {
           await captureSessionControllerSourceSettlement(sibling.controllerInput!);
           expect(siblingSettled).toHaveBeenCalledOnce();
           expect(siblingCleanup).toHaveBeenCalledExactlyOnceWith(sibling);
-          expect(abandoned).not.toHaveBeenCalled();
-          expect(settled).not.toHaveBeenCalled();
+          expectNotCalled(abandoned, settled);
           expect(tryDuplicate()).toBe(false);
           if (confirmation === "confirmed") {
             delivery.resolve();
@@ -312,10 +306,8 @@ describe("question response custody through reply adoption", () => {
           }
           expect(adopted).toHaveBeenCalledOnce();
           expect(settled).toHaveBeenCalledOnce();
-          expect(abandoned).not.toHaveBeenCalled();
+          expectNotCalled(abandoned, followup, cancel);
           expect(tryDuplicate()).toBe(false);
-          expect(followup).not.toHaveBeenCalled();
-          expect(cancel).not.toHaveBeenCalled();
           expect(operation.abortSignal.aborted).toBe(false);
         } finally {
           delivery.resolve();
@@ -331,6 +323,8 @@ describe("question response custody through reply adoption", () => {
     async (outcome, { signal }) => {
       const key = "agent:main:steer-outcome-" + outcome;
       const first = createQueueTestRun({ prompt: "first", messageId: "first" });
+      const wait = (gate: PromiseLike<unknown>, work: PromiseLike<unknown>, message: string) =>
+        withinTest(awaitGateBeforeSettlement(gate, work, message), signal);
       await withQuestionCreator(key, first, async (operation, fingerprint) => {
         // Construct before either call binds its immutable controller input.
         const second: FollowupRun = { ...first, prompt: "second", messageId: "second" };
@@ -361,30 +355,17 @@ describe("question response custody through reply adoption", () => {
         const firstSteer = startSteer(key, first, operation, followup);
         let secondSteer: ReturnType<typeof startSteer> | undefined;
         try {
-          await withinTest(
-            awaitGateBeforeSettlement(
-              accepted.promise,
-              firstSteer,
-              "first steer ended before native acceptance",
-            ),
-            signal,
-          );
+          await wait(accepted.promise, firstSteer, "first steer ended before native acceptance");
           secondSteer = startSteer(key, second, operation, followup);
-          await withinTest(
-            awaitGateBeforeSettlement(
-              secondParked.promise,
-              secondSteer,
-              "second steer ended before source admission",
-            ),
-            signal,
+          await wait(
+            secondParked.promise,
+            secondSteer,
+            "second steer ended before source admission",
           );
-          await withinTest(
-            awaitGateBeforeSettlement(
-              secondQueued.promise,
-              secondSteer,
-              "second steer ended before backend injection",
-            ),
-            signal,
+          await wait(
+            secondQueued.promise,
+            secondSteer,
+            "second steer ended before backend injection",
           );
           // A native ACK is final FIFO placement: the owner holds the first input ahead
           // of the next and never replays it. Its commit can depend on later input.
@@ -409,8 +390,7 @@ describe("question response custody through reply adoption", () => {
             ),
           );
           expect(queueMessage.mock.calls.map(([message]) => message)).toEqual(["first", "second"]);
-          expect(followup).not.toHaveBeenCalled();
-          expect(abandoned).not.toHaveBeenCalled();
+          expectNotCalled(followup, abandoned);
           expect(first.controllerInput?.phase).toBe("consumed");
           expect(second.controllerInput?.phase).toBe("consumed");
         } finally {
@@ -513,9 +493,7 @@ describe("question response custody through reply adoption", () => {
           expect(operation.result).toBeNull();
           if (change === "legacy-dispatcher") {
             expect(result).toEqual({ handled: false });
-            expect(legacyCall).not.toHaveBeenCalled();
-            expect(adopted).not.toHaveBeenCalled();
-            expect(settled).not.toHaveBeenCalled();
+            expectNotCalled(legacyCall, adopted, settled);
             expect(state.admission).toBeUndefined();
             await expectPendingQuestionAnswerClaimable(key, true);
           } else if (change === "next-model") {
@@ -529,9 +507,7 @@ describe("question response custody through reply adoption", () => {
               status: "skipped",
               reason: "question-response-refused",
             });
-            expect(committed).not.toHaveBeenCalled();
-            expect(adopted).not.toHaveBeenCalled();
-            expect(settled).not.toHaveBeenCalled();
+            expectNotCalled(committed, adopted, settled);
             await expectPendingQuestionAnswerClaimable(key, true);
           }
         } finally {
@@ -565,10 +541,12 @@ describe("question response custody through reply adoption", () => {
         await withQuestionCreator(key, first, async (operation, fingerprint) => {
           // Construct both sources before either is bound to its controller input.
           const second: FollowupRun = { ...first, prompt: "next input", messageId: "v1-second" };
-          const questions = [
-            { id: "answer", header: "Answer", question: "Continue?", isOther: true, options: [] },
-          ];
-          claim = registerPendingAgentQuestion({ questionId: id, sessionKey: key, questions });
+          const question = { header: "Answer", question: "Continue?", isOther: true, options: [] };
+          claim = registerPendingAgentQuestion({
+            questionId: id,
+            sessionKey: key,
+            questions: [{ id: "answer", ...question }],
+          });
           const registration = callGatewayTool(
             "question.request",
             {},
@@ -576,13 +554,7 @@ describe("question response custody through reply adoption", () => {
               id,
               sessionKey: key,
               timeoutMs: 60_000,
-              questions: questions.map((question) => ({
-                questionId: question.id,
-                header: question.header,
-                question: question.question,
-                isOther: question.isOther,
-                options: question.options,
-              })),
+              questions: [{ questionId: "answer", ...question }],
             },
           );
           claim.attachRegistration(registration);
@@ -621,9 +593,7 @@ describe("question response custody through reply adoption", () => {
             text,
             "next input",
           ]);
-          expect(followup).not.toHaveBeenCalled();
-          expect(queueMessage).not.toHaveBeenCalled();
-          expect(cancel).not.toHaveBeenCalled();
+          expectNotCalled(followup, queueMessage, cancel);
           expect(operation.abortSignal.aborted).toBe(false);
           expect(fixture.backingRun.signal.aborted).toBe(false);
           expect(

@@ -196,12 +196,8 @@ export async function preflightClawPluginPackage(
 ): Promise<ClawPackagePreflightResult> {
   const result = await (options.deps?.preflightPlugin ?? preflightPluginInstall)({
     clawhubPackage: pkg.ref,
-    rawSpec: `clawhub:${pkg.ref}@${pkg.version}`,
     expectedVersion: pkg.version,
   });
-  if (!result.ok && result.code !== "plugin_version_conflict") {
-    return { ok: false, code: result.code, message: result.error };
-  }
   const probe = await probeClawPluginArtifact(pkg, !(result.ok && result.action === "install"), {
     ...options.deps,
     env: options.env,

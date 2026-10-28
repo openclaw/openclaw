@@ -4,6 +4,7 @@ import path from "node:path";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
+import { createIndexFixture } from "./test-helpers/installed-plugin-index-fixture.js";
 
 export const nativeSize = 2 * 1024 * 1024;
 
@@ -44,13 +45,10 @@ export function createFixture(
   const filename = path.join(root, managed ? "fixture.bin" : "fixture.so");
   const bytes = Buffer.alloc(nativeSize, "A");
   fs.writeFileSync(filename, bytes);
-  const index: InstalledPluginIndex = {
-    version: 1,
+  const index: InstalledPluginIndex = createIndexFixture({
     hostContractVersion: "2026.9.6",
     compatRegistryVersion: "compat-v1",
-    migrationVersion: 1,
     policyHash: "fixture-policy",
-    generatedAtMs: 1,
     installRecords: managed ? { "fixture-package": { source, installPath: installRoot } } : {},
     plugins: [
       recordInstalledPluginIndexInstallOwner<InstalledPluginIndex["plugins"][number]>(
@@ -69,7 +67,6 @@ export function createFixture(
         managed ? "fixture-package" : undefined,
       ),
     ],
-    diagnostics: [],
-  };
+  });
   return { root, installRoot, entry, filename, bytes, index };
 }

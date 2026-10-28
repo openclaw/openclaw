@@ -1,3 +1,4 @@
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { clampPositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -28,6 +29,8 @@ import { jsonError, runProfileRouteOperation, toStringOrEmpty } from "./utils.js
 
 const DEFAULT_TAB_REACHABILITY_TIMEOUT_MS = 300;
 const TAB_REACHABILITY_RETRY_DELAY_MS = 250;
+// Each check is a host DNS lookup on the libuv pool (4 threads by default); leave one free.
+const TAB_URL_CHECK_CONCURRENCY = 3;
 
 async function runTabsProfileRoute(params: {
   req: BrowserRequest;
@@ -87,38 +90,6 @@ async function ensureBrowserRunning(
   if (!isReachable) {
     throw new BrowserProfileUnavailableError("browser not running");
   }
-}
-
-async function redactBlockedTabUrls(params: {
-  tabs: Awaited<ReturnType<ProfileContext["listTabs"]>>;
-  navigationPolicy: ReturnType<typeof browserNavigationPolicyForProfile>;
-}): Promise<Awaited<ReturnType<ProfileContext["listTabs"]>>> {
-  if (!params.navigationPolicy.ssrfPolicy) {
-    return params.tabs;
-  }
-
-  const redactedTabs: Awaited<ReturnType<ProfileContext["listTabs"]>> = [];
-  for (const tab of params.tabs) {
-    try {
-      await assertBrowserNavigationResultAllowed({
-        url: tab.url,
-        ...params.navigationPolicy,
-      });
-      redactedTabs.push(tab);
-    } catch (error) {
-      const failure = toBrowserErrorResponse(error);
-      // Preserve safe tab management without turning a DNS failure into a policy denial.
-      redactedTabs.push({
-        ...tab,
-        url: "",
-        urlUnavailableReason:
-          failure && "reason" in failure && failure.reason === "navigation_blocked"
-            ? "navigation_blocked"
-            : "navigation_check_failed",
-      });
-    }
-  }
-  return redactedTabs;
 }
 
 function parseRequiredTargetId(res: BrowserResponse, rawTargetId: unknown): string | null {
@@ -195,10 +166,35 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
     if (!running) {
       return { running: false, tabs: [] };
     }
-    const tabs = await redactBlockedTabUrls({
-      tabs: await profileCtx.listTabs({ signal }),
-      navigationPolicy: browserNavigationPolicyForProfile(ctx, profileCtx),
-    });
+    let tabs = await profileCtx.listTabs({ signal });
+    const navigationPolicy = browserNavigationPolicyForProfile(ctx, profileCtx);
+    if (navigationPolicy.ssrfPolicy) {
+      const { results } = await runTasksWithConcurrency<(typeof tabs)[number]>({
+        limit: TAB_URL_CHECK_CONCURRENCY,
+        tasks: tabs.map((tab) => async () => {
+          try {
+            await assertBrowserNavigationResultAllowed({
+              url: tab.url,
+              ...navigationPolicy,
+              signal,
+            });
+            return tab;
+          } catch (error) {
+            const failure = toBrowserErrorResponse(error);
+            // Preserve safe tab management without turning a DNS failure into a policy denial.
+            return {
+              ...tab,
+              url: "",
+              urlUnavailableReason:
+                failure && "reason" in failure && failure.reason === "navigation_blocked"
+                  ? "navigation_blocked"
+                  : "navigation_check_failed",
+            };
+          }
+        }),
+      });
+      tabs = results;
+    }
     signal.throwIfAborted();
     // Only an isolated browser owned by OpenClaw may follow the preview size.
     // Attached sessions and remote CDP browsers retain their existing viewport.
@@ -264,11 +260,11 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       ctx,
       mapTabError: true,
       run: async (profileCtx, signal) => {
+        await profileCtx.ensureBrowserAvailable({ signal });
         await assertBrowserNavigationAllowed({
           url,
           ...browserNavigationPolicyForProfile(ctx, profileCtx),
         });
-        await profileCtx.ensureBrowserAvailable({ signal });
         await req.assertCurrent?.(profileCtx.profile);
         const opened = await profileCtx.openTab(url, {
           label,

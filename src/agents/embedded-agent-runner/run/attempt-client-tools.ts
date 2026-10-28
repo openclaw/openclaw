@@ -35,7 +35,10 @@ import {
 import type { EmbeddedAttemptClientToolCallSlot, EmbeddedRunAttemptParams } from "./types.js";
 
 export function prepareEmbeddedAttemptClientTools(params: {
-  attempt: EmbeddedRunAttemptParams;
+  attempt: Pick<
+    EmbeddedRunAttemptParams,
+    "config" | "sessionId" | "runId" | "onToolOutcome" | "allocateToolOutcomeOrdinal"
+  >;
   catalogToolHookContext: Parameters<typeof toToolDefinitions>[1];
   codeModeControlsEnabledForRun: boolean;
   deferredDirectoryToolsCallable: boolean;
@@ -178,6 +181,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
       enabled:
         params.codeModeControlsEnabledForRun || (search.enabled && search.mode !== "directory"),
       catalogRef: params.toolSearchCatalogRef,
+      selection: params.codeModeControlsEnabledForRun ? undefined : search,
     });
     clientToolDefs = clientToolSearch.tools;
     if (clientToolSearch.compacted) {

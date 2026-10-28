@@ -26,6 +26,7 @@ import {
 } from "./openclaw-state-lease-heartbeat-shared.js";
 import {
   readOpenClawStateLeaseExpiry,
+  readOpenClawStateLeaseLoss,
   releaseOpenClawStateLeaseInTransaction,
   renewOpenClawStateLeaseInTransaction,
 } from "./openclaw-state-lease-store.js";
@@ -87,16 +88,19 @@ export function withLeaseWriteTransaction<T>(
       { ...transactionOptions, schemaSql: leaseSchema },
     );
   }
-  const stateDatabase = database.options?.database ?? openOpenClawStateDatabase(database.options);
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => operation(db),
-    { ...database.options, database: stateDatabase },
-    {
-      ...transactionOptions,
-      singleStatement:
-        singleStatement && !isPostgresSqlConnection(stateDatabase.db) ? true : undefined,
-    },
-  );
+  // Native renewal and release are lock primitives; their callers remain outside admission.
+  return withEngineStoreAdmission(() => {
+    const stateDatabase = database.options?.database ?? openOpenClawStateDatabase(database.options);
+    return runOpenClawStateWriteTransaction(
+      ({ db }) => operation(db),
+      { ...database.options, database: stateDatabase },
+      {
+        ...transactionOptions,
+        singleStatement:
+          singleStatement && !isPostgresSqlConnection(stateDatabase.db) ? true : undefined,
+      },
+    );
+  });
 }
 
 export const STATE_LEASE_WRITE_BACKOFF = {
@@ -106,7 +110,22 @@ export const STATE_LEASE_WRITE_BACKOFF = {
   jitter: 0.25,
 } as const;
 
-export type OpenClawStateLeaseOwnerIdentity = OpenClawStateLeaseIdentity & { leaseLabel: string };
+export type OpenClawStateLeaseOwnerIdentity = OpenClawStateLeaseIdentity &
+  Parameters<typeof createOpenClawStateLeaseLostError>[0] & { leaseLabel: string };
+
+export function createOpenClawStateLeaseLostErrorFromDatabase(
+  identity: OpenClawStateLeaseOwnerIdentity,
+  database: OpenClawStateLeaseDatabase,
+  cause?: unknown,
+) {
+  let loss;
+  try {
+    loss = readLeaseDatabase(database, (db) => readOpenClawStateLeaseLoss(db, identity));
+  } catch {
+    // Expiry still fences the owner if storage or admission is unavailable.
+  }
+  return createOpenClawStateLeaseLostError(identity, cause, loss);
+}
 
 export function renewOpenClawStateLease(
   params: OpenClawStateLeaseOwnerIdentity & {
@@ -121,7 +140,11 @@ export function renewOpenClawStateLease(
     (db) => {
       const expiresAt = renewOpenClawStateLeaseInTransaction(db, params, params.leaseMs);
       if (expiresAt === undefined) {
-        throw createOpenClawStateLeaseLostError(params);
+        throw createOpenClawStateLeaseLostError(
+          params,
+          undefined,
+          readOpenClawStateLeaseLoss(db, params),
+        );
       }
       return expiresAt;
     },
@@ -134,7 +157,11 @@ function assertOpenClawStateLeaseOwnedInDatabase(
 ): number {
   const expiresAt = readOpenClawStateLeaseExpiry(database, params);
   if (expiresAt === undefined) {
-    throw createOpenClawStateLeaseLostError(params);
+    throw createOpenClawStateLeaseLostError(
+      params,
+      undefined,
+      readOpenClawStateLeaseLoss(database, params),
+    );
   }
   return expiresAt;
 }
@@ -159,9 +186,9 @@ export function verifyOpenClawStateLeaseOwnership(
     if (isStatePostgres() && maintenance?.ownsSchemaMaintenance) {
       // Doctor's synchronous lease check remains inside its admitted maintenance lifetime.
       maintenance.assertAdmission();
-      return withEngineStoreAdmission(read);
     }
-    return read();
+    // Admit only the synchronous lease check; protected operations retain their own SQL boundary.
+    return withEngineStoreAdmission(read);
   } catch (error) {
     throw toOpenClawStateLeaseVerificationError(params, error);
   }

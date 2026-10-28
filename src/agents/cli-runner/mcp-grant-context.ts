@@ -4,6 +4,7 @@ import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { McpLoopbackRequestContext } from "../../gateway/mcp-grant-store.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
+import { cloneExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import {
   bindActiveCronAuthorityCurrentness,
   captureCronRequesterGrantIssuer,
@@ -114,17 +115,7 @@ function buildCliMcpBashElevated(
   if (!bashElevated) {
     return undefined;
   }
-  return {
-    enabled: bashElevated.enabled,
-    allowed: bashElevated.allowed,
-    defaultLevel: bashElevated.defaultLevel,
-    ...(bashElevated.fullAccessAvailable !== undefined
-      ? { fullAccessAvailable: bashElevated.fullAccessAvailable }
-      : {}),
-    ...(bashElevated.fullAccessBlockedReason !== undefined
-      ? { fullAccessBlockedReason: bashElevated.fullAccessBlockedReason }
-      : {}),
-  };
+  return cloneExecElevatedDefaults(bashElevated);
 }
 
 function buildCliMcpChannelContext(
@@ -164,7 +155,6 @@ export function buildCliMcpGrantContext(params: {
   runtimePolicyAgentId?: string;
   modelProvider: string;
   modelId: string;
-  toolsAllow?: string[];
 }): McpLoopbackRequestContext {
   const sessionKey = resolveCliMcpSessionKey(params.run, params.config, params.agentId);
   const runtimePolicySessionKey = normalizeOptionalString(params.run.runtimePolicySessionKey);
@@ -190,7 +180,7 @@ export function buildCliMcpGrantContext(params: {
     params.run.messageChannel ?? params.run.messageProvider,
   );
   const currentChannelId = normalizeOptionalString(params.run.currentChannelId);
-  const grantedToolsAllow = params.run.cliToolAvailability?.openClaw ?? params.toolsAllow;
+  const grantedToolsAllow = params.run.cliToolAvailability?.openClaw;
   const delegationCapability = readCliMcpDelegationCapability(params.run);
   // Trusted message-only completions stay restricted even when source routing
   // is missing; the message tool must fail closed instead of widening authority.
@@ -211,10 +201,12 @@ export function buildCliMcpGrantContext(params: {
       ? { conversationToolPolicy: structuredClone(params.run.conversationToolPolicy) }
       : {}),
     ...(params.run.trustedInternalHandoff
-      ? {
-          trustedInternalHandoff: params.run.trustedInternalHandoff,
-          inputProvenance: params.run.inputProvenance,
-        }
+      ? { trustedInternalHandoff: params.run.trustedInternalHandoff }
+      : {}),
+    // Loopback requester policy reads only external-user provenance and verified handoffs,
+    // so internal-system facts (an exec wake's starting run) reach plugin tools unchanged.
+    ...(params.run.trustedInternalHandoff || params.run.inputProvenance?.kind === "internal_system"
+      ? { inputProvenance: params.run.inputProvenance }
       : {}),
     runtimePolicySessionKey,
     ...(params.runtimePolicyAgentId ? { runtimePolicyAgentId: params.runtimePolicyAgentId } : {}),
@@ -223,9 +215,6 @@ export function buildCliMcpGrantContext(params: {
     runId: normalizeOptionalString(params.run.runId),
     workspaceDir: params.run.workspaceDir,
     ...(normalizeOptionalString(params.run.cwd) ? { cwd: params.run.cwd?.trim() } : {}),
-    // Restricted runs get their allowlist stamped into the grant; the
-    // loopback server enforces it on tools/list and tools/call.
-    ...(params.toolsAllow ? { toolsAllow: params.toolsAllow } : {}),
     ...(params.run.toolOverrides?.webSearch === false ? { webSearchDisabled: true as const } : {}),
     // Same enforcement point for the fallback delegation gate, so an
     // unrestricted run keeps its exact prior grant shape.
@@ -274,7 +263,6 @@ export function buildCliMcpGrantContext(params: {
     ...(execOverrides ? { execOverrides } : {}),
     ...(bashElevated ? { bashElevated } : {}),
     ...(params.run.trigger ? { trigger: params.run.trigger } : {}),
-    ...(params.run.continuesConversation ? { continuesConversation: true } : {}),
     ...(normalizeOptionalString(params.run.approvalReviewerDeviceId)
       ? { approvalReviewerDeviceId: params.run.approvalReviewerDeviceId?.trim() }
       : {}),

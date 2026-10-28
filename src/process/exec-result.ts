@@ -48,6 +48,14 @@ export function hasCommandProcessCleanupError(error: unknown): boolean {
   return collectNestedErrorCandidates(error).some(isCanonicalCommandProcessCleanupError);
 }
 
+/** Best-effort command reads must still propagate uncertain cleanup. */
+export function ignoreNonCleanupCommandError(error: unknown): null {
+  if (hasCommandProcessCleanupError(error)) {
+    throw error;
+  }
+  return null;
+}
+
 export type SpawnResult = {
   pid?: number;
   stdout: string;
@@ -71,7 +79,7 @@ export type SpawnResult = {
 
 export type CommandProcessOutcome = Pick<
   SpawnResult,
-  "pid" | "code" | "cleanup" | "termination"
+  "pid" | "code" | "cleanup" | "termination" | "killIssuedByAbort" | "outputLimitExceeded"
 > & {
   /** False only while a managed beforeInput callback has withheld every input byte. */
   inputReleased?: boolean;
@@ -139,15 +147,9 @@ export function createSanitizedCommandError(result: {
   });
 }
 
-type CommandFailure = {
+type CommandFailure = Omit<Parameters<typeof createSanitizedCommandError>[0], "code"> & {
   failed: boolean;
-  exitCode?: unknown;
-  signal?: unknown;
   cause?: unknown;
-  timedOut?: boolean;
-  isCanceled?: boolean;
-  isMaxBuffer?: boolean;
-  isTerminated?: boolean;
 };
 
 export function isPlainCommandExitFailure(result: CommandFailure): boolean {

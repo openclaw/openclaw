@@ -101,7 +101,7 @@ function compareAppStoreVersions(left: string, right: string): number {
   return 0;
 }
 
-export function decodeIosAppStoreVersion(gatewayVersion: string, appStoreVersion: string) {
+function decodeIosAppStoreVersion(gatewayVersion: string, appStoreVersion: string) {
   const canonicalGatewayVersion = normalizePinnedIosVersion(gatewayVersion);
   const gateway = parseVersionComponents(canonicalGatewayVersion);
   const candidate = parseVersionComponents(appStoreVersion);

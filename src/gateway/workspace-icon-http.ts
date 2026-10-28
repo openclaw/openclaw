@@ -13,7 +13,7 @@ import { openRootFile, readFileDescriptorBounded } from "../infra/boundary-file-
 import { LruCache } from "../infra/lru-cache.js";
 import { parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
-import { sendMethodNotAllowed } from "./http-common.js";
+import { sendMethodNotAllowed, sendSessionReadForbidden } from "./http-common.js";
 import {
   HTTP_IMAGE_MAX_BYTES,
   HTTP_SVG_MAX_BYTES,
@@ -201,7 +201,14 @@ export async function handleWorkspaceIconHttpRequest(
         localRoot = undefined;
       }
     }
-    return { generation: row?.generation, sessionId: entry?.sessionId, root: localRoot };
+    // An unknown session stays an ordinary miss; a known one must be visible to the profile.
+    const visible = entry ? requestAuth.canReadSession(query.key, entry) : true;
+    return {
+      generation: row?.generation,
+      sessionId: entry?.sessionId,
+      root: visible ? localRoot : undefined,
+      visible,
+    };
   };
   const selected = await withReadySessionRows(projection, queries, select);
   requestAuth.assertCurrent();
@@ -212,9 +219,12 @@ export async function handleWorkspaceIconHttpRequest(
     if (
       current.generation !== selected.generation ||
       current.sessionId !== selected.sessionId ||
-      current.root !== selected.root
+      current.root !== selected.root ||
+      current.visible !== selected.visible
     ) {
       respondWorkspaceIconUnavailable(res);
+    } else if (!selected.visible) {
+      sendSessionReadForbidden(res);
     } else if (!icon) {
       res.setHeader("cache-control", selected.root ? "private, max-age=60" : "no-store");
       res.setHeader("vary", "Authorization, Cookie");

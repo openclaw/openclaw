@@ -16,7 +16,7 @@ import {
 } from "../plugins/installed-plugin-index-install-owner.js";
 import { isTrustedOfficialPluginInstallRecord } from "../plugins/official-external-install-records.js";
 import { getOfficialExternalPluginCatalogEntry } from "../plugins/official-external-plugin-catalog.js";
-import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import { withPluginLifecycleLeaseAsync } from "../plugins/plugin-lifecycle-lease.js";
 import { resolveManifestProviderAuthChoices } from "../plugins/provider-auth-choices.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
@@ -169,7 +169,7 @@ export async function prepareAutomaticSetupCodex(params: {
   signal?: AbortSignal;
 }): Promise<{ ok: true; config: OpenClawConfig } | StageFailure> {
   const leaseOptions = { signal: params.signal, assertCurrent: params.beforePersistentApply };
-  return await withPluginLifecycleLease(leaseOptions, async () => {
+  return await withPluginLifecycleLeaseAsync(leaseOptions, async () => {
     const { ensureCodexRuntimePluginForSupervision } =
       await import("../commands/runtime-plugin-install.js");
     const prepared = await prepareCodexRuntimePlugin({
@@ -190,7 +190,7 @@ export async function stageCodexCandidate(
 ): Promise<StagedCandidate | StageFailure> {
   const beforePersistentApply = () => throwIfSetupInferenceCancelled(ctx.params);
   const leaseOptions = { signal: ctx.params.signal, assertCurrent: beforePersistentApply };
-  return await withPluginLifecycleLease(leaseOptions, async () => {
+  return await withPluginLifecycleLeaseAsync(leaseOptions, async () => {
     const { ensureCodexRuntimePluginForModelSelection: ensureCodex } =
       await import("../commands/runtime-plugin-install.js");
     const prepared = await prepareCodexRuntimePlugin({

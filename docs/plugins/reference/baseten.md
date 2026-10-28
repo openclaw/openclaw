@@ -20,6 +20,7 @@ OpenClaw Baseten provider plugin.
 ## Surface
 
 - Providers: `baseten`
+- Contracts: `decisionProviders`
 
 ## Related docs
 

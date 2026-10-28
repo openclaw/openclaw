@@ -1,10 +1,11 @@
-import { expect, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
 import {
   closeAdmittedRunDelegatedAuthority,
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
   parseWorkerLaunchDescriptor,
   type WorkerLaunchPlan,
@@ -24,10 +25,18 @@ import {
   ENVIRONMENT_ID,
   OWNER_EPOCH,
   reconcileUnchangedLocalWorkspace,
+  setupWorkerTurnLauncherTest,
+  cleanupWorkerTurnLauncherTest,
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-launcher.test-support.js";
 
 export const localResult = async () => ({ meta: { durationMs: 1 } });
+
+export function installLauncherTest() {
+  afterAll(closeStateDatabaseForTest);
+  beforeEach(setupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
+}
 
 export const completedWorkerMessage = () =>
   makeAgentAssistantMessage({

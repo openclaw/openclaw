@@ -10,7 +10,6 @@ const log = createSubsystemLogger("agents/diagnostic-writer");
 export type QueuedFileWriter = {
   filePath: string;
   write: (line: string) => unknown;
-  flush: () => Promise<void>;
 };
 
 /** Returns the cached writer for a path or creates a new ordered append queue. */
@@ -46,10 +45,7 @@ export function getQueuedFileWriter(
           }),
         )
         .catch(reportFailure);
-      return "queued";
-    },
-    flush: async () => {
-      await queue;
+      return queue;
     },
   };
 

@@ -100,20 +100,34 @@ function insertChildren<T>(
   }
 }
 
-export function insertCard(db: WorkboardSqlConnection, card: WorkboardCard): void {
-  const board = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<{ workboard_boards: { id: string; kind: string | null } }>(db)
-      .selectFrom("workboard_boards")
-      .select("kind")
-      .where("id", "=", cardBoardId(card)),
+export function insertCard(
+  db: WorkboardSqlConnection,
+  card: WorkboardCard,
+  condition?: { mode: "absent"; key: string } | { mode: "updated"; key: string; updatedAt: number },
+): boolean {
+  const query = getNodeSqliteKysely<
+    WorkboardCardDatabase & { workboard_boards: { id: string; kind: string | null } }
+  >(db);
+  let admission = query.selectNoFrom((eb) =>
+    eb.selectFrom("workboard_boards").select("kind").where("id", "=", cardBoardId(card)).as("kind"),
   );
-  if (board?.kind === "sessions") {
+  if (condition) {
+    admission = admission.where((eb) => {
+      const current = eb.selectFrom("workboard_cards").select("id").where("id", "=", condition.key);
+      return condition.mode === "absent"
+        ? eb.not(eb.exists(current))
+        : eb.exists(current.where("updated_at", "=", condition.updatedAt));
+    });
+  }
+  const board = executeSqliteQueryTakeFirstSync(db, admission);
+  if (!board) {
+    return false;
+  }
+  if (board.kind === "sessions") {
     throw new Error("Sessions boards do not hold cards");
   }
   const execution = card.execution;
   const metadata = card.metadata;
-  const query = getNodeSqliteKysely<WorkboardCardDatabase>(db);
   prepareWorkboardUpsert(db, "workboard_cards", {
     id: () => card.id,
     board_id: () => cardBoardId(card),
@@ -269,4 +283,5 @@ export function insertCard(db: WorkboardSqlConnection, card: WorkboardCard): voi
     );
     db.prepare(compiled.sql).run(...bind());
   }
+  return true;
 }

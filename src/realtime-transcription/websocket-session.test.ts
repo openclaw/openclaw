@@ -1,4 +1,4 @@
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -7,8 +7,8 @@ import WebSocket, { WebSocketServer } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createRealtimeTranscriptionWebSocketSession,
-  type RealtimeTranscriptionWebSocketSessionOptions,
-  type RealtimeTranscriptionWebSocketTransport,
+  type RealtimeTranscriptionWebSocketSessionOptions as WebSocketOptions,
+  type RealtimeTranscriptionWebSocketTransport as Transport,
 } from "./websocket-session.js";
 
 let cleanup: (() => Promise<void>) | undefined;
@@ -16,11 +16,10 @@ const sessions = new Set<ReturnType<typeof createRealtimeTranscriptionWebSocketS
 const timeoutMessage = "test realtime transcription connection timeout";
 const closedMessage = "test realtime transcription connection closed before ready";
 type ProviderEvent = { type?: string; text?: string; message?: string };
-type SessionOptions = Partial<
-  Omit<RealtimeTranscriptionWebSocketSessionOptions<ProviderEvent>, "providerId">
->;
+type SessionOptions = Partial<Omit<WebSocketOptions<ProviderEvent>, "providerId">>;
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   for (const session of sessions) {
     session.close();
   }
@@ -30,59 +29,6 @@ afterEach(async () => {
   await cleanup?.();
   cleanup = undefined;
 });
-
-async function createRealtimeServer(params?: {
-  closeOnConnection?: boolean;
-  initialEvent?: unknown;
-  initialText?: string;
-  onConnection?: (ws: WebSocket) => void;
-  onUpgrade?: (headers: Record<string, string | string[] | undefined>) => void;
-  onBinary?: (payload: Buffer) => void;
-  onText?: (payload: unknown, ws: WebSocket) => void;
-}) {
-  const wss = new WebSocketServer({ host: "127.0.0.1", port: 0, maxPayload: 1024 * 1024 });
-  const connections: WebSocket[] = [];
-  wss.on("headers", (_headers, request) => {
-    params?.onUpgrade?.(request.headers);
-  });
-  wss.on("connection", (ws) => {
-    connections.push(ws);
-    if (params?.closeOnConnection) {
-      ws.close(1011, "setup failed");
-      return;
-    }
-    if (params?.initialEvent) {
-      ws.send(JSON.stringify(params.initialEvent));
-    }
-    if (params?.initialText) {
-      ws.send(params.initialText);
-    }
-    params?.onConnection?.(ws);
-    ws.on("message", (data, isBinary) => {
-      const buffer = Buffer.isBuffer(data)
-        ? data
-        : Array.isArray(data)
-          ? Buffer.concat(data)
-          : Buffer.from(data);
-      if (isBinary) {
-        params?.onBinary?.(buffer);
-        return;
-      }
-      params?.onText?.(JSON.parse(buffer.toString()), ws);
-    });
-  });
-  await once(wss, "listening");
-  cleanup = async () => {
-    for (const ws of wss.clients) {
-      ws.terminate();
-    }
-    await new Promise<void>((resolve) => {
-      wss.close(() => resolve());
-    });
-  };
-  const port = (wss.address() as AddressInfo).port;
-  return { url: `ws://127.0.0.1:${port}`, connections };
-}
 
 function createSession(options: SessionOptions & Required<Pick<SessionOptions, "url">>) {
   const session = createRealtimeTranscriptionWebSocketSession<ProviderEvent>({
@@ -97,38 +43,69 @@ function createSession(options: SessionOptions & Required<Pick<SessionOptions, "
 
 async function setup(
   options: SessionOptions = {},
-  serverOptions?: Parameters<typeof createRealtimeServer>[0],
+  onConnect?: (ws: WebSocket, number: number) => void,
 ) {
-  const server = await createRealtimeServer(serverOptions);
+  const wss = new WebSocketServer({ host: "127.0.0.1", port: 0, maxPayload: 1024 * 1024 });
+  const connections: WebSocket[] = [];
+  const frames: unknown[] = [];
+  const authHeaders: Array<string | string[] | undefined> = [];
+  const received = new EventEmitter();
+  wss.on("headers", (_headers, request) => authHeaders.push(request.headers.authorization));
+  wss.on("connection", (ws) => {
+    connections.push(ws);
+    ws.on("message", (data, isBinary) => {
+      const buffer = Buffer.isBuffer(data)
+        ? data
+        : Array.isArray(data)
+          ? Buffer.concat(data)
+          : Buffer.from(data);
+      frames.push(isBinary ? buffer : JSON.parse(buffer.toString()));
+      received.emit("frame");
+    });
+    onConnect?.(ws, connections.length);
+  });
+  await once(wss, "listening");
+  cleanup = async () => {
+    for (const ws of wss.clients) {
+      ws.terminate();
+    }
+    await new Promise<void>((resolve) => {
+      wss.close(() => resolve());
+    });
+  };
+  const url = `ws://127.0.0.1:${(wss.address() as AddressInfo).port}`;
   const onError = vi.fn();
+  const onTranscript = vi.fn();
+  const transports: Transport[] = [];
   const session = createSession({
-    url: server.url,
+    url,
     readyOnOpen: true,
-    callbacks: { onError },
+    callbacks: { onError, onTranscript },
+    onOpen: (transport) => transports.push(transport),
     ...options,
   });
-  return { ...server, session, onError };
-}
-
-function collectFrames<T>(count: number) {
-  const frames: T[] = [];
-  const ready = createDeferred();
   return {
+    url,
+    session,
+    onError,
+    onTranscript,
+    transports,
+    connections,
     frames,
-    ready: ready.promise,
-    onFrame: (frame: T) => {
-      frames.push(frame);
-      if (frames.length === count) {
-        ready.resolve();
+    authHeaders,
+    waitFrames: async (count: number) => {
+      while (frames.length < count) {
+        await once(received, "frame");
       }
+    },
+    connection: async (count: number) => {
+      await vi.waitFor(() => expect(connections).toHaveLength(count));
+      return expectDefined(connections[count - 1], "expected server connection");
     },
   };
 }
 
-function handleProviderEvent(
-  event: ProviderEvent,
-  transport: RealtimeTranscriptionWebSocketTransport,
-) {
+function handleProviderEvent(event: ProviderEvent, transport: Transport) {
   if (event.type === "session.created") {
     transport.markReady();
   } else if (!transport.isReady() && event.type === "error") {
@@ -139,9 +116,8 @@ function handleProviderEvent(
 }
 
 function expectError(onError: ReturnType<typeof vi.fn>, message: string | RegExp) {
-  expect(onError).toHaveBeenCalledTimes(1);
+  expect(onError).toHaveBeenCalledExactlyOnceWith(expect.any(Error));
   const error = expectDefined<Error>(onError.mock.calls[0]?.[0], "expected error call");
-  expect(error).toBeInstanceOf(Error);
   const expected = typeof message === "string" ? message : expect.stringMatching(message);
   expect(error.message).toEqual(expected);
   return error;
@@ -149,10 +125,7 @@ function expectError(onError: ReturnType<typeof vi.fn>, message: string | RegExp
 
 function saturateSocket(session: ReturnType<typeof createSession>) {
   const socket = Reflect.get(session, "ws") as WebSocket;
-  Object.defineProperty(socket, "bufferedAmount", {
-    configurable: true,
-    get: () => 1024 * 1024,
-  });
+  Object.defineProperty(socket, "bufferedAmount", { configurable: true, get: () => 1024 * 1024 });
   return vi.spyOn(socket, "terminate");
 }
 
@@ -162,47 +135,45 @@ function encodeSequence(value: number): Buffer {
   return frame;
 }
 
-it.each([false, true])(
-  "flushes the retained audio tail unless closed (close=%s)",
-  async (close) => {
-    const { frames, ready, onFrame } = collectFrames<Buffer>(close ? 1 : 4);
-    const { session } = await setup({ maxQueuedBytes: close ? 8 : 7 }, { onBinary: onFrame });
-
-    const shiftSpy = vi.spyOn(Array.prototype, "shift");
-    let shiftCalls = 0;
-    try {
-      for (let index = 0; index < 13_000; index += 1) {
-        session.sendAudio(encodeSequence(index));
-      }
-      if (close) {
-        session.close();
-      } else {
-        session.sendAudio(Buffer.from([0xaa, 0xbb, 0xcc]));
-      }
-      shiftCalls = shiftSpy.mock.calls.length;
-    } finally {
-      shiftSpy.mockRestore();
-    }
-    expect(shiftCalls).toBe(0);
-
+it.each(["closed", "reconnect"] as const)("retains the audio tail: %s", async (phase) => {
+  const reconnect = phase === "reconnect";
+  const { session, frames, waitFrames, connection } = await setup({
+    maxQueuedBytes: 7,
+    readyOnOpen: !reconnect,
+    maxReconnectAttempts: 1,
+    reconnectDelayMs: 1,
+    onMessage: handleProviderEvent,
+  });
+  let replacement: WebSocket | undefined;
+  if (reconnect) {
+    const connecting = session.connect();
+    (await connection(1)).send(JSON.stringify({ type: "session.created" }));
+    await connecting;
+    (await connection(1)).close(1011, "reconnect");
+    await vi.waitFor(() => expect(session.isConnected()).toBe(false));
+    replacement = await connection(2);
+  }
+  for (let index = 0; index < 13_000; index += 1) {
+    session.sendAudio(encodeSequence(index));
+  }
+  session.sendAudio(Buffer.from([0xaa, 0xbb, 0xcc]));
+  if (replacement) {
+    replacement.send(JSON.stringify({ type: "session.created" }));
+    await vi.waitFor(() => expect(session.isConnected()).toBe(true));
+  } else {
+    session.close();
     await session.connect();
-    session.sendAudio(Buffer.from("live"));
-    await ready;
-    expect(frames).toEqual(
-      close
-        ? [Buffer.from("live")]
-        : [
-            encodeSequence(12_998),
-            encodeSequence(12_999),
-            Buffer.from([0xaa, 0xbb, 0xcc]),
-            Buffer.from("live"),
-          ],
-    );
-    expect(session.isConnected()).toBe(true);
-  },
-);
+  }
+  session.sendAudio(Buffer.from("live"));
+  const tail = [12_998, 12_999].map(encodeSequence);
+  const expected = reconnect ? [...tail, Buffer.from([0xaa, 0xbb, 0xcc])] : [];
+  expected.push(Buffer.from("live"));
+  await waitFrames(expected.length);
+  expect(frames).toEqual(expected);
+  expect(session.isConnected()).toBe(true);
+});
 
-it("does not replay successfully flushed audio after a later frame fails", async () => {
+it("owns queued bytes without replaying successfully flushed frames", async () => {
   const sentFrames: string[] = [];
   let shouldFailSecondFrame = true;
   const { session, onError } = await setup({
@@ -211,69 +182,33 @@ it("does not replay successfully flushed audio after a later frame fails", async
         shouldFailSecondFrame = false;
         throw new Error("second frame failed");
       }
+      expect(audio.buffer.byteLength).toBe(audio.byteLength);
       sentFrames.push(audio.toString());
       transport.sendBinary(audio);
     },
   });
-
   session.sendAudio(Buffer.from("first"));
-  session.sendAudio(Buffer.from("second"));
+  const second = Buffer.from("second");
+  session.sendAudio(second);
+  second.fill(0);
   await expect(session.connect()).rejects.toThrow("second frame failed");
   expect(session.isConnected()).toBe(false);
-  expect(onError).toHaveBeenCalledOnce();
+  expectError(onError, "second frame failed");
   await session.connect();
-
   expect(sentFrames).toEqual(["first", "second"]);
 });
 
-it("flushes a large retained audio tail in order after reconnect", async () => {
-  const { frames, ready, onFrame } = collectFrames<Buffer>(4);
-  const { session, connections } = await setup(
-    {
-      readyOnOpen: false,
-      maxQueuedBytes: 8,
-      maxReconnectAttempts: 1,
-      reconnectDelayMs: 1,
-      onMessage: handleProviderEvent,
-    },
-    { onBinary: onFrame },
-  );
-
-  const connecting = session.connect();
-  await vi.waitFor(() => expect(connections).toHaveLength(1));
-  connections[0]?.send(JSON.stringify({ type: "session.created" }));
-  await connecting;
-
-  connections[0]?.close(1011, "reconnect");
-  await vi.waitFor(() => expect(session.isConnected()).toBe(false));
-  await vi.waitFor(() => expect(connections).toHaveLength(2));
-  for (let index = 0; index < 13_000; index += 1) {
-    session.sendAudio(encodeSequence(index));
-  }
-  connections[1]?.send(JSON.stringify({ type: "session.created" }));
-
-  await ready;
-  expect(frames).toEqual([12_996, 12_997, 12_998, 12_999].map(encodeSequence));
-});
-
 it("keeps replacement sockets owned when retired socket callbacks arrive late", async () => {
-  const transports: RealtimeTranscriptionWebSocketTransport[] = [];
-  const onTranscript = vi.fn();
-  const onError = vi.fn();
-  const { session, connections } = await setup({
-    callbacks: { onError, onTranscript },
+  const { session, connections, transports, onError, onTranscript } = await setup({
     closeTimeoutMs: 30,
     reconnectDelayMs: 1,
-    onOpen: (transport) => transports.push(transport),
     onMessage: handleProviderEvent,
   });
-
   await session.connect();
   const retiredSocket = Reflect.get(session, "ws") as WebSocket;
   session.close();
   await session.connect();
   await vi.waitFor(() => expect(connections).toHaveLength(2));
-
   const retiredTransport = expectDefined(transports[0], "retired socket transport");
   expect(retiredTransport.isOpen()).toBe(false);
   expect(retiredTransport.isReady()).toBe(false);
@@ -281,153 +216,73 @@ it("keeps replacement sockets owned when retired socket callbacks arrive late", 
   retiredTransport.markReady();
   retiredTransport.failConnect(new Error("retired provider failed"));
   retiredTransport.closeNow();
-
-  // Replay late callbacks from a retired connection against its replacement.
   retiredSocket.emit("message", Buffer.from(JSON.stringify({ text: "stale transcript" })));
   retiredSocket.emit("error", new Error("retired socket failed"));
   retiredSocket.emit("close", 1000, Buffer.from("retired"));
-
   expect(onTranscript).not.toHaveBeenCalled();
   expect(onError).not.toHaveBeenCalled();
   expect(session.isConnected()).toBe(true);
-
   await delay(60);
   expect(session.isConnected()).toBe(true);
   expect(connections).toHaveLength(2);
-
   connections[1]?.send(JSON.stringify({ text: "current transcript" }));
   await vi.waitFor(() => expect(onTranscript).toHaveBeenCalledWith("current transcript"));
 });
 
-it("discards superseded asynchronous connection preparation", async () => {
-  const server = await createRealtimeServer();
-  const { connections } = server;
-  const firstUrl = createDeferred<string>();
-  let connectionAttempt = 0;
-  const session = createSession({
-    url: async () => (++connectionAttempt === 1 ? await firstUrl.promise : server.url),
-    readyOnOpen: true,
-  });
-
-  const supersededConnection = session.connect();
-  session.close();
-  await session.connect();
-  firstUrl.resolve(server.url);
-  await supersededConnection;
-
-  await delay(20);
-  expect(connections).toHaveLength(1);
-  expect(session.isConnected()).toBe(true);
-});
-
 it("cancels a retired reconnect delay before starting a replacement socket", async () => {
   const { session, connections } = await setup({ reconnectDelayMs: 50 });
-
   await session.connect();
   connections[0]?.close(1011, "retired connection");
   await vi.waitFor(() => expect(session.isConnected()).toBe(false));
-
   session.close();
   await session.connect();
   await delay(100);
-
   expect(connections).toHaveLength(2);
   expect(session.isConnected()).toBe(true);
 });
 
-it("reconnects after a healthy successor closes following a failed connection", async () => {
-  const onError = vi.fn();
-  const server = await createRealtimeServer({
-    onConnection: (socket) => {
-      socket.send(
-        JSON.stringify(
-          connections.length === 2
-            ? { type: "error", message: "provider handshake rejected" }
-            : { type: "session.created" },
-        ),
-      );
-    },
-  });
-  const { connections } = server;
-  const session = createSession({
-    callbacks: { onError },
-    url: server.url,
-    reconnectDelayMs: 1,
-    onMessage: handleProviderEvent,
-  });
-
-  await session.connect();
-  connections[0]?.close(1011, "first connection dropped");
-  await vi.waitFor(() => expect(connections).toHaveLength(3));
-  await vi.waitFor(() => expect(session.isConnected()).toBe(true));
-  expect(onError).toHaveBeenCalledWith(
-    expect.objectContaining({ message: "provider handshake rejected" }),
-  );
-
-  connections[2]?.close(1011, "healthy connection dropped");
-  await vi.waitFor(() => expect(connections).toHaveLength(4), { timeout: 500 });
-  await vi.waitFor(() => expect(session.isConnected()).toBe(true));
-});
-
-it("delivers graceful provider finals before natural close and finalizes only once", async () => {
-  const finalizedFrames: unknown[] = [];
-  const transcripts: string[] = [];
+it.each(["natural", "timeout"] as const)("finishes graceful shutdown: %s", async (mode) => {
   const closed = createDeferred();
-  const { session } = await setup(
+  const { session, frames, onTranscript } = await setup(
     {
-      callbacks: { onTranscript: (text) => transcripts.push(text) },
-      closeTimeoutMs: 100,
+      closeTimeoutMs: mode === "natural" ? 100 : 20,
       onClose: (transport) => transport.sendJson({ type: "finalize" }),
       onMessage: handleProviderEvent,
     },
-    {
-      onConnection: (socket) => socket.once("close", () => closed.resolve()),
-      onText: (payload, socket) => {
-        finalizedFrames.push(payload);
-        if (finalizedFrames.length === 1) {
-          socket.send(JSON.stringify({ text: "final provider transcript" }));
+    (socket) => {
+      socket.once("close", () => closed.resolve());
+      socket.on("message", () => {
+        if (mode === "natural") {
+          socket.send(JSON.stringify({ text: "final transcript" }));
           socket.close(1000, "finished");
         }
-      },
+      });
     },
   );
-
   await session.connect();
+  const terminate = vi.spyOn(Reflect.get(session, "ws") as WebSocket, "terminate");
   session.close();
   session.close();
-
-  await closed.promise;
-  await vi.waitFor(() => expect(transcripts).toEqual(["final provider transcript"]));
-  expect(finalizedFrames).toEqual([{ type: "finalize" }]);
-});
-
-it("terminates the captured socket when graceful provider shutdown expires", async () => {
-  const { session } = await setup({ closeTimeoutMs: 20 });
-
-  await session.connect();
-  const ownedSocket = Reflect.get(session, "ws") as WebSocket;
-  const terminate = vi.spyOn(ownedSocket, "terminate");
-  session.close();
-
-  await vi.waitFor(() => expect(terminate).toHaveBeenCalledOnce(), { timeout: 500 });
-  expect(session.isConnected()).toBe(false);
+  if (mode === "natural") {
+    await closed.promise;
+    await vi.waitFor(() =>
+      expect(onTranscript).toHaveBeenCalledExactlyOnceWith("final transcript"),
+    );
+    expect(frames).toEqual([{ type: "finalize" }]);
+  } else {
+    await vi.waitFor(() => expect(terminate).toHaveBeenCalledOnce(), { timeout: 500 });
+    expect(session.isConnected()).toBe(false);
+  }
 });
 
 it.each(["binary", "JSON"] as const)("caps active %s frames and terminates once", async (kind) => {
-  let providerTransport: RealtimeTranscriptionWebSocketTransport | undefined;
-  const { session, onError } = await setup({
-    onOpen: (transport) => {
-      providerTransport = transport;
-    },
-  });
-
+  const { session, onError, transports } = await setup();
   await session.connect();
   const terminate = saturateSocket(session);
-
   if (kind === "binary") {
     session.sendAudio(Buffer.from([1]));
   } else {
-    expect(providerTransport?.sendJson({ type: "provider.control" })).toBe(false);
+    expect(transports[0]?.sendJson({ type: "provider.control" })).toBe(false);
   }
   await vi.waitFor(() => expect(terminate).toHaveBeenCalledOnce());
   expect(session.isConnected()).toBe(false);
@@ -447,15 +302,13 @@ it("rejects connect when provider handshake frames exceed the socket buffer cap"
       expect(transport.sendJson({ type: "session.update" })).toBe(false);
     },
   });
-
   await expect(session.connect()).rejects.toThrow(/send buffer exceeded/);
   expect(session.isConnected()).toBe(false);
   expectError(onError, /send buffer exceeded/);
 });
 
 it("lets providers mark ready after a JSON handshake", async () => {
-  const { frames, ready, onFrame } = collectFrames<unknown>(2);
-  const { session } = await setup(
+  const { session, frames, waitFrames } = await setup(
     {
       readyOnOpen: false,
       onMessage: (event, transport) => {
@@ -468,41 +321,46 @@ it("lets providers mark ready after a JSON handshake", async () => {
         transport.sendJson({ type: "input_audio.append", audio: audio.toString("base64") });
       },
     },
-    { initialEvent: { type: "session.created" }, onText: onFrame },
+    (socket) => socket.send(JSON.stringify({ type: "session.created" })),
   );
-
   session.sendAudio(Buffer.from("queued"));
   await session.connect();
-  await ready;
+  await waitFrames(2);
   expect(frames).toEqual([
     { type: "session.update" },
     { type: "input_audio.append", audio: Buffer.from("queued").toString("base64") },
   ]);
 });
 
-it.each([false, true])("resolves async URL/headers unless closed (close=%s)", async (close) => {
-  const seenAuthHeaders: Array<string | string[] | undefined> = [];
-  const url = createDeferred<string>();
-  const server = await createRealtimeServer({
-    onUpgrade: (headers) => seenAuthHeaders.push(headers.authorization),
-  });
-  const session = createSession({
-    url: () => url.promise,
-    headers: async () => ({ Authorization: "Bearer resolved-token" }),
-    readyOnOpen: true,
-  });
-  const connecting = session.connect();
-  if (close) {
-    session.close();
-  }
-  url.resolve(server.url);
-  await connecting;
-  expect(seenAuthHeaders).toEqual(close ? [] : ["Bearer resolved-token"]);
-  expect(session.isConnected()).toBe(!close);
-});
+it.each(["connected", "closed", "superseded"] as const)(
+  "resolves async credentials: %s",
+  async (phase) => {
+    const url = createDeferred<string>();
+    let attempts = 0;
+    const state: Awaited<ReturnType<typeof setup>> = await setup({
+      url: () => (++attempts === 1 ? url.promise : state.url),
+      headers: async () => ({ Authorization: "Bearer resolved-token" }),
+    });
+    const { session, connections } = state;
+    const connecting = session.connect();
+    if (phase !== "connected") {
+      session.close();
+    }
+    if (phase === "superseded") {
+      await session.connect();
+    }
+    url.resolve(state.url);
+    await connecting;
+    if (phase === "superseded") {
+      await delay(20);
+      expect(connections).toHaveLength(1);
+    }
+    expect(state.authHeaders).toEqual(phase === "closed" ? [] : ["Bearer resolved-token"]);
+    expect(session.isConnected()).toBe(phase !== "closed");
+  },
+);
 
 it.each([
-  ["queued audio", "queued audio send failed"],
   ["provider setup", "nope"],
   ["pre-ready close", closedMessage],
   ["connection resolution", "connection unavailable"],
@@ -511,7 +369,6 @@ it.each([
   const options: SessionOptions = {
     readyOnOpen: false,
     onMessage: handleProviderEvent,
-    connectTimeoutMessage: timeoutMessage,
     connectClosedBeforeReadyMessage: closedMessage,
   };
   if (phase === "connection resolution") {
@@ -520,19 +377,16 @@ it.each([
     };
   } else if (phase === "socket construction") {
     options.url = message;
-  } else if (phase === "queued audio") {
-    options.sendAudio = () => {
-      throw new Error(message);
-    };
   }
-  const { session, onError } = await setup(options, {
-    closeOnConnection: phase === "pre-ready close",
-    initialEvent:
-      phase === "provider setup" ? { type: "error", message } : { type: "session.created" },
+  const { session, onError } = await setup(options, (socket) => {
+    if (phase === "pre-ready close") {
+      socket.close(1011, "setup failed");
+    } else {
+      const event =
+        phase === "provider setup" ? { type: "error", message } : { type: "session.created" };
+      socket.send(JSON.stringify(event));
+    }
   });
-  if (phase === "queued audio") {
-    session.sendAudio(Buffer.from("queued"));
-  }
   await expect(session.connect()).rejects.toThrow(message);
   expect(session.isConnected()).toBe(false);
   expectError(onError, phase === "socket construction" ? /not a valid websocket URL/ : message);
@@ -551,91 +405,86 @@ it("preserves connect failures when the error callback throws", async () => {
     connectTimeoutMessage: timeoutMessage,
     readyOnOpen: true,
   });
+  const connecting = session.connect();
+  const timeoutAssertion = expect(connecting).rejects.toThrow(timeoutMessage);
+  await vi.advanceTimersByTimeAsync(10);
+  await timeoutAssertion;
+  expect(session.isConnected()).toBe(false);
+  expectError(onError, timeoutMessage);
+});
 
-  try {
-    const connecting = session.connect();
-    const timeoutAssertion = expect(connecting).rejects.toThrow(timeoutMessage);
-    await vi.advanceTimersByTimeAsync(10);
-
-    await timeoutAssertion;
-    expect(session.isConnected()).toBe(false);
-    expectError(onError, timeoutMessage);
-  } finally {
-    vi.unstubAllEnvs();
+it.each(["failed handshake", "stable reset"] as const)("reconnect lifecycle: %s", async (mode) => {
+  const stable = mode === "stable reset";
+  let now = 0;
+  if (stable) {
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+  }
+  const { session, connections, onError } = await setup(
+    {
+      readyOnOpen: false,
+      maxReconnectAttempts: stable ? 1 : 5,
+      reconnectDelayMs: stable ? 5 : 1,
+      onMessage: handleProviderEvent,
+    },
+    (socket, number) => {
+      const event =
+        !stable && number === 2
+          ? { type: "error", message: "provider handshake rejected" }
+          : { type: "session.created" };
+      socket.send(JSON.stringify(event));
+    },
+  );
+  await session.connect();
+  const droppedSockets = stable ? [0, 1] : [0, 2];
+  for (const [step, index] of droppedSockets.entries()) {
+    const count = step + (stable ? 2 : 3);
+    connections[index]?.close(1011, "disconnect");
+    await vi.waitFor(
+      () => expect(connections).toHaveLength(count),
+      !stable && count === 4 ? { timeout: 500 } : undefined,
+    );
+    await vi.waitFor(() => expect(session.isConnected()).toBe(true));
+    if (stable) {
+      now = 30_000;
+    }
+  }
+  if (stable) {
+    connections[2]?.close(1011, "second flap");
+    await vi.waitFor(() =>
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "test realtime transcription reconnect limit reached" }),
+      ),
+    );
+    expect(connections).toHaveLength(3);
+  } else {
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "provider handshake rejected" }),
+    );
   }
 });
 
-it("keeps error callback failures inside websocket message dispatch", async () => {
-  const received = createDeferred();
+it.each(["malformed", "oversized"] as const)("rejects %s frames before dispatch", async (kind) => {
+  const onMessage = vi.fn(() => {
+    throw new Error("invalid frame reached provider handler");
+  });
   const onError = vi.fn((_error: Error) => {
-    received.resolve();
     throw new Error("error observer failed");
   });
-  const { session } = await setup(
-    {
-      callbacks: { onError },
-      onMessage: () => {
-        throw new Error("malformed payload should not reach provider handler");
-      },
-    },
-    { initialText: "{not json" },
+  const { session } = await setup({ callbacks: { onError }, onMessage }, (socket) =>
+    socket.send(kind === "malformed" ? "{not json" : "x".repeat(16 * 1024 * 1024 + 1)),
   );
-
   await session.connect();
-  await received.promise;
-  expectError(onError, "Realtime transcription websocket received malformed JSON.");
-  expect(session.isConnected()).toBe(true);
-});
-
-it("refreshes the reconnect budget after a stable ready connection", async () => {
-  let now = 0;
-  vi.spyOn(Date, "now").mockImplementation(() => now);
-  const { session, onError, connections } = await setup(
-    {
-      readyOnOpen: false,
-      maxReconnectAttempts: 1,
-      reconnectDelayMs: 5,
-      onMessage: handleProviderEvent,
-    },
-    { initialEvent: { type: "session.created" } },
-  );
-
-  await session.connect();
-  connections[0]?.close(1011, "first flap");
-  await vi.waitFor(() => expect(connections).toHaveLength(2));
-  await vi.waitFor(() => expect(session.isConnected()).toBe(true));
-
-  now = 30_000;
-  connections[1]?.close(1011, "stable disconnect");
-  await vi.waitFor(() => expect(connections).toHaveLength(3));
-  await vi.waitFor(() => expect(session.isConnected()).toBe(true));
-
-  connections[2]?.close(1011, "second flap");
-  await vi.waitFor(() => {
-    expect(onError).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "test realtime transcription reconnect limit reached",
-      }),
-    );
-  });
-  expect(connections).toHaveLength(3);
-});
-
-it("drops an oversized inbound message before it reaches the provider parser", async () => {
-  const oversized = "x".repeat(16 * 1024 * 1024 + 1);
-  const received = createDeferred();
-  const onError = vi.fn((_error: Error) => received.resolve());
-  const onMessage = vi.fn(() => {
-    throw new Error("oversized frame should not reach provider handler");
-  });
-  const { session } = await setup(
-    { callbacks: { onError }, onMessage },
-    { initialText: oversized },
-  );
-
-  await session.connect();
-  await received.promise;
+  await vi.waitFor(() => expect(onError).toHaveBeenCalled());
   expect(onMessage).not.toHaveBeenCalled();
-  const overflowError = expectError(onError, /max payload/i);
-  expect(overflowError).toHaveProperty("code", "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH");
+  const error = expectError(
+    onError,
+    kind === "malformed"
+      ? "Realtime transcription websocket received malformed JSON."
+      : /max payload/i,
+  );
+  if (kind === "oversized") {
+    expect(error).toHaveProperty("code", "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH");
+  } else {
+    expect(session.isConnected()).toBe(true);
+  }
 });

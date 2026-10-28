@@ -115,51 +115,6 @@ async function resolveTelegramCommandMenuModelContext(
   }
 }
 
-function resolveTelegramFastCommandState(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  modelContext: TelegramCommandMenuModelContext;
-}) {
-  const defaultModel = resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
-  return resolveFastModeState({
-    cfg: params.cfg,
-    provider: params.modelContext.provider ?? defaultModel.provider,
-    model: params.modelContext.model ?? defaultModel.model,
-    agentId: params.agentId,
-    sessionEntry: params.modelContext.sessionEntry,
-  });
-}
-
-async function resolveTelegramThinkMenuCurrentLevel(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  provider?: string;
-  model?: string;
-  agentRuntime?: string;
-  thinkingLevel?: string;
-  catalog: Awaited<ReturnType<typeof loadPreparedModelCatalog>>;
-}): Promise<string> {
-  const explicit = normalizeOptionalString(params.thinkingLevel);
-  if (explicit) {
-    return explicit;
-  }
-  const agentThinkingDefault = normalizeOptionalString(
-    resolveAgentConfig(params.cfg, params.agentId)?.thinkingDefault,
-  );
-  if (agentThinkingDefault) {
-    return agentThinkingDefault;
-  }
-  const defaultModel = resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
-  return await resolveThinkingDefaultWithRuntimeCatalog({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    provider: params.provider ?? defaultModel.provider,
-    model: params.model ?? defaultModel.model,
-    agentRuntime: params.agentRuntime,
-    loadModelCatalog: async () => params.catalog,
-  });
-}
-
 export type TelegramBuiltinCommandResult = "handled" | "handled-clear-buttons" | "fall-through";
 
 export async function executeTelegramBuiltinCommand(
@@ -253,24 +208,46 @@ export async function executeTelegramBuiltinCommand(
     if (params.shouldSkip?.()) {
       return "handled";
     }
-    const currentThinkingLevel =
-      commandDefinition.key === "think"
-        ? await resolveTelegramThinkMenuCurrentLevel({
-            cfg: dispatch.runtimeCfg,
-            agentId: dispatch.route.agentId,
-            ...menuModelContext,
-            catalog: menuModelCatalog ?? [],
-          })
-        : undefined;
-    const currentFastModeStatus =
-      commandDefinition.key === "fast"
-        ? formatFastModeCurrentStatus(
-            resolveTelegramFastCommandState({
-              ...menuContextParams,
-              modelContext: menuModelContext,
-            }),
-          )
-        : undefined;
+    let currentThinkingLevel: string | undefined;
+    if (commandDefinition.key === "think") {
+      const catalog = menuModelCatalog ?? [];
+      currentThinkingLevel = normalizeOptionalString(menuModelContext.thinkingLevel);
+      if (!currentThinkingLevel) {
+        currentThinkingLevel = normalizeOptionalString(
+          resolveAgentConfig(dispatch.runtimeCfg, dispatch.route.agentId)?.thinkingDefault,
+        );
+      }
+      if (!currentThinkingLevel) {
+        const defaultModel = resolveDefaultModelForAgent({
+          cfg: dispatch.runtimeCfg,
+          agentId: dispatch.route.agentId,
+        });
+        currentThinkingLevel = await resolveThinkingDefaultWithRuntimeCatalog({
+          cfg: dispatch.runtimeCfg,
+          agentId: dispatch.route.agentId,
+          provider: menuModelContext.provider ?? defaultModel.provider,
+          model: menuModelContext.model ?? defaultModel.model,
+          agentRuntime: menuModelContext.agentRuntime,
+          loadModelCatalog: async () => catalog,
+        });
+      }
+    }
+    let currentFastModeStatus: string | undefined;
+    if (commandDefinition.key === "fast") {
+      const defaultModel = resolveDefaultModelForAgent({
+        cfg: dispatch.runtimeCfg,
+        agentId: dispatch.route.agentId,
+      });
+      currentFastModeStatus = formatFastModeCurrentStatus(
+        resolveFastModeState({
+          cfg: dispatch.runtimeCfg,
+          provider: menuModelContext.provider ?? defaultModel.provider,
+          model: menuModelContext.model ?? defaultModel.model,
+          agentId: dispatch.route.agentId,
+          sessionEntry: menuModelContext.sessionEntry,
+        }),
+      );
+    }
     let title = formatCommandArgMenuTitle({ command: commandDefinition, menu });
     if (commandDefinition.key === "think" && currentThinkingLevel) {
       title = `Current thinking level: ${currentThinkingLevel}.\n${title}`;

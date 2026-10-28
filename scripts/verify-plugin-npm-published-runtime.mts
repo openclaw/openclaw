@@ -220,7 +220,7 @@ export function readPluginNpmCommandOptions(env: NodeJS.ProcessEnv = process.env
   } satisfies ExecFileSyncOptionsWithStringEncoding;
 }
 
-export function runPluginNpmCommand(
+function runPluginNpmCommand(
   args: string[],
   params: { execFileSyncImpl?: ExecFileSyncText; env?: NodeJS.ProcessEnv } = {},
 ) {

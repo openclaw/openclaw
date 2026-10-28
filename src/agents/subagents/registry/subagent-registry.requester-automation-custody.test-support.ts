@@ -40,18 +40,13 @@ import {
   markRequesterTurnYieldedWithAuthority,
 } from "./subagent-registry-requester-yield.test-support.js";
 import { registerSubagentRun } from "./subagent-registry.js";
+import type { RegistryRegistrationFixture } from "./subagent-registry.requester-completion.fixture.test-support.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.test-helpers.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
-
-type Registration = Parameters<typeof registerSubagentRun>[0];
 
 export function registerRequesterAutomationCustodyTests({
   registration,
   updateRun,
-}: {
-  registration: (runId: string, overrides?: Partial<Registration>) => Registration;
-  updateRun: (runId: string, update: (draft: SubagentRunRecord) => void) => Promise<void>;
-}) {
+}: RegistryRegistrationFixture) {
   it.each(["current", "revoked"] as const)(
     "keeps %s original completion custody after a same-human chat admission revokes automation",
     async (authority) => {
@@ -102,15 +97,12 @@ export function registerRequesterAutomationCustodyTests({
         );
         const transfer = createRequesterInitialTransferFixture(subagentRuns);
         const requester = { requesterSessionKey, requesterAgentId: "main", requesterTurnRunId };
+        const settlement = { ...requester, runs: subagentRuns, transfer };
+        const scope = { context, isWebchatConnect: () => false };
         const deliver = vi.spyOn(delivery, "deliverSubagentAnnouncement");
         try {
           await withPluginRuntimeGatewayRequestScope(
-            {
-              client,
-              context,
-              resolveGatewayContext: () => context,
-              isWebchatConnect: () => false,
-            },
+            { ...scope, client, resolveGatewayContext: () => context },
             () =>
               runWithCronCreatorAuthorityCapability(capability, () =>
                 withGatewayToolCallerIdentity(
@@ -126,16 +118,10 @@ export function registerRequesterAutomationCustodyTests({
                     await registerSubagentRun(
                       registration(runId, { ...requester, gatewayContextResolver: () => context }),
                     );
-                    expect(
-                      await markRequesterTurnYieldedWithAuthority({
-                        ...requester,
-                        runs: subagentRuns,
-                        transfer,
-                      }),
-                    ).toBe(1);
+                    expect(await markRequesterTurnYieldedWithAuthority(settlement)).toBe(1);
                     expect(
                       await settleRequesterTurnAfterSessionSpawns({
-                        ...requester,
+                        ...settlement,
                         requesterYielded: true,
                         acceptedSessionSpawns: [
                           {
@@ -144,8 +130,6 @@ export function registerRequesterAutomationCustodyTests({
                             expectsCompletionMessage: true,
                           },
                         ],
-                        runs: subagentRuns,
-                        transfer,
                         schedule: () => {},
                       }),
                     ).toBe(true);
@@ -179,6 +163,7 @@ export function registerRequesterAutomationCustodyTests({
               isDirectExternalUser: true,
             }),
           ).toMatchObject({ managementEntitlement: { source: "control-ui-admin" } });
+          const resultText = "Original child result";
           await updateRun(runId, (draft) => {
             draft.execution = {
               status: "terminal",
@@ -187,10 +172,10 @@ export function registerRequesterAutomationCustodyTests({
             };
             draft.completion = {
               required: true,
-              resultText: "Original child result",
-              terminalReply: { disposition: "visible", text: "Original child result" },
+              resultText,
+              terminalReply: { disposition: "visible", text: resultText },
             };
-            draft.delivery = { status: "delivered" };
+            draft.delivery = { status: "pending" };
           });
           if (authority === "revoked") {
             revoked.abort(new Error("original operator source revoked"));
@@ -200,7 +185,7 @@ export function registerRequesterAutomationCustodyTests({
               getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
             expect(retained?.source).toBe(source.authority.source);
             expect(retained?.scopes).toEqual(["operator.admin"]);
-            expect(params.triggerMessage).toContain("Original child result");
+            expect(params.triggerMessage).toContain(resultText);
             expect(
               resolveGatewayCronCreatorAuthorityAdmission({
                 runId: params.directIdempotencyKey!,
@@ -231,7 +216,7 @@ export function registerRequesterAutomationCustodyTests({
           const pendingWake = structuredClone(subagentRuns.get(runId)?.requesterSettleWake);
           // Exercise the real settle dispatcher, including its canonical registry authority wrapper.
           const deliveryAttempt = withPluginRuntimeGatewayRequestScope(
-            { client: unrelatedClient, context, isWebchatConnect: () => false },
+            { ...scope, client: unrelatedClient },
             () =>
               maybeWakeRequesterAfterAllChildrenSettled({
                 requesterSessionKey,

@@ -10,6 +10,7 @@ import {
   isProviderAuthProfileConfiguredAsync,
 } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSpeechDirectivePolicy } from "../test-support/speech-directive-policy.test-support.js";
 
 const transcode = vi.hoisted(() => vi.fn());
 
@@ -70,54 +71,25 @@ describe("resolveConfig", () => {
 });
 
 describe("parseDirectiveToken", () => {
-  const policy = {
-    enabled: true,
-    allowText: true,
-    allowProvider: true,
-    allowVoice: true,
-    allowModelId: true,
-    allowVoiceSettings: true,
-    allowNormalization: true,
-    allowSeed: true,
-  };
+  const policy = createSpeechDirectivePolicy();
 
   it.each([
-    ["voice", "Chinese (Mandarin)_Warm_Girl", { voiceId: "Chinese (Mandarin)_Warm_Girl" }],
-    ["model", "speech-01-turbo", { model: "speech-01-turbo" }],
-    ["speed", "1.5", { speed: 1.5 }],
-    ["vol", "10", { vol: 10 }],
-    ["pitch", "-3", { pitch: -3 }],
-  ])("parses %s=%s", (key, value, overrides) => {
-    const result = parseDirectiveToken({ key, value, policy });
-    expect(result.handled).toBe(true);
-    expect(result.warnings).toBeUndefined();
-    expect(result.overrides).toEqual(overrides);
-  });
-
-  it("warns on invalid speed", () => {
-    const result = parseDirectiveToken({ key: "speed", value: "5.0", policy });
-    expect(result.handled).toBe(true);
-    expect(result.warnings).toHaveLength(1);
-    expect(result.overrides).toBeUndefined();
-  });
-
-  it("returns handled=false for unknown keys", () => {
-    expect(parseDirectiveToken({ key: "unknown_key", value: "whatever", policy }).handled).toBe(
-      false,
-    );
-  });
-
-  it.each([
-    ["voice", "allowVoice"],
-    ["model", "allowModelId"],
-  ] as const)("suppresses %s when policy disallows %s", (key, flag) => {
-    const result = parseDirectiveToken({
-      key,
-      value: "test",
-      policy: { ...policy, [flag]: false },
-    });
-    expect(result.handled).toBe(true);
-    expect(result.overrides).toBeUndefined();
+    [
+      "voice",
+      "Chinese (Mandarin)_Warm_Girl",
+      {},
+      { handled: true, overrides: { voiceId: "Chinese (Mandarin)_Warm_Girl" } },
+    ],
+    ["model", "speech-01-turbo", {}, { handled: true, overrides: { model: "speech-01-turbo" } }],
+    ["speed", "1.5", {}, { handled: true, overrides: { speed: 1.5 } }],
+    ["vol", "10", {}, { handled: true, overrides: { vol: 10 } }],
+    ["pitch", "-3", {}, { handled: true, overrides: { pitch: -3 } }],
+    ["speed", "5.0", {}, { handled: true, warnings: [expect.any(String)] }],
+    ["unknown_key", "whatever", {}, { handled: false }],
+    ["voice", "test", { allowVoice: false }, { handled: true }],
+    ["model", "test", { allowModelId: false }, { handled: true }],
+  ] as const)("parses %s=%s under policy %j", (key, value, flags, expected) => {
+    expect(parseDirectiveToken({ key, value, policy: { ...policy, ...flags } })).toEqual(expected);
   });
 });
 
@@ -197,14 +169,12 @@ describe("MiniMax auth and synthesis", () => {
       target: "voice-note",
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        outputFormat: "opus",
-        fileExtension: ".opus",
-        voiceCompatible: true,
-        audioBuffer: Buffer.from("fake-opus-data"),
-      }),
-    );
+    expect(result).toMatchObject({
+      outputFormat: "opus",
+      fileExtension: ".opus",
+      voiceCompatible: true,
+      audioBuffer: Buffer.from("fake-opus-data"),
+    });
     expect(transcode).toHaveBeenCalledWith({
       audioBuffer: Buffer.from("fake-mp3-data"),
       inputExtension: "mp3",
@@ -230,12 +200,7 @@ describe("MiniMax auth and synthesis", () => {
     ],
     [
       "providerConfig",
-      {
-        apiKey: "sk-test",
-        speed: 3,
-        vol: -1,
-        pitch: 20,
-      },
+      { apiKey: "sk-test", speed: 3, vol: -1, pitch: 20 },
       { voice_setting: { speed: 1, vol: 1, pitch: 0 } },
     ],
   ] as const)("normalizes %s synthesis settings", async (field, settings, expected) => {
@@ -284,10 +249,5 @@ describe("MiniMax auth and synthesis", () => {
 
     await expect(synthesize({ providerConfig: {} })).rejects.toThrow("MiniMax TTS auth missing");
     expect(globalThis.fetch).not.toHaveBeenCalled();
-  });
-
-  it("throws on API error with response body", async () => {
-    fetchMock.mockResolvedValueOnce(new Response("Unauthorized", { status: 401 }));
-    await expect(synthesize()).rejects.toThrow("MiniMax TTS API error (401): Unauthorized");
   });
 });

@@ -5,7 +5,7 @@ import type {
   PluginHookCronReconciledEvent,
   PluginHookGatewayCronService,
 } from "../plugins/hook-gateway.types.js";
-import type { GatewayCronState } from "./server-cron.js";
+import type { GatewayCronState } from "./server-cron-contract.js";
 
 type GatewayCronReconciliationArmParams = {
   reason: PluginHookCronReconciledEvent["reason"];

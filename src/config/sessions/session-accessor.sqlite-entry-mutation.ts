@@ -10,7 +10,6 @@ import {
   readSessionIdentitySnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { withSessionParticipantWriteSnapshot } from "./session-accessor.sqlite-participant-projection.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 import { assertSessionEntryPatchCliHistory } from "./session-entry-patch-guard.js";
 import type { SessionEntryPatchGuard } from "./session-entry-patch.types.js";
@@ -65,9 +64,7 @@ export function applySessionEntryPatchInDatabase(
   if (params.validateCanonicalKeys) {
     assertCanonicalSqliteSessionKeysCurrent(database);
   }
-  const fresh = withSessionParticipantWriteSnapshot(database.db, () =>
-    params.readSnapshot(database),
-  );
+  const fresh = params.readSnapshot(database);
   assertLifecycleTargetSnapshotUnchanged(params.prepared, fresh, params.operationLabel);
   return writeSessionEntryPatchInDatabase(database, { ...params, fresh });
 }

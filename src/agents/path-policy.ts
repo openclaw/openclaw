@@ -104,12 +104,8 @@ export function toRelativeWorkspacePath(
 }
 
 /** Return a sandbox-relative path, including the sandbox root in boundary errors. */
-export function toRelativeSandboxPath(
-  root: string,
-  candidate: string,
-  options?: RelativePathOptions,
-): string {
-  return toRelativePathUnderRoot(root, candidate, options, true);
+export function toRelativeSandboxPath(root: string, candidate: string): string {
+  return toRelativePathUnderRoot(root, candidate, undefined, true);
 }
 
 /** Resolve a user-supplied path against `cwd` using the sandbox input rules. */

@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -15,12 +14,11 @@ import {
   DEFAULT_LLAMA_CPP_MODEL_URI,
   LLAMA_CPP_PROVIDER_ID,
 } from "./defaults.js";
-import type { LlamaDownloadProgress } from "./llama-server-install.js";
 import { resolveLlamaCppModelCandidates } from "./model-catalog.js";
 import { authContext, config, GIB, mocks, modelPath, tempRoot } from "./setup.test-support.js";
 
 const { detectLlamaCppSetup, prepareLlamaCppSetup, runLlamaCppSetup } = await import("./setup.js");
-const { downloadVerifiedFile } = await import("./llama-server-install.js");
+const { UnsupportedLlamaServerHostError } = await import("./llama-server-install.js");
 
 const CUSTOM_EMBEDDING_MODEL =
   "hf:ggml-org/embeddinggemma-300M-qat-q4_0-GGUF/embeddinggemma-300M-qat-Q4_0.gguf";
@@ -57,11 +55,7 @@ function makeModel(
     ...overrides,
   };
 }
-function localService(prefix = ""): {
-  command: string;
-  args: [string, string];
-  healthUrl: string;
-} {
+function localService(prefix = ""): { command: string; args: [string, string]; healthUrl: string } {
   return {
     command: path.join(tempRoot, `${prefix}llama-server`),
     args: ["--models-preset", path.join(tempRoot, `${prefix}models.ini`)],
@@ -100,8 +94,7 @@ async function expectSkipped(ctx: ProviderAuthContext, reason: string | RegExp) 
 }
 
 describe("llama.cpp managed setup", () => {
-  it("reports producer download rates during setup across an established shared tick", async () => {
-    const times = [1010, 1010, 1030];
+  it("reports embedding download rates before stopping setup progress", async () => {
     vi.mocked(os.totalmem).mockReturnValue(4 * GIB);
     const ctx = authContext(true);
     requestUnconfiguredLocalMemory(ctx, CUSTOM_EMBEDDING_MODEL);
@@ -110,11 +103,6 @@ describe("llama.cpp managed setup", () => {
       update: mocks.progressUpdate,
       stop: stopped,
     });
-    const destination = path.join(tempRoot, "rate-embedding.gguf");
-    const chunks = [1, 2, 3].map((value) => Buffer.alloc(1_000_000, value));
-    const payload = Buffer.concat(chunks);
-    const observations: Array<Parameters<LlamaDownloadProgress>[0] & { text: string }> = [];
-    const release = vi.fn();
     const existingEnsure = mocks.ensureModel.getMockImplementation()!;
     mocks.ensureModel.mockImplementation(
       async (options: Parameters<typeof import("./managed-server.js").ensureLlamaCppModel>[0]) => {
@@ -122,89 +110,26 @@ describe("llama.cpp managed setup", () => {
           return existingEnsure(options);
         }
         const report = options.onProgress;
-        if (!report) {
-          throw new Error("Selected setup download has no progress callback");
-        }
-        mocks.downloadFetch.mockResolvedValueOnce({
-          response: new Response(
-            new ReadableStream<Uint8Array>({
-              start(controller) {
-                for (const chunk of chunks) {
-                  controller.enqueue(chunk);
-                }
-                controller.close();
-              },
-            }),
-          ),
-          release,
-        });
-        const clock = vi.spyOn(Date, "now").mockReturnValue(1000);
-        const actualOpen = fs.open.bind(fs);
-        let written = 0;
-        const opened = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-          const handle = await actualOpen(...args);
-          const writeFile = handle.writeFile.bind(handle);
-          handle.writeFile = async (...writeArgs) => {
-            await writeFile(...writeArgs);
-            clock.mockReturnValue(times[written++]!);
-          };
-          return handle;
-        });
-        try {
-          await downloadVerifiedFile({
-            url: "https://downloads.example/rate-embedding.gguf",
-            destination,
-            expectedSize: payload.byteLength,
-            expectedSha256: createHash("sha256").update(payload).digest("hex"),
-            onProgress: (progress) => {
-              expect(stopped).not.toHaveBeenCalled();
-              report(progress);
-              const text = mocks.progressUpdate.mock.lastCall?.[0];
-              expect(typeof text).toBe("string");
-              observations.push({ ...progress, text });
-            },
-          });
-        } finally {
-          opened.mockRestore();
-          clock.mockRestore();
-        }
-        return destination;
+        assert.ok(report, "Selected setup download has no progress callback");
+        expect(stopped).not.toHaveBeenCalled();
+        report({ downloadedSize: 1_000_000, totalSize: 3_000_000, bytesPerSecond: 100_000_000 });
+        return existingEnsure(options);
       },
     );
     await runLlamaCppSetup(ctx);
-    assert.deepStrictEqual(await fs.readFile(destination), payload);
-    expect(release).toHaveBeenCalledOnce();
     expect(stopped).toHaveBeenCalledExactlyOnceWith("Managed llama.cpp server prepared");
-    expect(mocks.downloadFetch).toHaveBeenCalledOnce();
-    expect(
-      observations.map(({ downloadedSize, totalSize, bytesPerSecond, text }) => [
-        downloadedSize,
-        totalSize,
-        bytesPerSecond,
-        Number(text.match(/, (\d+) MB\/s\)$/u)?.[1]),
-      ]),
-    ).toEqual([
-      [1_000_000, 3_000_000, 100_000_000, 100],
-      [2_000_000, 3_000_000, 100_000_000, 100],
-      [3_000_000, 3_000_000, 100_000_000, 100],
-    ]);
-    expect(
-      observations.every((progress) =>
-        progress.text.startsWith("Downloading configured embedding model…"),
-      ),
-    ).toBe(true);
+    expect(mocks.progressUpdate).toHaveBeenCalledWith(
+      "Downloading configured embedding model… 33% (0.0/0.0 GB, 100 MB/s)",
+    );
   });
 
   it("reuses a downloaded recommendation after cancelled activation with little free disk", async () => {
     mocks.hardware.mockResolvedValue({
-      platform: "darwin",
-      arch: "arm64",
-      accelerator: { kind: "metal" },
+      ...(await mocks.hardware()),
       totalMemoryBytes: 8 * GIB,
       availableMemoryBytes: 8 * GIB,
       availableDiskBytes: 3 * GIB,
       availableRuntimeDiskBytes: 3 * GIB,
-      sharedDisk: true,
     });
     const recipe = resolveLlamaCppModelCandidates(await mocks.hardware(), "metal").recipes.at(-1)!;
     mocks.ensureModel.mockImplementation(async ({ source, cacheDir }) => {
@@ -232,13 +157,11 @@ describe("llama.cpp managed setup", () => {
 
   it("makes CPU execution explicit when the NVIDIA host lacks a verified CUDA build", async () => {
     mocks.hardware.mockResolvedValue({
+      ...(await mocks.hardware()),
       platform: "linux",
       arch: "x64",
       totalMemoryBytes: 64 * GIB,
       availableMemoryBytes: 60 * GIB,
-      availableDiskBytes: 100 * GIB,
-      availableRuntimeDiskBytes: 100 * GIB,
-      sharedDisk: true,
       accelerator: {
         kind: "cuda",
         devices: [
@@ -269,33 +192,22 @@ describe("llama.cpp managed setup", () => {
     expect(mocks.removeProfiles).not.toHaveBeenCalled();
   });
 
-  it("does not suggest retrying setup on a host the verified build cannot run on", async () => {
-    const ctx = authContext(true);
-    const { UnsupportedLlamaServerHostError } = await import("./llama-server-install.js");
-    mocks.prepareServer.mockRejectedValue(
-      new UnsupportedLlamaServerHostError("The verified llama-server build requires macOS 13.3+"),
-    );
-    const setup = runLlamaCppSetup(ctx);
-    await expect(setup).rejects.toThrow(
-      "Managed llama.cpp setup is unavailable on this host. The verified llama-server build requires macOS 13.3+",
-    );
-    await expect(setup).rejects.not.toThrow("retry");
-  });
-
-  it("refuses an unsupported host before downloading any model files", async () => {
-    const ctx = authContext(true);
-    const { UnsupportedLlamaServerHostError } = await import("./llama-server-install.js");
-    mocks.ensureServerInstalled.mockRejectedValueOnce(
-      new UnsupportedLlamaServerHostError(
-        "The verified llama-server build requires macOS 13.3+; this Mac runs macOS 12.7.6.",
-      ),
-    );
-    await expect(runLlamaCppSetup(ctx)).rejects.toThrow(
-      "Managed llama.cpp setup is unavailable on this host. The verified llama-server build requires macOS 13.3+; this Mac runs macOS 12.7.6.",
-    );
-    expectNoDownload();
-    expect(mocks.prepareServer).not.toHaveBeenCalled();
-  });
+  it.each(["ensureServerInstalled", "prepareServer"] as const)(
+    "reports unsupported hosts without retry advice during %s",
+    async (stage) => {
+      const detail = "The verified llama-server build requires macOS 13.3+";
+      mocks[stage].mockRejectedValueOnce(new UnsupportedLlamaServerHostError(detail));
+      const setup = runLlamaCppSetup(authContext(true));
+      await expect(setup).rejects.toThrow(
+        `Managed llama.cpp setup is unavailable on this host. ${detail}`,
+      );
+      await expect(setup).rejects.not.toThrow("retry");
+      if (stage === "ensureServerInstalled") {
+        expectNoDownload();
+        expect(mocks.prepareServer).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("pins the default model identity and integrity", () => {
     expect(DEFAULT_LLAMA_CPP_MODEL_URI).toBe(

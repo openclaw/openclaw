@@ -1,11 +1,14 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  attachInternalToolResultContentSource,
+  copyInternalToolResultState,
+} from "../../packages/agent-core/src/internal-hooks.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { resolveAgentToolExecutionSchema } from "./agent-tool-availability.js";
 import {
   finalizeToolTerminalPresentation,
   getBeforeToolCallFailureDisposition,
-  isPreExecutionBlockedToolResult,
 } from "./agent-tools.before-tool-call.js";
 import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
@@ -14,10 +17,6 @@ import { setMcpCodeModeGuestResultFromAgentResult } from "./mcp-content.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import {
-  attachInternalToolResultContentSource,
-  copyInternalToolResultState,
-} from "./runtime/internal-hooks.js";
-import {
   captureToolOutputSelection,
   readToolOutputSchemaVariants,
   type ToolOutputSelection,
@@ -25,6 +24,7 @@ import {
 } from "./schema/tool-output-schema.js";
 import { bindJoinedCollectorInvocation } from "./subagents/swarm/swarm-collector-capability.js";
 import { markToolContractFailure } from "./tool-contract-error.js";
+import { readToolExecutionRefusal } from "./tool-effect-receipt.js";
 import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 import {
   isToolResultError,
@@ -34,6 +34,7 @@ import {
 import { runWithToolResultDelivery } from "./tool-result-limits.js";
 import {
   compactToolSearchCatalogEntry,
+  describeToolSearchCatalogEntry,
   prepareToolSearchCatalogExecutionTool,
   readToolSearchCatalogTelemetry,
   resolveCatalog,
@@ -72,14 +73,6 @@ type ToolSearchExactCallOptions = Pick<
   "parentToolCallId" | "signal" | "onUpdate" | "recoverySurface" | "mcpNamespaceGuest"
 >;
 
-function describeEntry(entry: ToolSearchCatalogEntry) {
-  return {
-    ...compactToolSearchCatalogEntry(entry),
-    parameters: entry.parameters ?? {},
-    ...(entry.outputSchema ? { outputSchema: entry.outputSchema } : {}),
-  };
-}
-
 function findEntry(
   catalog: ToolSearchCatalogSession,
   id: string,
@@ -94,7 +87,7 @@ function findEntry(
   }
   const namedEntries =
     match === "exact-id" ? [] : entries.filter((candidate) => candidate.name === needle);
-  if (namedEntries.length > 1) {
+  if (namedEntries.length > 1 || namedEntries[0]?.requiresExactId) {
     throw new ToolInputError(`Ambiguous tool name: ${needle}; use an exact tool id.`);
   }
   const namedEntry = namedEntries[0];
@@ -181,13 +174,16 @@ async function assertCatalogOutputMatchesSchema(
   if (!entry.outputSchema && !outputSelection) {
     return;
   }
-  if (isPreExecutionBlockedToolResult(result)) {
-    const details = unwrapToolResultValue(result);
-    const reason =
-      isRecord(details) && typeof details.reason === "string" && details.reason.trim()
-        ? details.reason
-        : "Tool call blocked by policy";
-    throw new Error(`Tool "${entry.id}" was blocked before execution: ${reason}`);
+  const refusal = readToolExecutionRefusal(result);
+  if (refusal) {
+    if (refusal.kind === "blocked") {
+      throw new Error(`Tool "${entry.id}" was blocked before execution: ${refusal.reason}`);
+    }
+    return;
+  }
+  // Failed operations carry an error result, not the tool's successful output.
+  if ("isError" in result && result.isError === true) {
+    return;
   }
   const validation = await validateCatalogSchemaValue(
     entry,
@@ -283,7 +279,9 @@ export class ToolSearchRuntime {
   };
 
   all = (options?: CatalogVisibilityOptions) =>
-    visibleCatalogEntries(resolveCatalog(this.ctx), options).map(compactToolSearchCatalogEntry);
+    visibleCatalogEntries(resolveCatalog(this.ctx), options).map((entry) =>
+      compactToolSearchCatalogEntry(entry),
+    );
 
   namespaceEntries = () =>
     // Snapshot host metadata without rendering hints or retaining the executable tool.
@@ -304,7 +302,7 @@ export class ToolSearchRuntime {
     if (entry.source !== "openclaw" && options?.parentToolCallId) {
       this.observeNetworkContent(options.parentToolCallId);
     }
-    return describeEntry(entry);
+    return describeToolSearchCatalogEntry(entry);
   };
 
   call = async (id: string, input?: unknown, options?: ToolSearchCallOptions) =>
@@ -426,26 +424,23 @@ export class ToolSearchRuntime {
         );
         return await params.acceptResultBeforeProjection(result);
       });
-    let preExecutionBlocked = false;
+    let preExecutionRefused = false;
     // Reuse only this call's accepted snapshot; outer schema validation must still run.
     let acceptedSnapshot: AgentToolResult<unknown> | undefined;
     const acceptResultBeforeProjection = async (candidate: AgentToolResult<unknown>) => {
       // Projection failure cannot revoke delivery already committed by the producer.
       this.sourceReplyCell.observe(candidate);
-      if (isPreExecutionBlockedToolResult(candidate)) {
-        // The JSON-safe snapshot drops the private blocked-result marker.
-        preExecutionBlocked = true;
+      const refusal = readToolExecutionRefusal(candidate);
+      if (refusal) {
+        preExecutionRefused = true;
+      }
+      if (refusal?.kind === "blocked") {
         if (entry.source === "mcp") {
           const operation = entry.mcp?.operation ?? "tool";
           if (operation === "tool") {
             setMcpCodeModeGuestResultFromAgentResult(candidate);
           } else if (options?.mcpNamespaceGuest) {
-            const details = isRecord(candidate.details) ? candidate.details : undefined;
-            const reason =
-              typeof details?.reason === "string" && details.reason.trim()
-                ? details.reason.trim()
-                : "Tool call blocked by policy";
-            throw new Error(`Tool "${entry.id}" was blocked before execution: ${reason}`);
+            throw new Error(`Tool "${entry.id}" was blocked before execution: ${refusal.reason}`);
           }
         }
         await assertCatalogOutputMatchesSchema(entry, candidate);
@@ -494,14 +489,14 @@ export class ToolSearchRuntime {
           onUpdate: options?.onUpdate,
           acceptResultBeforeProjection,
         });
-        if (networkInvocation && !preExecutionBlocked) {
+        if (networkInvocation && !preExecutionRefused) {
           networkInvocation.observed = true;
         }
         return result;
       } catch (error) {
         if (
           networkInvocation &&
-          !preExecutionBlocked &&
+          !preExecutionRefused &&
           getBeforeToolCallFailureDisposition(error) === undefined &&
           !isTrustedToolExecutionPreflightError(error) &&
           !(signal?.aborted && error === signal.reason)
@@ -621,6 +616,10 @@ function projectToolResultValue(result: AgentToolResult<unknown>): unknown {
     return result;
   }
   const { details } = result;
+  const refusal = readToolExecutionRefusal(result);
+  if (refusal?.kind === "gated") {
+    return { ...(isRecord(details) ? details : {}), message: refusal.reason };
+  }
   // An explicit error can explain itself only in model-facing text; keep that reason.
   if (result.isError !== true || hasErrorMessage(details)) {
     return details;

@@ -42,6 +42,7 @@ import { isMatrixStartupAbortError } from "../startup-abort.js";
 import {
   isMatrixDisconnectedSyncState,
   isMatrixReadySyncState,
+  isMatrixTerminalSyncState,
   type MatrixSyncState,
 } from "../sync-state.js";
 import { createMatrixThreadBindingManager } from "../thread-bindings.js";
@@ -56,7 +57,6 @@ import { createMatrixRoomInfoResolver } from "./room-info.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
 import { runMatrixStartupMaintenance } from "./startup.js";
 import { createMatrixMonitorStatusController } from "./status.js";
-import { createMatrixMonitorSyncLifecycle } from "./sync-lifecycle.js";
 import { createMatrixMonitorTaskRunner, getMatrixMonitorTaskSignal } from "./task-runner.js";
 
 type MonitorMatrixOpts = {
@@ -90,6 +90,17 @@ function resolveMatrixPreviewToolProgressEnabled(streaming: MatrixStreamingInput
     return streaming?.progress?.toolProgress ?? streaming?.preview?.toolProgress ?? false;
   }
   return streaming?.preview?.toolProgress ?? true;
+}
+
+function formatSyncLifecycleError(state: MatrixSyncState, error?: unknown): Error {
+  if (error instanceof Error) {
+    return error;
+  }
+  const message = typeof error === "string" && error.trim() ? error.trim() : undefined;
+  if (state === "STOPPED") {
+    return new Error(message ?? "Matrix sync stopped unexpectedly");
+  }
+  return new Error(message ?? `Matrix sync entered ${state} unexpectedly`);
 }
 
 const DEFAULT_MEDIA_MAX_MB = 20;
@@ -214,7 +225,10 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   let disposeMonitorEvents = () => {};
   let disposeSyncIngress = () => {};
   let ingress: ReturnType<typeof createMatrixIngressMonitor> | undefined;
-  let syncLifecycle: ReturnType<typeof createMatrixMonitorSyncLifecycle> | null = null;
+  let fatalError: Error | null = null;
+  let resolveFatalWait: (() => void) | null = null;
+  let rejectFatalWait: ((error: Error) => void) | null = null;
+  const isStopping = () => cleanedUp || monitorLifecycleSignal?.aborted === true;
   let monitorSetupClosed = false;
   const cleanup = (mode: "persist" | "stop" = "persist"): Promise<void> => {
     if (cleanupPromise) {
@@ -291,6 +305,49 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       healthySyncSinceMs = undefined;
     }
   };
+  const settleFatal = (error: Error) => {
+    if (fatalError) {
+      return;
+    }
+    fatalError = error;
+    rejectFatalWait?.(error);
+    resolveFatalWait = null;
+    rejectFatalWait = null;
+  };
+
+  const onSyncLifecycleState = (
+    state: MatrixSyncState,
+    _prevState: string | null,
+    error?: unknown,
+  ) => {
+    if (isMatrixTerminalSyncState(state) && !isStopping()) {
+      const fatalErrorLocal = formatSyncLifecycleError(state, error);
+      statusController.noteUnexpectedError(fatalErrorLocal);
+      settleFatal(fatalErrorLocal);
+      return;
+    }
+    // Fatal sync failures are sticky for telemetry; later SDK state churn during
+    // cleanup or reconnect should not overwrite the first recorded error.
+    if (fatalError) {
+      return;
+    }
+    // Operator-initiated shutdown can still emit transient sync states before
+    // the final STOPPED. Ignore that churn so intentional stops do not look
+    // like runtime failures.
+    if (isStopping() && !isMatrixTerminalSyncState(state)) {
+      return;
+    }
+    statusController.noteSyncState(state, error);
+  };
+
+  const onUnexpectedSyncError = (error: Error) => {
+    if (isStopping()) {
+      return;
+    }
+    statusController.noteUnexpectedError(error);
+    settleFatal(error);
+  };
+
   const monitorRetirement = {
     closeTaskAdmission: () => {
       monitorSetupClosed = true;
@@ -301,7 +358,11 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       disposeMonitorEvents();
       disposeSyncIngress();
       client?.off("sync.state", onSyncState);
-      syncLifecycle?.dispose();
+      resolveFatalWait?.();
+      resolveFatalWait = null;
+      rejectFatalWait = null;
+      client?.off("sync.state", onSyncLifecycleState);
+      client?.off("sync.unexpected_error", onUnexpectedSyncError);
     },
     waitForTasks: async () => {
       await ingress?.stop();
@@ -314,7 +375,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     clientLease = await acquireSharedMatrixClient({
       cfg,
       auth: authWithLimit,
-      startClient: false,
       accountId: auth.accountId,
       abortSignal: opts.abortSignal,
       role: "monitor",
@@ -324,13 +384,10 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       ? AbortSignal.any([opts.abortSignal, clientLease.abortSignal])
       : clientLease.abortSignal;
     clientLease.registerMonitorRetirement(monitorRetirement);
-    syncLifecycle = createMatrixMonitorSyncLifecycle({
-      client,
-      statusController,
-      isStopping: () => cleanedUp || monitorLifecycleSignal?.aborted === true,
-    });
+    client.on("sync.state", onSyncLifecycleState);
+    client.on("sync.unexpected_error", onUnexpectedSyncError);
     client.on("sync.state", onSyncState);
-    const { getRoomInfo, getMemberDisplayName, invalidateMemberDisplayName } =
+    const { getRoomInfo, getMemberDisplayName, invalidateMemberDisplayName, invalidateRoomName } =
       createMatrixRoomInfoResolver(client);
     const isExplicitlyConfiguredRoom = async (roomId: string): Promise<boolean> => {
       const roomInfoForConfig = needsRoomAliasesForConfig
@@ -458,6 +515,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       needsRoomAliasesForConfig,
       getRoomInfo,
       invalidateMemberDisplayName,
+      invalidateRoomName,
       logVerboseMessage,
       warnedEncryptedRooms,
       warnedCryptoMissingRooms,
@@ -547,7 +605,14 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
           });
         }
       }),
-      syncLifecycle.waitForFatalStop(),
+      new Promise<void>((resolve, reject) => {
+        if (fatalError) {
+          reject(fatalError);
+        } else {
+          resolveFatalWait = resolve;
+          rejectFatalWait = reject;
+        }
+      }),
     ]);
     await cleanup();
   } catch (err) {

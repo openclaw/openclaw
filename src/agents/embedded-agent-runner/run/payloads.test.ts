@@ -1,9 +1,6 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import { resolveHeartbeatReplyPayload } from "../../../auto-reply/heartbeat-reply-payload.js";
-import { selectHeartbeatToolResponse } from "../../../auto-reply/heartbeat-tool-response.js";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
-import { classifyHeartbeatAgentOutcome } from "../../../infra/heartbeat-delivery-normalization.js";
 import type { InteractiveReply, MessagePresentation } from "../../../interactive/payload.js";
 import { observeReplyDelivery } from "../../reply-completion.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
@@ -13,7 +10,6 @@ import {
   expectSinglePayloadText,
   expectSingleToolErrorPayload,
 } from "./payloads.test-helpers.js";
-import { mergeAttemptToolMediaPayloads } from "./tool-media-payloads.js";
 
 function signedText(text: string, id: string, phase?: "final_answer", type = "text") {
   return { type, text, textSignature: JSON.stringify({ v: 1, id, ...(phase ? { phase } : {}) }) };
@@ -191,22 +187,15 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   });
 
   it.each([
-    { parts: ["First part.", "Second part.\nNO_REPLY"], expected: "First part.\nSecond part." },
-    {
-      type: "input_text",
-      parts: ["First part.", "Second part.\nNO_REPLY"],
-      expected: "First part.\nSecond part.",
-    },
-    {
-      type: "output_text",
-      parts: ["First part.", "Second part.\nNO_REPLY"],
-      expected: "First part.\nSecond part.",
-    },
-    { parts: ["First part.", "Second part.\nNO_", "REPLY"], expected: "First part.\nSecond part." },
-    { parts: ["```text\nNO_REPLY", "```\nNO_REPLY"], expected: "```text\nNO_REPLY\n```" },
-  ])(
-    "preserves earlier segment source and boundaries after trailing cleanup: $type $parts",
-    ({ parts, expected, type = "text" }) => {
+    ...["text", "input_text", "output_text"].map(
+      (type) =>
+        [type, ["First part.", "Second part.\nNO_REPLY"], "First part.\nSecond part."] as const,
+    ),
+    ["text", ["First part.", "Second part.\nNO_", "REPLY"], "First part.\nSecond part."],
+    ["text", ["```text\nNO_REPLY", "```\nNO_REPLY"], "```text\nNO_REPLY\n```"],
+  ] as const)(
+    "preserves earlier segment source and boundaries after trailing cleanup: %s %s",
+    (type, parts, expected) => {
       const earlier = makeAgentAssistantMessage({
         content: parts.map((text) => ({ type, text })) as AssistantMessage["content"],
       });
@@ -291,7 +280,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expect(payloads).toEqual([{ text: "Gateway restarting…" }]);
   });
 
-  it("keeps heartbeat exec commands and paths private without full verbosity", () => {
+  it("keeps exec commands and paths private without full verbosity", () => {
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "exec",
@@ -299,7 +288,6 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
         error:
           "tail: cannot open '/home/user/.openclaw/workspace/memory/2026-06-04.md' for reading: No such file or directory",
       },
-      isHeartbeatTrigger: true,
       verboseLevel: "off",
     });
 
@@ -309,9 +297,8 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("adds a tool warning when a heartbeat failure leaves only reasoning", () => {
+  it("adds a tool warning when a tool failure leaves only reasoning", () => {
     const payloads = buildPayloads({
-      isHeartbeatTrigger: true,
       lastAssistant: {
         role: "assistant",
         stopReason: "stop",
@@ -328,59 +315,21 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
     expect(payloads).toHaveLength(2);
     expect(payloads[0]).toMatchObject({ text: "Private reasoning only.", isReasoning: true });
-    expect(resolveHeartbeatReplyPayload(payloads)).toMatchObject({
+    expect(payloads[1]).toMatchObject({
       text: "⚠️ Message failed",
       isError: true,
     });
-    for (const payload of payloads) {
-      expect(getReplyPayloadMetadata(payload)?.heartbeatTerminalToolFailure).toEqual({
-        toolName: "message",
-      });
-    }
   });
 
-  it("does not infer a terminal mutation from a mixed-action tool name", () => {
+  it.each([
+    ["exec", "Exec", "command failed"],
+    ["write", "Write", "permission denied"],
+  ])("shows %s tool error details when verbose mode is full", (toolName, title, error) => {
     const payloads = buildPayloads({
-      heartbeatToolResponse: {
-        outcome: "no_change",
-        notify: false,
-        summary: "Nothing needs attention.",
-      },
-      isHeartbeatTrigger: true,
-      lastToolError: {
-        toolName: "message",
-        error: "message search failed",
-      },
-    });
-
-    expectSinglePayloadText(payloads, "HEARTBEAT_OK");
-    expect(
-      getReplyPayloadMetadata(payloads[0] as object)?.heartbeatTerminalToolFailure,
-    ).toBeUndefined();
-  });
-
-  it("shows exec tool error details when verbose mode is full", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "exec", error: "command failed" },
+      lastToolError: { toolName, error },
       verboseLevel: "full",
     });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Exec",
-      detail: "command failed",
-    });
-  });
-
-  it("includes details for mutating tool failures when verbose is full", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "write", error: "permission denied" },
-      verboseLevel: "full",
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Write",
-      detail: "permission denied",
-    });
+    expectSingleToolErrorPayload(payloads, { title, detail: error });
   });
 
   it("strips NO_REPLY text but keeps voice media directives", () => {
@@ -438,7 +387,6 @@ describe("cron completion after a delivered report", () => {
       name: "a send without visible content",
       messagingToolSentTargets: [{ ...deliveredReport, text: "", visible: false }],
     },
-    { name: "a heartbeat", isHeartbeatTrigger: true },
   ])("still reports failure for $name", ({ name: _name, ...overrides }) => {
     expect(buildPayloads({ ...completedRun, ...overrides })).toEqual([
       expect.objectContaining({ isError: true }),
@@ -480,44 +428,6 @@ describe("buildEmbeddedRunPayloads delivery recovery", () => {
   });
 });
 
-describe("quiet heartbeat failures", () => {
-  it.each(["exec"])("does not notify after a failed %s and generated media", (toolName) => {
-    const payloads = buildPayloads({
-      assistantTexts: ["Everything is fine."],
-      heartbeatToolResponse: {
-        outcome: "no_change",
-        notify: false,
-        summary: "Nothing needs attention.",
-      },
-      isHeartbeatTrigger: true,
-      lastToolError: { toolName, error: "operation failed", mutatingAction: true },
-    });
-    const merged = mergeAttemptToolMediaPayloads({
-      payloads,
-      toolMediaUrls: ["/tmp/heartbeat.png"],
-      hostOwnedToolMediaUrls: ["/tmp/heartbeat.png"],
-      toolAutoDeliveryMediaUrls: ["/tmp/heartbeat.opus"],
-      toolAudioAsVoice: true,
-      sourceReplyDeliveryMode: "message_tool_only",
-    });
-    expect(
-      classifyHeartbeatAgentOutcome({
-        agentRun: {
-          agentRunFailed: false,
-          heartbeatToolResponse: selectHeartbeatToolResponse(merged)?.response,
-          heartbeatTerminalToolFailure: { toolName },
-          replyPayload: resolveHeartbeatReplyPayload(merged),
-        },
-        useHeartbeatFailureCopy: true,
-        hasRelayableExecCompletion: false,
-        suppressUnmarkedSourceReplies: false,
-        responsePrefix: undefined,
-        ackMaxChars: 300,
-      }),
-    ).toMatchObject({ kind: "failure", reason: "agent-tool-failure", shouldSkipMain: true });
-  });
-});
-
 describe("buildEmbeddedRunPayloads process-error warnings", () => {
   it("surfaces safe terminal diagnostics when verbose mode is off", () => {
     const dummyTelegramToken = `123456:${"A".repeat(28)}WXYZ`;
@@ -548,22 +458,10 @@ describe("buildEmbeddedRunPayloads process-error warnings", () => {
   });
 
   it.each([
-    {
-      label: "signal",
-      reason: { kind: "signal", signal: "SIGKILL" } as const,
-      expected: "signal SIGKILL",
-    },
-    {
-      label: "overall timeout",
-      reason: { kind: "timeout", timeoutKind: "overall-timeout" } as const,
-      expected: "timed out",
-    },
-    {
-      label: "no-output timeout",
-      reason: { kind: "timeout", timeoutKind: "no-output-timeout" } as const,
-      expected: "timed out waiting for output",
-    },
-  ])("renders $label without fabricating an exit code", ({ reason, expected }) => {
+    [{ kind: "signal", signal: "SIGKILL" }, "signal SIGKILL"],
+    [{ kind: "timeout", timeoutKind: "overall-timeout" }, "timed out"],
+    [{ kind: "timeout", timeoutKind: "no-output-timeout" }, "timed out waiting for output"],
+  ] as const)("renders %j without fabricating an exit code", (reason, expected) => {
     const payloads = buildPayloads({
       lastToolError: processError(reason),
       verboseLevel: "off",

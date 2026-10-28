@@ -367,8 +367,12 @@ private class WorkspaceFilesGateway : AutoCloseable {
             "connect" -> {
               val role = params.getValue("role").jsonPrimitive.content
               json.parseToJsonElement(
-                """{"type":"hello-ok","protocol":3,"server":{"host":"workspace-share-proof","version":"proof"},"features":{"methods":["agents.workspace.list","agents.workspace.get","chat.history","chat.metadata","health","sessions.list"],"events":[]},"auth":{"role":"$role","scopes":${if (role == "operator") "[\"operator.read\",\"operator.write\"]" else "[]"}},"snapshot":{"sessionDefaults":{"mainSessionKey":"agent:main:main"}}}""",
+                """{"type":"hello-ok","protocol":3,"server":{"host":"workspace-share-proof","version":"proof"},"features":{"methods":["agents.list","agents.workspace.list","agents.workspace.get","chat.history","chat.metadata","health","sessions.list"],"events":[]},"auth":{"role":"$role","scopes":${if (role == "operator") "[\"operator.read\",\"operator.write\"]" else "[]"}},"snapshot":{"sessionDefaults":{"mainSessionKey":"agent:main:main"}}}""",
               )
+            }
+
+            "agents.list" -> {
+              json.parseToJsonElement("""{"defaultId":"main","mainKey":"main","agents":[{"id":"main"}]}""")
             }
 
             "agents.workspace.list" -> {

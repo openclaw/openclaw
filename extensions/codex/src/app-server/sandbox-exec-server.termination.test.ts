@@ -1,11 +1,10 @@
 import { ChildProcess } from "node:child_process";
-import { PassThrough } from "node:stream";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { useIsolatedStateGuard } from "openclaw/plugin-sdk/test-env";
 import { withMockedWindowsPlatform } from "openclaw/plugin-sdk/test-node-mocks";
 import { afterEach, expect, it, vi } from "vitest";
 import { createSessionExecServer } from "./sandbox-exec-server-session.test-support.js";
-import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
+import { createSandboxChild, createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import { CodexSandboxExecSession } from "./sandbox-exec-server/session.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -32,12 +31,7 @@ afterEach(() => {
 function createFixture(code = 7, signal: NodeJS.Signals | null = null) {
   vi.useFakeTimers();
   const kill = vi.spyOn(process, "kill").mockReturnValue(true);
-  const child = Object.assign(new ChildProcess(), {
-    stdin: new PassThrough(),
-    stdout: new PassThrough(),
-    stderr: new PassThrough(),
-    pid: 42_424,
-  });
+  const child = createSandboxChild(false);
   spawnMock.mockReturnValue(child);
   const cleanupEntered = createDeferred<void>();
   const releaseCleanup = createDeferred<void>();

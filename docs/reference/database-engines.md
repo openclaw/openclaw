@@ -9,7 +9,7 @@ doc-schema-version: 1
 ---
 
 OpenClaw uses SQLite by default. PostgreSQL is a supported alternative for the
-five configurable families on the qualified PostgreSQL 17 runtime. One Gateway
+five configurable families on qualified PostgreSQL 16–18 runtimes. One Gateway
 can keep those stores in PostgreSQL while other stores stay on SQLite.
 The adapter owns connection setup, schema admission, transaction behavior, and
 commit notifications; stores keep their existing data and operation contracts.
@@ -17,9 +17,9 @@ commit notifications; stores keep their existing data and operation contracts.
 For provisioning, first boot, migration, and recovery procedures, see the
 [PostgreSQL operator guide](/gateway/postgresql). It also describes the current
 [support matrix](/gateway/postgresql#support-matrix), including unqualified
-server versions, TLS/exec-secret deployments, published-stable upgrades and native
-clients. Those specific gaps remain experimental; configured engine and search
-choices are supported.
+server versions and native clients. It also records the exact
+[published-stable upgrade scope](/gateway/postgresql#published-stable-upgrade-qualification).
+Configured engine and search choices are supported.
 
 Daemon runtime pins stay local on every engine, in
 `<state-root>/control/services.sqlite`. The daemon owner supplies typed runtime
@@ -39,8 +39,9 @@ through an older installed runtime.
 
 Use a PostgreSQL database and a role that can create schemas
 and tables. PostgreSQL 16 or newer and UTF8 server and client encoding are required;
-admission checks these once per physical store load. PostgreSQL 17 is qualified;
-other admitted majors remain experimental pending full conformance. No extensions
+admission checks these once per physical store load. PostgreSQL 16–18 are qualified;
+other admitted majors remain experimental pending full conformance. See the
+[server-major evidence](/gateway/postgresql#server-major-qualification). No extensions
 are installed by the engine. Put its connection DSN in a secret, then configure a SecretRef:
 
 ```json5
@@ -57,15 +58,23 @@ are installed by the engine. Put its connection DSN in a secret, then configure 
 
 Provide `OPENCLAW_DATABASE_DSN` in the Gateway's environment through your secret
 manager. It is the secret referenced by this example, not an engine-selection
-environment variable. [File and exec references](/gateway/secrets/secretref-contract)
-are accepted by the resolver; env/file are qualified, while PostgreSQL-specific
-exec-reference acceptance remains experimental. Store-backed references are
+environment variable. Env, [file, and exec references](/gateway/secrets/secretref-contract)
+are qualified for CLI and Gateway use. Store-backed references are
 rejected because resolving them requires the shared database that this connection
 must open. Use an env, file or
 exec SecretRef instead; `openclaw doctor` reports invalid connection refs.
 The host resolves the secret and passes the connection to
 database workers; workers do not resolve SecretRefs. Treat the DSN as a credential
 and do not put it in logs or diagnostic captures.
+
+The following connection surfaces are qualified on PostgreSQL 17. See the
+[connection qualification and setup](/gateway/postgresql#tls-and-exec-connection-qualification)
+for the server and provider configuration.
+
+| Connection surface | Support   | Verified configuration                                                                                                                                                |
+| ------------------ | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TLS DSN            | Supported | `sslmode=verify-full` with an absolute `sslrootcert` path; certificate-chain and hostname verification, invalid-certificate refusal, and TLS-only server enforcement. |
+| Exec SecretRef     | Supported | CLI and Gateway host resolution, worker propagation, no DSN persistence in config or diagnostics, and refusal on provider failure or empty output.                    |
 
 Restart the Gateway after changing the engine, then run `openclaw doctor` to see
 the default, override, and effective engine for each family. These are configured
@@ -114,14 +123,20 @@ The supported PostgreSQL families are:
   retained registry paths and explicit session or agent directories. Older SQLite
   schemas migrate only in the port's private copy. Compressed transcript events
   become plain JSON on PostgreSQL; transcript search is rebuilt before publication.
-  Rebuildable memory indexes are omitted. Their rebuild hook remains explicitly
-  pending the memory owner's rebuild entry point; empty metadata requests reindexing.
-  Canonical memory origins and
-  tombstones remain intact. Duplicate-key voice JSON refuses the port with a hashed
+  Rebuildable memory search projections are omitted; canonical memory origins,
+  tombstones, the embedding cache, and stored chunk vectors with their identity metadata
+  remain intact in the verified copy. After publication and port-owner release,
+  the selected memory plugin rebuilds ported agents under fresh offline ownership,
+  several agents at a time when the host's CPUs and free memory allow it.
+  Unchanged chunks reuse cached or stored embeddings only when provider, model,
+  provider settings, input format, hash, and dimensions match. Output and `--json` report
+  per-agent results; a failure leaves the port successful and warns to retry
+  `openclaw memory index --agent <id>` before starting the Gateway. Retained stores
+  need their original agent configuration to rebuild.
+  Duplicate-key voice JSON refuses the port with a hashed
   row locator. Cold archive references are retained; user backups embed their blobs.
-  PostgreSQL agent schemas support current-version
-  bootstrap and the schema 27 to 28 forward migration, and reject schema drift
-  before exposing the store.
+  PostgreSQL agent schemas support current-version bootstrap and registered
+  consecutive forward migrations, and reject schema drift before exposing the store.
 - **Workboard:** runtime storage, bidirectional database ports, and matched backups.
 - **Logbook:** runtime frames, batches, observations, cards, and standups;
   bidirectional database ports; and matched backups. Frame images remain local
@@ -328,7 +343,7 @@ critical path.
 ## Search on PostgreSQL
 
 The engine search contract supports native PostgreSQL full text, literal trigram
-contains, and exact cosine search. Memory body and path retrieval, agent
+contains, and cosine search. Memory body and path retrieval, agent
 transcript text search, and standing-intent matching use this contract.
 It does not enable PostgreSQL for an unported store.
 
@@ -353,7 +368,7 @@ CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
 ```
 
 `unaccent` is required for full text, `pg_trgm` for a declared trigram index,
-and `vector` for semantic search. Extensions are database-wide; the store's
+and `vector` 0.7 or newer for semantic memory search. Extensions are database-wide; the store's
 schema declaration identifies their namespace when it differs from `public`.
 The engine checks availability and privileges once at store admission. It never
 installs extensions automatically. An unavailable capability refuses admission
@@ -363,11 +378,11 @@ administrator. The runtime role needs `CREATE` in the store schema, or database
 `CREATE` privilege when bootstrapping a new schema, plus ownership/access to its
 tables, indexes, functions, and text-search configuration.
 
-| Search mode                                                     | PostgreSQL implementation                                           | Required extensions                                                         |
-| --------------------------------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| Memory body keywords, transcript text, standing-intent keywords | Full text with literal terms, phrases, and supported prefix queries | `unaccent`                                                                  |
-| Memory trigram tokenizer                                        | Literal contains matching with native similarity ranking            | `unaccent`, `pg_trgm`                                                       |
-| Memory semantic or hybrid retrieval                             | Exact cosine over the admitted embedding model and eligible sources | `unaccent`, `vector`; also `pg_trgm` when the trigram tokenizer is selected |
+| Search mode                                                     | PostgreSQL implementation                                           | Required extensions                                                              |
+| --------------------------------------------------------------- | ------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Memory body keywords, transcript text, standing-intent keywords | Full text with literal terms, phrases, and supported prefix queries | `unaccent`                                                                       |
+| Memory trigram tokenizer                                        | Literal contains matching with native similarity ranking            | `unaccent`, `pg_trgm`                                                            |
+| Memory semantic or hybrid retrieval                             | Binary prefilter followed by exact cosine reranking                 | `unaccent`, `vector` 0.7+; also `pg_trgm` when the trigram tokenizer is selected |
 
 Missing `pg_trgm` refuses a declared trigram index; it does not silently change
 the tokenizer. Missing `unaccent` refuses full-text admission. In either case,
@@ -382,7 +397,9 @@ vector index is not a PostgreSQL JavaScript-scan fallback. An embedding-provider
 does not silently authorize keyword-only PostgreSQL admission.
 
 Memory admits its search definitions through the agent
-database owner. PostgreSQL rebuilds use connection-local temporary staging and
+database owner, including on the first turn after a port that omits rebuildable
+memory indexes. No manual memory-index rebuild is required before chatting.
+PostgreSQL rebuilds use connection-local temporary staging and
 publish canonical rows and their derived search projections in one writer
 transaction. SQLite retains its existing shadow-file publication. Memory search
 uses these same admitted projections. Forgetting removes derived text and vector
@@ -393,8 +410,9 @@ sizes; WAL and reusable-file bytes are zero because those are server-owned,
 not local SQLite files.
 
 The public memory search path uses the admitted PostgreSQL projections. Vector
-queries filter model aliases, sources, and any candidate IDs before exact cosine
-ordering and the result limit. Keyword queries
+queries filter model aliases, sources, exclusions, and any candidate IDs before
+the binary prefilter and exact cosine reranking. Small candidate-ID scopes stay
+on the exact path. Keyword queries
 use native full-text ranking, or literal contains predicates for the configured
 trigram tokenizer. Only bounded result payloads cross into JavaScript. Hybrid
 merging keeps the existing default weights of 0.7 vector and 0.3 text; PostgreSQL
@@ -405,25 +423,47 @@ The error names the missing extension and the installation SQL. Install it in
 the selected database, then reopen the store; use `provider: "none"` when only
 keyword search is wanted.
 
-Full text uses a named `simple` plus `unaccent` configuration, a stored generated
-`tsvector`, and GIN. Queries bind literal terms and compile conjunctions,
+Full text uses a named `simple` plus `unaccent` configuration, a stored
+`tsvector` column, and GIN. Agent schema 38 and newer keep that column as a plain
+column maintained by a `<table>_search_sync` trigger (also after the 37→38
+migration, which drops the old generated expression in place and reparses the
+rows); historical stores before 38 used a generated column. Queries bind literal terms and compile conjunctions,
 disjunctions, adjacent phrases, and final-lexeme prefixes. User text is never
-interpreted as PostgreSQL query operators. Ranking uses `ts_rank_cd` with
-normalization 2: scores are engine-local, higher is better, and ordering differs
-from SQLite BM25. Tokenization also differs for punctuation, compound words, and
-Unicode. Snippets use `ts_headline` only after a materialized, bounded candidate
-selection, with a word budget of 2–48, a character cap of 500, and empty highlight markers. Trigram
+interpreted as PostgreSQL query operators. The default full-text capability uses
+`ts_rank_cd` with normalization 2: scores are engine-local, higher is better, and ordering differs
+from SQLite BM25. Punctuation runs are replaced by spaces before indexing and before
+parsing the query, so words inside dates, paths, file names, and `a/b` pairs match
+on both engines (`08` in `2026-08-18`, `server` in `server.py`); Unicode
+normalization still differs. Snippets use `ts_headline` only after a materialized, bounded candidate
+selection, with a word budget of 2–48, a character cap of 500, and empty highlight markers. The headline
+parses the same punctuation split as the query to pick its passage, then returns that passage from
+the original text, so snippets keep their punctuation. Trigram
 contains uses its own GIN index and escaped literal `ILIKE`; it is not a universal
 fallback for full-text queries. Trigram matches rank by native `word_similarity`
 before the result limit; multi-term memory queries average their term scores.
 
-Semantic search uses exact float32 `vector(n)` cosine distance, with model and
-source eligibility in the same query before ordering and limit. The canonical
-embedding remains its original little-endian binary64 BLOB; source-transaction
-triggers maintain the derived float32 projection. Exact vectors support up to
-16,000 dimensions. A dimension change requires a matching schema and a derived
-index rebuild. There is no ANN, HNSW, IVFFlat, half-precision storage, or transfer
-of the PostgreSQL corpus into JavaScript for per-query scoring.
+Memory full-text search uses frequency ranking (`ts_rank`) with normalization 0
+and maps rank `r` to `r / (r + 0.0027)` before the shared hybrid merge. Body and
+path candidates, including the match-any fallback when every primary branch is
+empty, share one statement. This calibration is engine-local and does not add
+corpus-wide inverse document frequency; ranking may differ from SQLite BM25.
+
+PostgreSQL memory vector search is approximate: a stored binary sketch selects a
+bounded candidate set by Hamming distance, then exact float32 `vector(n)` cosine
+distance reranks those candidates. Model and source eligibility apply before
+candidate selection. This recall-tuned path is enabled by default and has no
+separate configuration option; it can return different neighbors from exact
+search. SQLite memory vector search stays exact.
+
+The canonical embedding remains its original little-endian binary64 BLOB;
+source-transaction triggers maintain the derived float32 projection, and a
+stored generated column maintains its binary sketch. Zero vectors remain
+ineligible, while valid all-negative vectors retain a non-null sketch. Vectors
+support up to 16,000 dimensions. A dimension change requires a matching schema
+and a derived-index rebuild. No HNSW build or half-precision conversion is
+required, and the PostgreSQL corpus is not transferred into JavaScript for
+per-query scoring. The agent schema migration backfills sketches in existing
+stores; ports and backups reconstruct them from canonical embeddings.
 
 Search sees committed index inserts, updates, and deletes immediately. Memory
 files must first pass through normal indexing; changing a file alone does not
@@ -502,6 +542,11 @@ or a PostgreSQL privilege probe. It creates no manifest, migrated copy, or targe
 namespace. Add `--json` for machine-readable results without connection strings
 or row payloads.
 
+Local client credentials must be bound to the exact shared state database file,
+including its device and inode. A byte-identical copy with a new inode is refused.
+When moving state from a backup archive, use `openclaw backup restore` so the
+restore owner validates the shared/local pair and rebinds the credential receipt.
+
 The real operation retains exact original database and config captures under
 `<stateDir>/recovery/database-port/<operation-id>/`. SQLite originals are verified
 snapshots with WAL changes settled. PostgreSQL originals include a matched
@@ -511,6 +556,16 @@ Keep this directory private and retain the complete set. Former PostgreSQL
 namespaces are not dropped automatically.
 
 All destination stores are privately migrated and verified before publication.
+After committing a PostgreSQL bulk copy, port and backup restore run `ANALYZE`
+only on tables in the destination namespace. Agent ports refresh statistics again
+after the memory index rebuild. The port report records the result. Statistics
+refresh uses a 10-second statement timeout and a 1-second lock timeout; a failure
+is a warning and preserves the verified data for autovacuum to analyze later.
+
+Agent and shared-state columns normally created on a feature's first use are
+completed in the private copy when absent, preserving existing rows with `NULL`
+values and leaving the original SQLite store unchanged. Unknown columns still
+refuse the port.
 The command replaces each store atomically, switches config last while preserving
 SecretRefs, environment references, and includes, then archives its completed
 manifest with the captures. After success, start the Gateway through its service
@@ -590,16 +645,37 @@ do not restrict a role's access.
 One Gateway owns each store. PostgreSQL does not enable multiple active owners of one store,
 external writers, replication management, or connection-pool management.
 
+Session-state history pruning compares sequence watermarks as integers on both
+engines. PostgreSQL batches explicitly cast bound watermark values to `bigint`;
+this does not change the schema or the existing history retention limits.
+
 Writers use `READ COMMITTED` and a transaction-scoped advisory lock derived from
 the store identity. Every PostgreSQL write, including a single statement, uses
 the adapter's `runTransaction` so it retains that lock and publishes its write
 token. A single-statement read may use autocommit; multi-statement snapshot reads
-use `REPEATABLE READ READ ONLY`. Connections
-set `synchronous_commit=off` to match SQLite WAL with `synchronous=NORMAL`: a
-server or operating-system crash can lose recently acknowledged commits. Backups
-and recovery must account for that durability policy. The adapter sets generous
-lock and statement timeouts once during connection setup; operations do not
-change timeout settings individually.
+use `REPEATABLE READ READ ONLY`. OpenClaw uses the server's `synchronous_commit`
+setting. PostgreSQL's default `on` makes acknowledged commits durable across
+PostgreSQL or operating-system crashes. For SQLite WAL `synchronous=NORMAL`-like
+throughput, operators can opt in with
+`ALTER ROLE <openclaw_role> SET synchronous_commit = off` or the equivalent
+`ALTER DATABASE` setting. This can lose recently acknowledged commits on a server
+or operating-system crash, without corruption. Ports and backups always commit
+durably. Runtime connections set session-level lock and statement timeouts to
+60 and 90 seconds, overriding role, database, and DSN startup settings. Connection
+waits allow 60 seconds and the synchronous bridge has a 120-second deadline.
+Port and restore materialization allow a one-hour statement timeout. See the
+[operator timeout guidance](/gateway/postgresql#updates-and-schema-migrations).
+
+PostgreSQL model-context navigation reads parse each selected transcript row once
+and keep intermediate projections as JSONB until the navigation and byte counts
+cross the database boundary. The read remains bounded by the context page, and
+PostgreSQL transcript writes do not precompute navigation envelopes.
+
+Clean resident-actor appends write the transcript projection and session-window
+mutation in one PostgreSQL statement. Each write still targets its own table
+inside the existing locked transaction; commit and receipt publication keep
+their original boundaries. Batch imports, dirty projections, and native callers
+retain their existing flush paths.
 
 ## Anchors and backups
 
@@ -610,6 +686,13 @@ PostgreSQL schema metadata must match the anchor's store UUID and expected schem
 version. Admission checks run once per physical store per process load, and
 workers and handles reuse the admitted facts. Confirmed commits and uncertain
 commit outcomes invalidate cached store facts through the anchor's write token.
+
+When an agent worker is refused before opening its native writer, the host releases
+its prepared lease after native exit. The original refusal reaches its caller,
+and other logical borrowers can retry. This explicit refusal also preserves
+SQLite's clean-restart seal because no native writer opened. Unknown outcomes
+still invalidate that proof, and native and cleanup failures retain their
+existing retirement rules.
 
 PostgreSQL catalog admission captures column types, nullability, exact defaults,
 keys, CHECK expressions, index definitions (including partial predicates), and
@@ -764,9 +847,13 @@ PostgreSQL namespaces. Exact rollback restores the captured rows while
 preserving the current update-run history, as SQLite rollback does.
 SQLite-only installations keep their existing admission and inspection behavior.
 The installed driver owns these checks; a candidate cannot repair an older
-driver. Published-driver compatibility has been exercised on SQLite installations;
-a full latest-published-stable → current PostgreSQL upgrade remains experimental
-until package installation, service activation and rollback acceptance is recorded.
+driver. Published 2026.10.5 SQLite → current → PostgreSQL 17 port is qualified,
+including foreground Gateway operation, Doctor/status, agent/session/memory
+continuity and recovery to the matching stable SQLite backup. The stable package
+does not support PostgreSQL, so stable PostgreSQL → current is not applicable.
+Live turns were skipped without provider keys; service activation belongs to the
+separate signed-Mac/Parallels proof. See the
+[qualification cells and run IDs](/gateway/postgresql#published-stable-upgrade-qualification).
 See [Update admission](/cli/update#candidate-owned-admission).
 
 ## Limits and recovery
@@ -816,6 +903,15 @@ writes invalidate only their declared replica scopes; raw writes and schema
 changes invalidate the whole store. Empty commits leave replica revisions
 unchanged, so unrelated reads can reuse their cached snapshots.
 A PostgreSQL function that writes rows and is called through SELECT must be classified unscoped.
+
+Worker commit receipts carry only explicitly staged domain facts on both engines.
+A write without staged facts still commits and invalidates caches, but publishes
+no domain receipt. Native operation settlement is independent of those facts.
+
+Full transcript hydration reads PostgreSQL payloads in byte-budgeted pages within
+one read snapshot. Paging preserves all selected events and their sequence order;
+it does not impose a history cutoff. Individual oversized events retain bounded
+byte slicing.
 
 The engine boundary publishes Node.js `diagnostics_channel` events on
 `openclaw.database.statement` and `openclaw.database.request`. Subscriptions are

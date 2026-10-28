@@ -21,6 +21,7 @@ function mount(overrides: Partial<ConsentProps> = {}): HTMLElement {
       fallback: { name: "Workboard" },
     },
     inspection: createInspectResult(),
+    inspectionRead: null,
     loading: false,
     error: null,
     canMutate: true,
@@ -162,6 +163,33 @@ describe("renderPluginConsentDialog", () => {
     },
   );
 
+  it.each([true, false, undefined])(
+    "discloses native web UI only when inspection confirms it (%s)",
+    (hasNativeUi) => {
+      const container = mount({
+        inspection: createInspectResult({
+          overview: {
+            hasNativeUi,
+            capabilities: { providers: [], channels: [], contracts: {}, ui: ["page"] },
+          },
+        }),
+      });
+      const disclosure = container.querySelector(".plugin-native-ui-disclosure");
+      expect(Boolean(disclosure)).toBe(hasNativeUi === true);
+      if (hasNativeUi) {
+        const text = normalizedText(disclosure);
+        expect(text).toMatch(/runs code.*web app/u);
+        expect(text).toMatch(/read and modify.*interface/u);
+        expect(text).toMatch(/Gateway permissions.*signed-in user/u);
+        const actions = container.querySelector(".plugins-consent__actions")!;
+        expect(
+          disclosure!.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING,
+        ).not.toBe(0);
+        expect(disclosure?.querySelector("[role=alert], input, button")).toBeNull();
+      }
+    },
+  );
+
   it("explains an empty manifest and preserves external-plugin grants", () => {
     const container = mount();
     const text = normalizedText(container.querySelector('[data-plugin-consent="enable"]'));
@@ -272,12 +300,16 @@ describe("renderPluginConsentDialog", () => {
 
 it("tries the author image after a broken package image, then retains initials until the source changes", () => {
   const [url, setUrl] = createSignal("blob:package");
+  const unregister = vi.fn();
+  const onIconError = vi.fn();
   const view = mountSolid(() => (
     <PluginArtTile
       slug="lossless-claw"
       name="Lossless Context Management"
       iconUrl={url()}
       authorIconUrl="blob:author"
+      registerIcon={() => unregister}
+      onIconError={onIconError}
     />
   ));
   const container = view.container;
@@ -296,5 +328,9 @@ it("tries the author image after a broken package image, then retains initials u
   setUrl("blob:updated");
   flush();
   expect(container.querySelector("img")?.getAttribute("src")).toBe("blob:updated");
+  const detachedImage = container.querySelector("img")!;
   view.unmount();
+  detachedImage.dispatchEvent(new Event("error"));
+  expect(onIconError).toHaveBeenCalledTimes(1);
+  expect(unregister).toHaveBeenCalledOnce();
 });

@@ -321,7 +321,6 @@ it("keeps identical catalogs owner-scoped across registry replacement and full c
     failMainCatalogRead = true;
     notifyPreparedModelRuntimePublication({
       phase: "catalog-failed",
-      error: new Error("main catalog owner replaced"),
     });
     const partial = await listSessions(request);
     expectThinking(partial, "work", ["off", "low", "ultra"]);

@@ -10,6 +10,7 @@ on:
       - ".github/workflows/node-runtime-conformance.yml"
       - "crates/**"
       - "packages/gateway-protocol/src/index.ts"
+      - "packages/gateway-protocol/src/version.ts"
       - "packages/gateway-protocol/src/schema/nodes.ts"
       - "packages/gateway-protocol/src/validator-registry.ts"
       - "src/gateway/node-command-policy.ts"

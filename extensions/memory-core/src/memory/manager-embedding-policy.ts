@@ -1,14 +1,56 @@
+import type { EmbeddingProviderCallOptions } from "openclaw/plugin-sdk/embedding-providers";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   estimateStructuredEmbeddingInputBytes,
   estimateUtf8Bytes,
+  formatEmbeddingModelInput,
+  resolveEmbeddingInputFormatVersion,
   type EmbeddingInput,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import type { ResolvedMemorySearchConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { EmbeddingProvider } from "./embeddings.js";
+
+export function embedMemoryQuery(
+  provider: EmbeddingProvider,
+  text: string,
+  settings: Pick<ResolvedMemorySearchConfig, "queryInstruction" | "inputFormat">,
+  options: EmbeddingProviderCallOptions,
+): Promise<number[]> {
+  const instruction = settings.queryInstruction || settings.inputFormat?.query;
+  return provider.embed(
+    instruction !== undefined
+      ? `${instruction}${text}`
+      : formatEmbeddingModelInput(text, provider.model, "query"),
+    {
+      ...options,
+      inputType: "query",
+      ...(instruction !== undefined ? { queryInstructionApplied: true } : {}),
+    },
+  );
+}
+
+export function embedMemoryDocuments(
+  provider: EmbeddingProvider,
+  inputs: Array<string | EmbeddingInput>,
+  inputFormat: ResolvedMemorySearchConfig["inputFormat"],
+  options: EmbeddingProviderCallOptions,
+): Promise<number[][]> {
+  return provider.embedBatch(
+    inputs.map((input) =>
+      formatEmbeddingModelInput(input, provider.model, "document", inputFormat),
+    ),
+    {
+      ...options,
+      inputType: "document",
+      ...(inputFormat ? { documentFormatApplied: true } : {}),
+    },
+  );
+}
 
 // Retry attempts are host control state. Provider-thrown values stay opaque so
 // they cannot override the counter or break accounting when they are immutable.
@@ -38,6 +80,30 @@ type MemoryEmbeddingChunk = {
   text: string;
   embeddingInput?: EmbeddingInput;
 };
+
+export function formatMemoryEmbeddingChunks<T extends MemoryEmbeddingChunk>(
+  chunks: T[],
+  model: string,
+  inputFormat: ResolvedMemorySearchConfig["inputFormat"],
+): T[] {
+  if (!inputFormat && !resolveEmbeddingInputFormatVersion(model)) {
+    return chunks;
+  }
+  return chunks.map((chunk) => ({
+    ...chunk,
+    ...formatEmbeddingModelInput(chunk, model, "document", inputFormat),
+    ...(chunk.embeddingInput
+      ? {
+          embeddingInput: formatEmbeddingModelInput(
+            chunk.embeddingInput,
+            model,
+            "document",
+            inputFormat,
+          ),
+        }
+      : {}),
+  }));
+}
 
 export function buildMemoryEmbeddingBatches<T extends MemoryEmbeddingChunk>(
   chunks: T[],
@@ -77,9 +143,11 @@ const RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
 
 // Zhipu's item cap is reported as `input array max 64` (English) or
 // `input数组最大不得超过64条` (Chinese). Require the whole count and
-// message boundary so per-item and token limits remain terminal.
+// message boundary so per-item and token limits remain terminal. Mistral
+// rejects a batch by its aggregate token count and asks for more batches;
+// that exact phrase is splittable while a per-input token limit is not.
 const SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE =
-  /(request_headers_too_large|request header fields too large|other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted)|\bembeddings (?:api input limit exceeded:\s*max\s+\d+\s*,\s*got\s+\d+|max input length is\s+\d+)\b|\bbatch size is invalid,?\s+it should not be larger than\s+\d+\b|\binput array max\s+\d+(?=\s*(?:["'}]|$))|input\s*数组最大不得超过\s*\d+\s*条)/i;
+  /(too many tokens overall,?\s*split into more batches|request_headers_too_large|request header fields too large|other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted)|\bembeddings (?:api input limit exceeded:\s*max\s+\d+\s*,\s*got\s+\d+|max input length is\s+\d+)\b|\bbatch size is invalid,?\s+it should not be larger than\s+\d+\b|\binput array max\s+\d+(?=\s*(?:["'}]|$))|input\s*数组最大不得超过\s*\d+\s*条)/i;
 
 const SHORT_MEMORY_EMBEDDING_RETRY_BUDGET = {
   attempts: 3,

@@ -135,9 +135,6 @@ export function readCapturedResponseBodyBounded(
       detachAbort = () => signal.removeEventListener("abort", onAbort);
     }
   }
-  if (finished) {
-    return;
-  }
   void (async () => {
     try {
       const clone = response.clone();

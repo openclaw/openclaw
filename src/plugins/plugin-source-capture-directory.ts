@@ -15,12 +15,12 @@ import {
   type SqliteStagingToken,
 } from "../infra/sqlite-staging-token.js";
 import { removeTemporaryArtifacts } from "../infra/temp-artifact-cleanup.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
 import {
   pluginSourceCaptureMaintenance,
   resolvePluginSourceCaptureStorage,
-  runInPluginSourceCaptureContext,
 } from "./plugin-source-capture-context.js";
 import {
   createPluginNativeCaptureCustody,
@@ -433,7 +433,7 @@ function scheduleCaptureCleanup(key: string, instance: Instance): void {
   scope.signal.addEventListener("abort", () => scheduleCaptureCleanup(key, instance), {
     once: true,
   });
-  runInPluginSourceCaptureContext(() =>
+  runInDetachedAsyncContext(() =>
     scope.schedule({
       id: `plugin-source-captures:${key}`,
       delayMs: CAPTURE_GRACE_MS,
@@ -447,8 +447,20 @@ function scheduleCaptureCleanup(key: string, instance: Instance): void {
 export function retainPluginSourceCaptureInstance(
   stateDir?: string,
   placement?: PluginSourceCaptureStorage["placement"],
+  purpose: "source" | "native" = "source",
 ) {
-  const storage = resolvePluginSourceCaptureStorage(stateDir, placement);
+  const updateTmp = process.env.TMPDIR?.trim();
+  // Older update drivers already mark candidate helpers and select their TMPDIR.
+  // Native admissions can be published to the installed index; keep their durable placement.
+  const storage = resolvePluginSourceCaptureStorage(
+    stateDir,
+    purpose === "source" &&
+      process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" &&
+      updateTmp &&
+      path.isAbsolute(updateTmp)
+      ? "temporary"
+      : placement,
+  );
   const key = JSON.stringify([storage.stateDir, storage.placement]);
   const maintenance = pluginSourceCaptureMaintenance.getStore();
   const scheduler = maintenance?.scheduler;
@@ -568,7 +580,7 @@ export function createPluginNativeCaptureRoot(
   stateDir?: string,
   placement?: PluginSourceCaptureStorage["placement"],
 ) {
-  const instance = retainPluginSourceCaptureInstance(stateDir, placement);
+  const instance = retainPluginSourceCaptureInstance(stateDir, placement, "native");
   try {
     const root = instance.createNativeDirectory();
     let committed = false;

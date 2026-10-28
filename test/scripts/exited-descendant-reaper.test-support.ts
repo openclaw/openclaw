@@ -38,27 +38,24 @@ export function assertFixtureProcessGroupStopped(pgid: number, platform = proces
   assert.throws(() => process.kill(-pgid, 0), { code: "ESRCH" });
 }
 
-// Adopt exited tooling descendants and keep them unreaped until the command settles.
-// Adopted exits are recorded, not judged: tsx starts an esbuild service per worker
-// thread, and a worker terminated mid-import leaves that service to die by SIGPIPE,
-// unreaped until its process exits. Only a descendant still running after the
-// command is a tooling failure; it is named by pid, state, comm and argv.
-// Keep this source free of JS template escapes: no backslashes or dollar-brace.
+// Retain adopted exits until settlement; tsx/esbuild SIGPIPE exits are not failures.
+// Fail only on live descendants. No JS template escapes in the embedded source.
 export const exitedDescendantReaper = `
 import ctypes, os, signal, subprocess, sys
+from pathlib import Path
 if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
     raise OSError(ctypes.get_errno(), "PR_SET_CHILD_SUBREAPER failed")
 
+def process_stat(pid):
+    stat = Path("/proc/%s/stat" % pid).read_text()
+    return stat[stat.index("(") + 1 : stat.rindex(")")], stat.rsplit(")", 1)[1].split()
+
 def describe(pid):
     try:
-        with open("/proc/%d/stat" % pid) as handle:
-            stat = handle.read()
-        with open("/proc/%d/cmdline" % pid, "rb") as handle:
-            argv = [part.decode(errors="replace") for part in handle.read().split(bytes([0])) if part]
+        comm, fields = process_stat(pid)
+        argv = [part.decode(errors="replace") for part in Path("/proc/%d/cmdline" % pid).read_bytes().split(bytes([0])) if part]
     except OSError:
         return "pid=%d (gone)" % pid
-    comm = stat[stat.index("(") + 1 : stat.rindex(")")]
-    fields = stat[stat.rindex(")") + 2 :].split()
     return "pid=%d ppid=%s state=%s comm=%s argv=%r" % (pid, fields[1], fields[0], comm, argv)
 
 def running_children():
@@ -67,8 +64,7 @@ def running_children():
         if not entry.isdigit():
             continue
         try:
-            with open("/proc/%s/stat" % entry) as handle:
-                fields = handle.read().rsplit(")", 1)[1].split()
+            _, fields = process_stat(entry)
         except OSError:
             continue
         if int(fields[1]) == os.getpid() and fields[0] != "Z":
@@ -92,10 +88,8 @@ finally:
             )
         detail = describe(info.si_pid)
         os.waitpid(info.si_pid, 0)
-        if info.si_code == os.CLD_EXITED:
-            reaped.append("exit %d %s" % (info.si_status, detail))
-        else:
-            reaped.append("signal %s %s" % (signal.Signals(info.si_status).name, detail))
+        outcome = "exit %d" % info.si_status if info.si_code == os.CLD_EXITED else "signal %s" % signal.Signals(info.si_status).name
+        reaped.append("%s %s" % (outcome, detail))
     print("successfully reaped:", len(reaped))
     for detail in reaped:
         print("reaped descendant:", detail)

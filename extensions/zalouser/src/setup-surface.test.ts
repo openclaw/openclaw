@@ -201,7 +201,6 @@ it("writes canonical enabled entries for configured groups", async () => {
   expect(resolveZaloGroupsByEntriesMock).toHaveBeenCalledWith({
     profile: "default",
     entries: ["Family", "Work"],
-    credentialPersistence: "read-only",
   });
 });
 
@@ -215,7 +214,6 @@ it("resolves setup DM allowlists without persisting refreshed credentials", asyn
   expect(resolveZaloAllowFromEntriesMock).toHaveBeenCalledWith({
     profile: "default",
     entries: ["Alice"],
-    credentialPersistence: "read-only",
   });
 });
 

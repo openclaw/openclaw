@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
-import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import type { ChatHistoryParams } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
@@ -24,9 +23,8 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { readChatHistoryMessageId } from "../session-history-tail.js";
 import { readSessionMessageByIdAsync } from "../session-transcript-readers.js";
-import { chatHistoryHandlers } from "./chat-history-handler.js";
+import { historyPayload, historyRpc } from "./chat-history-fixture.test-support.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
-import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
 
 function appendLocal(
   scope: Parameters<typeof appendTranscriptMessage>[0],
@@ -143,26 +141,8 @@ async function rpcReader(
   sessionKey: string,
   method: "chat.history" | "chat.startup" | "chat.message.get",
 ) {
-  const context = await createHistoryReadContext();
-  const handler = expectDefined(
-    method === "chat.message.get" ? chatMessageGetHandlers[method] : chatHistoryHandlers[method],
-    "history handler",
-  );
-  return async (params: HistoryRequest) => {
-    let result: unknown;
-    await handler({
-      params: { sessionKey, ...params },
-      context,
-      req: { type: "req", id: randomUUID(), method },
-      client: null,
-      isWebchatConnect: () => false,
-      respond: (ok, payload, error) => {
-        expect({ ok, error }).toEqual({ ok: true, error: undefined });
-        result = payload;
-      },
-    });
-    return expectDefined(result, "history response");
-  };
+  const request = historyRpc(await createHistoryReadContext(), sessionKey);
+  return async (params: HistoryRequest) => historyPayload(await request(method, params));
 }
 
 async function historyReader(
@@ -442,9 +422,13 @@ it("filters recovered failures on metadata-only pages", async () => {
   });
 });
 
-it.each(["chat.history", "chat.startup"] as const)(
-  "%s pages local and external history within the requested limits",
-  async (method) => {
+it.each([
+  ["chat.history", false],
+  ["chat.startup", false],
+  ["chat.history", true],
+] as const)(
+  "%s pages local and external history within the requested limits (incognito=%s)",
+  async (method, incognito) => {
     await withImportedHistory(
       6,
       "External conversation",
@@ -453,6 +437,10 @@ it.each(["chat.history", "chat.startup"] as const)(
         expect(newest.messages.length).toBeLessThanOrEqual(2);
         expect(newest).toMatchObject({ hasMore: true, totalMessages: 8 });
         expect(newest).not.toHaveProperty("completeSnapshot");
+        if (incognito) {
+          expect(ids(newest)).toEqual(importedIds.slice(-2));
+          expect(newest.nextOffset).toBe(2);
+        }
         const restored = [...newest.messages];
         let page = newest;
         while (page.hasMore) {
@@ -472,28 +460,11 @@ it.each(["chat.history", "chat.startup"] as const)(
         expectMissingAnchor(await read({ messageId: "nonexistent-anchor", limit: 2 }));
         expect((await read({ offset: 9999, limit: 2 })).messages).toEqual([]);
       },
-      false,
+      incognito,
       method,
     );
   },
 );
-
-it("paginates process-held incognito imports", async () => {
-  await withImportedHistory(
-    2,
-    "Private native history",
-    async ({ read, importedIds }) => {
-      const newest = await read({ limit: 2 });
-      expect(ids(newest)).toEqual(importedIds);
-      expect(newest).toMatchObject({ totalMessages: 4, hasMore: true, nextOffset: 2 });
-      const older = await read({ offset: newest.nextOffset, limit: 2 });
-      expect(older).toMatchObject({ hasMore: false, totalMessages: 4 });
-      expect(JSON.stringify(older.messages)).toContain("Local question");
-      expect(JSON.stringify(older.messages)).toContain("Local answer");
-    },
-    true,
-  );
-});
 
 it("deduplicates native history independently of log redaction", async () => {
   const text = "opaqueSeedQ customMask7 laterRegV7 laterCfgV8";

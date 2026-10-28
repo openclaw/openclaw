@@ -1,146 +1,85 @@
-// Setup wizard proxy tests cover proxying setup wizard calls through channel plugin facades.
 import {
-  promptSetupWizardAllowFrom,
-  resolveSetupWizardAllowFromEntries,
-  resolveSetupWizardGroupAllowlist,
+  promptSetupWizardAllowFrom as promptFrom,
+  resolveSetupWizardAllowFromEntries as resolveEntries,
+  resolveSetupWizardGroupAllowlist as resolveAllowlist,
   runSetupWizardFinalize,
   runSetupWizardPrepare,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import {
   createAllowlistSetupWizardProxy,
   createDelegatedSetupWizardProxy,
 } from "./setup-wizard-proxy.js";
 import type { ChannelSetupWizard } from "./setup-wizard.js";
 
-describe("createAllowlistSetupWizardProxy", () => {
-  it("falls back when delegated surfaces are absent", async () => {
-    const wizard = createAllowlistSetupWizardProxy({
-      loadWizard: async () =>
-        ({
-          channel: "demo",
-          status: {
-            configuredLabel: "configured",
-            unconfiguredLabel: "needs setup",
-            resolveConfigured: () => true,
-          },
-          credentials: [],
-        }) satisfies ChannelSetupWizard,
-      createBase: ({ promptAllowFrom, resolveAllowFromEntries, resolveGroupAllowlist }) => ({
-        channel: "demo",
-        status: {
-          configuredLabel: "configured",
-          unconfiguredLabel: "needs setup",
-          resolveConfigured: () => true,
-        },
-        credentials: [],
-        dmPolicy: {
-          label: "Demo",
-          channel: "demo" as never,
-          policyKey: "channels.demo.dmPolicy",
-          allowFromKey: "channels.demo.allowFrom",
-          getCurrent: () => "pairing",
-          setPolicy: (cfg) => cfg,
-          promptAllowFrom,
-        },
-        allowFrom: {
-          message: "Allow from",
-          placeholder: "id",
-          invalidWithoutCredentialNote: "need id",
-          parseId: () => null,
-          resolveEntries: resolveAllowFromEntries,
-          apply: (params) => params.cfg,
-        },
-        groupAccess: {
-          label: "Groups",
-          placeholder: "group",
-          currentPolicy: () => "allowlist",
-          currentEntries: () => [],
-          updatePrompt: () => false,
-          setPolicy: (params) => params.cfg,
-          resolveAllowlist: resolveGroupAllowlist,
-        },
-      }),
-      fallbackResolvedGroupAllowlist: (entries) => entries.map((input) => ({ input })),
-    });
+const statusLabels = {
+  configuredLabel: "configured",
+  unconfiguredLabel: "needs setup",
+  configuredHint: "ready",
+  unconfiguredHint: "missing",
+  configuredScore: 1,
+  unconfiguredScore: 0,
+};
+const wizardBase: ChannelSetupWizard = {
+  channel: "demo",
+  status: { ...statusLabels, resolveConfigured: () => true },
+  credentials: [],
+};
 
-    expect(
-      await promptSetupWizardAllowFrom({ promptAllowFrom: wizard.dmPolicy?.promptAllowFrom }),
-    ).toStrictEqual({});
-    expect(
-      await resolveSetupWizardAllowFromEntries({
-        resolveEntries: wizard.allowFrom?.resolveEntries,
-        entries: ["alice"],
-      }),
-    ).toEqual([{ input: "alice", resolved: false, id: null }]);
-    expect(
-      await resolveSetupWizardGroupAllowlist({
-        resolveAllowlist: wizard.groupAccess?.resolveAllowlist,
-        entries: ["general"],
-      }),
-    ).toEqual([{ input: "general" }]);
+it("falls back when delegated surfaces are absent", async () => {
+  const createBase = vi.fn<Parameters<typeof createAllowlistSetupWizardProxy>[0]["createBase"]>(
+    () => wizardBase,
+  );
+  createAllowlistSetupWizardProxy({
+    loadWizard: async () => wizardBase,
+    createBase,
+    fallbackResolvedGroupAllowlist: (entries) => entries.map((input) => ({ input })),
   });
+
+  const call = createBase.mock.calls[0];
+  assert(call);
+  const { promptAllowFrom, resolveAllowFromEntries, resolveGroupAllowlist } = call[0];
+  expect(await promptFrom({ promptAllowFrom })).toStrictEqual({});
+  expect(
+    await resolveEntries({ resolveEntries: resolveAllowFromEntries, entries: ["alice"] }),
+  ).toEqual([{ input: "alice", resolved: false, id: null }]);
+  expect(
+    await resolveAllowlist({ resolveAllowlist: resolveGroupAllowlist, entries: ["general"] }),
+  ).toEqual([{ input: "general" }]);
 });
-
-describe("createDelegatedSetupWizardProxy", () => {
-  it("builds a direct proxy wizard with delegated status/prepare/finalize", async () => {
-    const wizard = createDelegatedSetupWizardProxy({
-      channel: "demo",
-      loadWizard: async () =>
-        ({
-          channel: "demo",
-          status: {
-            configuredLabel: "configured",
-            unconfiguredLabel: "needs setup",
-            configuredHint: "ready",
-            unconfiguredHint: "missing",
-            configuredScore: 1,
-            unconfiguredScore: 0,
-            resolveConfigured: async ({ cfg }) => Boolean(cfg.channels?.demo),
-            resolveStatusLines: async () => ["line"],
-            resolveSelectionHint: async () => "hint",
-            resolveQuickstartScore: async () => 3,
-          },
-          credentials: [],
-          prepare: async ({ cfg }) => ({
-            cfg: { ...cfg, channels: { demo: { prepared: true } } },
-          }),
-          finalize: async ({ cfg }) => ({
-            cfg: { ...cfg, channels: { demo: { finalized: true } } },
-          }),
-        }) satisfies ChannelSetupWizard,
+it("builds a direct proxy wizard with delegated status/prepare/finalize", async () => {
+  const wizard = createDelegatedSetupWizardProxy({
+    channel: "demo",
+    loadWizard: async (): Promise<ChannelSetupWizard> => ({
+      ...wizardBase,
       status: {
-        configuredLabel: "configured",
-        unconfiguredLabel: "needs setup",
-        configuredHint: "ready",
-        unconfiguredHint: "missing",
-        configuredScore: 1,
-        unconfiguredScore: 0,
+        ...statusLabels,
+        resolveConfigured: async ({ cfg }) => Boolean(cfg.channels?.demo),
+        resolveStatusLines: async () => ["line"],
+        resolveSelectionHint: async () => "hint",
+        resolveQuickstartScore: async () => 3,
       },
-      credentials: [],
-      textInputs: [],
-      completionNote: { title: "Done", lines: ["line"] },
-      delegatePrepare: true,
-      delegateFinalize: true,
-    });
+      prepare: async ({ cfg }) => ({ cfg: { ...cfg, channels: { demo: { prepared: true } } } }),
+      finalize: async ({ cfg }) => ({ cfg: { ...cfg, channels: { demo: { finalized: true } } } }),
+    }),
+    status: statusLabels,
+    credentials: [],
+    textInputs: [],
+    completionNote: { title: "Done", lines: ["line"] },
+    delegatePrepare: true,
+    delegateFinalize: true,
+  });
 
-    expect(await wizard.status.resolveConfigured({ cfg: {} })).toBe(false);
-    expect(await wizard.status.resolveStatusLines?.({ cfg: {}, configured: false })).toEqual([
-      "line",
-    ]);
-    expect(await runSetupWizardPrepare({ prepare: wizard.prepare })).toEqual({
-      cfg: {
-        channels: {
-          demo: { prepared: true },
-        },
-      },
-    });
-    expect(await runSetupWizardFinalize({ finalize: wizard.finalize })).toEqual({
-      cfg: {
-        channels: {
-          demo: { finalized: true },
-        },
-      },
-    });
+  expect(await wizard.status.resolveConfigured({ cfg: {} })).toBe(false);
+  expect(await wizard.status.resolveStatusLines?.({ cfg: {}, configured: false })).toEqual([
+    "line",
+  ]);
+  expect(await wizard.status.resolveSelectionHint?.({ cfg: {}, configured: false })).toBe("hint");
+  expect(await wizard.status.resolveQuickstartScore?.({ cfg: {}, configured: false })).toBe(3);
+  expect(await runSetupWizardPrepare({ prepare: wizard.prepare })).toEqual({
+    cfg: { channels: { demo: { prepared: true } } },
+  });
+  expect(await runSetupWizardFinalize({ finalize: wizard.finalize })).toEqual({
+    cfg: { channels: { demo: { finalized: true } } },
   });
 });

@@ -6,7 +6,7 @@ import {
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
-import { testing as swarmSchedulerTesting } from "../../agents/subagents/swarm/swarm-scheduler.test-support.js";
+import { observeSwarmSchedulerWork } from "../../agents/subagents/swarm/swarm-scheduler.lifecycle.test-support.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
@@ -59,6 +59,7 @@ export function registerAgentAbortSubagentTests() {
     "chat.abort by runId kills only registered children of its non-admin owner: $name",
     async ({ expectsCompletionMessage, collect, releaseOnParent, partialFailure, cascade }) => {
       prime();
+      const schedulerWork = observeSwarmSchedulerWork();
       const registryResult = createDeferred<{ status: "timeout" }>();
       mocks.registryCallGateway.mockReturnValue(registryResult.promise);
       const agentResult = createDeferred<{
@@ -268,7 +269,7 @@ export function registerAgentAbortSubagentTests() {
           expect(rpcSourceTesting.has(runId)).toBe(false);
           await registryResult.promise;
         } finally {
-          swarmSchedulerTesting.reset();
+          await schedulerWork.close();
           await resetSubagentRegistryForTests();
         }
       }

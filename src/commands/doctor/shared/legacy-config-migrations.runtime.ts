@@ -6,6 +6,7 @@ import {
   LEGACY_CONFIG_MIGRATION_RUNTIME_CODE_MODE_EXECUTOR,
 } from "./legacy-config-migrations.runtime.code-mode.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_CRON } from "./legacy-config-migrations.runtime.cron.js";
+import { LEGACY_CONFIG_MIGRATION_RUNTIME_CYBER_FAILOVER } from "./legacy-config-migrations.runtime.cyber-failover.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_DIAGNOSTICS } from "./legacy-config-migrations.runtime.diagnostics.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_ENTRIES } from "./legacy-config-migrations.runtime.entries.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY } from "./legacy-config-migrations.runtime.gateway.js";
@@ -24,6 +25,7 @@ import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS } from "./legacy-config-migrations
 import { LEGACY_TALK_VOICE_CALL_INHERITANCE } from "./legacy-talk-config-normalizer.js";
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
+  LEGACY_CONFIG_MIGRATION_RUNTIME_CYBER_FAILOVER,
   ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS,
   ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_CLI_BACKENDS,
   LEGACY_CONFIG_MIGRATION_RUNTIME_CODE_MODE,

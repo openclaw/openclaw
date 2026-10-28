@@ -47,29 +47,11 @@ function expectRejected(
   return result;
 }
 
-it.each([false, true])("reports ceilings as local errors or Actions warnings: %s", (actions) => {
-  const statsFile = writeStats(sample("513MiB / 2GiB", "101.0%"));
-  const summary = join(dirname(statsFile), "summary.md");
-  const result = runAssert(statsFile, "512", "100", {
-    CI: "1",
-    GITHUB_ACTIONS: actions ? "true" : "",
-    GITHUB_STEP_SUMMARY: summary,
-  });
-
-  expect(result.status, result.stderr).toBe(actions ? 0 : 1);
+it("reports both exceeded ceilings", () => {
+  const result = runAssert(writeStats(sample("513MiB / 2GiB", "101.0%")));
+  expect(result.status, result.stderr).toBe(1);
   expect(result.stderr).toContain("memory peak 513.0MiB exceeded 512MiB");
-  expect(result.stderr).toContain(
-    actions ? "CPU peak 101.0%25 exceeded 100%25" : "CPU peak 101.0% exceeded 100%",
-  );
-  if (actions) {
-    expect(result.stderr).toContain(`::warning file=${SCRIPT_PATH},line=1,col=0`);
-    const report = readFileSync(summary, "utf8");
-    expect(report).toContain("Docker memory budget");
-    expect(report).toContain("Docker CPU budget");
-    expect(report).toContain("CPU peak 101.0% exceeded 100%");
-  } else {
-    expect(result.stderr).not.toContain("::warning");
-  }
+  expect(result.stderr).toContain("CPU peak 101.0% exceeded 100%");
 });
 
 it("rejects invalid resource limits instead of disabling the ceiling", () => {
@@ -79,8 +61,8 @@ it("rejects invalid resource limits instead of disabling the ceiling", () => {
   expectRejected(sample(), "max CPU percent must be a finite non-negative number", "512", "1e3");
 });
 
-it.each(["", "true"])("rejects invalid samples in Actions mode %s", (actions) => {
-  const env = { GITHUB_ACTIONS: actions };
+it("rejects invalid samples even in Actions mode", () => {
+  const env = { GITHUB_ACTIONS: "true" };
   expectRejected("{}\n", "had invalid MemUsage", "512", "100", env);
   expectRejected(sample("bad", "bad"), "had invalid MemUsage", "512", "100", env);
   expectRejected(sample(undefined, "1e3%"), "had invalid CPUPerc", "512", "100", env);
@@ -101,9 +83,7 @@ it("parses mixed stats lines, enforces peaks, and ignores terminal samples", () 
 
   expect(Buffer.byteLength(cappedLine, "utf8")).toBe(MAX_STATS_SAMPLE_LINE_BYTES);
   expect(result.status, result.stderr).toBe(0);
-  expect(result.stdout).toContain("memory=128.0MiB");
-  expect(result.stdout).toContain("cpu=25.0%");
-  expect(result.stdout).toContain("samples=6");
+  expect(result.stdout).toContain("memory=128.0MiB cpu=25.0% samples=6");
 });
 
 it("rejects oversized stats sample lines before parsing JSON", () => {

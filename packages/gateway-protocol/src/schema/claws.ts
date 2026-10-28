@@ -5,26 +5,34 @@ import { PluginDeclaredSurfaceSchema, PluginOperatorGrantsSchema } from "./plugi
 import { NonEmptyString } from "./primitives.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
 
-const OfficialClawName = Type.String({ pattern: "^@openclaw/[a-z0-9][a-z0-9._-]*$" });
+const ClawPackageName = Type.String({
+  pattern: "^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$",
+});
 const ClawArtifactIntegrity = Type.String({ pattern: "^sha256-[A-Za-z0-9+/]{43}=$" });
 const ClawCatalogCoordinateSchema = closedObject({
-  packageName: OfficialClawName,
+  packageName: ClawPackageName,
   version: NonEmptyString,
 });
 
 export const ClawsCatalogSearchParamsSchema = closedObject({
   query: Type.Optional(Type.String({ maxLength: 200 })),
+  category: Type.Optional(Type.String({ maxLength: 40 })),
+  featured: Type.Optional(Type.Boolean()),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
 });
 
 export const ClawsCatalogEntrySchema = closedObject({
-  packageName: OfficialClawName,
+  packageName: ClawPackageName,
   displayName: NonEmptyString,
+  iconUrl: Type.Optional(NonEmptyString),
   summary: Type.Optional(Type.String()),
   latestVersion: Type.Optional(NonEmptyString),
-  channel: Type.Literal("official"),
-  official: Type.Literal(true),
+  channel: Type.Union([Type.Literal("official"), Type.Literal("community")]),
+  official: Type.Boolean(),
+  ownerHandle: Type.Optional(NonEmptyString),
   downloads: Type.Number({ minimum: 0 }),
+  installs: Type.Number({ minimum: 0 }),
+  featuredAt: Type.Optional(Type.Number({ minimum: 0 })),
   updatedAtMs: Type.Number({ minimum: 0 }),
 });
 
@@ -290,9 +298,12 @@ export const ClawConfiguredAccessSchema = closedObject({
 });
 
 const ClawScheduledDeclarationSchema = closedObject({
-  schedule: closedObject({ cron: NonEmptyString, timezone: NonEmptyString }),
+  schedule: Type.Union([
+    closedObject({ cron: NonEmptyString, timezone: NonEmptyString }),
+    closedObject({ everyMs: Type.Integer({ minimum: 1 }) }),
+  ]),
   session: stringLiteralUnion(["main", "isolated"]),
-  delivery: stringLiteralUnion(["none", "last-channel"]),
+  delivery: stringLiteralUnion(["none", "last-channel", "owner"]),
   messageDigest: NonEmptyString,
 });
 
@@ -379,7 +390,7 @@ export const ClawActionEffectSchema = Type.Union([
 
 export const ClawManifestDisclosureSchema = closedObject({
   source: closedObject({
-    packageName: OfficialClawName,
+    packageName: ClawPackageName,
     version: NonEmptyString,
     integrity: Type.String({ pattern: "^sha256:[a-f0-9]{64}$" }),
     byteLength: Type.Integer({ minimum: 1 }),

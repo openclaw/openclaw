@@ -13,7 +13,15 @@ export const visitorInviteDetailsSchema = Type.Object(
     githubLogin: Type.Optional(Type.String()),
     expiresAt: expiresAtSchema,
     gatewayAccess: Type.String(),
-    signInUrl: Type.String(),
+    signInUrl: Type.Optional(
+      Type.String({
+        description: "Absent without gateway.publicOrigin or when the Control UI is disabled.",
+      }),
+    ),
+    noteStored: Type.Boolean({ description: "Whether the grant now carries an inviter note." }),
+    invitationText: Type.String({
+      description: "Plain text for the inviter to hand to the visitor; contains no credentials.",
+    }),
   },
   {
     additionalProperties: false,
@@ -71,6 +79,28 @@ export const visitorListDetailsSchema = Type.Object(
               description:
                 "Missing policy membership takes precedence; expired grants await provider cleanup.",
             },
+          ),
+          welcome: Type.Optional(
+            Type.Object(
+              {
+                state: Type.Union([
+                  Type.Literal("pending"),
+                  Type.Literal("ready"),
+                  Type.Literal("failed"),
+                ]),
+                sessionKey: Type.Optional(
+                  Type.String({
+                    description:
+                      "This invitation's welcome session, once reserved. A deleted session is not recreated.",
+                  }),
+                ),
+              },
+              {
+                additionalProperties: false,
+                description:
+                  "Welcome-session progress for this invitation; absent on grants recorded before onboarding.",
+              },
+            ),
           ),
           gatewayAccess: Type.String(),
         },

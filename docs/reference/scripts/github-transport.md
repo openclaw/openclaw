@@ -28,7 +28,16 @@ Writer identity uses the protected CLI with included headers on both transports
 to retain the native writer route. Reviewer assignment requires REST and verifies
 the retained assignee. The CI watcher polls GraphQL summaries, expanding details
 for failures or pending checks after CI succeeds; primary quota exhaustion selects
-REST with complete check/status and workflow evidence.
+REST with complete check/status and workflow evidence. In `--completion ci-run`
+mode, active polling revalidates the attached run and attempt-specific job pages
+with REST ETags. Only a successful `304 Not Modified` reuses the previous body;
+changed responses and new attempts replace that evidence. Missing ETags retain
+ordinary fresh reads. Validators live only for this watcher and credential/host
+scope. PR head, lifecycle, and conflict observations remain fresh each poll, and
+completed runs do not reload job progress. `gh api --include` uses the protected
+CLI’s native caller-authenticated route, not the pooled relay; authenticated
+304s avoid GitHub’s primary quota but still make network requests and remain
+subject to secondary limits.
 
 Successful authentication is reused within one shell operation and its nested
 worktree entries; new processes and changed credential selection require a new
@@ -45,9 +54,9 @@ Ordinary immediate squash prefers REST. Explicit recovery of a validated retaine
 intent starts with GraphQL; normal fallback and immediate-only recovery gates
 still apply. Admission reads switch transports only
 for confirmed primary quota exhaustion or unsupported REST policy or mergeability
-projections, including UNKNOWN; secondary throttles and access failures never authorize a switch. REST requires proven absence
-of classic protection and merge queues, supported effective rules, exact-head publisher-bound
-checks, and the retained-outcome lifecycle. It preserves configured message content
+projections, including UNKNOWN; secondary throttles and access failures never authorize a switch. REST requires absence of merge queues, supported applicable rules, exact-head
+publisher-bound checks, and the retained-outcome lifecycle. Classic-protection
+discovery is not required; GitHub enforces it at the pinned merge request. It preserves configured message content
 from pinned published commits or the PR body and leaves the title to GitHub.
 Choose the transport before dispatch; never replay an uncertain mutation through
 another API. Completion comments use the receipt observation's transport and keep

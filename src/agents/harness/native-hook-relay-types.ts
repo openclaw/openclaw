@@ -307,6 +307,13 @@ export type NativeHookRelayOwnerOptions = {
   retention?: NativeHookRelayRetention;
   approvalHost?: NativeHookRelayRegistration["approvalHost"];
   executionAdmission?: NativeHookRelayExecutionAdmission;
+  postToolUse?: Readonly<{
+    toolNames: readonly string[];
+    observe: (
+      invocation: Readonly<NativeHookRelayInvocation>,
+      assertCurrent: () => void,
+    ) => void | Promise<void>;
+  }>;
 };
 
 export type OwnedNativeHookRelayParams = RegisterNativeHookRelayParams &
@@ -321,6 +328,8 @@ export type RelayLifetime = {
   retained?: ReturnType<typeof retainBeforeToolCallForNativeHookRelay>;
   retention?: NativeHookRelayRetention;
   executionAdmission?: NativeHookRelayExecutionAdmission;
+  postToolUse?: NativeHookRelayOwnerOptions["postToolUse"];
+  postToolUseWork: Set<Promise<void>>;
   removeAbortListener?: () => void;
   expiryTimer?: ReturnType<typeof setTimeout>;
 };

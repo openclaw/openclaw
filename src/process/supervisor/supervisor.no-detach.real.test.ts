@@ -4,10 +4,6 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { expect, it, onTestFinished } from "vitest";
-import {
-  fixtureReceiptClientSource,
-  openFixtureReceiptChannel,
-} from "../../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 
@@ -45,7 +41,6 @@ function readIdentity(file: string): Identity | undefined {
 }
 
 async function createFixture(signal: AbortSignal) {
-  const receipts = await openFixtureReceiptChannel();
   const tempDirs = createTempDirTracker();
   const cwd = tempDirs.make("openclaw-idle-cancellation-proof-");
   const leafPath = path.join(cwd, "leaf.mjs");
@@ -57,27 +52,24 @@ async function createFixture(signal: AbortSignal) {
       .map(readIdentity)
       .filter((identity) => identity !== undefined);
     try {
-      await Promise.all(
-        identities.map(async (identity) => {
-          if (stillRunning(identity)) {
-            try {
-              signalProcess(identity.pid, "SIGKILL");
-            } catch {
-              // The exact fixture instance exited after the identity check.
-            }
+      for (const identity of identities) {
+        if (stillRunning(identity)) {
+          try {
+            signalProcess(identity.pid, "SIGKILL");
+          } catch {
+            // The exact fixture instance exited after the identity check.
           }
-          await waitForFixtureExit(identity, signal);
-        }),
-      );
+        }
+      }
+      await Promise.all(identities.map((identity) => waitForFixtureExit(identity, signal)));
     } finally {
-      await receipts.close().finally(tempDirs.cleanup);
+      tempDirs.cleanup();
     }
   });
   await writeFile(
     leafPath,
     `
       import fs from "node:fs";
-      ${fixtureReceiptClientSource(receipts.endpoint)}
       process.on("SIGTERM", () => {});
       const stat = fs.readFileSync("/proc/self/stat", "utf8");
       const fields = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\\s+/);
@@ -85,7 +77,6 @@ async function createFixture(signal: AbortSignal) {
       let tick = 0;
       setInterval(() => {
         fs.appendFileSync(process.argv[3], ".");
-        sendReceipt(process.argv[3], "tick");
         if (++tick === 1) process.send?.("ready");
       }, 25);
     `,
@@ -105,22 +96,7 @@ async function createFixture(signal: AbortSignal) {
       });
       setInterval(() => {}, 1000);
     `;
-  return { leafIdentityPath, rootIdentityPath, rootSource, tickBeforeSettlement };
-
-  function tickBeforeSettlement(operation: Promise<unknown>) {
-    const requireTick = (error: unknown) => {
-      if (!statSync(leafTicksPath, { throwIfNoEntry: false })?.size) {
-        throw error;
-      }
-    };
-    return Promise.race([
-      receipts.waitFor(leafTicksPath, "tick"),
-      operation.then(
-        () => requireTick(new Error(`Fixture exited before its first tick: ${leafTicksPath}`)),
-        requireTick,
-      ),
-    ]);
-  }
+  return { leafIdentityPath, rootIdentityPath, leafTicksPath, rootSource };
 }
 
 async function waitForFixtureExit(identity: Identity, signal: AbortSignal) {
@@ -132,7 +108,7 @@ async function waitForFixtureExit(identity: Identity, signal: AbortSignal) {
 it.skipIf(process.platform !== "linux")(
   "finishes retained escalation before an otherwise idle cancellation host exits",
   async ({ signal }) => {
-    const { rootSource, leafIdentityPath, rootIdentityPath, tickBeforeSettlement } =
+    const { rootSource, leafIdentityPath, rootIdentityPath, leafTicksPath } =
       await createFixture(signal);
     const helperUrl = new URL(
       "../../../packages/agent-core/src/harness/env/kill-tree.ts",
@@ -167,10 +143,11 @@ it.skipIf(process.platform !== "linux")(
     });
     try {
       expect(readInstance(host.pid!)?.starttime).toBeDefined();
-      await withinTest(tickBeforeSettlement(exit), signal);
+      // Host cancellation starts only after the leaf's first tick and IPC acknowledgement.
+      expect(await withinTest(exit, signal)).toBe(0);
+      expect(statSync(leafTicksPath).size).toBeGreaterThan(0);
       const leaf = readIdentity(leafIdentityPath)!;
       expect(leaf).toBeDefined();
-      expect(await withinTest(exit, signal)).toBe(0);
       await waitForFixtureExit(leaf, signal);
     } finally {
       host.kill("SIGKILL");

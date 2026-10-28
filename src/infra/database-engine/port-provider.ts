@@ -52,6 +52,7 @@ export async function withDatabasePortConnection<T>(
   config: OpenClawConfig,
   run: (client: Client) => Promise<T>,
   env: NodeJS.ProcessEnv = process.env,
+  options?: Parameters<typeof withPostgresConnection>[2],
 ): Promise<T> {
   const { resolveDatabaseEngineSelection } = await import("./config.js");
   const input =
@@ -62,7 +63,7 @@ export async function withDatabasePortConnection<T>(
       "PostgreSQL requires an effective postgres family and a resolvable connection.",
     );
   }
-  return withPostgresConnection(input, run);
+  return withPostgresConnection(input, run, options);
 }
 
 export function withDatabasePortPostgres<T>(

@@ -3,10 +3,21 @@ import { describe, expect, it, vi } from "vitest";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { PluginInstance } from "../plugin-instance.js";
+import { createEmptyPluginRegistry } from "../registry-empty.js";
+import { createPluginRecord } from "../status.test-helpers.js";
 import { withPluginRuntimePluginScope } from "./gateway-request-scope.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
 
-const dispatchRoutedChannelTurn = vi.hoisted(() => vi.fn(async () => ({ status: "handled" })));
+const dispatchRoutedChannelTurn = vi.hoisted(() =>
+  vi.fn(
+    async (
+      _turn: Parameters<
+        typeof import("../../channels/turn/lifecycle.js").dispatchRoutedChannelTurn
+      >[0],
+    ) => ({ status: "handled" }),
+  ),
+);
 
 vi.mock("../../channels/turn/lifecycle.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../channels/turn/lifecycle.js")>()),
@@ -24,30 +35,52 @@ it("warns about synchronous runtime timestamps while preserving the shipped resu
       sessionKey: "agent:main:legacy-timestamp",
     };
     replaceSessionEntrySync(scope, { sessionId: "legacy-timestamp", updatedAt: 60_000 });
-    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-    try {
-      const channel = createRuntimeChannel();
-      withPluginRuntimePluginScope({ pluginId: "legacy-runtime-timestamp-test" }, () => {
-        expect(channel.session.readSessionUpdatedAt(scope)).toBe(60_000);
-      });
-      expect(warning).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining("readSessionUpdatedAtAsync"),
-        { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
-      );
-    } finally {
-      warning.mockRestore();
-    }
+    using warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    const channel = createRuntimeChannel();
+    withPluginRuntimePluginScope({ pluginId: "legacy-runtime-timestamp-test" }, () => {
+      expect(channel.session.readSessionUpdatedAt(scope)).toBe(60_000);
+    });
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("readSessionUpdatedAtAsync"),
+      { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+    );
   });
 });
 
 describe("inbound dispatch", () => {
+  function createOwnedInboundFixture() {
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "owned-channel" });
+    registry.plugins.push(record);
+    const owner = new PluginInstance("owned-channel", { record, registry });
+    const channel = createRuntimeChannel();
+    const delivered = vi.fn();
+    return {
+      owner,
+      delivered,
+      dispatch: () =>
+        owner.run(() =>
+          channel.inbound.dispatch({
+            cfg: {},
+            channel: "owned-channel",
+            route: { agentId: "main", sessionKey: "agent:main:owned-channel:direct:test" },
+            ctxPayload: { Body: "test", CommandAuthorized: false },
+            delivery: { deliver: delivered },
+            replyOptions: { onQueuedFollowupReplyBatch: delivered },
+          }),
+        ),
+    };
+  }
+
   it("removes event custody before invoking the host-bound reply dispatcher", async () => {
     const callback = vi.fn();
-    const counts = { tool: 0, block: 0, final: 0 };
-    const dispatch = vi.fn(async () => ({ queuedFinal: false, counts }));
+    const dispatch = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    }));
     const channel = createRuntimeChannel({ dispatchReplyFromConfig: dispatch });
     const replyOptions = {
-      isHeartbeat: true,
+      disableTools: true,
       internalEventExecution: { assertCurrent: callback, onStarted: callback },
       onReplyOperationOwned: callback,
     };
@@ -58,9 +91,61 @@ describe("inbound dispatch", () => {
       replyOptions,
     });
     expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({ replyOptions: { isHeartbeat: true } }),
+      expect.objectContaining({ replyOptions: { disableTools: true } }),
     );
     expect(replyOptions.onReplyOperationOwned).toBe(callback);
+  });
+
+  it("keeps immediate delivery live after source settlement until dispatch returns", async () => {
+    const { owner, delivered, dispatch } = createOwnedInboundFixture();
+    dispatchRoutedChannelTurn.mockImplementationOnce(async (turn) => {
+      // Immediate execution settles its source before the dispatcher sends its final.
+      await turn.replyOptions?.turnAdoptionLifecycle?.onSettled?.();
+      await turn.delivery.deliver?.({ text: "immediate answer" }, { kind: "final" });
+      return { status: "handled" };
+    });
+    try {
+      await dispatch();
+      expect(delivered).toHaveBeenCalledWith({ text: "immediate answer" }, { kind: "final" });
+      expect(owner.hasRetainedConsumers).toBe(false);
+    } finally {
+      await owner.dispose();
+    }
+  });
+
+  it("keeps queued source callbacks live until queue settlement, then revokes them", async () => {
+    const { owner, delivered, dispatch } = createOwnedInboundFixture();
+    let settle: (() => void | Promise<void>) | undefined;
+    dispatchRoutedChannelTurn.mockImplementationOnce(async (turn) => {
+      turn.replyOptions?.turnAdoptionLifecycle?.onDeferred?.();
+      return { status: "handled" };
+    });
+    try {
+      await dispatch();
+      const queued = dispatchRoutedChannelTurn.mock.calls.at(-1)?.[0];
+      if (!queued) {
+        throw new Error("Dispatch did not retain the queued source");
+      }
+      settle = queued.replyOptions?.turnAdoptionLifecycle?.onSettled;
+      expect(owner.hasRetainedConsumers).toBe(true);
+      const deliver = queued.replyOptions?.onQueuedFollowupReplyBatch;
+      const batch = {
+        kind: "queued-followup" as const,
+        runId: "queued-run",
+        originatingChannel: "owned-channel",
+        payloads: [{ text: "answer" }],
+        completion: { kind: "completed" as const },
+      };
+      await deliver?.(batch);
+      expect(delivered).toHaveBeenCalledExactlyOnceWith(batch);
+      await settle?.();
+      expect(owner.hasRetainedConsumers).toBe(false);
+      expect(() => deliver?.(batch)).toThrow("consumer is closed");
+      settle = undefined;
+    } finally {
+      await settle?.();
+      await owner.dispose();
+    }
   });
 
   it.each([true, false])("inbound preserves dispatch precedence (bound=%s)", async (bound) => {
@@ -69,7 +154,7 @@ describe("inbound dispatch", () => {
     const channel = createRuntimeChannel({ dispatchReplyFromConfig: boundReplyDispatch });
     expect(channel.turn).toBe(channel.inbound);
     const replyOptions = {
-      isHeartbeat: true,
+      disableTools: true,
       internalEventExecution: { onStarted: vi.fn() },
       onReplyOperationOwned: vi.fn(),
     };
@@ -88,105 +173,81 @@ describe("inbound dispatch", () => {
     expect(dispatchRoutedChannelTurn).toHaveBeenCalledWith({
       ...turn,
       dispatchReplyFromConfig: boundReplyDispatch ?? callerDispatch,
-      replyOptions: { isHeartbeat: true },
+      replyOptions: { disableTools: true },
     });
   });
 });
 
 describe("runtimeContexts", () => {
   const scope = { channelId: "matrix", accountId: "default", capability: "approval.native" };
+  function fixture() {
+    const contexts = createRuntimeChannel().runtimeContexts;
+    const controller = new AbortController();
+    return {
+      controller,
+      register: (context: object) =>
+        contexts.register({ ...scope, context, abortSignal: controller.signal }),
+      watch: (onEvent: Parameters<typeof contexts.watch>[0]["onEvent"]) =>
+        contexts.watch({ ...scope, onEvent }),
+      read: () => contexts.get(scope),
+    };
+  }
 
   it("removes the stale lease abort listener after a replacement registration", () => {
-    const contexts = createRuntimeChannel().runtimeContexts;
-    const connectionScope = {
-      channelId: "whatsapp",
-      accountId: "default",
-      capability: "connection.controller",
-    };
-    const controller = new AbortController();
+    const { controller, register, read } = fixture();
     const initialListenerCount = getEventListeners(controller.signal, "abort").length;
-    const staleLease = contexts.register({
-      ...connectionScope,
-      context: { token: "stale" },
-      abortSignal: controller.signal,
-    });
-    contexts.register({
-      ...connectionScope,
-      context: { token: "replacement" },
-      abortSignal: controller.signal,
-    });
+    const staleLease = register({ token: "stale" });
+    register({ token: "replacement" });
 
     expect(getEventListeners(controller.signal, "abort")).toHaveLength(initialListenerCount + 2);
 
-    // Plugins dispose the old lease only after its replacement is registered.
     staleLease.dispose();
 
     expect(getEventListeners(controller.signal, "abort")).toHaveLength(initialListenerCount + 1);
-    expect(contexts.get(connectionScope)).toEqual({ token: "replacement" });
+    expect(read()).toEqual({ token: "replacement" });
   });
 
-  it("does not register contexts when the abort signal is already aborted", () => {
-    const contexts = createRuntimeChannel().runtimeContexts;
-    const onEvent = vi.fn();
-    const controller = new AbortController();
-    controller.abort();
-    contexts.watch({ ...scope, onEvent });
-
-    const lease = contexts.register({
-      ...scope,
-      context: { client: "stale" },
-      abortSignal: controller.signal,
-    });
-
-    expect(contexts.get(scope)).toBeUndefined();
-    expect(onEvent).not.toHaveBeenCalled();
-    lease.dispose();
-  });
+  it.each(["before registration", "during notification"] as const)(
+    "disposes on abort %s",
+    (timing) => {
+      const { controller, register, watch, read } = fixture();
+      const onEvent = vi.fn((event) => {
+        if (timing === "during notification" && event.type === "registered") {
+          controller.abort();
+        }
+      });
+      watch(onEvent);
+      if (timing === "before registration") {
+        controller.abort();
+      }
+      const lease = register({ client: "stale" });
+      expect(read()).toBeUndefined();
+      expectWatcherEvents(
+        onEvent,
+        ...(timing === "before registration" ? [] : ["registered", "unregistered"]),
+      );
+      lease.dispose();
+    },
+  );
 
   it("isolates watcher exceptions so registration and disposal still complete", () => {
-    const contexts = createRuntimeChannel().runtimeContexts;
+    const { register, watch, read } = fixture();
     const badWatcher = vi.fn((event) => {
       throw new Error(`boom:${event.type}`);
     });
     const goodWatcher = vi.fn();
 
-    contexts.watch({ ...scope, onEvent: badWatcher });
-    const unsubscribe = contexts.watch({ ...scope, onEvent: goodWatcher });
+    watch(badWatcher);
+    const unsubscribe = watch(goodWatcher);
 
-    const lease = contexts.register({ ...scope, context: { client: "ok" } });
+    const lease = register({ client: "ok" });
 
-    expect(contexts.get(scope)).toEqual({ client: "ok" });
-    expectWatcherEvents(badWatcher, "registered");
-    expectWatcherEvents(goodWatcher, "registered");
-
+    expect(read()).toEqual({ client: "ok" });
     lease.dispose();
 
-    expect(contexts.get(scope)).toBeUndefined();
+    expect(read()).toBeUndefined();
     expectWatcherEvents(badWatcher, "registered", "unregistered");
     expectWatcherEvents(goodWatcher, "registered", "unregistered");
     unsubscribe();
-  });
-
-  it("auto-disposes when a watcher aborts during the registered event", () => {
-    const contexts = createRuntimeChannel().runtimeContexts;
-    const controller = new AbortController();
-    const onEvent = vi.fn((event) => {
-      if (event.type === "registered") {
-        controller.abort();
-      }
-    });
-
-    contexts.watch({ ...scope, onEvent });
-
-    const lease = contexts.register({
-      ...scope,
-      context: { client: "ok" },
-      abortSignal: controller.signal,
-    });
-
-    expect(contexts.get(scope)).toBeUndefined();
-    expectWatcherEvents(onEvent, "registered", "unregistered");
-
-    lease.dispose();
   });
 });

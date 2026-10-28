@@ -11,25 +11,22 @@ import { buildOpenAIProvider } from "./openai-provider.js";
 import { resolveModelRoutes } from "./provider-policy-api.js";
 
 function resolveUnconfiguredModel(modelId: string) {
+  return resolveModelRoutes({ provider: "openai", modelId, env: {} });
+}
+const platformRoute = { api: "openai-completions", authRequirement: "api-key" };
+const subscriptionRoute = { api: "openai-chatgpt-responses", authRequirement: "subscription" };
+const dualApis = ["openai-responses", "openai-chatgpt-responses"];
+const completions = { api: "openai-completions" } as const;
+function resolveBilling(overrides: Partial<Parameters<typeof resolveModelRoutes>[0]>) {
   return resolveModelRoutes({
     provider: "openai",
-    modelId,
-    env: {},
+    modelId: "gpt-5.4-mini",
+    configuredProvider: completions,
+    ...overrides,
   });
 }
 
 describe("OpenAI model route contract", () => {
-  it.each(["gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"])(
-    "resolves both auth routes for %s",
-    (modelId) => {
-      const result = resolveUnconfiguredModel(modelId);
-      expect(result.kind === "routes" ? result.routes.map((route) => route.api) : []).toEqual([
-        "openai-responses",
-        "openai-chatgpt-responses",
-      ]);
-    },
-  );
-
   it("preserves custom model spelling while matching built-in routes case-insensitively", () => {
     expect(normalizeOpenAIModelRouteId("  openai/Future-MODEL  ")).toBe("openai/Future-MODEL");
     expect(normalizeOpenAIModelRouteId("future-model")).toBe("future-model");
@@ -46,46 +43,32 @@ describe("OpenAI model route contract", () => {
     const routeModelIds = [
       ...new Set([...OPENAI_PROVIDER_MODERN_MODEL_IDS, ...OPENAI_CHATGPT_MODERN_MODEL_IDS]),
     ];
-    const dualRouteModelIds = routeModelIds.filter(isOpenAIDualRouteModelId);
-    const platformOnlyRouteModelIds = routeModelIds.filter(isOpenAIPlatformOnlyRouteModelId);
-    const subscriptionOnlyRouteModelIds = routeModelIds.filter(
-      isOpenAISubscriptionOnlyRouteModelId,
-    );
-
-    expect(
-      new Set([
-        ...dualRouteModelIds,
-        ...platformOnlyRouteModelIds,
-        ...subscriptionOnlyRouteModelIds,
-      ]).size,
-    ).toBe(
-      dualRouteModelIds.length +
-        platformOnlyRouteModelIds.length +
-        subscriptionOnlyRouteModelIds.length,
-    );
+    const dual = routeModelIds.filter(isOpenAIDualRouteModelId);
+    const platform = routeModelIds.filter(isOpenAIPlatformOnlyRouteModelId);
+    const subscription = routeModelIds.filter(isOpenAISubscriptionOnlyRouteModelId);
+    const eligible = [...dual, ...platform, ...subscription];
+    expect(new Set(eligible).size).toBe(eligible.length);
 
     for (const modelId of OPENAI_PROVIDER_MODERN_MODEL_IDS) {
       expect(provider.isModernModelRef?.({ provider: "openai", modelId })).toBe(true);
     }
-    for (const modelId of dualRouteModelIds) {
+    for (const modelId of dual) {
       const resolution = resolveUnconfiguredModel(modelId);
       expect(
         resolution.kind === "routes" ? resolution.routes.map((route) => route.api) : [],
-      ).toEqual(["openai-responses", "openai-chatgpt-responses"]);
+      ).toEqual(dualApis);
     }
-    for (const modelId of platformOnlyRouteModelIds) {
-      expect(resolveUnconfiguredModel(modelId)).toMatchObject({
-        kind: "routes",
-        defaultRuntimeId: "codex",
-        routes: [{ api: "openai-responses", authRequirement: "api-key" }],
-      });
-    }
-    for (const modelId of subscriptionOnlyRouteModelIds) {
-      expect(resolveUnconfiguredModel(modelId)).toMatchObject({
-        kind: "routes",
-        defaultRuntimeId: "codex",
-        routes: [{ api: "openai-chatgpt-responses", authRequirement: "subscription" }],
-      });
+    for (const [models, route] of [
+      [platform, { api: "openai-responses", authRequirement: "api-key" }],
+      [subscription, subscriptionRoute],
+    ] as const) {
+      for (const modelId of models) {
+        expect(resolveUnconfiguredModel(modelId)).toMatchObject({
+          kind: "routes",
+          defaultRuntimeId: "codex",
+          routes: [route],
+        });
+      }
     }
   });
 });
@@ -95,22 +78,14 @@ describe("OpenAI billing route intent", () => {
     "keeps subscription eligible with a legacy official Completions adapter (%j)",
     (routeIntent) => {
       expect(
-        resolveModelRoutes({
-          provider: "openai",
-          modelId: "gpt-5.4-mini",
-          configuredProvider: {
-            api: "openai-completions",
-            baseUrl: "https://api.openai.com/v1",
-          },
+        resolveBilling({
+          configuredProvider: { ...completions, baseUrl: "https://api.openai.com/v1" },
           routeIntent,
         }),
       ).toMatchObject({
         kind: "routes",
         preferredAuthRequirement: "subscription",
-        routes: [
-          { api: "openai-completions", authRequirement: "api-key" },
-          { api: "openai-chatgpt-responses", authRequirement: "subscription" },
-        ],
+        routes: [platformRoute, subscriptionRoute],
       });
     },
   );
@@ -119,35 +94,17 @@ describe("OpenAI billing route intent", () => {
     { authRequirement: "api-key", source: "explicit" },
     { authRequirement: "api-key", source: "inherited" },
   ] as const)("honors the prepared API route intent %j", (routeIntent) => {
-    expect(
-      resolveModelRoutes({
-        provider: "openai",
-        modelId: "gpt-5.4-mini",
-        configuredProvider: { api: "openai-completions" },
-        routeIntent,
-      }),
-    ).toMatchObject({
+    expect(resolveBilling({ routeIntent })).toMatchObject({
       kind: "routes",
       routes:
-        routeIntent.source === "explicit"
-          ? [{ api: "openai-completions", authRequirement: "api-key" }]
-          : [
-              { api: "openai-completions", authRequirement: "api-key" },
-              { api: "openai-chatgpt-responses", authRequirement: "subscription" },
-            ],
+        routeIntent.source === "explicit" ? [platformRoute] : [platformRoute, subscriptionRoute],
       ...(routeIntent.source === "inherited" ? { preferredAuthRequirement: "api-key" } : {}),
     });
   });
 
   it("keeps subscription eligible for an OpenClaw runtime pin with no API credential", () => {
-    expect(
-      resolveModelRoutes({
-        provider: "openai",
-        modelId: "gpt-5.4-mini",
-        configuredProvider: { api: "openai-completions" },
-        routeIntent: { runtimeId: "openclaw", source: "explicit" },
-      }),
-    ).toMatchObject({
+    const routeIntent = { runtimeId: "openclaw", source: "explicit" } as const;
+    expect(resolveBilling({ routeIntent })).toMatchObject({
       kind: "routes",
       preferredAuthRequirement: "api-key",
       routes: [{ authRequirement: "api-key" }, { authRequirement: "subscription" }],
@@ -155,11 +112,9 @@ describe("OpenAI billing route intent", () => {
   });
   it("retains the provider adapter for API-key callers when the model overrides its official URL", () => {
     expect(
-      resolveModelRoutes({
-        provider: "openai",
+      resolveBilling({
         modelId: "gpt-5.5",
         configuredModel: { baseUrl: "https://api.openai.com/v1" },
-        configuredProvider: { api: "openai-completions" },
       }),
     ).toEqual({
       kind: "routes",
@@ -167,16 +122,14 @@ describe("OpenAI billing route intent", () => {
       preferredAuthRequirement: "subscription",
       routes: [
         {
-          api: "openai-completions",
+          ...platformRoute,
           baseUrl: "https://api.openai.com/v1",
-          authRequirement: "api-key",
           requestTransportOverrides: "none",
           runtimePolicy: { compatibleIds: ["openclaw"] },
         },
         {
-          api: "openai-chatgpt-responses",
+          ...subscriptionRoute,
           baseUrl: "https://chatgpt.com/backend-api/codex",
-          authRequirement: "subscription",
           requestTransportOverrides: "none",
           runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
         },

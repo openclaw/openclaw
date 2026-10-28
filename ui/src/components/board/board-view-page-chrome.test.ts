@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import "./board-view.ts";
+import "./board-view.tsx";
 import { boardWidget, callbacks, mount, settleCells, snapshot } from "./board-view.test-support.ts";
 
 afterEach(() => {

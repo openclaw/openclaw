@@ -1,16 +1,25 @@
 import { createServer } from "node:http";
+import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   closeHttpServer,
   listenLoopback,
+  readRequestText,
 } from "../../test/helpers/gateway-integration-fixtures.js";
+import { providerResponse } from "../agents/embedded-agent-runner.wire.test-support.js";
 import { requireApiKey } from "../agents/model-auth.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { acquireAgentRunPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import {
   acquireSimpleCompletionModelWithSelection,
   completeWithPreparedSimpleCompletionModel,
 } from "../agents/simple-completion-runtime.js";
+import {
+  completionChunk,
+  completionModel,
+  completionModelDefinition,
+} from "../agents/simple-completion.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { summarizeText } from "../plugin-sdk/speech-core.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
@@ -58,16 +67,7 @@ async function withSummaryFixture(
         const { model } = JSON.parse(body) as { model: string };
         requests.push(model);
         response.writeHead(200, { "content-type": "text/event-stream" });
-        response.end(
-          `data: ${JSON.stringify({
-            id: "tts-selection-response",
-            object: "chat.completion.chunk",
-            model,
-            choices: [
-              { index: 0, delta: { content: `materialized:${model}` }, finish_reason: "stop" },
-            ],
-          })}\n\ndata: [DONE]\n\n`,
-        );
+        response.end(completionChunk(`materialized:${model}`, model));
       });
     });
     const baseUrl = `${await listenLoopback(server)}/v1`;
@@ -86,18 +86,16 @@ async function withSummaryFixture(
         "agent-model",
         "runtime-drift",
         `${modelProvider}/entry`,
-      ].map((id) => ({
-        id,
-        name: id,
-        provider: modelProvider,
-        api: "openai-completions" as const,
-        baseUrl,
-        reasoning: false,
-        input: ["text" as const],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 16_000,
-        maxTokens: 4_096,
-      }));
+      ].map((id) =>
+        completionModel({
+          id,
+          provider: modelProvider,
+          api: "openai-completions",
+          baseUrl,
+          contextWindow: 16_000,
+          maxTokens: 4_096,
+        }),
+      );
       await state.writeJson("provider/openclaw.plugin.json", {
         id: pluginId,
         providers: [modelProvider],
@@ -160,7 +158,17 @@ module.exports = {
               baseUrl,
               apiKey: "synthetic-fixture",
               models: options.literalRow
-                ? models.filter(({ id }) => id === options.literalRow)
+                ? models
+                    .filter(({ id }) => id === options.literalRow)
+                    .map(({ id, name }) =>
+                      completionModelDefinition({
+                        id,
+                        name,
+                        api: "openai-completions",
+                        contextWindow: 16_000,
+                        maxTokens: 4_096,
+                      }),
+                    )
                 : [],
             },
           },
@@ -306,3 +314,121 @@ it("retains the shipped injected callback shape and caller-owned returned model"
     },
   );
 });
+it.each([
+  { name: "canonical default", model: "kimi-for-coding" },
+  { name: "canonical K3 default", model: "k3" },
+  { name: "explicit summary override", model: "k3", override: true },
+  {
+    name: "disabled plugin",
+    model: "k3",
+    plugins: { entries: { kimi: { enabled: false } } },
+    rejected: true,
+  },
+  { name: "disabled plugins", model: "k3", plugins: { enabled: false }, rejected: true },
+  { name: "denied plugin", model: "k3", plugins: { deny: ["kimi"] }, rejected: true },
+  { name: "omitted allowlist owner", model: "k3", plugins: { allow: ["google"] }, rejected: true },
+  { name: "unknown model", model: "not-a-real-kimi-model", rejected: true },
+] satisfies Array<{
+  name: string;
+  model: string;
+  override?: boolean;
+  plugins?: OpenClawConfig["plugins"];
+  rejected?: boolean;
+}>)(
+  "respects the cold summary catalog for $name",
+  async ({ model: expectedModel, override, plugins, rejected }) => {
+    await withOpenClawTestState(
+      {
+        label: "tts-cold-static-catalog",
+        env: {
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
+          KIMI_API_KEY: undefined,
+          KIMICODE_API_KEY: undefined,
+        },
+      },
+      async (state) => {
+        const requests: string[] = [];
+        const server = createServer((request, response) => {
+          void readRequestText(request)
+            .then(async (body) => {
+              const { model } = JSON.parse(body) as { model: string };
+              requests.push(model);
+              response.writeHead(200, { "content-type": "text/event-stream" });
+              const reply = providerResponse({
+                api: "anthropic-messages",
+                model,
+                id: "kimi-summary",
+                messageId: "kimi-summary",
+                text: `Summary from ${model}.`,
+                calls: [],
+              }).response;
+              response.end(await reply.text());
+            })
+            .catch((error: unknown) => {
+              response.destroy(error instanceof Error ? error : new Error(String(error)));
+            });
+        });
+        const baseUrl = await listenLoopback(server);
+        try {
+          const nativeFetch = globalThis.fetch;
+          vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+            const request = new Request(input, init);
+            expect(request.url).toBe("https://api.kimi.com/coding/v1/messages");
+            return nativeFetch(`${baseUrl}/v1/messages`, {
+              method: request.method,
+              headers: request.headers,
+              body: await request.arrayBuffer(),
+              signal: request.signal,
+            });
+          });
+          const cfg: OpenClawConfig = {
+            agents: {
+              defaults: {
+                workspace: state.workspaceDir,
+                model: `kimi/${override ? "kimi-for-coding" : expectedModel}`,
+              },
+              entries: { main: {} },
+            },
+            plugins: {
+              allow: ["kimi"],
+              entries: { kimi: { enabled: true } },
+              slots: { memory: "none" },
+              ...plugins,
+            },
+            ...(override ? { tts: { summaryModel: `kimi/${expectedModel}` } } : {}),
+          };
+          await state.writeConfig(cfg);
+          await state.writeAuthProfiles({
+            version: 1,
+            profiles: {
+              "kimi:summary-test": { type: "api_key", provider: "kimi", key: "synthetic-kimi-key" },
+            },
+          });
+
+          // No configured base URL: a generic fallback cannot hide a missing catalog alias.
+          const pending = summarizeText({
+            cfg,
+            config: resolveTtsConfig(cfg),
+            text: "Synthetic text for an ordinary TTS summary.",
+            targetLength: 100,
+            timeoutMs: 10_000,
+          });
+          if (rejected) {
+            await expect(pending).rejects.toThrow(`Unknown model: kimi/${expectedModel}`);
+            expect(requests).toEqual([]);
+            return;
+          }
+          expect((await pending).summary).toBe(`Summary from ${expectedModel}.`);
+          expect(requests).toEqual([expectedModel]);
+          expect(resolveDefaultModelForAgent({ cfg, allowPluginNormalization: false })).toEqual({
+            provider: "kimi",
+            model: override ? "kimi-for-coding" : expectedModel,
+          });
+        } finally {
+          await closeHttpServer(server);
+        }
+      },
+    );
+  },
+);

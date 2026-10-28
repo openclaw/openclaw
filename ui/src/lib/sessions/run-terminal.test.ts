@@ -3,7 +3,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { reconcileSessionRunTerminal } from "./index.ts";
+import { reconcileSessionRunTerminal, type SessionRunTerminal } from "./index.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -22,6 +22,12 @@ const running: GatewaySessionRow = {
   activeRunIds: ["run-a"],
   status: "running",
 };
+const timing = { startedAt: 100, endedAt: 200, runtimeMs: 100 };
+const terminal = (
+  runId: string | undefined,
+  status: SessionRunStatus,
+  endedAt = 200,
+): SessionRunTerminal => ({ sessionKeys: [running.key], runId, status, endedAt });
 
 describe("reconcileSessionRunTerminal yielded parent", () => {
   it("settles the owned model run while keeping parent work pending", () => {
@@ -180,9 +186,9 @@ describe("terminal metadata ownership", () => {
       };
       const h = await terminalOwner(initial, owner);
       const primary = h.sessions.state.result;
-      const terminal = { sessionKeys: [initial.key], runId: "new-run", status, endedAt: 400 };
+      const settlement = { sessionKeys: [initial.key], runId: "new-run", status, endedAt: 400 };
 
-      expect(h.sessions.reconcileRunTerminal(terminal)).toBe(true);
+      expect(h.sessions.reconcileRunTerminal(settlement)).toBe(true);
       expect(h.row()).toMatchObject({
         status,
         hasActiveRun: false,
@@ -192,12 +198,14 @@ describe("terminal metadata ownership", () => {
         abortedLastRun: status === "killed",
         updatedAt: 200,
       });
-      expect(h.row()?.startedAt).toBeUndefined();
-      expect(h.row()?.runtimeMs).toBeUndefined();
-      expect(h.row()?.lastRunError).toBeUndefined();
+      expect(h.row()).toMatchObject({
+        startedAt: undefined,
+        runtimeMs: undefined,
+        lastRunError: undefined,
+      });
       const settled = h.result();
       h.updates.mockClear();
-      expect(h.sessions.reconcileRunTerminal({ ...terminal, endedAt: 900 })).toBe(false);
+      expect(h.sessions.reconcileRunTerminal({ ...settlement, endedAt: 900 })).toBe(false);
       expect(h.result()).toBe(settled);
       expect(h.updates).not.toHaveBeenCalled();
 
@@ -271,17 +279,8 @@ describe("terminal metadata ownership", () => {
     const h = await terminalOwner(initial, "primary");
     const previous = h.result();
     h.updates.mockClear();
-    const changed = h.sessions.reconcileRunTerminal({
-      sessionKeys: [initial.key],
-      runId: "new-run",
-      status,
-      endedAt: 900,
-    });
-    expect(h.row()).toMatchObject({
-      startedAt: 100,
-      endedAt: 200,
-      runtimeMs: 100,
-    });
+    const changed = h.sessions.reconcileRunTerminal(terminal("new-run", status, 900));
+    expect(h.row()).toMatchObject(timing);
     expect(h.row()?.lastRunId).toBe(initial.lastRunId);
     if (same) {
       expect(h.row()?.abortedLastRun).toBe(initial.abortedLastRun);
@@ -317,25 +316,16 @@ describe("terminal metadata ownership", () => {
       };
       const h = await terminalOwner(initial, "primary");
 
-      expect(
-        h.sessions.reconcileRunTerminal({
-          sessionKeys: [initial.key],
-          runId: "current-run",
-          status,
-          endedAt: 900,
-        }),
-      ).toBe(true);
+      expect(h.sessions.reconcileRunTerminal(terminal("current-run", status, 900))).toBe(true);
 
       expect(h.row()).toMatchObject({
         status,
         hasActiveRun: false,
         activeRunIds: [],
-        startedAt: 100,
-        endedAt: 200,
-        runtimeMs: 100,
+        ...timing,
+        lastRunError: undefined,
       });
       expect(h.row()?.lastRunId).toBe(lastRunId);
-      expect(h.row()?.lastRunError).toBeUndefined();
     },
   );
 });
@@ -375,12 +365,9 @@ describe("terminal observations", () => {
       const previous = result();
       listener.mockClear();
       expect(
-        sessions.reconcileRunTerminal({
-          sessionKeys: [initial.key],
-          runId: mode === "foreign run" ? "run-other" : "run-a",
-          status: "done",
-          endedAt: 200,
-        }),
+        sessions.reconcileRunTerminal(
+          terminal(mode === "foreign run" ? "run-other" : "run-a", "done"),
+        ),
       ).toBe(mode === "done" || mode === "overlap" || mode === "later read");
       if (mode === "confirmation" || mode === "foreign run") {
         expect(result()).toBe(previous);
@@ -438,14 +425,7 @@ describe("terminal observations", () => {
         await sessions.refresh({ agentId: "main", force: true });
         await sessions.refreshList(olderQuery);
         await sessions.refreshList(query);
-        expect(
-          sessions.reconcileRunTerminal({
-            sessionKeys: [initial.key],
-            runId: "run-a",
-            status: "done",
-            endedAt: 200,
-          }),
-        ).toBe(overlap);
+        expect(sessions.reconcileRunTerminal(terminal("run-a", "done"))).toBe(overlap);
         const expectedOlder = {
           status: "running",
           hasActiveRun: true,

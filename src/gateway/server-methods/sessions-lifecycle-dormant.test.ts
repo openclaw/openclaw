@@ -19,84 +19,73 @@ const childKey = "agent:main:subagent:paused-lifecycle-child";
 const childId = "paused-lifecycle-child-session";
 const childRunId = "paused-lifecycle-child-run";
 const target = { agentId: "main", sessionKey: childKey };
+const parentTarget = { agentId: "main", sessionKey: parentKey };
+const runTarget = { runId: childRunId, sessionKey: childKey, sessionId: childId };
 
-async function seedPausedChild() {
-  await captureRuntimeConfigAsyncReader()();
-  // Only requester delivery is unavailable; lifecycle, registry, and storage stay real.
-  fixture.wake.mockResolvedValue(false);
-  await writeSubagentSessionEntry({
-    stateDir: fixture.stateDir,
-    agentId: "main",
-    sessionKey: parentKey,
-    defaultSessionId: "paused-child-requester-session",
-  });
-  const startedAt = await seedYieldedSession(fixture.stateDir, childKey, childId, childRunId);
-  await registry.registerSubagentRun({
-    runId: childRunId,
-    childSessionKey: childKey,
-    childAgentId: "main",
-    sessionEntry: expectDefined(loadSessionEntry(target), "paused child session"),
-    requesterSessionKey: parentKey,
-    requesterAgentId: "main",
-    requesterDisplayKey: parentKey,
-    task: "Await an incoming continuation",
-    cleanup: "keep",
-    expectsCompletionMessage: true,
-  });
-  expect(
-    await registry.claimSubagentYield({
+it.each([false, true])(
+  "deleting a paused child preserves storage iff retirement fails (%s)",
+  async (fails) => {
+    await captureRuntimeConfigAsyncReader()();
+    // Only requester delivery is unavailable; lifecycle, registry, and storage stay real.
+    fixture.wake.mockResolvedValue(false);
+    await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      ...parentTarget,
+      defaultSessionId: "paused-child-requester-session",
+    });
+    const startedAt = await seedYieldedSession(fixture.stateDir, childKey, childId, childRunId);
+    await registry.registerSubagentRun({
       runId: childRunId,
-      sessionKey: childKey,
-      agentId: "main",
+      childSessionKey: childKey,
+      childAgentId: "main",
+      sessionEntry: expectDefined(loadSessionEntry(target), "paused child session"),
+      requesterSessionKey: parentKey,
+      requesterAgentId: "main",
+      requesterDisplayKey: parentKey,
+      task: "Await an incoming continuation",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+    const claimed = await registry.claimSubagentYield({
+      ...target,
+      runId: childRunId,
       waitForMessage: true,
       hasPendingWork: () => false,
-    }),
-  ).toEqual({ messageWaitRegistered: true });
-  emitAgentEvent({
-    runId: childRunId,
-    sessionKey: childKey,
-    sessionId: childId,
-    stream: "lifecycle",
-    data: { phase: "end", startedAt, endedAt: Date.now(), yielded: true },
-  });
-  await fixture.settle();
-  expect(subagentRuns.get(childRunId)).toMatchObject({
-    pauseReason: "sessions_yield",
-    requesterSettleWake: { pauseNotice: { acknowledgment: "Paused awaiting continuation." } },
-  });
-}
-
-function deleteChild() {
-  return deleteGatewaySession({
-    params: { key: childKey, agentId: "main" },
-    client: null,
-    context: createDirectChatContext({ getRuntimeConfig }),
-  });
-}
-
-it("deletes a paused child only after retiring its pending pause notice", async () => {
-  await seedPausedChild();
-  const parent = loadSessionEntry({ agentId: "main", sessionKey: parentKey });
-  expect(await deleteChild()).toMatchObject({ ok: true, result: { deleted: true } });
-  expect(loadSessionEntry(target)).toBeUndefined();
-  expect(subagentRuns.get(childRunId)?.pauseReason).toBeUndefined();
-  expect(subagentRuns.get(childRunId)?.requesterSettleWake?.pauseNotice).toBeUndefined();
-  expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toEqual(parent);
-});
-
-it("preserves the child's session when dormant obligation retirement fails", async () => {
-  await seedPausedChild();
-  const failure = "controlled dormant obligation retirement failure";
-  const retire = vi
-    .spyOn(registry, "retireSubagentObligations")
-    .mockRejectedValueOnce(new Error(failure));
-  try {
-    expect(await deleteChild()).toMatchObject({
-      ok: false,
-      error: { code: "UNAVAILABLE", message: expect.stringContaining(failure) },
     });
-    expect(loadSessionEntry(target)).toMatchObject({ sessionId: childId });
-  } finally {
-    retire.mockRestore();
-  }
-});
+    expect(claimed).toEqual({ messageWaitRegistered: true });
+    emitAgentEvent({
+      ...runTarget,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt, endedAt: Date.now(), yielded: true },
+    });
+    await fixture.settle();
+    expect(subagentRuns.get(childRunId)).toMatchObject({
+      pauseReason: "sessions_yield",
+      requesterSettleWake: { pauseNotice: { acknowledgment: "Paused awaiting continuation." } },
+    });
+    const parent = loadSessionEntry(parentTarget);
+    const failure = "controlled dormant obligation retirement failure";
+    if (fails) {
+      vi.spyOn(registry, "retireSubagentObligations").mockRejectedValueOnce(new Error(failure));
+    }
+    const result = await deleteGatewaySession({
+      params: { key: childKey, agentId: "main" },
+      client: null,
+      context: createDirectChatContext({ getRuntimeConfig }),
+    });
+    if (fails) {
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: "UNAVAILABLE", message: expect.stringContaining(failure) },
+      });
+      expect(loadSessionEntry(target)).toMatchObject({ sessionId: childId });
+      return;
+    }
+    expect(result).toMatchObject({ ok: true, result: { deleted: true } });
+    expect(loadSessionEntry(target)).toBeUndefined();
+    const run = subagentRuns.get(childRunId);
+    expect(run?.pauseReason).toBeUndefined();
+    expect(run?.requesterSettleWake?.pauseNotice).toBeUndefined();
+    expect(loadSessionEntry(parentTarget)).toEqual(parent);
+  },
+);

@@ -33,10 +33,7 @@ async function createFixture() {
     }
   };
   try {
-    const port = await fixture.reservePort();
-    const server = await fixture.start(port);
-    const kernel = fixture.kernels.get(port);
-    assert(kernel);
+    const { server, kernel } = await fixture.startServer();
     return {
       ...fixture,
       kernel,
@@ -183,10 +180,7 @@ it("refuses a new Gateway until the final shared-state reset finishes", async ()
   release.resolve();
   await closing;
   reset.enabled = false;
-  const port = await fixture.reservePort();
-  const successor = await fixture.start(port);
-  const kernel = fixture.kernels.get(port);
-  assert(kernel);
+  const { server: successor, kernel } = await fixture.startServer();
   const metadata = kernel.getPluginMetadataSnapshot();
   assert(metadata);
   await expect(fixture.loadCallback(metadata)()).resolves.toBe("captured");

@@ -347,7 +347,7 @@ export async function applyModelItem(
   item: MigrationItem,
 ): Promise<MigrationItem> {
   const details = readHermesModelDetails(item);
-  if (!details || item.status !== "planned") {
+  if (!details) {
     return item;
   }
   try {

@@ -8,10 +8,11 @@ import { assertDaemonRuntimePinDefinition } from "./runtime-pin-state.js";
 import {
   buildHiddenLauncherScript,
   buildStartupLauncherScript,
+  readScheduledTaskCommand,
   resolveStartupEntryPaths,
+  resolveTaskScriptPath,
 } from "./schtasks-layout.js";
 import { isScheduledTaskEnabled, readScheduledTaskRuntime } from "./schtasks-runtime.js";
-import { readScheduledTaskCommand, resolveTaskScriptPath } from "./schtasks.js";
 import { hasGatewayServiceLauncherOverride } from "./service-types.js";
 
 const resolveWindowsOemEncodingMock = vi.hoisted(() => vi.fn((): string | null => null));
@@ -88,10 +89,18 @@ describe("readScheduledTaskCommand", () => {
     mockRegisteredTask([taskAction(action.path, action.arguments, "C:\\OpenClaw")], taskName);
     const env = { USERPROFILE: "C:\\Users\\test", OPENCLAW_WINDOWS_TASK_NAME: taskName };
     const readFile = vi.spyOn(fs, "readFile");
-    await expect(effectiveCommand(env)).resolves.toEqual({
+    const onEffectiveExecutable = vi.fn();
+    await expect(
+      readScheduledTaskCommand(env, {
+        requireEffective: true,
+        requireLoaded: true,
+        onEffectiveExecutable,
+      }),
+    ).resolves.toEqual({
       programArguments: [action.path, "gateway", "run", "--label", "literal ^! label"],
       workingDirectory: "C:\\OpenClaw",
     });
+    expect(onEffectiveExecutable).toHaveBeenCalledExactlyOnceWith(action.path);
     await expect(readScheduledTaskRuntime(env, { requireLoaded: true })).resolves.toMatchObject({
       status: "unknown",
       state: "Running",
@@ -180,6 +189,7 @@ describe("readScheduledTaskCommand", () => {
         '@echo off\r\n"C:\\Node\\node.exe" "C:\\DefaultInstall\\openclaw.mjs" gateway --port 18789\r\n',
       );
       const captured: string[] = [];
+      const onEffectiveExecutable = vi.fn();
       await expect(
         readScheduledTaskCommand(
           { USERPROFILE: "C:\\Users\\test", OPENCLAW_WINDOWS_TASK_NAME: taskName },
@@ -187,6 +197,7 @@ describe("readScheduledTaskCommand", () => {
             requireEffective: true,
             requireLoaded: true,
             onLauncherContent: (content) => captured.push(content),
+            onEffectiveExecutable,
           },
         ),
       ).resolves.toMatchObject({
@@ -200,6 +211,7 @@ describe("readScheduledTaskCommand", () => {
         },
       });
       expect(readFile).toHaveBeenCalledWith(scriptPath);
+      expect(onEffectiveExecutable).toHaveBeenCalledExactlyOnceWith(backupArguments[0]);
       expect(captured).toHaveLength(kind === "cmd" || kind === "cmd executable" ? 1 : 2);
       expect(captured.at(-1)).toContain("OtherInstall");
     },

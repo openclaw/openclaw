@@ -31,12 +31,7 @@ export function createChannelDeadlineFixture(step: string, synchronous: boolean)
     vi.advanceTimersByTime(1000);
     return {};
   };
-  const overrun = async () => {
-    if (!synchronous) {
-      await new Promise<never>(() => {});
-    }
-    return expire();
-  };
+  const overrun = async () => (synchronous ? expire() : new Promise<never>(() => {}));
   const plugin: ChannelPlugin = createChannelTestPluginBase({ id: "hanging" });
   const describeAccount = vi.fn(() => ({ accountId: "default" }));
   plugin.config.resolveAccount = step === "resolve" && synchronous ? expire : () => ({});

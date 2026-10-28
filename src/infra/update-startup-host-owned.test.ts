@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { MACOS_APP_INSTALL_OWNER_MARKER } from "../commands/test-runtime-config-helpers.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
@@ -52,12 +53,7 @@ it.each(["stable", "beta", "dev", "extended-stable"] as const)(
     const root = tempDirs.make("openclaw-app-startup-update-");
     await fs.writeFile(
       path.join(root, "openclaw-install-owner.json"),
-      JSON.stringify({
-        schemaVersion: 1,
-        owner: "macos-app",
-        displayName: "OpenClaw.app",
-        updateHint: "Update OpenClaw.app to update this Gateway.",
-      }),
+      MACOS_APP_INSTALL_OWNER_MARKER,
     );
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
     const runAutoUpdate = vi

@@ -249,33 +249,39 @@ describe("plugin-sdk facade loader", () => {
     expect(listImportedFacadeRuntimeIds()).toEqual([fixture.pluginId]);
   });
 
-  it("reloads replaced facade artifacts and dependencies without erasing imported-plugin history", () => {
-    const pluginRoot = fs.realpathSync(createTempDirSync("openclaw-facade-replacement-"));
-    const modulePath = path.join(pluginRoot, "api.js");
-    const dependencyPath = path.join(pluginRoot, "dependency.js");
-    fs.writeFileSync(path.join(pluginRoot, "package.json"), '{"type":"commonjs"}\n', "utf8");
+  it.each([
+    { kind: "external", origin: undefined, expected: "replacement" },
+    { kind: "bundled", origin: "bundled", expected: "retired" },
+  ] as const)(
+    "preserves $kind facade code policy after metadata refresh",
+    ({ origin, expected }) => {
+      const pluginRoot = fs.realpathSync(createTempDirSync("openclaw-facade-replacement-"));
+      const modulePath = path.join(pluginRoot, "api.js");
+      const dependencyPath = path.join(pluginRoot, "dependency.js");
+      fs.writeFileSync(path.join(pluginRoot, "package.json"), '{"type":"commonjs"}\n', "utf8");
 
-    const writeArtifact = (marker: string) => {
-      fs.writeFileSync(dependencyPath, `module.exports = ${JSON.stringify(marker)};\n`, "utf8");
-      fs.writeFileSync(modulePath, 'module.exports = { marker: require("./dependency.js") };\n');
-    };
-    const loadArtifact = () =>
-      loadFacadeModuleAtLocationSync<{ marker: string }>({
-        location: { modulePath, boundaryRoot: pluginRoot },
-        trackedPluginId: "replacement-plugin",
-      }).marker;
+      const writeArtifact = (marker: string) => {
+        fs.writeFileSync(dependencyPath, `module.exports = ${JSON.stringify(marker)};\n`, "utf8");
+        fs.writeFileSync(modulePath, 'module.exports = { marker: require("./dependency.js") };\n');
+      };
+      const loadArtifact = () =>
+        loadFacadeModuleAtLocationSync<{ marker: string }>({
+          location: { modulePath, boundaryRoot: pluginRoot, origin },
+          trackedPluginId: "replacement-plugin",
+        }).marker;
 
-    writeArtifact("retired");
-    expect(loadArtifact()).toBe("retired");
+      writeArtifact("retired");
+      expect(loadArtifact()).toBe("retired");
 
-    writeArtifact("replacement");
-    expect(loadArtifact()).toBe("retired");
+      writeArtifact("replacement");
+      expect(loadArtifact()).toBe("retired");
 
-    clearPluginMetadataLifecycleCaches();
+      clearPluginMetadataLifecycleCaches();
 
-    expect(listImportedBundledPluginFacadeIds()).toContain("replacement-plugin");
-    expect(loadArtifact()).toBe("replacement");
-  });
+      expect(listImportedBundledPluginFacadeIds()).toContain("replacement-plugin");
+      expect(loadArtifact()).toBe(expected);
+    },
+  );
 
   it("breaks circular facade re-entry during module evaluation", () => {
     const fixture = createCircularPluginFixture();

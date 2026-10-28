@@ -1,5 +1,4 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { PairingChannel, PairingRequestRecord } from "./pairing-store.types.js";
 
@@ -47,10 +46,6 @@ export function safeChannelKey(channel: PairingChannel): string {
 
 export function safeAccountKey(accountId: string): string {
   return normalizePairingKey(accountId, "account id");
-}
-
-export function dedupePreserveOrder(entries: string[]): string[] {
-  return normalizeUniqueStringEntries(entries);
 }
 
 export function resolveAllowFromAccountId(accountId?: string): string {

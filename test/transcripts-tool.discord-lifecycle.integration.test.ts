@@ -53,9 +53,9 @@ defineDiscordVoiceTests((h) => {
       const metadataSnapshot = createPluginMetadataSnapshotFixture({
         plugins: [{ id: "discord", contracts: { transcriptSourceProviders: ["discord-voice"] } }],
       });
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       const tool = createTranscriptsTool({
         config,
-        stateDir,
         agentId: "transcript-replacement",
         caller: { kind: "operator", source: "local" },
       });
@@ -248,6 +248,7 @@ defineDiscordVoiceTests((h) => {
           providerStop.mockRestore();
           await closeOpenClawStateDatabaseAsync();
           closeOpenClawStateDatabaseForTest();
+          vi.unstubAllEnvs();
           tempDirs.cleanup();
         }
       }

@@ -10,7 +10,7 @@ const TENCENT_TOKENHUB_HY4_PREVIEW_MODEL_REF = "tencent-tokenhub/hy4-preview";
 // upgrade existing users to Hy4 with different pricing and model access.
 const TENCENT_TOKENHUB_MIGRATION_TARGET_MODEL_REF = TENCENT_TOKENHUB_HY3_MODEL_REF;
 
-// Ordered so the repaired allowlist matches onboard.ts's alias order.
+// Ordered so the repaired allowlist matches the registered provider aliases.
 const TENCENT_TOKENHUB_MANAGED_MODEL_REFS = [
   TENCENT_TOKENHUB_HY4_PREVIEW_MODEL_REF,
   TENCENT_TOKENHUB_HY3_MODEL_REF,

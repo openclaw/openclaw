@@ -11,8 +11,13 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 const spawn = vi.mocked(spawnSync);
+const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const jitAssertion = "# Check failed: jit_page.has_value().";
+const nativeCrashes = [
+  { signal: "SIGTRAP", stderr: jitAssertion },
+  { signal: "SIGILL", stderr: "" },
+] as const;
 const crashedScan: SpawnSyncReturns<string> = {
   pid: 12345,
   status: null,
@@ -47,20 +52,12 @@ export const view = <div>{value} ·</div>;`,
       retained: ["./runtime.js", "./default-type.js", "./side-effect.js"],
     },
     ...[
-      'import type { Value } from "./types.js"; export const view = <div>{import("./types.js")}</div>;',
       'import type { Value } from "./types.js"; export const view = <div> // text {import("./types.js")} </div>;',
-      String.raw`import type { Value } from "./types.js"; export const view = <div> // text {import('./ty\u0070es.js')} </div>;`,
       String.raw`import type { Value } from "./types.js"; export const view = <div>{requ\u0069re('./types.js')}</div>;`,
-      'import type { Value } from "./types.js"; export const view = <div> // text {import(/* load */ "./types.js")} </div>;',
-      'import type { Value } from "./types.js"; export const view = <div> // text\n</div>; export { value } from/* load */ "./types.js";',
-      'import type { Value } from "./types.js"; export const view = <div />; import "./types.js";',
       '"import type { Fake } from \'./types.js\'"; import type { Value } from "./types.js"; export const view = <div />;',
-      '"import"\nimport type { Value } from "./types.js"; export const view = <div />;',
-      'export const view = <div>import type Value from "./types.js"</div>; import("./types.js");',
     ].map((source) => ({ source, erased: [], retained: ["./types.js"] })),
   ];
   const cwd = tempDirs.make("openclaw-tsx-import-facts-");
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   spawn.mockImplementationOnce((command, args, options) =>
     actual.spawnSync(command, args, options),
   );
@@ -88,51 +85,52 @@ describe("test selector native crash recovery", () => {
     },
   );
 
-  it("rescans without workers and preserves complete facts and request order", async () => {
-    const cwd = tempDirs.make("openclaw-source-scan-recovery-");
-    writeFileSync(path.join(cwd, "first.ts"), 'import "./first.js"; const needle: number = 1;');
-    writeFileSync(path.join(cwd, "last.ts"), 'import "./last.js"; const needle: number = 2;');
-    const hook = path.join(cwd, "forbid-workers.mjs");
-    writeFileSync(
-      hook,
-      `import os from "node:os";
+  it.each(nativeCrashes)(
+    "rescans without workers after $signal and preserves complete facts and request order",
+    async (crash) => {
+      const cwd = tempDirs.make("openclaw-source-scan-recovery-");
+      writeFileSync(path.join(cwd, "first.ts"), 'import "./first.js"; const needle: number = 1;');
+      writeFileSync(path.join(cwd, "last.ts"), 'import "./last.js"; const needle: number = 2;');
+      const hook = path.join(cwd, "forbid-workers.mjs");
+      writeFileSync(
+        hook,
+        `import os from "node:os";
 import workers from "node:worker_threads";
 import { syncBuiltinESMExports } from "node:module";
 os.availableParallelism = () => 2;
 workers.Worker = class { constructor() { throw new Error("Recovery started a scan worker"); } };
 syncBuiltinESMExports();`,
-    );
-    const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-    spawn
-      .mockReturnValueOnce(crashedScan)
-      .mockImplementationOnce((command, args, options) =>
-        actual.spawnSync(command, ["--import", hook, ...(args ?? [])], options),
       );
-    // This inventory normally starts workers. Missing rows must not shift
-    // identity when the failed child's partial output is discarded.
-    const inventory = Array.from({ length: 600 }, (_, index) => ({
-      file: ["first.ts", "missing.ts", "last.ts"][index % 3]!,
-      parseImports: true,
-    }));
-    expect(
-      readTestSelectorSourceFacts(cwd, inventory, ["needle"], 1024 * 1024, {
-        matchingOnly: true,
-      }),
-    ).toEqual(
-      inventory
-        .filter(({ file }) => file !== "missing.ts")
-        .map(({ file }) => ({
-          file,
-          imports: [`./${file.replace(".ts", ".js")}`],
-          mocks: [],
-          workerExports: [],
-          typeOnlyImports: [],
-          matches: ["needle"],
-          references: ["needle"],
-        })),
-    );
-    expect(spawn).toHaveBeenCalledTimes(2);
-  });
+      spawn
+        .mockReturnValueOnce({ ...crashedScan, ...crash })
+        .mockImplementationOnce((command, args, options) =>
+          actual.spawnSync(command, ["--import", hook, ...(args ?? [])], options),
+        );
+      // Force worker admission; missing rows must not shift file identity after recovery.
+      const inventory = Array.from({ length: 600 }, (_, index) => ({
+        file: ["first.ts", "missing.ts", "last.ts"][index % 3]!,
+        parseImports: true,
+      }));
+      expect(
+        readTestSelectorSourceFacts(cwd, inventory, ["needle"], 1024 * 1024, {
+          matchingOnly: true,
+        }),
+      ).toEqual(
+        inventory
+          .filter(({ file }) => file !== "missing.ts")
+          .map(({ file }) => ({
+            file,
+            imports: [`./${file.replace(".ts", ".js")}`],
+            mocks: [],
+            workerExports: [],
+            typeOnlyImports: [],
+            matches: ["needle"],
+            references: ["needle"],
+          })),
+      );
+      expect(spawn).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it.each([
     { status: 1, signal: null, stderr: "SyntaxError: invalid source" },

@@ -59,6 +59,23 @@ function commandCase(owner: string, command: string, extra: Record<string, unkno
   };
 }
 
+it("preserves empty operands while requiring a nonempty executable and bounded argv", () => {
+  const argv = ["node", "-e", "process.stdout.write(process.argv[1])", "", "all"];
+  expect(parse({ argv }).argv).toEqual(argv);
+  for (const invalid of [
+    [],
+    [""],
+    ["", "operand"],
+    ["node", null],
+    ["node", "bad\0operand"],
+    Array.from({ length: 129 }, () => "node"),
+    ["node", "x".repeat(128 * 1024 + 1)],
+    ["node", "x".repeat(128 * 1024), "x".repeat(128 * 1024)],
+  ]) {
+    expect(() => parse({ argv: invalid })).toThrow("INVALID_REQUEST");
+  }
+});
+
 it("preserves admitted host results but rejects malformed or inherited fields", () => {
   for (const workspaceDir of ["/workspace", "C:\\workspace"]) {
     const result = {

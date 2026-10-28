@@ -1895,6 +1895,18 @@ describe("mcp loopback server", () => {
       status: 415,
     },
     {
+      name: "mixed-case JSON content type",
+      authenticated: true,
+      headers: { "content-type": "Application/JSON" },
+      status: 200,
+    },
+    {
+      name: "mixed-case non-JSON content type",
+      authenticated: true,
+      headers: { "content-type": "Application/XML" },
+      status: 415,
+    },
+    {
       name: "non-loopback origin before authentication",
       authenticated: false,
       headers: { origin: "https://evil.example" },

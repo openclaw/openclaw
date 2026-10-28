@@ -1,5 +1,5 @@
 import type { JSX } from "../types/solid-elements.d.ts";
-import { staticSprite } from "./lobster-pet-sprite.tsx";
+import { LobsterClosedEyes, staticSprite } from "./lobster-pet-sprite.tsx";
 import type { LobsterEyeProps } from "./lobster-pet-sprite.tsx";
 
 const FLATPACK_PARTS = staticSprite(`
@@ -46,17 +46,10 @@ export function FLATPACK_LOBSTER(props: LobsterEyeProps): JSX.Element {
         <circle cx="40.2" cy="32.8" r="1.7" fill="var(--lob-glint, #00e5cc)" />
         <circle cx="58.2" cy="32.8" r="1.7" fill="var(--lob-glint, #00e5cc)" />
       </g>
-      <g
-        class="lob-eye-closed"
-        stroke="#0a1014"
-        stroke-width="2.5"
-        stroke-linecap="round"
-        fill="none"
-        style={props.closedEyeStyle}
-      >
+      <LobsterClosedEyes stroke-width="2.5" style={props.closedEyeStyle}>
         <path d="M34 35 Q39 31 44 35" />
         <path d="M52 35 Q57 31 62 35" />
-      </g>
+      </LobsterClosedEyes>
 
       {FLATPACK_PARTS()}
     </g>
@@ -146,17 +139,10 @@ export function ACTUAL_LOBSTER(props: LobsterEyeProps): JSX.Element {
         <circle cx="46" cy="21" r="1" fill="#f2c6a8" />
         <circle cx="76" cy="21" r="1" fill="#f2c6a8" />
       </g>
-      <g
-        class="lob-eye-closed"
-        style={props.closedEyeStyle}
-        fill="none"
-        stroke="#17100e"
-        stroke-width="2"
-        stroke-linecap="round"
-      >
+      <LobsterClosedEyes stroke="#17100e" stroke-width="2" style={props.closedEyeStyle}>
         <path d="M41.5 22 H48.5" />
         <path d="M71.5 22 H78.5" />
-      </g>
+      </LobsterClosedEyes>
     </g>
   );
 }
@@ -202,17 +188,10 @@ export function BALLOON_LOBSTER(props: LobsterEyeProps): JSX.Element {
         <circle cx="51.3" cy="28.7" r="1.8" fill="var(--lob-glint, #00e5cc)" />
         <circle cx="71.3" cy="28.7" r="1.8" fill="var(--lob-glint, #00e5cc)" />
       </g>
-      <g
-        class="lob-eye-closed"
-        style={props.closedEyeStyle}
-        fill="none"
-        stroke="#0a1014"
-        stroke-width="2.5"
-        stroke-linecap="round"
-      >
+      <LobsterClosedEyes stroke-width="2.5" style={props.closedEyeStyle}>
         <path d="M45 31 Q50 27 55 31" />
         <path d="M65 31 Q70 27 75 31" />
-      </g>
+      </LobsterClosedEyes>
 
       {BALLOON_STRING()}
     </g>
@@ -296,17 +275,10 @@ export function PORTAL_LOBSTER(props: LobsterEyeProps): JSX.Element {
         <circle cx="46" cy="38" r="1.5" fill="var(--lob-glint, #00e5cc)" />
         <circle cx="58" cy="36" r="1.5" fill="var(--lob-glint, #00e5cc)" />
       </g>
-      <g
-        class="lob-eye-closed"
-        style={props.closedEyeStyle}
-        fill="none"
-        stroke="#0a1014"
-        stroke-width="2.2"
-        stroke-linecap="round"
-      >
+      <LobsterClosedEyes stroke-width="2.2" style={props.closedEyeStyle}>
         <path d="M41 40 Q45 37 49 40" />
         <path d="M53 38 Q57 35 61 38" />
-      </g>
+      </LobsterClosedEyes>
 
       {PORTAL_REAR()}
     </g>

@@ -283,6 +283,11 @@ openclaw plugins install <plugin-name> --marketplace https://github.com/<owner>/
 openclaw plugins install <plugin-name> --marketplace ./my-marketplace
 ```
 
+Marketplace plugin names are case-sensitive after trimming surrounding whitespace.
+If multiple entries share the requested name, installation and updates stop with
+an ambiguity error. Remove or rename the duplicate entries in the marketplace;
+listing and operations on uniquely named plugins remain available.
+
 <Tabs>
   <Tab title="Marketplace sources">
     - a Claude known-marketplace name from `~/.claude/plugins/known_marketplaces.json`

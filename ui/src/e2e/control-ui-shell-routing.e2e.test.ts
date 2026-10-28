@@ -5,7 +5,11 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { expect, it } from "vitest";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
+import {
+  installMockGateway,
+  startControlUiE2eServer,
+  waitForConfirmModal,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const basePath = "/control";
@@ -111,7 +115,10 @@ suite.define(() => {
     await suite.withPage(
       {
         locale: "en-US",
-        recordVideo: { dir: suite.artifactDir, size: { height: 720, width: 1280 } },
+        recordVideo:
+          process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+            ? { dir: suite.artifactDir, size: { height: 720, width: 1280 } }
+            : undefined,
         serviceWorkers: "block",
         viewport: { height: 720, width: 1280 },
       },
@@ -126,6 +133,7 @@ suite.define(() => {
         expect(response?.status()).toBe(200);
 
         const confirmation = page.locator("openclaw-gateway-url-confirmation");
+        await waitForConfirmModal(page, confirmation.locator("openclaw-modal-dialog"));
         await confirmation.getByText(explicitGatewayUrl, { exact: true }).waitFor();
         expect(await confirmation.getByText(explicitGatewayUrl, { exact: true }).count()).toBe(1);
         await confirmation

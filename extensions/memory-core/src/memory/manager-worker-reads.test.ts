@@ -37,10 +37,13 @@ describe("memory manager retained worker reads", () => {
     const config = memoryConfig();
     const initial = await getFreshManager(config, "cli");
     await initial.sync({ reason: "baseline", force: true });
-    fixtures
-      .memoryIndexFixtureWriter(initial)
-      .prepare("UPDATE memory_index_sources SET hash = ''")
-      .run();
+    // Published source changes advance the revision used by retained corpus facts.
+    fixtures.memoryIndexFixtureWriter(initial).exec(`
+      BEGIN IMMEDIATE;
+      UPDATE memory_index_sources SET hash = '';
+      UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
+      COMMIT;
+    `);
     await initial.close();
     using observed = observeSql();
     const manager = await getFreshManager(config, "cli");

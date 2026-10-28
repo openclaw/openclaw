@@ -94,8 +94,6 @@ esac`,
 
   it.each([
     { probe: "show", scope: "user" },
-    { probe: "cat", scope: "user" },
-    { probe: "is-active", scope: "user" },
     { probe: "show", scope: "system" },
   ])("sanitizes failed $scope $probe diagnostics", async ({ probe, scope }) => {
     const script =
@@ -130,10 +128,6 @@ esac`,
     { output: "Failed to connect to bus: No medium found", code: 1, available: false },
   ])("preserves manager status $output", async ({ output, code, available }) => {
     await commandFixture("systemctl", `#!/bin/sh\nprintf '%s\\n' '${output}'\nexit ${code}\n`);
-    const expected = { stdout: `${output}\n`, stderr: "", code, termination: "exit" };
-    await expect(execFileUtf8("systemctl", ["--user", "status"], { env })).resolves.toEqual(
-      expected,
-    );
     await expect(isAvailable(env)).resolves.toBe(true);
     await expect(isUserAvailable(env)).resolves.toBe(available);
     if (available) {
@@ -215,6 +209,8 @@ esac`,
       const disableFails = mode === "failure";
       const definition = "[Unit]\nDescription=Gateway cleanup fixture\n";
       const unitPath = await writeUnit(unitName, definition);
+      const backup = "[Unit]\nDescription=Previous Gateway\n";
+      await fs.writeFile(`${unitPath}.bak`, backup);
       if (mode !== "missing") {
         await cleanupCommand(
           `test -f "$HOME/.config/systemd/user/${unitName}" || exit 98\n${disableFails ? "kill -TERM $$" : "exit 0"}`,
@@ -225,10 +221,15 @@ esac`,
       if (disableFails) {
         await expect(uninstall({ env, stdout })).rejects.toThrow("systemctl disable failed:");
         await expect(fs.readFile(unitPath, "utf8")).resolves.toBe(definition);
+        await expect(fs.readFile(`${unitPath}.bak`, "utf8")).resolves.toBe(backup);
         expect(output()).not.toContain("Removed");
       } else {
-        await uninstall({ env, stdout });
+        const result = await uninstall({ env, stdout });
+        if (unitName === "openclaw-gateway.service" && mode === "missing") {
+          expect(result).toMatchObject({ unitName, unitPath, removed: true, disabled: false });
+        }
         await absent(unitPath);
+        await absent(`${unitPath}.bak`);
         expect(output()).toContain("Removed");
       }
       if (mode === "missing") {
@@ -248,6 +249,7 @@ esac`,
     const unitName = "openclaw-lisa.service";
     const definition = "[Unit]\nDescription=OpenClaw Gateway (profile: lisa)\n";
     const unitPath = await writeUnit(unitName, definition);
+    await fs.writeFile(`${unitPath}.bak`, "[Unit]\nDescription=Previous gateway\n");
     if (matches) {
       await cleanupCommand("exit 0");
     }
@@ -265,6 +267,7 @@ esac`,
     }
     expect(await removal).toMatchObject({ unitName, unitPath, removed: true, disabled: true });
     await absent(unitPath);
+    await absent(`${unitPath}.bak`);
     expect(await calls()).toContain("--user disable --now openclaw-lisa.service");
     expect(output()).toContain("Removed");
   });

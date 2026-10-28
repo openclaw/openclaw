@@ -67,7 +67,11 @@ export async function prepareCliMcpToolProjection(
     defaultMediatedToolNames?: readonly string[];
     scope: Pick<
       McpScope,
-      "cfg" | "skillLibraryAuthoring" | "authProfileStore" | "authProfileStoreAgentDir"
+      | "cfg"
+      | "skillLibraryAuthoring"
+      | "bundledTools"
+      | "authProfileStore"
+      | "authProfileStoreAgentDir"
     >;
     resolvePolicyTools: ResolveMcpTools;
     resolveScopedTools: ResolveMcpTools;
@@ -94,7 +98,7 @@ export async function prepareCliMcpToolProjection(
   return { params: admittedParams, tools };
 }
 
-/** Resolve default coding ownership without changing exact, standalone, or node runs. */
+/** Resolve native-tool and configured-MCP ownership for this CLI run. */
 export function resolveCliMcpToolOwnership(
   run: RunCliAgentParams,
   options: {
@@ -104,7 +108,7 @@ export function resolveCliMcpToolOwnership(
     skipPreparation: boolean;
   },
 ) {
-  const hostOwnedTools =
+  const nodeExec =
     options.enabled &&
     resolveExecConfigState({
       cfg: run.config,
@@ -112,7 +116,10 @@ export function resolveCliMcpToolOwnership(
       execOverrides: run.execOverrides,
       agentId: run.agentId,
       sessionKey: run.sessionKey,
-    }).host !== "node" &&
+    }).host === "node";
+  const hostOwnedTools =
+    options.enabled &&
+    !nodeExec &&
     run.cliToolAvailability === undefined &&
     options.backend.nativeToolMode === "selectable" &&
     options.backend.toolAvailabilityEnforcement === "execution-args" &&
@@ -121,6 +128,7 @@ export function resolveCliMcpToolOwnership(
       : undefined;
   return {
     hostOwnedTools,
+    bridgeConfiguredMcp: nodeExec && options.backend.id === "claude-cli",
     nodeWorkshopEnabled:
       options.nodePlacement &&
       !options.skipPreparation &&

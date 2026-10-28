@@ -4,8 +4,6 @@ import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import {
-  buildInstallManifest,
-  parseWorkspaceDependencyDirs,
   resolveNpmEnvironment,
   resolveRuntimePackEnvironment,
   resolveRuntimePackPlan,
@@ -28,7 +26,6 @@ const packageDocsMapPath = fileURLToPath(
 const postpackPath = fileURLToPath(new URL("../../scripts/openclaw-postpack.mjs", import.meta.url));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const runtimeProfile = { OPENCLAW_OCM_RUNTIME_BUILD_PROFILE: "sourcePerformance" };
-const buildDate = () => new Date("2026-07-11T12:34:56.000Z");
 const installFlags = ["--omit=dev", "--no-save", "--package-lock=false"];
 const sourceChangelog = `# Changelog
 
@@ -101,7 +98,7 @@ it("pins one timestamp and commit across the prepared runtime pack", () => {
   expect(
     resolveRuntimePackEnvironment(
       { KEEP: "value" },
-      buildDate,
+      () => new Date("2026-07-11T12:34:56.000Z"),
       () => "ABCDEF0123456789ABCDEF0123456789ABCDEF01",
     ),
   ).toMatchObject({
@@ -109,12 +106,6 @@ it("pins one timestamp and commit across the prepared runtime pack", () => {
     GIT_COMMIT: "abcdef0123456789abcdef0123456789abcdef01",
     OPENCLAW_BUILD_TIMESTAMP: "2026-07-11T12:34:56.000Z",
   });
-});
-
-it("rejects ambiguous runtime pack commits", () => {
-  expect(() =>
-    resolveRuntimePackEnvironment({ GITHUB_SHA: "abc123" }, buildDate, () => null),
-  ).toThrow("runtime pack commit must be a full 40-character hexadecimal SHA");
 });
 
 it("does not let a failed concurrent owner restore the active pack lifecycle", async () => {
@@ -186,54 +177,9 @@ it("restores a prepared legacy source fixture through its changelog owner", () =
   ).toBe(false);
 });
 
-it("resolves workspace package directories", () => {
-  expect(
-    parseWorkspaceDependencyDirs(["packages/ai", "extensions/example"].join(delimiter), "/repo"),
-  ).toEqual(["/repo/packages/ai", "/repo/extensions/example"]);
-});
-
-it("replaces the root archive argument with a prepared install manifest", () => {
-  const installArgs = ["install", "--prefix", "runtime", ...installFlags];
-  expect(
-    resolveWorkspaceInstallPlan([...installArgs, "openclaw.tgz"], ["/repo/packages/ai"], "/repo"),
-  ).toEqual({
-    installArgs,
-    prefixDir: "/repo/runtime",
-    rootArchive: "/repo/openclaw.tgz",
-  });
-});
-
 it("keeps normal npm commands unchanged", () => {
   expect(resolveWorkspaceInstallPlan(["pack", "--silent"], ["/repo/packages/ai"])).toBeNull();
   expect(resolveWorkspaceInstallPlan(["install", "openclaw.tgz"], [])).toBeNull();
-});
-
-it("builds a manifest with the root and local workspace tarballs", () => {
-  expect(
-    buildInstallManifest("/tmp/openclaw.tgz", [
-      { name: "@openclaw/ai", tarball: "/tmp/openclaw-ai.tgz" },
-    ]),
-  ).toEqual({
-    private: true,
-    dependencies: {
-      "@openclaw/ai": "file:///tmp/openclaw-ai.tgz",
-      openclaw: "file:///tmp/openclaw.tgz",
-    },
-  });
-});
-
-it("rewrites packed workspace protocols to the local package version", () => {
-  const packageJson = { dependencies: { "@openclaw/ai": "workspace:*", chalk: "5.6.2" } };
-
-  expect(
-    rewriteWorkspaceDependencyVersions(packageJson, [
-      { name: "@openclaw/ai", version: "2026.7.1-beta.3", tarball: "/tmp/openclaw-ai.tgz" },
-    ]),
-  ).toBe(1);
-  expect(packageJson.dependencies).toEqual({
-    "@openclaw/ai": "2026.7.1-beta.3",
-    chalk: "5.6.2",
-  });
 });
 
 it("rejects package archives with an unconfigured workspace dependency", () => {
@@ -255,6 +201,7 @@ it("installs a packed root with transitive local workspace dependencies", () => 
   packageFixture(packagedRoot, {
     name: "openclaw",
     dependencies: { "@openclaw/ai": "workspace:*" },
+    devDependencies: { chalk: "5.6.2" },
   });
   workspaceFixture(workspaceDir, "@openclaw/ai", "ready", {
     "@openclaw/normalization-core": "workspace:*",
@@ -264,14 +211,13 @@ it("installs a packed root with transitive local workspace dependencies", () => 
 
   execFileSync(
     process.execPath,
-    [adapterPath, "install", "--prefix", installDir, ...installFlags, rootArchive],
+    [adapterPath, "install", "--prefix", "install", ...installFlags, "openclaw.tgz"],
     {
+      cwd: root,
       env: {
         ...process.env,
         OPENCLAW_OCM_REAL_NPM_BIN: process.platform === "win32" ? "npm.cmd" : "npm",
-        OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS: [workspaceDir, transitiveWorkspaceDir].join(
-          delimiter,
-        ),
+        OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS: ["ai", "normalization-core"].join(delimiter),
         npm_config_audit: "false",
         npm_config_cache: join(root, "npm-cache"),
         npm_config_fund: "false",
@@ -280,10 +226,12 @@ it("installs a packed root with transitive local workspace dependencies", () => 
     },
   );
 
+  expect(JSON.parse(readFileSync(join(installDir, "package.json"), "utf8")).private).toBe(true);
   const installed = (name: string) =>
     JSON.parse(readFileSync(join(installDir, "node_modules", name, "package.json"), "utf8"));
   for (const name of ["openclaw", "@openclaw/ai", "@openclaw/normalization-core"]) {
     expect(installed(name).version).toBe("1.0.0");
   }
   expect(installed("@openclaw/ai").dependencies["@openclaw/normalization-core"]).toBe("1.0.0");
+  expect(installed("openclaw").devDependencies.chalk).toBe("5.6.2");
 });

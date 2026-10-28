@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import {
   loadStoredCollapsedSessionSections,
@@ -19,6 +20,12 @@ import {
 // getSafeLocalStorage only accepts an own value property under Vitest, so the
 // jsdom getter-backed localStorage must be replaced with a plain mock.
 let originalLocalStorage: PropertyDescriptor | undefined;
+const gateway = "wss://one.example/ws";
+const ownerFilter = (ownerId: string | null, involvingMe = false) => ({ ownerId, involvingMe });
+const loadOwner = (user = "profile-ada", url = gateway) =>
+  loadStoredSidebarSessionOwnerFilter(url, user);
+const storeOwner = (ownerId: string | null, involvingMe = false, user = "profile-ada") =>
+  storeSidebarSessionOwnerFilter(gateway, user, ownerFilter(ownerId, involvingMe));
 
 beforeEach(() => {
   originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
@@ -29,76 +36,37 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (originalLocalStorage) {
-    Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
-  } else {
-    Reflect.deleteProperty(globalThis, "localStorage");
-  }
+  restorePropertyDescriptor(globalThis, "localStorage", originalLocalStorage);
 });
 
-describe("sidebar session status preference", () => {
+describe("sidebar session preferences", () => {
   it("defaults unknown stored values to active", () => {
     expect(loadStoredSidebarSessionStatusFilter()).toBe("active");
     localStorage.setItem("openclaw:sidebar:sessions:status-filter", "unexpected");
     expect(loadStoredSidebarSessionStatusFilter()).toBe("active");
   });
 
-  it("stores snoozed, archived, and all filters", () => {
-    storeSidebarSessionStatusFilter("snoozed");
-    expect(loadStoredSidebarSessionStatusFilter()).toBe("snoozed");
-    storeSidebarSessionStatusFilter("archived");
-    expect(loadStoredSidebarSessionStatusFilter()).toBe("archived");
-    storeSidebarSessionStatusFilter("all");
-    expect(loadStoredSidebarSessionStatusFilter()).toBe("all");
+  it.each(["snoozed", "archived", "all"] as const)("stores the %s filter", (filter) => {
+    storeSidebarSessionStatusFilter(filter);
+    expect(loadStoredSidebarSessionStatusFilter()).toBe(filter);
   });
-});
 
-describe("sidebar session owner preference", () => {
   it("isolates owner and involving-me filters by gateway and authenticated user", () => {
-    storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada", {
-      ownerId: "profile-bob",
-      involvingMe: false,
-    });
-    storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-grace", {
-      ownerId: null,
-      involvingMe: true,
-    });
-
-    expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada")).toEqual({
-      ownerId: "profile-bob",
-      involvingMe: false,
-    });
-    expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-grace")).toEqual({
-      ownerId: null,
-      involvingMe: true,
-    });
-    expect(loadStoredSidebarSessionOwnerFilter("wss://two.example/ws", "profile-ada")).toEqual({
-      ownerId: "profile-ada",
-      involvingMe: false,
-    });
+    storeOwner("profile-bob");
+    storeOwner(null, true, "profile-grace");
+    expect(loadOwner()).toEqual(ownerFilter("profile-bob"));
+    expect(loadOwner("profile-grace")).toEqual(ownerFilter(null, true));
+    expect(loadOwner("profile-ada", "wss://two.example/ws")).toEqual(ownerFilter("profile-ada"));
   });
 
   it("stores an explicit all-owner choice and rejects malformed stored values", () => {
-    storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada", {
-      ownerId: "profile-bob",
-      involvingMe: false,
-    });
+    storeOwner("profile-bob");
     const key = localStorage.key(0);
     expect(key).not.toBeNull();
     localStorage.setItem(key ?? "", "owner:");
-    expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada")).toEqual({
-      ownerId: null,
-      involvingMe: false,
-    });
-
-    storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada", {
-      ownerId: null,
-      involvingMe: false,
-    });
-    expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada")).toEqual({
-      ownerId: null,
-      involvingMe: false,
-    });
+    expect(loadOwner()).toEqual(ownerFilter(null));
+    storeOwner(null);
+    expect(loadOwner()).toEqual(ownerFilter(null));
     expect(localStorage.getItem(key ?? "")).toBe("all");
   });
 
@@ -110,40 +78,23 @@ describe("sidebar session owner preference", () => {
       throw new Error("storage disabled");
     };
 
-    expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada")).toEqual({
-      ownerId: "profile-ada",
-      involvingMe: false,
-    });
-    expect(() =>
-      storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada", {
-        ownerId: null,
-        involvingMe: true,
-      }),
-    ).not.toThrow();
-  });
-});
-
-describe("sidebar session sort preference", () => {
-  it("round-trips updated and people modes", () => {
-    expect(storeSidebarSessionSortMode("updated", undefined)).toBe("updated");
-    expect(loadStoredSidebarSessionSortMode()).toBe("updated");
-    expect(storeSidebarSessionSortMode("people", true)).toBe("people");
-    expect(loadStoredSidebarSessionSortMode()).toBe("people");
+    expect(loadOwner()).toEqual(ownerFilter("profile-ada"));
+    expect(() => storeOwner(null, true)).not.toThrow();
   });
 
-  it("stores created instead of a people sort the gateway denied", () => {
-    expect(storeSidebarSessionSortMode("people", false)).toBe("created");
-    expect(loadStoredSidebarSessionSortMode()).toBe("created");
+  it.each([
+    ["updated", undefined, "updated"],
+    ["people", true, "people"],
+    ["people", false, "created"],
+  ] as const)("persists %s with people capability %s as %s", (mode, capability, expected) => {
+    expect(storeSidebarSessionSortMode(mode, capability)).toBe(expected);
+    expect(loadStoredSidebarSessionSortMode()).toBe(expected);
   });
-});
 
-describe("collapsed sidebar sections preference", () => {
   it("defaults Coding to compact while Online remains expanded", () => {
     expect([...loadStoredCollapsedSessionSections()]).toEqual(["work"]);
   });
-});
 
-describe("sidebar session preview preference", () => {
   it("defaults to hiding previews and round-trips the stored choice", () => {
     expect(loadStoredSidebarSessionsShowPreview()).toBe(false);
 
@@ -153,9 +104,7 @@ describe("sidebar session preview preference", () => {
     storeSidebarSessionsShowPreview(true);
     expect(loadStoredSidebarSessionsShowPreview()).toBe(true);
   });
-});
 
-describe("hidden session catalog preference", () => {
   it("round-trips catalog ids and reverses one hide at a time", () => {
     setStoredSessionCatalogHidden("codex", true);
     setStoredSessionCatalogHidden("claude", true);

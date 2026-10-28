@@ -10,6 +10,7 @@ import type {
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
+import * as profiles from "../../state/user-profile-list.js";
 import { resolveBundledPluginPublicModulePath } from "../../test-utils/bundled-plugin-public-surface.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import {
@@ -23,7 +24,12 @@ type Client = NonNullable<Parameters<typeof handleGatewayRequest>[0]["client"]>;
 
 const providerConfig: OpenClawConfig = { agents: { entries: { main: {} } } };
 let config = providerConfig;
-const reference = { providerId: "records", id: "claim:42" };
+const reference = { providerId: "records", id: "claim:42", revision: "r3" };
+const searchPage = {
+  hits: [{ reference, excerpt: "A record, not a workspace file" }],
+  coverage: "partial" as const,
+  nextCursor: "page2",
+};
 
 let provider: ReturnType<typeof createMemoryProvider>;
 let open: ReturnType<typeof vi.fn<MemoryProviderRuntime["open"]>>;
@@ -50,10 +56,19 @@ async function call(
 }
 
 const searchParams = { version: 2, query: "x" };
+async function expectDenied(method: string, params: Record<string, unknown>, message: string) {
+  expectRpcError(await call(method, params), { message: expect.stringContaining(message) });
+}
+
+let sharedGateway = false;
 
 beforeEach(() => {
+  sharedGateway = false;
+  vi.spyOn(profiles, "hasMultipleResidentSessionSharingIdentities").mockImplementation(
+    () => sharedGateway,
+  );
   config = providerConfig;
-  provider = createMemoryProvider(reference);
+  provider = createMemoryProvider(reference, searchPage, true);
   open = vi.fn<MemoryProviderRuntime["open"]>(async () => ({ provider }));
   const registry = createEmptyPluginRegistry();
   registry.memoryCapabilities.push({
@@ -68,20 +83,51 @@ afterEach(resetPluginRuntimeStateForTest);
 describe("memory provider reads through Gateway dispatch", () => {
   it("serves v2 search, get, and status to a token-authenticated operator.read client", async () => {
     const client = cliClient();
-    const search = await call("memory.search", searchParams, client);
-    expectRpcResult(
-      search,
-      expect.objectContaining({ version: 2, providerId: "records", hits: [expect.anything()] }),
-    );
-    const get = await call("memory.get", { reference }, client);
-    expectRpcResult(get, expect.objectContaining({ status: "ok", text: "Record body" }));
+    const search = await call("memory.search", { ...searchParams, sources: ["memory"] }, client);
+    expect(provider.search).toHaveBeenCalledExactlyOnceWith({
+      query: "x",
+      maxResults: 20,
+      minScore: undefined,
+      cursor: undefined,
+      sources: ["memory"],
+    });
+    expectRpcResult(search, { version: 2, agentId: "main", providerId: "records", ...searchPage });
+    const get = await call("memory.get", { reference, from: 2, lines: 10 }, client);
+    expect(provider.get).toHaveBeenCalledWith({ reference, from: 2, lines: 10 });
+    expectRpcResult(get, expect.objectContaining({ status: "ok", reference, text: "Record body" }));
     const status = await call("memory.status", {}, client);
-    expectRpcResult(status, expect.objectContaining({ providerId: "records", status: "ready" }));
+    expectRpcResult(status, {
+      version: 2,
+      agentId: "main",
+      providerId: "records",
+      status: "ready",
+    });
+    expect(provider.close).toHaveBeenCalledTimes(3);
     expect(open.mock.calls[0]?.[0].context.authority).toEqual({
       kind: "operator",
       scopes: ["operator.read"],
       connId: "cli-connection",
     });
+  });
+
+  it("requires an administrator for content reads on a shared Gateway", async () => {
+    sharedGateway = true;
+    await expectDenied("memory.search", searchParams, "requires an administrator");
+    await expectDenied("memory.get", { reference }, "requires an administrator");
+    expect(open).not.toHaveBeenCalled();
+    expectRpcResult(await call("memory.status", {}), expect.objectContaining({ status: "ready" }));
+    const admin = await call("memory.search", searchParams, cliClient(["operator.admin"]));
+    expectRpcResult(admin, expect.objectContaining({ agentId: "main" }));
+  });
+
+  it("refuses a content read before provider I/O when the Gateway becomes shared during open", async () => {
+    open.mockImplementation(async (input) => {
+      sharedGateway = true;
+      input.context.assertCurrent();
+      return { provider };
+    });
+    await expectDenied("memory.search", searchParams, "requires an administrator");
+    expect(provider.search).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -129,18 +175,15 @@ describe("memory provider reads through Gateway dispatch", () => {
   );
 });
 
-it.each([{}, { version: 1 }])(
-  "directs %j to v2 when the memory owner registers only a provider runtime",
-  async (version) => {
-    const respond = await call("memory.search", { query: "x", ...version });
-    expectRpcError(respond, {
-      code: "INVALID_REQUEST",
-      message:
-        'memory plugin "records" uses the provider runtime; retry memory.search with version: 2',
-    });
-    expect(open).not.toHaveBeenCalled();
-  },
-);
+it("directs a legacy search to v2 when the memory owner registers only a provider runtime", async () => {
+  const respond = await call("memory.search", { query: "x", version: 1 });
+  expectRpcError(respond, {
+    code: "INVALID_REQUEST",
+    message:
+      'memory plugin "records" uses the provider runtime; retry memory.search with version: 2',
+  });
+  expect(open).not.toHaveBeenCalled();
+});
 
 describe("Memory Core legacy owner", () => {
   const sessionHit = (path: string): MemorySearchResult => ({

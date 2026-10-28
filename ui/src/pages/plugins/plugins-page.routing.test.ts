@@ -534,7 +534,7 @@ it.each(["disabled", "needs-setup"] as const)(
         )?.href,
       ).toContain("view=settings");
     } else {
-      expect(page.querySelector('[aria-label="Connect account"]')).not.toBeNull();
+      expect(page.querySelector('[aria-label="Sign in to account"]')).not.toBeNull();
       expect(page.textContent).toContain("Credentials");
     }
     expect(page.querySelector(".plugin-catalog-detail__sidebar")?.textContent).toContain("1.2.3");
@@ -709,5 +709,32 @@ it("reloads the missing schema after a failed schema read", async () => {
 
   expectAdvancedFields(harness.page);
   expect(attempts).toBe(2);
+  expect(harness.request.mock.calls.some(([method]) => method === "config.set")).toBe(false);
+});
+
+it("keeps settings navigation available during a held schema retry", async () => {
+  const first = deferred<(typeof configMocks)["config.schema"]>();
+  const retry = deferred<(typeof configMocks)["config.schema"]>();
+  let attempts = 0;
+  const harness = await mountAdvanced({
+    connected: true,
+    schema: () => (++attempts === 1 ? first.promise : retry.promise),
+  });
+  await harness.runtimeConfig.ensureLoaded();
+  first.reject(new Error("Schema temporarily unavailable"));
+  await harness.settle();
+  const alert = () => harness.page.querySelector('[role="alert"]');
+  expect(alert()?.textContent).toContain("Schema temporarily unavailable");
+  alert()?.querySelector<HTMLButtonElement>("button")?.click();
+  await waitForSolid(() => {
+    expect(attempts).toBe(2);
+    expect(alert()).toBeNull();
+    expect(harness.page.querySelector<HTMLButtonElement>('[aria-label="Reload"]')?.disabled).toBe(
+      true,
+    );
+  });
+  retry.resolve(configMocks["config.schema"]);
+  await harness.settle();
+  expectAdvancedFields(harness.page);
   expect(harness.request.mock.calls.some(([method]) => method === "config.set")).toBe(false);
 });

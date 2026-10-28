@@ -8,7 +8,7 @@ export function recordBoardWidgetTicketReceipt(
   widget: BoardWidgetTicketIdentity,
   receivedAtMs = Date.now(),
 ): void {
-  if (widget.viewTicket && widget.viewTicketTtlMs) {
+  if (widget.viewTicket && widget.viewTicketTtlMs !== undefined) {
     ticketReceivedAtMs.set(widget, receivedAtMs);
   }
 }
@@ -26,7 +26,7 @@ export function remainingBoardWidgetTicketTtlMs(
 ): number | undefined {
   const nowMs = Date.now();
   const ttlMs = widget.viewTicketTtlMs;
-  if (!widget.viewTicket || !ttlMs) {
+  if (!widget.viewTicket || ttlMs === undefined) {
     return undefined;
   }
   const receivedAtMs = ticketReceivedAtMs.get(widget);

@@ -46,7 +46,6 @@ export function createDeletionCron(
     cronEnabled: false,
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob,
   });
   return {

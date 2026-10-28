@@ -45,18 +45,39 @@ export function prepareSteeringDelivery(params: {
   entry?: SessionEntry;
   assertCurrent: () => void;
 }) {
+  let admission:
+    | {
+        recoveryDeliveryClaim: Parameters<typeof resolveRestartRecoverySteeringBlockReason>[3];
+        matchesExecutionSettings: (entry: SessionEntry | undefined, agentId: string) => boolean;
+      }
+    | undefined;
+  const bindAdmission = (value: NonNullable<typeof admission>) => {
+    admission = value;
+  };
+  const matchesExecutionSettings = (entry: SessionEntry | undefined) =>
+    admission?.matchesExecutionSettings(entry, params.agentId) ?? true;
   const fallbackEntry = params.entry;
+  const sourceTurnId = (entry: SessionEntry | null | undefined) =>
+    params.sourceTurnId ??
+    normalizeOptionalString(
+      (admission?.recoveryDeliveryClaim ?? entry)?.restartRecoveryDeliverySourceRunId,
+    ) ??
+    "";
   const assertEntry = (
     current: Parameters<typeof resolveRestartRecoverySteeringBlockReason>[0],
   ) => {
     params.assertCurrent();
     const entry = current ?? fallbackEntry;
+    if (!matchesExecutionSettings(entry)) {
+      throw new MessageInjectionTargetUnavailableError(
+        "Execution settings changed during steering preparation",
+      );
+    }
     const reason = resolveRestartRecoverySteeringBlockReason(
       entry,
       params.sessionId ?? entry?.sessionId ?? "",
-      params.sourceTurnId ??
-        normalizeOptionalString(entry?.restartRecoveryDeliverySourceRunId) ??
-        "",
+      sourceTurnId(entry),
+      admission?.recoveryDeliveryClaim,
     );
     if (reason) {
       throw new MessageInjectionTargetUnavailableError(
@@ -65,21 +86,27 @@ export function prepareSteeringDelivery(params: {
     }
   };
   if (!params.sessionKey || !params.storePath) {
-    return prepareCurrentSteeringRead(() => assertEntry(fallbackEntry));
+    return {
+      ...prepareCurrentSteeringRead(() => assertEntry(fallbackEntry)),
+      bindAdmission,
+    };
   }
   const memory = captureSessionActorStorageOwner(params, { assertCurrent() {}, authorize() {} });
   if (memory) {
     const sessionKey = params.sessionKey;
-    return prepareCurrentSteeringRead(() => {
-      const current =
-        memory.binding?.actor.target.sessionKey === sessionKey
-          ? memory.binding.actor.snapshot(memory.authority)
-          : memory.owner?.readSession(sessionKey, memory.authority);
-      if (!current?.entry) {
-        throw new MessageInjectionTargetUnavailableError("Steering target session was closed");
-      }
-      assertEntry(current.entry);
-    });
+    return {
+      ...prepareCurrentSteeringRead(() => {
+        const current =
+          memory.binding?.actor.target.sessionKey === sessionKey
+            ? memory.binding.actor.snapshot(memory.authority)
+            : memory.owner?.readSession(sessionKey, memory.authority);
+        if (!current?.entry) {
+          throw new MessageInjectionTargetUnavailableError("Steering target session was closed");
+        }
+        assertEntry(current.entry);
+      }),
+      bindAdmission,
+    };
   }
   const { scope } = captureSessionEntryReadScope({
     agentId: params.agentId,
@@ -141,14 +168,14 @@ export function prepareSteeringDelivery(params: {
           sessionKey: selected?.sessionKey ?? sessionKey,
           entry: selected?.entry,
           matches: (before, after) =>
+            matchesExecutionSettings(after) &&
             before?.sessionId === after?.sessionId &&
             before?.lifecycleRevision === after?.lifecycleRevision &&
             !resolveRestartRecoverySteeringBlockReason(
               after ?? fallbackEntry,
               params.sessionId ?? after?.sessionId ?? "",
-              params.sourceTurnId ??
-                normalizeOptionalString(after?.restartRecoveryDeliverySourceRunId) ??
-                "",
+              sourceTurnId(after),
+              admission?.recoveryDeliveryClaim,
             ),
         });
         unregister = registerOpenClawAgentDatabaseAsyncResource({
@@ -168,6 +195,7 @@ export function prepareSteeringDelivery(params: {
     assertLegacyCurrent: assertCurrent,
   };
   return {
+    bindAdmission,
     assertCurrent,
     release,
     prepareCurrent: async () => {

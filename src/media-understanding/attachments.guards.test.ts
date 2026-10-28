@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
-import { selectAttachments } from "./attachments.js";
 import { normalizeAttachments } from "./attachments.normalize.js";
+import { selectAttachments } from "./attachments.select.js";
 import type { MediaAttachment } from "./types.js";
 
 describe("media-understanding selectAttachments guards", () => {
@@ -69,12 +69,21 @@ describe("media-understanding selectAttachments guards", () => {
       }
       Object.freeze(attachments);
 
-      const result = selectAttachments({
-        capability: "image",
-        attachments,
-        policy: { mode: "all", prefer, maxAttachments: limit },
-      });
+      const copy = vi.spyOn(Array.prototype, "toReversed");
+      let result: ReturnType<typeof selectAttachments>;
+      let copies: number;
+      try {
+        result = selectAttachments({
+          capability: "image",
+          attachments,
+          policy: { mode: "all", prefer, maxAttachments: limit },
+        });
+        copies = copy.mock.calls.length;
+      } finally {
+        copy.mockRestore();
+      }
 
+      expect(copies).toBe(0);
       expect(result.selected).toHaveLength(selected.length);
       for (const [position, inputPosition] of selected.entries()) {
         expect(result.selected[position]).toBe(attachments[inputPosition]);

@@ -8,7 +8,7 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { deriveGatewaySessionLifecycleSnapshot } from "../../gateway/session-lifecycle-state.js";
+import { deriveGatewaySessionLifecycleSnapshot } from "../../gateway/session-lifecycle-projection.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { resolveSession } from "./session.js";

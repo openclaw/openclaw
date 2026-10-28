@@ -28,6 +28,8 @@ import {
 import { getRpcSource } from "../../sessions/session-controller.rpc-sources.js";
 import { registerAgentOwnerPolicyCases } from "./agent.owner-policy.test-support.js";
 import {
+  createElevatedExecApprovalFixture,
+  mockTelegramSessionEntry,
   getAgentTestMocks,
   makeContext,
   type AgentParams,
@@ -890,24 +892,11 @@ describe("gateway agent handler", () => {
   });
 
   it("forwards elevated defaults only for valid exec approval runtime handoffs", async () => {
-    const bashElevated = {
-      enabled: true,
-      allowed: true,
-      defaultLevel: "on" as const,
-    };
-    const registration = registerExecApprovalFollowupRuntimeHandoff({
-      approvalId: "req-elevated-75832",
-      sessionKey: "agent:main:telegram:direct:123",
-      bashElevated,
-    });
+    const { bashElevated, registration } = createElevatedExecApprovalFixture("req-elevated-75832");
     if (!registration) {
       throw new Error("expected runtime handoff id");
     }
-    mockMainSessionEntry({
-      sessionId: "existing-session-id",
-      lastChannel: "telegram",
-      lastTo: "123",
-    });
+    mockTelegramSessionEntry();
     mockSuccessfulAgentCommand();
 
     await invokeAgent(
@@ -928,24 +917,11 @@ describe("gateway agent handler", () => {
   it("fails closed when an exec approval handoff expires during durable admission", async () => {
     vi.useFakeTimers();
     const sessionKey = "agent:main:telegram:direct:123";
-    const bashElevated = {
-      enabled: true,
-      allowed: true,
-      defaultLevel: "on" as const,
-    };
-    const registration = registerExecApprovalFollowupRuntimeHandoff({
-      approvalId: "req-elevated-expired-admission",
-      sessionKey,
-      bashElevated,
-    });
+    const { registration } = createElevatedExecApprovalFixture("req-elevated-expired-admission");
     if (!registration) {
       throw new Error("expected runtime handoff id");
     }
-    mockMainSessionEntry({
-      sessionId: "existing-session-id",
-      lastChannel: "telegram",
-      lastTo: "123",
-    });
+    mockTelegramSessionEntry();
     const stagePendingInput = mocks.stageSessionPendingInput.getMockImplementation();
     if (!stagePendingInput) {
       throw new Error("expected pending input staging implementation");
@@ -992,11 +968,7 @@ describe("gateway agent handler", () => {
     if (!registration) {
       throw new Error("expected runtime handoff id");
     }
-    mockMainSessionEntry({
-      sessionId: "existing-session-id",
-      lastChannel: "telegram",
-      lastTo: "123",
-    });
+    mockTelegramSessionEntry();
     mockSuccessfulAgentCommand();
 
     await invokeAgent(
@@ -1057,11 +1029,7 @@ describe("gateway agent handler", () => {
       throw new Error("expected runtime handoff id");
     }
     const agentCommandCallsBefore = mocks.agentCommand.mock.calls.length;
-    mockMainSessionEntry({
-      sessionId: "existing-session-id",
-      lastChannel: "telegram",
-      lastTo: "123",
-    });
+    mockTelegramSessionEntry();
     mocks.stageSessionPendingInput.mockRejectedValueOnce(new Error("input admission failed"));
 
     const respond = await invokeAgent(
@@ -1105,29 +1073,12 @@ describe("gateway agent handler", () => {
   });
 
   it("dedupes elevated exec approval followups across nonce idempotency keys", async () => {
-    const bashElevated = {
-      enabled: true,
-      allowed: true,
-      defaultLevel: "on" as const,
-    };
-    const firstRegistration = registerExecApprovalFollowupRuntimeHandoff({
-      approvalId: "req-elevated-duplicate",
-      sessionKey: "agent:main:telegram:direct:123",
-      bashElevated,
-    });
-    const secondRegistration = registerExecApprovalFollowupRuntimeHandoff({
-      approvalId: "req-elevated-duplicate",
-      sessionKey: "agent:main:telegram:direct:123",
-      bashElevated,
-    });
+    const { registration: firstRegistration, secondRegistration } =
+      createElevatedExecApprovalFixture("req-elevated-duplicate", 2);
     if (!firstRegistration || !secondRegistration) {
       throw new Error("expected runtime handoff ids");
     }
-    mockMainSessionEntry({
-      sessionId: "existing-session-id",
-      lastChannel: "telegram",
-      lastTo: "123",
-    });
+    mockTelegramSessionEntry();
     const finishCommand = createDeferred();
     mocks.agentCommand.mockImplementation(async () => {
       await finishCommand.promise;
@@ -1180,29 +1131,12 @@ describe("gateway agent handler", () => {
   });
 
   it("reserves exec approval followup dedupe before awaited session work", async () => {
-    const bashElevated = {
-      enabled: true,
-      allowed: true,
-      defaultLevel: "on" as const,
-    };
-    const firstRegistration = registerExecApprovalFollowupRuntimeHandoff({
-      approvalId: "req-elevated-overlap",
-      sessionKey: "agent:main:telegram:direct:123",
-      bashElevated,
-    });
-    const secondRegistration = registerExecApprovalFollowupRuntimeHandoff({
-      approvalId: "req-elevated-overlap",
-      sessionKey: "agent:main:telegram:direct:123",
-      bashElevated,
-    });
+    const { registration: firstRegistration, secondRegistration } =
+      createElevatedExecApprovalFixture("req-elevated-overlap", 2);
     if (!firstRegistration || !secondRegistration) {
       throw new Error("expected runtime handoff ids");
     }
-    mockMainSessionEntry({
-      sessionId: "existing-session-id",
-      lastChannel: "telegram",
-      lastTo: "123",
-    });
+    mockTelegramSessionEntry();
     let releaseFirstSessionWrite: (() => void) | undefined;
     let sessionWriteCalls = 0;
     mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
@@ -1290,29 +1224,12 @@ describe("gateway agent handler", () => {
   });
 
   it("clears reserved exec approval dedupe when pre-run session work fails", async () => {
-    const bashElevated = {
-      enabled: true,
-      allowed: true,
-      defaultLevel: "on" as const,
-    };
-    const firstRegistration = registerExecApprovalFollowupRuntimeHandoff({
-      approvalId: "req-elevated-pre-run-fail",
-      sessionKey: "agent:main:telegram:direct:123",
-      bashElevated,
-    });
-    const secondRegistration = registerExecApprovalFollowupRuntimeHandoff({
-      approvalId: "req-elevated-pre-run-fail",
-      sessionKey: "agent:main:telegram:direct:123",
-      bashElevated,
-    });
+    const { registration: firstRegistration, secondRegistration } =
+      createElevatedExecApprovalFixture("req-elevated-pre-run-fail", 2);
     if (!firstRegistration || !secondRegistration) {
       throw new Error("expected runtime handoff ids");
     }
-    mockMainSessionEntry({
-      sessionId: "existing-session-id",
-      lastChannel: "telegram",
-      lastTo: "123",
-    });
+    mockTelegramSessionEntry();
     const context = makeContext();
     const agentCommandCallsBefore = mocks.agentCommand.mock.calls.length;
     mocks.updateSessionStore.mockRejectedValueOnce(new Error("session write failed"));
@@ -1367,24 +1284,11 @@ describe("gateway agent handler", () => {
   });
 
   it("does not consume exec approval runtime handoffs from non-backend callers", async () => {
-    const bashElevated = {
-      enabled: true,
-      allowed: true,
-      defaultLevel: "on" as const,
-    };
-    const registration = registerExecApprovalFollowupRuntimeHandoff({
-      approvalId: "req-elevated-75832",
-      sessionKey: "agent:main:telegram:direct:123",
-      bashElevated,
-    });
+    const { registration } = createElevatedExecApprovalFixture("req-elevated-75832");
     if (!registration) {
       throw new Error("expected runtime handoff id");
     }
-    mockMainSessionEntry({
-      sessionId: "existing-session-id",
-      lastChannel: "telegram",
-      lastTo: "123",
-    });
+    mockTelegramSessionEntry();
     mockSuccessfulAgentCommand();
     const agentCommandCallsBefore = mocks.agentCommand.mock.calls.length;
 
@@ -1406,26 +1310,13 @@ describe("gateway agent handler", () => {
   });
 
   it("drops a stale exec approval followup at preflight without touching the rebound session (#59349)", async () => {
-    const bashElevated = {
-      enabled: true,
-      allowed: true,
-      defaultLevel: "on" as const,
-    };
-    const registration = registerExecApprovalFollowupRuntimeHandoff({
-      approvalId: "req-rebound-followup",
-      sessionKey: "agent:main:telegram:direct:123",
-      bashElevated,
-    });
+    const { registration } = createElevatedExecApprovalFixture("req-rebound-followup");
     if (!registration) {
       throw new Error("expected runtime handoff id");
     }
     // Session was rebound by /new or /reset: current sessionId differs from the
     // approval-time sessionId carried on the request.
-    mockMainSessionEntry({
-      sessionId: "current-session-after-reset",
-      lastChannel: "telegram",
-      lastTo: "123",
-    });
+    mockTelegramSessionEntry("current-session-after-reset");
     const context = makeContext();
     const diagnostics: DiagnosticEventPayload[] = [];
     onDiagnosticEvent((event) => {
@@ -1476,11 +1367,7 @@ describe("gateway agent handler", () => {
   });
 
   it("uses the self-contained fallback without honoring an unavailable handoff", async () => {
-    mockMainSessionEntry({
-      sessionId: "existing-session-id",
-      lastChannel: "telegram",
-      lastTo: "123",
-    });
+    mockTelegramSessionEntry();
     mockSuccessfulAgentCommand();
 
     await invokeAgent(

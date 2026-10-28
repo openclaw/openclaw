@@ -33,10 +33,8 @@ type MSTeamsNativeDeliveryFinalization = {
   postNativePayloads?: ReplyPayload[];
 };
 
-// Match SDK Stop failures by name: tsgo cannot resolve its error re-export
-// chain, and the SDK retry helper uses the same check.
-function isStreamCancelledError(err: unknown): boolean {
-  return err instanceof Error && err.name === "StreamCancelledError";
+function hasUnstreamedContent(payload: ReplyPayload): boolean {
+  return Boolean(payload.presentation || payload.mediaUrl || payload.mediaUrls?.length);
 }
 
 /** Bridge reply callbacks to the SDK stream; shared conversations use block delivery. */
@@ -146,8 +144,7 @@ export function createTeamsReplyStreamController(params: {
       return payload;
     }
     const remainingText = payload.text.slice(acknowledgedLogicalText.length);
-    const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
-    if (!remainingText && !hasMedia) {
+    if (!remainingText && !hasUnstreamedContent(payload)) {
       return undefined;
     }
     return { ...payload, text: remainingText || undefined };
@@ -188,9 +185,8 @@ export function createTeamsReplyStreamController(params: {
       if (entry.kind === "payload") {
         return [entry.payload];
       }
-      const hasMedia = Boolean(entry.payload.mediaUrl || entry.payload.mediaUrls?.length);
       const text = replacementFallback?.text;
-      if (!text && !hasMedia) {
+      if (!text && !hasUnstreamedContent(entry.payload)) {
         return [];
       }
       return [{ ...entry.payload, text: text || undefined }];
@@ -340,7 +336,16 @@ export function createTeamsReplyStreamController(params: {
         pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
         streamFinalizationPending = true;
         tokensEmitted = false;
-        return hasMedia ? { ...payload, text: undefined } : undefined;
+        if (!hasMedia) {
+          return undefined;
+        }
+        // Cards must wait for close() to observe Stop; media keeps its existing delivery path.
+        const {
+          presentation: _presentation,
+          presentationTextMode: _mode,
+          ...mediaPayload
+        } = payload;
+        return { ...mediaPayload, text: undefined };
       }
       return payload;
     },
@@ -405,7 +410,9 @@ export function createTeamsReplyStreamController(params: {
         const messageId = extractMessageId(result) ?? acknowledgedStreamId;
         const postNativePayloads = replacementSettlementPending
           ? deferredReplacementPayloads(undefined)
-          : [];
+          : pendingFinalPayload?.presentation
+            ? [{ ...pendingFinalPayload, text: undefined }]
+            : [];
         return {
           visibleReplySent: true,
           ...(content === undefined ? {} : { content }),
@@ -414,7 +421,9 @@ export function createTeamsReplyStreamController(params: {
           ...(postNativePayloads.length > 0 ? { postNativePayloads } : {}),
         };
       } catch (err) {
-        if (isStreamCancelledError(err)) {
+        // Match SDK Stop failures by name: tsgo cannot resolve its error re-export
+        // chain, and the SDK retry helper uses the same check.
+        if (err instanceof Error && err.name === "StreamCancelledError") {
           return acknowledgedNativeDelivery();
         }
         // Non-cancel failure during the closing emit/close. Preserve only a

@@ -146,6 +146,7 @@ export async function configureHeapRigTurns(config, root, mockPort) {
     artifacts: 0,
     cronRuns: 0,
     cronJobsRemoved: 0,
+    shellCommands: 0,
   };
   let active = false;
 
@@ -227,7 +228,9 @@ export async function configureHeapRigTurns(config, root, mockPort) {
                 runTimeoutSeconds: 120,
                 label: `Synthetic heap rig child ${index}`,
               })});\nreturn { marker: ${JSON.stringify(marker)}, child };`
-            : `const values = Array.from({ length: 256 }, (_, index) => index * index);\nreturn { marker: ${JSON.stringify(marker)}, checksum: values.reduce((sum, value) => sum + value, 0) };`;
+            : options.shell
+              ? `const shell = await exec({command: "printf SYNTHETIC_SHELL_MARKER", awaitResults: true});\nif (!JSON.stringify(shell).includes("SYNTHETIC_SHELL_MARKER")) throw new Error("Synthetic shell output missing");\nreturn { marker: ${JSON.stringify(marker)}, shell };`
+              : `const values = Array.from({ length: 256 }, (_, index) => index * index);\nreturn { marker: ${JSON.stringify(marker)}, checksum: values.reduce((sum, value) => sum + value, 0) };`;
         // The first request consumes the tool fixture. Every continuation and child
         // gets final text; exact receipt/output checks detect another request stealing it.
         await writeControl({
@@ -265,6 +268,7 @@ export async function configureHeapRigTurns(config, root, mockPort) {
         if (options.canStart && !options.canStart()) {
           return null;
         }
+        const chatStartedAt = Date.now();
         const started = await rpc(
           "chat.send",
           {
@@ -292,6 +296,7 @@ export async function configureHeapRigTurns(config, root, mockPort) {
           throw new Error(`Synthetic turn was not accepted: ${JSON.stringify(started)}`);
         }
         const completed = await rpc("agent.wait", { runId, timeoutMs: 180_000 }, 190_000);
+        const chatCompletedAt = Date.now();
         const receipt = assertTerminal(completed, runId, reply, tool);
         await assertHistory(rpc, sessionKey, agentId, receipt.sessionId, reply);
         if (hot) {
@@ -300,6 +305,16 @@ export async function configureHeapRigTurns(config, root, mockPort) {
         let child;
         if (tool) {
           const value = await readCodeResult(requestLogPath, logStart, marker);
+          if (kind === "code" && options.shell) {
+            if (
+              value.shell?.status !== "completed" ||
+              value.shell.exitCode !== 0 ||
+              value.shell.aggregated !== "SYNTHETIC_SHELL_MARKER"
+            ) {
+              throw new Error(`Synthetic shell result failed: ${JSON.stringify(value.shell)}`);
+            }
+            counts.shellCommands++;
+          }
           if (kind === "subagent") {
             child = value.child;
             if (child?.status !== "accepted" || !child.runId || !child.childSessionKey) {
@@ -420,6 +435,11 @@ export async function configureHeapRigTurns(config, root, mockPort) {
           sessionKey,
           startedAt,
           elapsedMs: Date.now() - startedAt,
+          phaseMs: {
+            setup: chatStartedAt - startedAt,
+            chat: chatCompletedAt - chatStartedAt,
+            verificationAndCleanup: Date.now() - chatCompletedAt,
+          },
           replyBytes: Buffer.byteLength(reply),
           successfulToolNames: receipt.successfulToolNames,
           sessionId,

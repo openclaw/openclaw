@@ -1,12 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForGatewayDispatch } from "../../gateway/server-in-process-dispatch.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  clearAgentRunContext,
-  registerAgentRunContext,
-  releaseAgentRunDelegatedAuthority,
-  validateAgentRunDelegatedAuthority,
-} from "../../infra/agent-run-registry.js";
+import type { DispatchGatewayMethodInProcessOptions } from "../../gateway/server-plugin-in-process-dispatch.types.js";
+import * as agentRuns from "../../infra/agent-run-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import {
@@ -16,7 +11,6 @@ import {
   runWithCronCreatorAuthorityCapability,
 } from "../cron-creator-authority-context.js";
 import { SessionFollowupCompletion } from "../subagents/completion/session-followup-completion.js";
-import type { FollowupRequest } from "../subagents/completion/session-followup-completion.types.js";
 import {
   consumeRequesterCronAuthorityAdmission,
   revokeRequesterCronAuthority,
@@ -30,14 +24,27 @@ const fixture = vi.hoisted(() => ({
   assertCustody: vi.fn(),
   release: vi.fn(),
   log: vi.fn(),
-  dispatch: vi.fn(),
+  callGateway: vi.fn(),
   wait: vi.fn(),
   gatewayContext: {},
 }));
 vi.mock("../../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
+// mock-isolation: The fixture owns dispatch and continuation custody without booting a Gateway.
 vi.mock("../../gateway/server-plugin-in-process-dispatch.js", () => ({
   getInProcessGatewayRequestContext: () => fixture.gatewayContext,
-  dispatchGatewayMethodInProcess: (...args: unknown[]) => fixture.dispatch(...args),
+  dispatchGatewayMethodInProcess: (
+    method: string,
+    params: unknown,
+    options?: DispatchGatewayMethodInProcessOptions,
+  ) =>
+    fixture.callGateway({
+      method,
+      params,
+      timeoutMs: options?.timeoutMs,
+      signal: options?.signal,
+      onAccepted: options?.onAccepted,
+      assertDispatchCurrent: options?.sessionMutationCommitGuard,
+    }),
   captureOperatorToolGatewayContinuationContext: async () => ({
     signal: new AbortController().signal,
     assertCurrent: fixture.assertCustody,
@@ -73,9 +80,6 @@ vi.mock("../../gateway/session-sharing-policy.js", () => ({
 vi.mock("../../process/gateway-work-admission.js", () => ({
   runWithGatewayDetachedWorkContinuation: (work: () => unknown) => work(),
 }));
-vi.mock("../../config/sessions/transcript-write-context.js", () => ({
-  runWithoutOwnedSessionTranscriptWrites: (work: () => unknown) => work(),
-}));
 vi.mock("../prepared-model-runtime-generation-scope.js", () => ({
   runOutsidePreparedModelRuntimePluginGenerationScope: (work: () => unknown) => work(),
 }));
@@ -107,33 +111,68 @@ vi.mock("../../sessions/session-participant-recording.js", () => ({
 const SESSION = "agent:main:requester";
 const CHILD = "agent:main:subagent:worker";
 const SESSION_ID = `${SESSION}-id`;
-async function inRun<T>(runId: string, work: () => Promise<T>) {
-  const { operationalRunInstance } = createTestAdmittedRunContext(runId);
-  const approvalAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-  registerAgentRunContext(runId, {
-    agentId: "main",
-    sessionKey: SESSION,
-    sessionId: SESSION_ID,
+const requester = { agentId: "main", sessionKey: SESSION };
+async function prepareCompletion(withRequesterAuthority?: <T>(run: () => T) => T) {
+  const request = await prepareSessionsSendFollowup({
+    runId: "child-followup",
+    requesterTurnRunId: "original",
+    requesterAgentId: "main",
+    requesterSessionKey: SESSION,
+    targetAgentId: "main",
+    targetSessionKey: CHILD,
+    withRequesterAuthority,
   });
+  expect(request).toBeDefined();
+  const completion = SessionFollowupCompletion.bind(request!);
+  completion.markAccepted(request!.runId);
+  const released = createDeferredCore();
+  fixture.release.mockImplementation(() => released.resolve());
+  return { completion, runId: request!.runId, released };
+}
+const replyDefaults = {
+  skip: false,
+  notifyRequesterOnWaitFailure: true,
+  targetSessionKey: CHILD,
+  targetAgentId: "main",
+  displayKey: CHILD,
+  requesterSessionKey: SESSION,
+  requesterAgentId: "main",
+  replyTimeoutMs: 1000,
+  replyMode: "one-way",
+} satisfies Partial<Parameters<typeof startSessionsSendReplyFlow>[0]>;
+function visibleReply(text: string) {
+  return {
+    status: "ok" as const,
+    replyText: text,
+    terminalReply: { disposition: "visible" as const, text },
+  };
+}
+async function inRun<T>(
+  runId: string,
+  work: () => Promise<T>,
+  scope?: NonNullable<ReturnType<typeof createCronCreatorAuthorityCapability>>,
+) {
+  const { operationalRunInstance } = createTestAdmittedRunContext(runId);
+  const approvalAuthority = agentRuns.claimAgentRunDelegatedAuthority(operationalRunInstance);
+  agentRuns.registerAgentRunContext(runId, { ...requester, sessionId: SESSION_ID });
   try {
     return await withGatewayToolCallerIdentity(
       {
-        agentId: "main",
-        sessionKey: SESSION,
+        ...requester,
         operationalRunInstance,
         approvalAuthority,
-        receiptAuthority: () => validateAgentRunDelegatedAuthority(approvalAuthority),
+        receiptAuthority: () => agentRuns.validateAgentRunDelegatedAuthority(approvalAuthority),
       },
-      work,
+      () => (scope ? runWithCronCreatorAuthorityCapability(scope, work) : work()),
     );
   } finally {
-    releaseAgentRunDelegatedAuthority(approvalAuthority);
-    clearAgentRunContext(runId);
+    agentRuns.releaseAgentRunDelegatedAuthority(approvalAuthority);
+    agentRuns.clearAgentRunContext(runId);
   }
 }
 afterEach(() => {
   revokeRequesterCronAuthority(SESSION);
-  fixture.dispatch.mockReset();
+  fixture.callGateway.mockReset();
   fixture.wait.mockReset();
   vi.useRealTimers();
   vi.clearAllMocks();
@@ -142,19 +181,7 @@ afterEach(() => {
 describe("child followup requester continuation", () => {
   it("retains one timed-out inline result through busy parent admission and execution", async () => {
     vi.useFakeTimers();
-    const request = await inRun("original", () =>
-      prepareSessionsSendFollowup({
-        runId: "child-followup",
-        requesterTurnRunId: "original",
-        requesterAgentId: "main",
-        requesterSessionKey: SESSION,
-        targetAgentId: "main",
-        targetSessionKey: CHILD,
-      }),
-    );
-    expect(request).toBeDefined();
-    const completion = SessionFollowupCompletion.bind(request!);
-    completion.markAccepted(request!.runId);
+    const { completion, runId, released } = await inRun("original", () => prepareCompletion());
     const inline = completion.take(10);
     await vi.advanceTimersByTimeAsync(10);
     await expect(inline).resolves.toBeUndefined();
@@ -162,9 +189,7 @@ describe("child followup requester continuation", () => {
     const entered = createDeferredCore();
     const admit = createDeferredCore();
     const finish = createDeferredCore();
-    const released = createDeferredCore();
-    fixture.release.mockImplementation(() => released.resolve());
-    const callGateway = vi.fn(async (rpc) => {
+    const callGateway = fixture.callGateway.mockImplementation(async (rpc) => {
       expect(rpc.method).toBe("agent");
       entered.resolve();
       const execution = (async () => {
@@ -176,46 +201,23 @@ describe("child followup requester continuation", () => {
       })();
       return await waitForGatewayDispatch("agent", execution, rpc.timeoutMs, rpc.signal);
     });
-    fixture.dispatch.mockImplementation(async (method, params, options) =>
-      callGateway({
-        method,
-        params,
-        timeoutMs: options?.timeoutMs,
-        signal: options?.signal,
-        onAccepted: options?.onAccepted,
-        assertDispatchCurrent: options?.sessionMutationCommitGuard,
-      }),
-    );
     try {
       await startSessionsSendReplyFlow({
+        ...replyDefaults,
         completion,
         callGateway: callAgentToolGatewayRequest,
-        runId: request!.runId,
-        skip: false,
-        notifyRequesterOnWaitFailure: true,
-        targetSessionKey: CHILD,
-        targetAgentId: "main",
-        displayKey: CHILD,
-        requesterSessionKey: SESSION,
-        requesterAgentId: "main",
+        runId,
         requesterSession: { sessionId: SESSION_ID, lifecycleRevision: "one" },
-        replyTimeoutMs: 1_000,
-        replyMode: "one-way",
       });
-      await completion.settle(request!.runId, {
-        status: "ok",
-        replyText: "Child result",
-        terminalReply: { disposition: "visible", text: "Child result" },
-      });
-      completion.finishExecution(request!.runId);
+      await completion.settle(runId, visibleReply("Child result"));
+      completion.finishExecution(runId);
       await entered.promise;
-      await vi.advanceTimersByTimeAsync(180_000);
-      expect(fixture.release).not.toHaveBeenCalled();
-      expect(fixture.log).not.toHaveBeenCalled();
-      admit.resolve();
-      await vi.advanceTimersByTimeAsync(180_000);
-      expect(fixture.release).not.toHaveBeenCalled();
-      expect(fixture.log).not.toHaveBeenCalled();
+      for (const advance of [() => {}, () => admit.resolve()]) {
+        advance();
+        await vi.advanceTimersByTimeAsync(180_000);
+        expect(fixture.release).not.toHaveBeenCalled();
+        expect(fixture.log).not.toHaveBeenCalled();
+      }
       expect(callGateway).toHaveBeenCalledOnce();
       expect(callGateway.mock.calls[0]?.[0].params).toMatchObject({
         sessionKey: SESSION,
@@ -261,25 +263,11 @@ describe("child followup requester continuation", () => {
       undefined,
       owner,
     )!;
-    const request: FollowupRequest | undefined = await inRun("original", () =>
-      runWithCronCreatorAuthorityCapability(capability, async () => {
-        const withRequesterAuthority = bindRequesterYieldCronAuthority("original");
-        return await prepareSessionsSendFollowup({
-          runId: "child-followup",
-          requesterTurnRunId: "original",
-          withRequesterAuthority,
-          requesterAgentId: "main",
-          requesterSessionKey: SESSION,
-          targetAgentId: "main",
-          targetSessionKey: CHILD,
-        });
-      }),
+    const { completion, runId, released } = await inRun(
+      "original",
+      () => prepareCompletion(bindRequesterYieldCronAuthority("original")),
+      capability,
     );
-    expect(request).toBeDefined();
-    const completion = SessionFollowupCompletion.bind(request!);
-    completion.markAccepted(request!.runId);
-    const released = createDeferredCore();
-    fixture.release.mockImplementation(() => released.resolve());
     if (outcome === "owner revoked") {
       ownerCurrent = false;
     }
@@ -292,20 +280,14 @@ describe("child followup requester continuation", () => {
       revokeRequesterCronAuthority(SESSION);
     }
     const invoked = vi.fn();
-    const callGateway = vi.fn();
+    const callGateway = fixture.callGateway;
     fixture.wait.mockResolvedValue(
       outcome === "requester failed while pending"
         ? { status: "error", error: "requester processing failed" }
-        : {
-            status: "ok",
-            replyText: "continued",
-            terminalReply: { disposition: "visible", text: "continued" },
-          },
+        : visibleReply("continued"),
     );
     callGateway.mockImplementation(async (rpc) => {
-      if (rpc.method !== "agent") {
-        throw new Error("unexpected RPC");
-      }
+      expect(rpc.method).toBe("agent");
       rpc.assertDispatchCurrent?.();
       const input = rpc.params;
       if (outcome === "receipt replay" && callGateway.mock.calls.length > 1) {
@@ -328,75 +310,51 @@ describe("child followup requester continuation", () => {
         admission!.requesterOwner,
       )!;
       admission!.bindRunScope(scope);
-      await inRun(admission!.runId, () =>
-        runWithCronCreatorAuthorityCapability(scope, async () => {
+      await inRun(
+        admission!.runId,
+        async () => {
           if (outcome === "observer closed") {
             completion.close();
             expect(fixture.release).not.toHaveBeenCalled();
           }
           const binding = bindRequesterOwnerIdentity({
             runId: admission!.runId,
-            sessionKey: SESSION,
+            ...requester,
             sessionId: SESSION_ID,
-            agentId: "main",
           });
           expect(binding?.isCurrent()).toBe(true);
           binding!.assertCurrent();
           invoked();
-        }),
+        },
+        scope,
       );
       return outcome === "receipt replay" || outcome === "requester failed while pending"
         ? { runId: admission!.runId, status: "in_flight" }
         : { runId: admission!.runId, status: "ok", inputProcessingCompleted: true };
     });
-    fixture.dispatch.mockImplementation(async (method, params, options) =>
-      callGateway({
-        method,
-        params,
-        assertDispatchCurrent: options?.sessionMutationCommitGuard,
-      }),
-    );
     await startSessionsSendReplyFlow({
+      ...replyDefaults,
       completion,
       callGateway,
-      runId: request!.runId,
-      skip: false,
+      runId,
       reply:
         outcome === "child error"
           ? { status: "error", error: "plugin failed" }
-          : {
-              status: "ok",
-              replyText: "ready",
-              terminalReply: { disposition: "visible", text: "ready" },
-            },
-      notifyRequesterOnWaitFailure: true,
-      targetSessionKey: CHILD,
-      targetAgentId: "main",
-      displayKey: CHILD,
-      requesterSessionKey: SESSION,
-      requesterAgentId: "main",
-      replyTimeoutMs: 1000,
-      replyMode: "one-way",
+          : visibleReply("ready"),
     });
     await released.promise;
-    if (
-      outcome === "success" ||
-      outcome === "child error" ||
-      outcome === "observer closed" ||
-      outcome === "receipt replay"
-    ) {
-      expect(invoked).toHaveBeenCalledTimes(1);
-      expect(fixture.log).not.toHaveBeenCalled();
-    } else if (outcome === "requester failed while pending") {
-      expect(invoked).toHaveBeenCalledOnce();
+    const rejected = ["owner revoked", "custody revoked", "new user turn"].includes(outcome);
+    expect(invoked).toHaveBeenCalledTimes(rejected ? 0 : 1);
+    if (outcome === "requester failed while pending") {
       expect(callGateway).toHaveBeenCalledOnce();
       expect(fixture.log).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({ error: "requester processing failed" }),
       );
-    } else {
-      expect(invoked).not.toHaveBeenCalled();
+    } else if (rejected) {
       expect(fixture.log).toHaveBeenCalled();
+    } else {
+      expect(fixture.log).not.toHaveBeenCalled();
     }
     if (outcome === "receipt replay") {
       expect(callGateway).toHaveBeenCalledTimes(2);

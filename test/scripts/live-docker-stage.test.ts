@@ -267,7 +267,7 @@ function invoke(source: Source, command: string, env: NodeJS.ProcessEnv = {}) {
   );
 }
 
-it("preserves real read-failure injection under inherited automatic Git maintenance", () => {
+it("reads only committed source and preserves read failures under inherited Git maintenance", () => {
   const config = { "gc.auto": "1", "gc.autoDetach": "false", "maintenance.strategy": "gc" };
   vi.stubEnv("GIT_CONFIG_COUNT", String(Object.keys(config).length));
   for (const [index, [key, value]] of Object.entries(config).entries()) {
@@ -276,32 +276,22 @@ it("preserves real read-failure injection under inherited automatic Git maintena
   }
   try {
     const source = committedSourceFixture({
-      [metadata]: "unavailable source bytes",
+      [metadata]: "selected committed text\n",
       // Git samples directory 17/ for its loose-object auto-GC threshold.
       "gc-sample-a": "gc sample 376\n",
       "gc-sample-b": "gc sample 568\n",
       "gc-sample-c": "gc sample 675\n",
     });
-    removeObject(source, `${source.sha}:${metadata}`);
+    writeFileSync(path.join(source.root, metadata), "dirty worktree decoy\n");
     const reader = createFrozenTargetSource(source.root, source.sha);
+    expect(reader.readText(metadata)).toBe("selected committed text\n");
+    expect(reader.readText("scripts/absent.ts")).toBeNull();
+    removeObject(source, `${source.sha}:${metadata}`);
     expect(() => reader.readText(metadata)).toThrow("unable to read selected source");
+    expect(() => createFrozenTargetSource(source.root, source.sha).readText(metadata)).toThrow();
   } finally {
     vi.unstubAllEnvs();
   }
-});
-
-it("reads committed text through the imported API and distinguishes absent from unreadable blobs", () => {
-  const committedText = "selected committed text\n";
-  const source = committedSourceFixture({ [metadata]: committedText });
-  writeFileSync(path.join(source.root, metadata), "dirty worktree decoy\n");
-  const reader = createFrozenTargetSource(source.root, source.sha);
-  expect(reader.readText(metadata)).toBe(committedText);
-  expect(reader.readText("scripts/absent.ts")).toBeNull();
-
-  removeObject(source, `${source.sha}:${metadata}`);
-  expect(() => reader.readText(metadata)).toThrow();
-  const freshReader = createFrozenTargetSource(source.root, source.sha);
-  expect(() => freshReader.readText(metadata)).toThrow();
 });
 
 it.each(["tree", "blob"] as const)(

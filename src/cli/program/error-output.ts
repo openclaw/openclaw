@@ -16,12 +16,6 @@ type FormatCliParseErrorOptions = {
   commandNames?: readonly string[];
 };
 
-function uniqueSortedCommandNames(commands: Iterable<string>): string[] {
-  return [...new Set([...commands].filter(Boolean))].toSorted((left, right) =>
-    left.localeCompare(right),
-  );
-}
-
 function formatCliCommandSuggestions(
   input: string,
   commandPath: readonly string[] = [],
@@ -32,14 +26,13 @@ function formatCliCommandSuggestions(
     return undefined;
   }
 
-  const knownCommands = uniqueSortedCommandNames(
+  const candidateNames =
     candidates ??
-      (commandPath.length === 0
-        ? [
-            ...getCoreCliCommandNamesCore(),
-            ...getSubCliCommandMetadata().map((entry) => entry.name),
-          ]
-        : []),
+    (commandPath.length === 0
+      ? [...getCoreCliCommandNamesCore(), ...getSubCliCommandMetadata().map((entry) => entry.name)]
+      : []);
+  const knownCommands = [...new Set([...candidateNames].filter(Boolean))].toSorted((left, right) =>
+    left.localeCompare(right),
   );
   if (
     (normalizedInput === "upgrade" || normalizedInput === "udpate") &&
@@ -47,23 +40,19 @@ function formatCliCommandSuggestions(
   ) {
     return formatCliSuggestionLines(["update"], commandPath);
   }
-  const suggestions = findCliCommandSuggestions(normalizedInput, knownCommands);
-  if (suggestions.length === 0) {
-    return undefined;
-  }
-  return formatCliSuggestionLines(suggestions, commandPath);
-}
-
-function findCliCommandSuggestions(input: string, candidates: readonly string[]): string[] {
-  const maxDistance = Math.max(1, Math.floor(input.length * 0.4));
-  return candidates
-    .map((command) => ({ command, distance: levenshteinDistance(input, command) }))
-    .filter(({ command, distance }) => command !== input && distance <= maxDistance)
+  const maxDistance = Math.max(1, Math.floor(normalizedInput.length * 0.4));
+  const suggestions = knownCommands
+    .map((command) => ({ command, distance: levenshteinDistance(normalizedInput, command) }))
+    .filter(({ command, distance }) => command !== normalizedInput && distance <= maxDistance)
     .toSorted(
       (left, right) => left.distance - right.distance || left.command.localeCompare(right.command),
     )
     .slice(0, MAX_SUGGESTIONS)
     .map(({ command }) => command);
+  if (suggestions.length === 0) {
+    return undefined;
+  }
+  return formatCliSuggestionLines(suggestions, commandPath);
 }
 
 function formatCliSuggestionLines(
@@ -94,10 +83,6 @@ function formatHelpHint(argv: string[] | undefined, options?: { commandPath?: st
   return `${theme.muted("Try:")} ${theme.command(command)}`;
 }
 
-function formatDocsHint(): string {
-  return `${theme.muted("Docs:")} ${formatDocsLink("/cli", "docs.openclaw.ai/cli")}`;
-}
-
 function formatCliMachineOutput(humanOutput: string): string {
   const docs = `Docs: ${formatDocsLink("/cli", "docs.openclaw.ai/cli", { force: false })}`;
   return stripAnsi(humanOutput).replace(/^Docs:.*$/mu, docs);
@@ -122,25 +107,26 @@ function formatCliUnknownCommandOutput(
     hasParentCommand
       ? undefined
       : `${theme.muted("Plugin command?")} ${theme.command(formatCliCommand("openclaw plugins list"))}`,
-    formatDocsHint(),
+    `${theme.muted("Docs:")} ${formatDocsLink("/cli", "docs.openclaw.ai/cli")}`,
   );
 }
 
 export function createCliParseError(
   raw: string,
   options: FormatCliParseErrorOptions = {},
-  errorOptions: { humanOutputWritten?: boolean } = {},
 ): ExpectedCliError {
   const message = stripCommanderErrorPrefix(raw);
   const unknownCommand = message.match(/^unknown command ['"`](.+?)['"`]/i);
   if (unknownCommand) {
-    return createCliUnknownCommandError(unknownCommand[1] ?? "", options, errorOptions);
+    return createCliUnknownCommandError(unknownCommand[1] ?? "", options, {
+      humanOutputWritten: true,
+    });
   }
   const humanOutput = formatCliParseErrorOutput(raw, options);
   return new ExpectedCliError({
     message,
     humanOutput,
-    humanOutputWritten: errorOptions.humanOutputWritten,
+    humanOutputWritten: true,
     machineOutput: formatCliMachineOutput(humanOutput),
   });
 }

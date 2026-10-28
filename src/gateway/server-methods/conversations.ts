@@ -26,6 +26,7 @@ import {
   runGatewayInflightWork,
   type GatewayInflightResult,
 } from "./inflight.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
 
@@ -43,13 +44,10 @@ async function handleConversationWrite(
     const parsed = parseAgentSessionKey(request.sourceSessionKey);
     if (parsed) {
       if (normalizeAgentId(parsed.agentId) !== normalizeAgentId(request.agentId)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `agent "${request.agentId}" does not match session key agent "${parsed.agentId}"`,
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          `agent "${request.agentId}" does not match session key agent "${parsed.agentId}"`,
         );
         return;
       }
@@ -83,13 +81,10 @@ async function handleConversationWrite(
     (completed && completed.requestIdentity !== requestIdentity) ||
     (prior && (!prior.ok || prior.requestIdentity !== requestIdentity))
   ) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `conversation ${request.method} ${request.operationId} was already used with different input`,
-      ),
+    respondError(
+      respond,
+      ErrorCodes.INVALID_REQUEST,
+      `conversation ${request.method} ${request.operationId} was already used with different input`,
     );
     return;
   }

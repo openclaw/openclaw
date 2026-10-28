@@ -1,27 +1,20 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { addAbortListener } from "node:events";
 import { createServer, type ServerResponse } from "node:http";
 import { Readable, Writable } from "node:stream";
-import {
-  ClientSideConnection,
-  PROTOCOL_VERSION,
-  ndJsonStream,
-  type SessionNotification,
-} from "@agentclientprotocol/sdk";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { ClientSideConnection, PROTOCOL_VERSION, ndJsonStream } from "@agentclientprotocol/sdk";
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
-import { acquireGatewayTestClient } from "../../test/helpers/gateway-client.js";
 import {
   closeHttpServer,
   listenLoopback,
-  readRequestText,
 } from "../../test/helpers/gateway-integration-fixtures.js";
+import { createOpenAiResponsesModelConfig } from "../../test/helpers/openai-responses-model-fixture.js";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../test/helpers/openclaw-test-instance.js";
-import { withinTest } from "../../test/helpers/promise.js";
-import type { GatewayClient } from "../gateway/client.js";
 
 const ABORT_CAUSE = "session_status tool validation failed: invalid arguments";
 const modelId = "gpt-acp-abort-cause";
@@ -35,75 +28,10 @@ function writeToolCall(response: ServerResponse): void {
     name: "session_status",
     arguments: JSON.stringify({ changesSince: "not-a-number" }),
   };
-  const events = [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...call, arguments: "" },
-    },
-    {
-      type: "response.function_call_arguments.delta",
-      item_id: call.id,
-      output_index: 0,
-      delta: call.arguments,
-    },
+  writeOpenAiResponsesSse(response, [
     { type: "response.output_item.done", output_index: 0, item: call },
-    {
-      type: "response.completed",
-      response: {
-        id: "resp_abort_cause",
-        status: "completed",
-        output: [call],
-        usage: { input_tokens: 20, output_tokens: 10, total_tokens: 30 },
-      },
-    },
-  ];
-  writeOpenAiResponsesSse(response, events);
-}
-
-async function connectOperator(instance: OpenClawTestInstance, signal: AbortSignal) {
-  return acquireGatewayTestClient(
-    {
-      url: instance.url,
-      token: instance.gatewayToken,
-      clientName: "cli",
-      mode: "cli",
-      role: "operator",
-      scopes: ["operator.write", "operator.admin"],
-      deviceIdentity: null,
-      env: instance.env,
-      sharedStateMode: "read-only",
-    },
-    {
-      timeoutMs: 120_000,
-      signal,
-      timeoutMessage: "operator connection timed out",
-      closeMessage: "operator connection closed",
-    },
-  );
-}
-
-async function stopChild(
-  child: ChildProcessWithoutNullStreams | undefined,
-  closed: Promise<void>,
-  signal: AbortSignal,
-): Promise<void> {
-  if (!child || child.exitCode !== null || child.signalCode !== null) {
-    return;
-  }
-  child.stdin.end();
-  try {
-    await withinTest(closed, signal);
-  } catch (error) {
-    if (!signal.aborted) {
-      throw error;
-    }
-    // EOF owns normal shutdown; only an aborted test needs the cleanup rescue.
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGKILL");
-    }
-    await closed;
-  }
+    { type: "response.completed", response: { id: "resp_abort_cause", status: "completed" } },
+  ]);
 }
 
 it(
@@ -111,79 +39,48 @@ it(
   { timeout: 120_000 },
   async ({ signal }) => {
     let instance: OpenClawTestInstance | undefined;
-    let operator: GatewayClient | undefined;
     let acpProcess: ChildProcessWithoutNullStreams | undefined;
     let acpClosed = Promise.resolve();
-    const stalledResponses = new Set<ServerResponse>();
     let providerRequestCount = 0;
     let failedToolUpdate = false;
     const provider = createServer((request, response) => {
-      void (async () => {
-        const text = await readRequestText(request);
-        if (request.method !== "POST" || request.url !== "/v1/responses") {
-          response.writeHead(404).end();
-          return;
-        }
-        providerRequestCount += 1;
-        const body: unknown = JSON.parse(text);
-        const tools = isRecord(body) && Array.isArray(body.tools) ? body.tools : [];
-        if (!tools.some((tool) => isRecord(tool) && tool.name === "session_status")) {
-          throw new Error("session_status tool missing from provider request");
-        }
-        if (providerRequestCount > 1) {
-          stalledResponses.add(response);
-          request.once("close", () => stalledResponses.delete(response));
-          return;
-        }
+      request.resume();
+      if (request.method !== "POST" || request.url !== "/v1/responses") {
+        response.writeHead(404).end();
+      } else if (++providerRequestCount === 1) {
         writeToolCall(response);
-      })().catch((error: unknown) => response.writeHead(500).end(String(error)));
+      }
     });
 
     try {
       const providerUrl = await listenLoopback(provider);
+      const config = createOpenAiResponsesModelConfig({
+        baseUrl: providerUrl,
+        providerId: "mock-openai",
+        modelId,
+        reasoning: false,
+        toolProfile: "full",
+      });
+      const defaults = expectDefined(config.agents?.defaults, "provider fixture agent defaults");
+      defaults.workspace = process.cwd();
+      defaults.models = { [modelRef]: { params: { transport: "sse", openaiWsWarmup: false } } };
+      // This provider emits a direct call, not a Tool Search lookup.
+      config.tools = { codeMode: { enabled: false }, toolSearch: false };
       instance = await createOpenClawTestInstance({
         name: "acp-abort-cause",
-        config: {
-          agents: {
-            defaults: {
-              workspace: process.cwd(),
-              skipBootstrap: true,
-              model: { primary: modelRef },
-              models: { [modelRef]: { params: { transport: "sse", openaiWsWarmup: false } } },
-            },
-          },
-          tools: {
-            codeMode: { enabled: false },
-            // This provider fixture emits a direct call, not a Tool Search lookup.
-            toolSearch: false,
-          },
-          models: {
-            mode: "replace",
-            providers: {
-              "mock-openai": {
-                baseUrl: `${providerUrl}/v1`,
-                apiKey: "test",
-                api: "openai-responses",
-                models: [{ id: modelId, name: modelId }],
-              },
-            },
-          },
-          plugins: { slots: { memory: "none" } },
-        },
+        config,
         env: {
           OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
         },
       });
       await instance.startGateway();
-      operator = await connectOperator(instance, signal);
 
-      const entrypoint = await instance.entrypoint();
-      const child = spawn(
-        process.execPath,
-        [...entrypoint, "acp", "--url", instance.url, "--token", instance.gatewayToken],
-        { cwd: process.cwd(), env: instance.env, stdio: ["pipe", "pipe", "pipe"] },
-      );
+      const child = spawn(process.execPath, [...(await instance.entrypoint()), "acp"], {
+        cwd: process.cwd(),
+        env: instance.env,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
       acpProcess = child;
       acpClosed = new Promise<void>((resolve) => {
         child.once("close", () => resolve());
@@ -191,11 +88,9 @@ it(
       const timeline: string[] = [];
       // SAFETY: Node and DOM ReadableStream types describe the same runtime object here.
       const output = Readable.toWeb(acpProcess.stdout) as Parameters<typeof ndJsonStream>[1];
-      const stream = ndJsonStream(Writable.toWeb(acpProcess.stdin), output);
       const client = new ClientSideConnection(
         () => ({
-          sessionUpdate: async (notification: SessionNotification) => {
-            const update = notification.update;
+          sessionUpdate: async ({ update }) => {
             if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text") {
               timeline.push(update.content.text);
             }
@@ -205,11 +100,9 @@ it(
           },
           requestPermission: async () => ({ outcome: { outcome: "cancelled" } }),
         }),
-        stream,
+        ndJsonStream(Writable.toWeb(acpProcess.stdin), output),
       );
-      await client.initialize({
-        protocolVersion: PROTOCOL_VERSION,
-      });
+      await client.initialize({ protocolVersion: PROTOCOL_VERSION });
       const sessionKey = `agent:main:acp-abort-cause-${process.pid}`;
       const session = await client.newSession({
         cwd: process.cwd(),
@@ -222,25 +115,31 @@ it(
       });
 
       await expect
-        .poll(() => ({ failedToolUpdate, providerRequestCount }), {
-          timeout: 30_000,
-          interval: 25,
-        })
-        .toEqual({ failedToolUpdate: true, providerRequestCount: 2 });
-      await expect(operator.request("chat.abort", { sessionKey })).resolves.toMatchObject({
-        aborted: true,
-      });
-      const result = await prompt;
-      timeline.push(result.stopReason);
+        .poll(() => [failedToolUpdate, providerRequestCount], { timeout: 30_000, interval: 25 })
+        .toEqual([true, 2]);
+      const abort = await instance.cli([
+        "gateway",
+        "call",
+        "chat.abort",
+        "--json",
+        "--params",
+        JSON.stringify({ sessionKey }),
+      ]);
+      expect(abort.code, abort.stderr).toBe(0);
+      expect(JSON.parse(abort.stdout)).toMatchObject({ aborted: true });
+      timeline.push((await prompt).stopReason);
 
       expect(timeline).toContain(`[OpenClaw interruption] ${ABORT_CAUSE}`);
       expect(timeline.at(-1)).toBe("cancelled");
     } finally {
-      for (const response of stalledResponses) {
-        response.destroy();
+      provider.closeAllConnections();
+      if (acpProcess && acpProcess.exitCode === null && acpProcess.signalCode === null) {
+        const child = acpProcess;
+        // EOF owns normal shutdown; an aborted test gets a signal-bound rescue.
+        using _ = addAbortListener(signal, () => child.kill("SIGKILL"));
+        child.stdin.end();
+        await acpClosed;
       }
-      await stopChild(acpProcess, acpClosed, signal);
-      await operator?.stopAndWait({ timeoutMs: 1_000 }).catch(() => operator?.stop());
       await instance?.cleanup();
       await closeHttpServer(provider);
     }

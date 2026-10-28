@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import { isRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GatewayRequest } from "./gateway-request.js";
@@ -489,7 +490,10 @@ export function createOperations({
     // The SDK binding has no deadline; agent.wait owns its observation timeout.
     const request: GatewayRequest = async (method, requestParams) => {
       assertAuthority();
-      const signal = method === "agent.wait" ? undefined : AbortSignal.timeout(15_000);
+      // Accepted runs retain the request signal; stop the deadline at RPC settlement.
+      const { signal, cleanup } = buildTimeoutAbortSignal({
+        timeoutMs: method === "agent.wait" ? undefined : 15_000,
+      });
       try {
         return await boundRequest(method, requestParams, signal ? { signal } : undefined);
       } catch (error) {
@@ -502,6 +506,8 @@ export function createOperations({
           );
         }
         throw error;
+      } finally {
+        cleanup();
       }
     };
     return await execute(op, params, request);

@@ -143,6 +143,8 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 
 ### Access and policy
 
+`openclaw config validate` warns about missing `dm.allowFrom` entries, including account overrides and inherited defaults. For `dm.policy: "open"`, add `"*"` to the indicated nested allowlist or run `openclaw doctor --fix`; for `"allowlist"`, add the intended Matrix user IDs.
+
 - `groupPolicy`: `"open"`, `"allowlist"`, or `"disabled"`. Default: `"allowlist"`.
 - `groupAllowFrom`: allowlist of user IDs for room traffic.
 - `mentionPatterns`: scoped regex patterns for room mentions. Object with `{ mode: "allow"|"deny", allowIn: [roomId, ...], denyIn: [roomId, ...] }`. Controls whether configured `agents.entries.*.groupChat.mentionPatterns` apply per-room.

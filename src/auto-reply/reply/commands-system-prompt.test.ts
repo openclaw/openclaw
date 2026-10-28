@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createOpenClawCodingToolsAsync } from "../../agents/agent-tools.js";
@@ -78,11 +76,11 @@ vi.mock("../../skills/runtime/remote.js", () => ({
   getRemoteSkillEligibility: vi.fn(() => false),
 }));
 
-vi.mock("../../skills/runtime/session-snapshot.js", () => ({
+vi.mock("../../skills/runtime/session-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../skills/runtime/session-snapshot.js")>()),
   resolveReusableWorkspaceSkillSnapshot: vi.fn(() => ({
     snapshot: { prompt: "", skills: [], resolvedSkills: [] },
     shouldRefresh: false,
-    snapshotVersion: "test-snapshot",
   })),
 }));
 
@@ -112,7 +110,7 @@ vi.mock("../../tts/tts-settings.js", () => ({
   setTtsMachinePrefsPathResolver: vi.fn(),
 }));
 
-function makeParams(): HandleCommandsParams {
+function makeParams(overrides: Partial<HandleCommandsParams> = {}): HandleCommandsParams {
   return {
     ctx: {
       SessionKey: "agent:main:default",
@@ -139,6 +137,7 @@ function makeParams(): HandleCommandsParams {
     resolvedElevatedLevel: "off",
     provider: "openai",
     model: "gpt-5.4",
+    ...overrides,
   } as unknown as HandleCommandsParams;
 }
 
@@ -169,7 +168,6 @@ describe("resolveCommandsSystemPromptBundle", () => {
     vi.mocked(resolveReusableWorkspaceSkillSnapshot).mockReturnValue({
       snapshot: { prompt: "", skills: [], resolvedSkills: [] },
       shouldRefresh: false,
-      snapshotVersion: "test-snapshot",
     } as never);
   });
 
@@ -198,11 +196,12 @@ describe("resolveCommandsSystemPromptBundle", () => {
   );
 
   it("rejects an independent global sandbox policy without its own owner", async () => {
-    const params = makeParams();
-    params.agentId = "target";
-    params.sessionKey = "agent:target:main";
+    const params = makeParams({
+      agentId: "target",
+      sessionKey: "agent:target:main",
+      cfg: { agents: { ownership: "explicit", entries: { main: {}, target: {} } } },
+    });
     params.ctx.RuntimePolicySessionKey = "global";
-    params.cfg = { agents: { ownership: "explicit", entries: { main: {}, target: {} } } };
 
     await expect(resolveCommandsSystemPromptBundle(params)).rejects.toMatchObject({
       code: "AGENT_SELECTION_REQUIRED",
@@ -211,9 +210,7 @@ describe("resolveCommandsSystemPromptBundle", () => {
   });
 
   it("records bootstrap exclusions for generated command prompts", async () => {
-    const params = makeParams();
-
-    await resolveCommandsSystemPromptBundle(params);
+    await resolveCommandsSystemPromptBundle(makeParams());
 
     expect(vi.mocked(makeBootstrapWarn)).toHaveBeenCalledWith({
       sessionLabel: "agent:main:default",
@@ -262,12 +259,13 @@ describe("resolveCommandsSystemPromptBundle", () => {
   });
 
   it("uses the resolved session key and forwards full-access block reasons", async () => {
-    const params = makeParams();
-    params.cfg = { agents: { defaults: { sandbox: { mode: "all" } } } };
-    params.sessionKey = "agent:target:default";
-    params.agentId = "target";
+    const params = makeParams({
+      cfg: { agents: { defaults: { sandbox: { mode: "all" } } } },
+      sessionKey: "agent:target:default",
+      agentId: "target",
+      elevated: { enabled: true, allowed: false, failures: [] },
+    });
     params.ctx.SessionKey = "agent:source:default";
-    params.elevated = { enabled: true, allowed: false, failures: [] };
 
     const result = await resolveCommandsSystemPromptBundle(params);
 
@@ -301,97 +299,84 @@ describe("resolveCommandsSystemPromptBundle", () => {
   });
 
   it("uses materialized sandbox library skill paths", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-command-sandbox-skills-"));
-    try {
-      const workspaceDir = path.join(root, "workspace");
-      const skillsWorkspaceDir = path.join(root, "state", "sandbox-skills");
-      const skillDir = path.join(skillsWorkspaceDir, "skills", "gog");
-      const hostSkillPath = "/host/skills/gog/SKILL.md";
-      const hostSnapshot: SkillSnapshot = {
-        prompt: "<available_skills>Host skill catalog</available_skills>",
-        skills: [{ name: "gog" }],
-        resolvedSkills: [
-          {
-            name: "gog",
-            description: "Gog skill",
-            filePath: hostSkillPath,
-            baseDir: path.dirname(hostSkillPath),
-            source: "openclaw-library",
-            sourceInfo: createSyntheticSourceInfo(hostSkillPath, { source: "openclaw-library" }),
-            disableModelInvocation: false,
-          },
-        ],
-        librarySelections: [
-          { skillId: "test-pin", revision: "revision-1", name: "gog", ownerProfileId: null },
-        ],
-      };
-      await fs.mkdir(skillDir, { recursive: true });
-      await fs.writeFile(
-        path.join(skillDir, "SKILL.md"),
-        ["---", "name: gog", "description: Gog skill", "---", "# Gog", ""].join("\n"),
-        "utf8",
-      );
-      const params = makeParams();
-      params.workspaceDir = workspaceDir;
-      params.sessionKey = "global";
-      params.agentId = "target";
-      params.cfg = {
-        agents: {
-          ownership: "explicit",
-          entries: {
-            main: {},
-            target: { workspace: path.join(root, "agent-workspace"), sandbox: { mode: "all" } },
-          },
+    const root = "/tmp/openclaw-command-sandbox-skills";
+    const workspaceDir = path.join(root, "workspace");
+    const skillsWorkspaceDir = path.join(root, "state", "sandbox-skills");
+    const skillDir = path.join(skillsWorkspaceDir, "skills", "gog");
+    const hostSkillPath = "/host/skills/gog/SKILL.md";
+    const hostSnapshot: SkillSnapshot = {
+      prompt: "<available_skills>Host skill catalog</available_skills>",
+      skills: [{ name: "gog" }],
+      resolvedSkills: [
+        {
+          name: "gog",
+          description: "Gog skill",
+          filePath: hostSkillPath,
+          baseDir: path.dirname(hostSkillPath),
+          source: "openclaw-library",
+          sourceInfo: createSyntheticSourceInfo(hostSkillPath, { source: "openclaw-library" }),
+          disableModelInvocation: false,
         },
-      };
-      vi.mocked(ensureSandboxWorkspaceForSession).mockResolvedValue({
-        workspaceDir,
-        containerWorkdir: "/workspace",
-        skillsWorkspaceDir,
-        skillUsagePaths: [
-          {
-            skillName: "gog",
-            skillFile: hostSkillPath,
-            readPath: path.join(skillDir, "SKILL.md"),
-            skillSource: "unknown",
-          },
-        ],
-        skillsEligibility: {
-          remote: {
-            platforms: ["linux"],
-            hasBin: () => true,
-            hasAnyBin: () => true,
-            note: "sandbox",
-          },
+      ],
+      librarySelections: [
+        { skillId: "test-pin", revision: "revision-1", name: "gog", ownerProfileId: null },
+      ],
+    };
+    const params = makeParams();
+    params.workspaceDir = workspaceDir;
+    params.sessionKey = "global";
+    params.agentId = "target";
+    params.cfg = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: {},
+          target: { workspace: path.join(root, "agent-workspace"), sandbox: { mode: "all" } },
         },
-        workspaceAccess: "rw",
-      } as never);
-      vi.mocked(resolveReusableWorkspaceSkillSnapshot).mockReturnValue({
-        snapshot: hostSnapshot,
-        shouldRefresh: false,
-        snapshotVersion: "host-snapshot",
-      } as never);
+      },
+    };
+    vi.mocked(ensureSandboxWorkspaceForSession).mockResolvedValue({
+      workspaceDir,
+      containerWorkdir: "/workspace",
+      skillsWorkspaceDir,
+      skillUsagePaths: [
+        {
+          skillName: "gog",
+          skillFile: hostSkillPath,
+          readPath: path.join(skillDir, "SKILL.md"),
+          skillSource: "unknown",
+        },
+      ],
+      skillsEligibility: {
+        remote: {
+          platforms: ["linux"],
+          hasBin: () => true,
+          hasAnyBin: () => true,
+          note: "sandbox",
+        },
+      },
+      workspaceAccess: "rw",
+    } as never);
+    vi.mocked(resolveReusableWorkspaceSkillSnapshot).mockReturnValue({
+      snapshot: hostSnapshot,
+      shouldRefresh: false,
+    } as never);
 
-      const result = await resolveCommandsSystemPromptBundle(params);
+    const result = await resolveCommandsSystemPromptBundle(params);
 
-      expect(vi.mocked(ensureSandboxWorkspaceForSession)).toHaveBeenCalledWith({
-        skillsSnapshot: vi.mocked(resolveReusableWorkspaceSkillSnapshot).mock.results[0]?.value
-          .snapshot,
-        config: params.cfg,
-        sessionKey: "global",
-        agentId: "target",
-        workspaceDir,
-      });
-      const sandboxSkillPath = "/workspace/.openclaw/sandbox-skills/skills/gog/SKILL.md";
-      expect(result.skillsPrompt).toContain(sandboxSkillPath);
-      expect(result.skillsPrompt).not.toContain(hostSkillPath);
-      expect(vi.mocked(resolveReusableWorkspaceSkillSnapshot)).toHaveBeenCalledOnce();
-      const promptParams = firstArg(vi.mocked(buildAgentSystemPrompt));
-      expect(promptParams.skillsPrompt).toContain(sandboxSkillPath);
-      expect(String(promptParams.skillsPrompt)).not.toContain(hostSkillPath);
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
+    expect(vi.mocked(ensureSandboxWorkspaceForSession)).toHaveBeenCalledWith({
+      skillsSnapshot: hostSnapshot,
+      config: params.cfg,
+      sessionKey: "global",
+      agentId: "target",
+      workspaceDir,
+    });
+    const sandboxSkillPath = "/workspace/.openclaw/sandbox-skills/skills/gog/SKILL.md";
+    expect(result.skillsPrompt).toContain(sandboxSkillPath);
+    expect(result.skillsPrompt).not.toContain(hostSkillPath);
+    expect(vi.mocked(resolveReusableWorkspaceSkillSnapshot)).toHaveBeenCalledOnce();
+    const promptParams = firstArg(vi.mocked(buildAgentSystemPrompt));
+    expect(promptParams.skillsPrompt).toBe(result.skillsPrompt);
   });
 
   it("uses config-backed prompt settings for the target agent", async () => {

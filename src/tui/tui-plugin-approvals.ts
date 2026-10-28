@@ -3,11 +3,7 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import { isApprovalStaleError } from "../infra/approval-errors.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createTuiRefreshCoalescer } from "./coalesced-refresh.js";
-import {
-  TuiChoicePrompt,
-  createTuiChoiceSelector,
-  type TuiChoiceSelector,
-} from "./components/choice-prompt.js";
+import { TuiChoicePrompt, createTuiChoiceSelector } from "./components/choice-prompt.js";
 import { tuiTheme as theme } from "./theme/theme.js";
 import type { TuiApprovalDecision, TuiBackend, TuiPluginApproval } from "./tui-backend.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
@@ -19,29 +15,6 @@ const APPROVAL_BIDI_CONTROL_RE = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]
 function sanitizeApprovalText(text: string): string {
   const flattened = text.replace(APPROVAL_BIDI_CONTROL_RE, "").replace(/\s+/g, " ").trim();
   return sanitizeRenderableText(flattened);
-}
-
-function createApprovalPrompt(approval: TuiPluginApproval, selector: TuiChoiceSelector) {
-  const title = sanitizeApprovalText(approval.request.title);
-  const description = sanitizeApprovalText(approval.request.description ?? "");
-  const severity = approval.request.severity ?? "warning";
-  const metadata = [
-    `Severity: ${severity === "critical" ? "Critical" : severity === "info" ? "Info" : "Warning"}`,
-    ...(approval.request.toolName
-      ? [`Tool: ${sanitizeApprovalText(approval.request.toolName)}`]
-      : []),
-    ...(approval.request.pluginId
-      ? [`Plugin: ${sanitizeApprovalText(approval.request.pluginId)}`]
-      : []),
-  ];
-  return new TuiChoicePrompt(
-    theme.header(`plugin approval: ${title}`),
-    [
-      theme.dim(metadata.join("\n")),
-      { text: theme.system(description ? `Request: ${description}` : ""), optional: true },
-    ],
-    selector,
-  );
 }
 
 type ApprovalTimer = ReturnType<typeof setTimeout>;
@@ -130,16 +103,6 @@ function parseTuiPluginApproval(payload: unknown): TuiPluginApproval | null {
   };
 }
 
-function decisionLabel(decision: TuiApprovalDecision): string {
-  if (decision === "allow-once") {
-    return "allowed once";
-  }
-  if (decision === "allow-always") {
-    return "always allowed";
-  }
-  return "denied";
-}
-
 export function createTuiPluginApprovalController(deps: TuiPluginApprovalControllerDeps) {
   let queue = new Map<string, TuiPluginApproval>();
   type Presentation = { id: string; overlay?: OverlayHandle; timer?: ApprovalTimer };
@@ -198,7 +161,26 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
     const decisions = approval.request.allowedDecisions ?? DEFAULT_DECISIONS;
     const selector = createTuiChoiceSelector(decisions.map((decision) => DECISION_ITEMS[decision]));
     let allowDecisionArmed = false;
-    const prompt = createApprovalPrompt(approval, selector);
+    const title = sanitizeApprovalText(approval.request.title);
+    const description = sanitizeApprovalText(approval.request.description ?? "");
+    const severity = approval.request.severity ?? "warning";
+    const metadata = [
+      `Severity: ${severity === "critical" ? "Critical" : severity === "info" ? "Info" : "Warning"}`,
+      ...(approval.request.toolName
+        ? [`Tool: ${sanitizeApprovalText(approval.request.toolName)}`]
+        : []),
+      ...(approval.request.pluginId
+        ? [`Plugin: ${sanitizeApprovalText(approval.request.pluginId)}`]
+        : []),
+    ];
+    const prompt = new TuiChoicePrompt(
+      theme.header(`plugin approval: ${title}`),
+      [
+        theme.dim(metadata.join("\n")),
+        { text: theme.system(description ? `Request: ${description}` : ""), optional: true },
+      ],
+      selector,
+    );
     const denyIndex = decisions.indexOf("deny");
     let selectedDecision = denyIndex >= 0 ? decisions[denyIndex] : decisions[0];
     if (denyIndex >= 0) {
@@ -234,7 +216,13 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
           stale = true;
         } else {
           remove(approval.id);
-          deps.chatLog.addSystem(`${surfaceLabel}: ${decisionLabel(decision)}`);
+          const label =
+            decision === "allow-once"
+              ? "allowed once"
+              : decision === "allow-always"
+                ? "always allowed"
+                : "denied";
+          deps.chatLog.addSystem(`${surfaceLabel}: ${label}`);
         }
       } catch (error) {
         if (disposed) {

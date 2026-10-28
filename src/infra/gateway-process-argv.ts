@@ -152,8 +152,7 @@ export function readProcessWorkingDirectories(pids: readonly number[]): Map<numb
           const candidate = /^p(\d+)$/.exec(field);
           pid = candidate && requested.has(Number(candidate[1])) ? Number(candidate[1]) : undefined;
         } else if (pid !== undefined && field.startsWith("n") && path.isAbsolute(field.slice(1))) {
-          if (directories.has(pid)) {
-            directories.delete(pid);
+          if (directories.delete(pid)) {
             ambiguous.add(pid);
           } else if (!ambiguous.has(pid)) {
             directories.set(pid, field.slice(1));

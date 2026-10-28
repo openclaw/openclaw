@@ -4,7 +4,6 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PlivoConfig, WebhookSecurityConfig } from "../config.js";
-import { getHeader } from "../http-headers.js";
 import type {
   GetCallStatusInput,
   GetCallStatusResult,
@@ -22,7 +21,7 @@ import type {
 } from "../types.js";
 import { escapeXml } from "../voice-mapping.js";
 import { reconstructWebhookUrl, verifyPlivoWebhook } from "../webhook-security.js";
-import type { VoiceCallProvider } from "./base.js";
+import { assertVoiceCallProviderSetting, type VoiceCallProvider } from "./base.js";
 import { createCarrierApi } from "./shared/carrier-api.js";
 
 interface PlivoProviderOptions {
@@ -38,18 +37,6 @@ interface PlivoProviderOptions {
 
 type PendingSpeak = { text: string; locale?: string; listenAfterPlayback?: boolean };
 type PendingListen = { language?: string };
-
-function createPlivoRequestDedupeKey(ctx: WebhookContext): string {
-  const nonceV3 = getHeader(ctx.headers, "x-plivo-signature-v3-nonce");
-  if (nonceV3) {
-    return `plivo:v3:${nonceV3}`;
-  }
-  const nonceV2 = getHeader(ctx.headers, "x-plivo-signature-v2-nonce");
-  if (nonceV2) {
-    return `plivo:v2:${nonceV2}`;
-  }
-  return `plivo:fallback:${crypto.createHash("sha256").update(ctx.rawBody).digest("hex")}`;
-}
 
 export class PlivoProvider implements VoiceCallProvider {
   readonly name = "plivo" as const;
@@ -105,12 +92,8 @@ export class PlivoProvider implements VoiceCallProvider {
   }
 
   constructor(config: PlivoConfig, options: PlivoProviderOptions = {}) {
-    if (!config.authId) {
-      throw new Error("Plivo Auth ID is required");
-    }
-    if (!config.authToken) {
-      throw new Error("Plivo Auth Token is required");
-    }
+    assertVoiceCallProviderSetting(config.authId, "Plivo Auth ID is required");
+    assertVoiceCallProviderSetting(config.authToken, "Plivo Auth Token is required");
 
     this.authToken = config.authToken;
     this.options = options;
@@ -135,13 +118,7 @@ export class PlivoProvider implements VoiceCallProvider {
       console.warn(`[plivo] Webhook verification failed: ${result.reason}`);
     }
 
-    return {
-      ok: result.ok,
-      reason: result.reason,
-      isReplay: result.isReplay,
-      verifiedRequestKey: result.verifiedRequestKey,
-      releaseReplay: result.releaseReplay,
-    };
+    return result;
   }
 
   parseWebhookEvent(
@@ -187,8 +164,7 @@ export class PlivoProvider implements VoiceCallProvider {
               )
             : PlivoProvider.xmlKeepAlive();
     } else {
-      const dedupeKey = options?.verifiedRequestKey ?? createPlivoRequestDedupeKey(ctx);
-      event = this.normalizeEvent(parsed, callId, dedupeKey);
+      event = this.normalizeEvent(parsed, callId, options?.verifiedRequestKey);
       providerResponseBody =
         flow === "answer" || flow === "getinput"
           ? PlivoProvider.xmlKeepAlive()

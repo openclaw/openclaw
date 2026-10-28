@@ -159,19 +159,6 @@ type CapabilityProviderCandidate = CapabilityModelProviderCandidate & {
   isConfiguredAsync?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => Promise<boolean>;
 };
 
-type ParsedAspectRatio = {
-  width: number;
-  height: number;
-  value: number;
-};
-
-type ParsedSize = {
-  width: number;
-  height: number;
-  aspectRatio: number;
-  area: number;
-};
-
 function resolveCurrentDefaultProviderId(cfg?: OpenClawConfig): string {
   const trimmed = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.model);
   if (!trimmed) {
@@ -432,7 +419,11 @@ function parsePositiveDimensionPair(
   return { width, height };
 }
 
-function parseAspectRatioValue(raw?: string | null): ParsedAspectRatio | null {
+export function parseAspectRatioValue(raw?: string | null): {
+  width: number;
+  height: number;
+  value: number;
+} | null {
   const pair = parsePositiveDimensionPair(raw, /^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/);
   if (!pair) {
     return null;
@@ -444,7 +435,12 @@ function parseAspectRatioValue(raw?: string | null): ParsedAspectRatio | null {
   };
 }
 
-function parseSizeValue(raw?: string | null): ParsedSize | null {
+function parseSizeValue(raw?: string | null): {
+  width: number;
+  height: number;
+  aspectRatio: number;
+  area: number;
+} | null {
   const pair = parsePositiveDimensionPair(raw, /^(\d+)\s*x\s*(\d+)$/i);
   if (!pair) {
     return null;

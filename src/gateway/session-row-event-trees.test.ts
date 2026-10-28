@@ -1,5 +1,4 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
 import type { SessionAncestorRef } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { publishSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
@@ -28,6 +27,8 @@ import {
   sessionReadHandlers,
 } from "./server-methods/sessions-read-cache.test-support.js";
 import { sessionSubscriptionHandlers } from "./server-methods/sessions-subscriptions.js";
+import { gatewayConnect } from "./server/client-fixtures.test-support.js";
+import { createInertGatewayTestSocket } from "./server/inert-socket.test-support.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
@@ -71,28 +72,8 @@ it.each(["sessions.list", "sessions.subscribe"])(
         const client = {
           connId,
           usesSharedGatewayAuth: false,
-          connect: {
-            minProtocol: 1,
-            maxProtocol: 1,
-            client: {
-              id: "openclaw-control-ui",
-              version: "test",
-              platform: "test",
-              mode: "webchat",
-            },
-            role: "operator",
-            scopes: ["operator.admin"],
-          },
-          socket: {
-            readyState: WebSocket.OPEN,
-            bufferedAmount: 0,
-            send,
-            close: vi.fn(),
-            terminate: vi.fn(),
-            on: vi.fn(),
-            off: vi.fn(),
-            once: vi.fn(),
-          },
+          connect: gatewayConnect(["operator.admin"]),
+          socket: createInertGatewayTestSocket(send),
         } satisfies GatewayWsClient;
         connection.clients.add(client);
         connection.sessionEventSubscribers.subscribe(connId);

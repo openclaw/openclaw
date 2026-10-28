@@ -5,7 +5,10 @@ import {
   POSIX_INLINE_COMMAND_FLAGS,
   resolveInlineCommandMatch,
 } from "./shell-inline-command.js";
-import { POSIX_SHELL_WRAPPERS } from "./shell-wrapper-resolution.js";
+import {
+  POSIX_SHELL_WRAPPERS,
+  POSIX_SHELLS_WITH_PLUS_OPTIONS,
+} from "./shell-wrapper-resolution.js";
 
 const POSIX_SHELL_OPTIONS_WITH_VALUE = new Set([
   "--init-file",
@@ -17,17 +20,6 @@ const POSIX_SHELL_OPTIONS_WITH_VALUE = new Set([
   "+o",
 ]);
 const POSIX_SHELL_CODE_LOADING_OPTIONS = new Set(["--init-file", "--rcfile", "--startup-script"]);
-const POSIX_SHELLS_WITH_PLUS_OPTIONS = new Set([
-  "ash",
-  "bash",
-  "dash",
-  "ksh",
-  "mksh",
-  "osh",
-  "sh",
-  "yash",
-  "zsh",
-]);
 
 function normalizeOptionFlag(token: string): string {
   return normalizeLowercaseStringOrEmpty(parseInlineOptionToken(token).name);

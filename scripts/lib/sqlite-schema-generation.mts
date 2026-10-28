@@ -147,7 +147,13 @@ export async function generateSqliteSchemaCatalogs(
 import { createHash } from "node:crypto";
 ${CATALOG_TYPE_IMPORT}
 import type { GeneratedSqliteFingerprint } from "../../infra/sqlite-schema-fingerprint.js";
-${stores.map((store) => `import { ${storeReaderName(store, "Catalog")}, ${storeReaderName(store, "Fingerprint")} } from "./sqlite-${store}-catalogs.js";`).join("\n")}
+${stores
+  .toSorted()
+  .map(
+    (store) =>
+      `import { ${storeReaderName(store, "Catalog")}, ${storeReaderName(store, "Fingerprint")} } from "./sqlite-${store}-catalogs.js";`,
+  )
+  .join("\n")}
 
 export function readGeneratedSqliteFingerprint(schemaSql: string): GeneratedSqliteFingerprint | undefined {
   const hash = createHash("sha256").update(schemaSql).digest("hex");

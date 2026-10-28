@@ -7,5 +7,3 @@ export type SessionsUsageResult = SharedSessionsUsageResult;
 export type { UsageSummary as ProviderUsageSummary } from "../../../../src/infra/provider-usage.types.js";
 
 export type CostUsageDailyEntry = CostUsageSummary["daily"][number];
-
-export type { CostUsageSummary } from "../../../../src/infra/session-cost-usage.types.js";

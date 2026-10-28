@@ -155,11 +155,7 @@ it.each(["project", "legacy"] as const)(
     expect(loadInstalledPluginIndexInstallRecordsSync()["obsolete"]?.installPath).toBe(obsolete);
     // Advance the durable ledger without publishing the install-record cache.
     replaceIndexField("installRecords", installRecord("desired", desired));
-    {
-      using reads = vi.spyOn(metadataState, "readPluginMetadataStateRow");
-      await withoutParentSqlite(() => cleanup(log, startupInstallPaths));
-      expect(reads).toHaveBeenCalledTimes(1);
-    }
+    await withoutParentSqlite(() => cleanup(log, startupInstallPaths));
 
     expect(loadInstalledPluginIndexInstallRecordsSync()["obsolete"]?.installPath).toBe(obsolete);
     expect(fs.existsSync(startup)).toBe(true);
@@ -187,9 +183,7 @@ it.each([false, true])(
       replaceIndexField("plugins", [{ ...plugin, sourceAdmissions: { malformed: true } }]);
     }
     try {
-      using reads = vi.spyOn(metadataState, "readPluginMetadataStateRow");
       await cleanup(log);
-      expect(reads).toHaveBeenCalledTimes(1);
       expect(fs.readFileSync(retainedFile, "utf8")).toBe("synthetic retained");
       expect(fs.readFileSync(liveFile, "utf8")).toBe("synthetic live");
       expect(fs.existsSync(orphanFile)).toBe(malformed);

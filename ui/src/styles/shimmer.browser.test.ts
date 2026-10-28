@@ -1,5 +1,4 @@
 import { expect, it } from "vitest";
-import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
 import { withBrowserPage } from "../test-helpers/browser-page.ts";
 import { readStyles, styleDocument, styleFixture } from "./style-fixture.test-support.ts";
 
@@ -36,44 +35,28 @@ fixture.describe("Control UI shimmer", () => {
             const effect = animations[0]?.effect;
             const keyframes = effect instanceof KeyframeEffect ? effect.getKeyframes() : [];
             return {
-              hostAnimation: host.animationName,
-              hostBackground: host.backgroundImage,
-              hostOverflow: host.overflow,
-              highlightAnimation: highlight.animationName,
+              host: [host.animationName, host.backgroundImage, host.overflow],
+              highlight: [highlight.animationName, highlight.animationIterationCount],
               highlightBackground: highlight.backgroundImage,
               highlightDuration: highlight.animationDuration,
-              highlightIterations: highlight.animationIterationCount,
               highlightWillChange: highlight.willChange,
-              animatedProperties: [
-                ...new Set(
-                  keyframes.flatMap((frame) =>
-                    Object.keys(frame).filter(
-                      (key) => !["composite", "computedOffset", "easing", "offset"].includes(key),
-                    ),
-                  ),
-                ),
-              ],
+              animatedProperties: [...new Set(keyframes.flatMap(Object.keys))].filter(
+                (key) => !["composite", "computedOffset", "easing", "offset"].includes(key),
+              ),
               running: animations.some((item) => item.playState === "running"),
               settledX: Number.parseFloat(highlight.transform.split(",")[4] ?? "NaN"),
               width: element.clientWidth,
             };
           });
           if (reducedMotion === "reduce") {
-            expect(styles).toMatchObject({
-              highlightAnimation: "none",
-              highlightIterations: "1",
-              running: false,
-            });
+            expect(styles).toMatchObject({ highlight: ["none", "1"], running: false });
             expect(Number.parseFloat(styles.highlightDuration)).toBeLessThanOrEqual(0.00001);
             expect(Math.abs(styles.settledX + styles.width)).toBeLessThanOrEqual(1);
           } else {
             expect(styles).toMatchObject({
-              hostAnimation: "none",
-              hostBackground: "none",
-              hostOverflow: "hidden",
-              highlightAnimation: "shimmer",
+              host: ["none", "none", "hidden"],
+              highlight: ["shimmer", "infinite"],
               highlightDuration: duration,
-              highlightIterations: "infinite",
               highlightWillChange: "transform",
               animatedProperties: ["transform"],
             });
@@ -87,29 +70,29 @@ fixture.describe("Control UI shimmer", () => {
     await withBrowserPage(fixture.page({ reducedMotion: "no-preference" }), async (page) => {
       for (const count of [1, 2, 5]) {
         await page.setContent(
-          `<style>${readStyleSheet("ui/src/styles/base.css")}${readStyleSheet("ui/src/styles/chat/grouped.css")}</style><div style="padding:16px;width:360px"><span id="preview">A</span><span class="agent-chat__typing-state agent-chat__typing-text" data-typing>is typing…</span><span id="draft" class="agent-chat__typing-state agent-chat__typing-text">Draft</span><div class="agent-chat__typing-overflow"><span class="agent-chat__typing-identities">${'<span class="agent-chat__typing-person">C</span>'.repeat(count)}</span><span class="agent-chat__typing-summary"><span class="agent-chat__typing-text" data-typing><bdi class="agent-chat__typing-name">Camila</bdi> is typing…</span></span></div><span class="agent-chat__typing-text" data-typing>Several people are typing…</span></div>`,
+          `<style>${readStyles("styles/base", "styles/chat/grouped")}</style><div style="padding:16px;width:360px"><span id="preview">A</span><span class="agent-chat__typing-state agent-chat__typing-text" data-typing>is typing…</span><span id="draft" class="agent-chat__typing-state agent-chat__typing-text">Draft</span><div class="agent-chat__typing-overflow"><span class="agent-chat__typing-identities">${'<span class="agent-chat__typing-person">C</span>'.repeat(count)}</span><span class="agent-chat__typing-summary"><span class="agent-chat__typing-text" data-typing><bdi class="agent-chat__typing-name">Camila</bdi> is typing…</span></span></div><span class="agent-chat__typing-text" data-typing>Several people are typing…</span></div>`,
         );
         const result = await page.evaluate(() => {
-          const first = document.querySelector(".agent-chat__typing-person");
-          const stack = document.querySelector(".agent-chat__typing-identities");
-          const summary = document.querySelector(".agent-chat__typing-summary");
-          const preview = document.querySelector("#preview");
-          if (!first || !stack || !summary || !preview) {
-            throw new Error("Missing typing fixture");
-          }
+          const element = (selector: string) => {
+            const found = document.querySelector(selector);
+            if (!found) {
+              throw new Error(`Missing typing fixture: ${selector}`);
+            }
+            return found;
+          };
+          const rect = (selector: string) => element(selector).getBoundingClientRect();
           return {
-            offset: first.getBoundingClientRect().x - preview.getBoundingClientRect().x,
-            gap: summary.getBoundingClientRect().x - stack.getBoundingClientRect().right,
-            width: stack.getBoundingClientRect().width,
+            offset: rect(".agent-chat__typing-person").x - rect("#preview").x,
+            gap:
+              rect(".agent-chat__typing-summary").x - rect(".agent-chat__typing-identities").right,
+            width: rect(".agent-chat__typing-identities").width,
             animated: [...document.querySelectorAll(".agent-chat__typing-text[data-typing]")].map(
               (e) => getComputedStyle(e).animationName,
             ),
-            draftAnimation: getComputedStyle(document.querySelector("#draft") ?? preview)
-              .animationName,
-            nameFill: getComputedStyle(
-              document.querySelector(".agent-chat__typing-name") ?? preview,
-            ).webkitTextFillColor,
-            avatarAnimations: first.getAnimations({ subtree: true }).length,
+            draftAnimation: getComputedStyle(element("#draft")).animationName,
+            nameFill: getComputedStyle(element(".agent-chat__typing-name")).webkitTextFillColor,
+            avatarAnimations: element(".agent-chat__typing-person").getAnimations({ subtree: true })
+              .length,
           };
         });
         expect(result).toMatchObject({

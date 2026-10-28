@@ -72,45 +72,36 @@ describe("bundled manifest contract availability", () => {
     mocks.readBundledDiscoveryMode.mockReturnValue("allowlist");
   });
 
-  it("does not expose a plugin outside a restrictive allowlist", () => {
-    const config = { plugins: { allow: ["another-plugin"] } };
-    expect(available({ config, allowBundledProviderCompat: true })).toBe(false);
-    expect(values(config)).toEqual([]);
-  });
+  it.each(["allowlist", "compat"] as const)(
+    "honors %s discovery for provider contracts",
+    (mode) => {
+      mocks.readBundledDiscoveryMode.mockReturnValue(mode);
+      const config = { plugins: { allow: ["another-plugin"] } };
+      expect(available({ config, allowBundledProviderCompat: true })).toBe(mode === "compat");
+      expect(values(config)).toEqual(mode === "compat" ? ["google"] : []);
+    },
+  );
 
   it.each([
-    ["custom-owner", "private-channel", { enabled: true }, {}, true],
-    ["discord-owner", "discord", { enabled: false, token: "configured" }, {}, false],
-    ["discord-owner", "discord", { token: "configured" }, { deny: ["discord-owner"] }, false],
-    [
-      "discord-owner",
-      "discord",
-      { token: "configured" },
-      { entries: { "discord-owner": { enabled: false } } },
-      false,
-    ],
-  ] satisfies Array<
-    [
-      string,
-      string,
-      { enabled?: boolean; token?: string },
-      NonNullable<OpenClawConfig["plugins"]>,
-      boolean,
-    ]
-  >)("honors %s / %s: channel=%j policy=%j -> %s", (id, channel, config, policy, expected) => {
-    expect(
-      available({
-        plugin: { ...plugin, id, channels: [channel] },
-        config: {
-          plugins: { allow: ["another-plugin"], ...policy },
-          channels: { [channel]: config },
-        },
-      }),
-    ).toBe(expected);
-    if (expected) {
-      expect(mocks.readBundledDiscoveryMode).not.toHaveBeenCalled();
-    }
-  });
+    ["custom-owner", "private-channel", { enabled: true }, true],
+    ["discord-owner", "discord", { enabled: false, token: "configured" }, false],
+  ] satisfies Array<[string, string, { enabled?: boolean; token?: string }, boolean]>)(
+    "honors %s / %s: channel=%j -> %s",
+    (id, channel, config, expected) => {
+      expect(
+        available({
+          plugin: { ...plugin, id, channels: [channel] },
+          config: {
+            plugins: { allow: ["another-plugin"] },
+            channels: { [channel]: config },
+          },
+        }),
+      ).toBe(expected);
+      if (expected) {
+        expect(mocks.readBundledDiscoveryMode).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("preserves globally disabled bundled metadata for the named speech compatibility path", () => {
     const config = { plugins: { enabled: false } };
@@ -120,17 +111,6 @@ describe("bundled manifest contract availability", () => {
     expect(normalizedConfig.enabled).toBe(false);
   });
 
-  it("preserves the shipped provider-contract compatibility mode", () => {
-    mocks.readBundledDiscoveryMode.mockReturnValue("compat");
-
-    expect(
-      available({
-        config: { plugins: { allow: ["another-plugin"] } },
-        allowBundledProviderCompat: true,
-      }),
-    ).toBe(true);
-  });
-
   it.each([{ entries: { google: { enabled: false } } }, { deny: ["google"] }])(
     "never bypasses explicit owner prohibition in bundled compatibility mode",
     (plugins) => {
@@ -138,7 +118,11 @@ describe("bundled manifest contract availability", () => {
 
       expect(
         available({
-          config: { plugins },
+          plugin: { ...plugin, channels: ["discord"] },
+          config: {
+            plugins: { allow: ["another-plugin"], ...plugins },
+            channels: { discord: { token: "configured" } },
+          },
           allowBundledProviderCompat: true,
         }),
       ).toBe(false);

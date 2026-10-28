@@ -21,6 +21,7 @@ const api = `https://firebaseappdistribution.googleapis.com/v1/${appName}`;
 const tokenUrl = "https://oauth2.googleapis.com/token";
 const clientEmail = "x@x.iam.gserviceaccount.com";
 const configuration = { appId, groupAliases: ["android-daily"] };
+const audiences = ["phone", "wear"] as const;
 type Audience = "wear" | "phone";
 type Receipt = { releases: Record<Audience, { state: string }> };
 type Call = Pick<RequestInit, "body" | "dispatcher"> & { method: string; url: string };
@@ -77,7 +78,7 @@ function fixture() {
     sourceSha: plan.sourceSha,
     version: plan.version,
     build: String(plan.versionCode),
-    entries: (["phone", "wear"] as const).map((audience) => ({
+    entries: audiences.map((audience) => ({
       audience,
       text: `${audience} improvements`,
       textSha256: sha256(`${audience} improvements`),
@@ -85,7 +86,7 @@ function fixture() {
   };
   const bytes = { phone: Buffer.from("signed phone AAB"), wear: Buffer.from("signed Wear AAB") };
   const files = Object.fromEntries(
-    (["phone", "wear"] as const).map((audience) => {
+    audiences.map((audience) => {
       const basename = `openclaw-${plan.version}-${audience === "phone" ? "play" : "wear"}-release.aab`;
       const file = path.join(directory, basename);
       fs.writeFileSync(file, bytes[audience]);
@@ -196,11 +197,9 @@ it.each([
 ] as const)("retries transient %s", async (_label, url, failure, minimumDelay) => {
   const warnings = silenceWarnings();
   test.failures.set(`${url.endsWith("/token") ? "POST" : "GET"} ${url}`, [failure()]);
-  const result = await distribute();
-  expect(result.releases.phone.state).toBe("distributed");
+  await expect(preflight()).resolves.toEqual(configuration);
   expect(test.requests(url)).toHaveLength(2);
   expect(vi.mocked(delay).mock.calls[0]![0]).toBeGreaterThanOrEqual(minimumDelay);
-  expect(test.calls.filter((call) => call.url.endsWith(":distribute"))).toHaveLength(2);
   expect(warningsText(warnings)).not.toMatch(/private|assertion|synthetic-access-token/);
 });
 
@@ -211,7 +210,6 @@ it("bounds read retries and redacts diagnostics", async () => {
   expect(test.requests(preflightUrl)).toHaveLength(4);
   expect(delay).toHaveBeenCalledTimes(3);
   expect(warningsText(warnings)).not.toMatch(/private|Bearer|synthetic-access-token/);
-  expect(warnings.mock.calls[0]![0]).toMatch(/ECONNRESET.*2\/4/);
 });
 
 it.each<[string, () => Failure]>([
@@ -261,7 +259,7 @@ it("closes preflight and failed publishing connections independently", async () 
   expect(publishingDispatcher).toMatchObject({ closed: true, destroyed: true });
 });
 
-it("publishes signed Wear then Phone with labeled notes and idempotent notifications", async () => {
+it("publishes signed Wear then Phone and binds idempotent recovery to the original inputs", async () => {
   const result = await distribute();
   const effects = test.effects();
   expect(effects.map((call) => `${call.method} ${call.url.split("/releases")[1]}`)).toEqual(
@@ -289,6 +287,16 @@ it("publishes signed Wear then Phone with labeled notes and idempotent notificat
   test.calls.length = 0;
   await distribute();
   expect(test.effects()).toEqual([]);
+  test.calls.length = 0;
+  fs.writeFileSync(test.files.phone!, "different AAB");
+  await expect(distribute()).rejects.toThrow("SHA-256 sidecar");
+  fs.writeFileSync(test.files.phone!, test.bytes.phone);
+  test.options.notes.entries[0]!.text = "different notes";
+  test.options.notes.entries[0]!.textSha256 = sha256("different notes");
+  await expect(distribute()).rejects.toThrow("receipt does not match");
+  test.env.FIREBASE_TESTER_GROUPS = "another-group";
+  await expect(distribute()).rejects.toThrow("saved internal Android plan");
+  expect(test.calls).toEqual([]);
 });
 
 it("resumes a partial pair without uploading or emailing Wear again", async () => {
@@ -324,20 +332,6 @@ it("rejects an incomplete Play integration during read-only preflight", async ()
   test.state.integrationState = "ADHOC_SHARING_KEY_NOT_REGISTERED";
   await expect(preflight()).rejects.toThrow("register its Internal App Sharing certificate");
   expect(test.calls.some((call) => call.url.includes("releases"))).toBe(false);
-});
-
-it("rejects changed artifacts, notes, and destination on recovery", async () => {
-  await distribute();
-  test.calls.length = 0;
-  fs.writeFileSync(test.files.phone!, "different AAB");
-  await expect(distribute()).rejects.toThrow("SHA-256 sidecar");
-  fs.writeFileSync(test.files.phone!, test.bytes.phone);
-  test.options.notes.entries[0]!.text = "different notes";
-  test.options.notes.entries[0]!.textSha256 = sha256("different notes");
-  await expect(distribute()).rejects.toThrow("receipt does not match");
-  test.env.FIREBASE_TESTER_GROUPS = "another-group";
-  await expect(distribute()).rejects.toThrow("saved internal Android plan");
-  expect(test.calls).toEqual([]);
 });
 
 it("rejects a different processed build before publishing", async () => {

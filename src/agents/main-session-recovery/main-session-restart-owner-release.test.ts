@@ -7,7 +7,10 @@ import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import * as gatewayWorkAdmission from "../../process/gateway-work-admission.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createRecoveryRuntimeFixture } from "./main-session-recovery-runtime.test-support.js";
+import {
+  createRecoveryRuntimeFixture,
+  observeRecoveryRoots,
+} from "./main-session-recovery-runtime.test-support.js";
 import {
   createRestartRecoveryStoreFixture,
   readStore,
@@ -30,9 +33,8 @@ const gatewayRuntime = createRecoveryRuntimeFixture({
 const { makeSessionsDir, writeStore, writeTranscript } = createRestartRecoveryStoreFixture(
   () => state.root,
 );
-const scheduleRestartAbortedMainSessionRecovery = (params: { delayMs: number }) =>
+const scheduleRestartAbortedMainSessionRecovery = () =>
   scheduleRecovery({
-    ...params,
     stateDir: state.root,
     getConfig: () => ({}),
     gatewayRuntime,
@@ -52,26 +54,6 @@ afterEach(async () => {
   clearRuntimeConfigSnapshot();
   await state.cleanup();
 });
-
-function observeRecoveryRoots(expectedOrigin: string, expectedCount: number) {
-  const completed = createDeferred();
-  const admit = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
-  let count = 0;
-  const spy = vi
-    .spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission")
-    .mockImplementation(
-      async <T>(run: () => Promise<T>, origin?: string, signal?: AbortSignal): Promise<T> => {
-        try {
-          return await admit(run, origin, signal);
-        } finally {
-          if (origin === expectedOrigin && ++count === expectedCount) {
-            completed.resolve();
-          }
-        }
-      },
-    );
-  return { completed: completed.promise, restore: () => spy.mockRestore() };
-}
 
 it.for(["abandoned", "completed", "replaced", "stopped"] as const)(
   "revisits a startup orphan after its temporary controller owner releases (%s)",
@@ -97,7 +79,7 @@ it.for(["abandoned", "completed", "replaced", "stopped"] as const)(
       dispatched.resolve();
       return { runId: "run-resumed" };
     });
-    const recovery = scheduleRestartAbortedMainSessionRecovery({ delayMs: 0 });
+    const recovery = scheduleRestartAbortedMainSessionRecovery();
     try {
       await withinTest(firstPass.completed, signal);
       expect(callGateway).not.toHaveBeenCalled();

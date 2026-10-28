@@ -13,7 +13,6 @@ import type { WorkerWriteOperationContext } from "../state/worker-operation-regi
 import { createWorkspaceStateIdentity } from "./workspace-state-identity.js";
 import {
   captureWorkspaceStateReceipt,
-  workspaceStateFactKey,
   workspaceStatePublication,
 } from "./workspace-state-publication.js";
 import {
@@ -26,9 +25,7 @@ import {
   hasRecentWorkspaceSetupState,
   recentWorkspaceAttestation,
   replaceWorkspaceAttestationInDatabase,
-  WORKSPACE_SETUP_STATE_VERSION,
   type WorkspaceAttestationInput,
-  type WorkspaceSetupState,
   type WorkspaceStateDatabase,
   type WorkspaceStateDatabaseHandle,
 } from "./workspace-state-store.kernel.js";
@@ -38,6 +35,10 @@ import type {
   WorkspaceStateGuard,
   WorkspaceStateWorkerOperations,
 } from "./workspace-state-store.worker-contract.js";
+import {
+  WORKSPACE_SETUP_STATE_VERSION,
+  type WorkspaceSetupState,
+} from "./workspace-state-types.js";
 
 function deleteWorkspace(
   database: WorkspaceStateDatabaseHandle,
@@ -73,9 +74,7 @@ function deleteWorkspace(
         .deleteFrom("workspace_path_aliases")
         .where("alias_key", "=", lexicalAlias.workspaceKey),
     );
-    workspaceStatePublication.stageDeletions(database.db, [
-      workspaceStateFactKey("alias", lexicalAlias.workspaceKey),
-    ]);
+    workspaceStatePublication.stageDeletions(database.db, ["aliases"]);
     storedIdentity = undefined;
   }
   const identity =
@@ -121,23 +120,22 @@ export function mergeWorkspaceSetupStateInDatabase(
     setup_completed_at: merged.setupCompletedAt ?? null,
     updated_at: nowMs,
   };
-  const setup = executeSqliteQueryTakeFirstSync(
+  executeSqliteQuerySync(
     database.db,
     kysely
       .insertInto("workspace_setup_state")
       .values({ workspace_key: identity.workspaceKey, ...values })
-      .onConflict((conflict) => conflict.column("workspace_key").doUpdateSet(values))
-      .returningAll(),
+      .onConflict((conflict) => conflict.column("workspace_key").doUpdateSet(values)),
   );
-  if (setup) {
-    workspaceStatePublication.stagePostimages(database.db, [{ kind: "setup", row: setup }]);
-  }
   registerWorkspaceStateAliasIdentitiesInTransaction({
     database,
     identity,
     aliases: resolution.aliases,
     updatedAtMs: nowMs,
   });
+  workspaceStatePublication.stagePostimages(database.db, [
+    { ...snapshot, setupExists: true, setupUpdatedAtMs: nowMs, setup: merged },
+  ]);
   return merged;
 }
 

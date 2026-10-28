@@ -1,158 +1,80 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { resolveCiCheckFamilyScope } from "../../scripts/lib/ci-check-family-scope.mts";
 
-type ScopeCase = {
-  paths: string[];
-  expected: Partial<ReturnType<typeof resolveCiCheckFamilyScope>>;
-};
-const scoped: ScopeCase["expected"] = {
-  baselineRatchets: true,
-  madgeImportCycles: true,
-  kyselyGuardrails: true,
-  lint: true,
-  types: true,
-};
-const cases: ScopeCase[] = [
-  ...[
-    ["packages/gateway-protocol/README.md", false],
-    ["packages/gateway-protocol/README.mdx", false],
-    ["packages/gateway-protocol/src/schema.ts", true],
-    ["packages/gateway-protocol/test/fixtures/README.md", true],
-    ["packages/gateway-protocol/prompts/runtime.md", true],
-  ].map(([file, selected]): ScopeCase => ({
-    paths: [String(file), "src/utils/absolute-deadline.test.ts"],
-    expected: { fastTasks: selected ? ["bundled-protocol"] : [] },
-  })),
-
-  {
-    paths: ["src/agents/session.test.ts"],
-    expected: {
-      ...scoped,
-      mode: "scoped",
-      checkTasks: ["guards", "dependencies"],
-      fastTasks: [],
-      additionalGroups: ["boundaries", "source-contracts", "runtime-topology-architecture"],
+type Scope = Partial<ReturnType<typeof resolveCiCheckFamilyScope>>;
+const kit = "apps/shared/OpenClawKit/Sources";
+const noTs = { madgeImportCycles: false, kyselyGuardrails: false };
+// Source/test/extension/style manifest wiring is exercised by
+// ci-workflow-planning.test.ts: "emits and wires narrow families for $path".
+it.each(
+  Object.entries({
+    "packages/gateway-protocol/README.md": { fastTasks: [] },
+    "packages/gateway-protocol/src/schema.ts": { fastTasks: ["bundled-protocol"] },
+    "packages/gateway-protocol/prompts/runtime.md": { fastTasks: ["bundled-protocol"] },
+    "packages/media-core/src/runtime.mts": { madgeImportCycles: true, kyselyGuardrails: true },
+    "src/config/zod-schema.core.ts": {
+      checkTasks: expect.arrayContaining(["bundled-channel-config-metadata"]),
     },
-  },
-  ...[
-    "src/shared/runtime.ts",
-    "src/shared/view.tsx",
-    "packages/media-core/src/runtime.mts",
-    "packages/media-core/src/runtime.cts",
-    "extensions/telegram/src/runtime.ts",
-    "packages/media-core/src/types.d.ts",
-  ].map((path) => ({
-    paths: [path],
-    expected: {
-      ...scoped,
-      checkTasks: ["guards", "dependencies"],
-      fastTasks: [],
-      additionalGroups: expect.arrayContaining(["boundaries", "extension-package-boundary"]),
+    "extensions/telegram/src/config-schema.ts": {
+      checkTasks: expect.arrayContaining(["bundled-channel-config-metadata"]),
     },
-  })),
-  ...["src/config/zod-schema.core.ts", "extensions/telegram/src/config-schema.ts"].map((path) => ({
-    paths: [path],
-    expected: { checkTasks: expect.arrayContaining(["bundled-channel-config-metadata"]) },
-  })),
-  ...[
-    "test/helpers/fixture.ts",
-    "src/agents/session.test-support.ts",
-    "scripts/lib/source-file-scan-cache.mts",
-    "config/knip.all-exports.config.ts",
-    "extensions/telegram/tsconfig.json",
-    "extensions/telegram/package.json",
-    "pnpm-lock.yaml",
-    "new-owner/data.json",
-  ].map((path): ScopeCase => ({
-    paths: [path],
-    expected: {
-      ...scoped,
-      mode: "full",
-      checkTasks: expect.arrayContaining(["npm-lock"]),
+    [`${kit}/OpenClawKit/Resources/tool-display.json`]: { checkTasks: ["guards"] },
+    "docs/providers/new-provider.md": { fastTasks: [], baselineRatchets: true },
+    "docs/.generated/sqlite-session-transcript-schema-baseline.sha256": {
+      additionalGroups: ["source-contracts"],
+    },
+    [`${kit}/OpenClawNativeState/OpenClawNativeStateSQLite.swift`]: {
+      additionalGroups: ["boundaries"],
+    },
+    "apps/macos/Sources/OpenClaw/Storage.swift": {
+      additionalGroups: ["runtime-topology-architecture"],
+    },
+    "apps/android/app/src/main/java/ai/openclaw/app/protocol/OpenClawProtocolConstants.kt": {
       fastTasks: ["bundled-protocol"],
-      additionalGroups: expect.arrayContaining(["extension-package-boundary"]),
     },
-  })),
-  {
-    paths: [
-      "ui/src/styles/chat.css",
-      "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
+    "packages/normalization-core/src/record-coerce.ts": {
+      checkTasks: expect.arrayContaining(["npm-lock"]),
+    },
+    "src/config/catalog.yaml": { lint: true, types: false },
+    "src/config/catalog.json": { lint: true, types: true, ...noTs },
+    "src/shared/runtime.js": noTs,
+    "cli-invocation.mjs": { fastTasks: expect.arrayContaining(["bun-launcher"]) },
+    "src/infra/sqlite-existing-database.ts": { fastTasks: ["bun-launcher"] },
+  } satisfies Record<string, Scope>),
+)("selects the check families owned by %s", (file, expected) => {
+  expect(resolveCiCheckFamilyScope([file])).toMatchObject(expected);
+});
+
+it.each([
+  "test/helpers/fixture.ts",
+  "src/agents/session.test-support.ts",
+  "scripts/lib/source-file-scan-cache.mts",
+  "extensions/telegram/tsconfig.json",
+  "new-owner/data.json",
+])("falls back to the full checks for %s", (file) => {
+  expect(resolveCiCheckFamilyScope([file])).toMatchObject({
+    mode: "full",
+    checkTasks: ["guards", "npm-lock", "bundled-channel-config-metadata", "dependencies"],
+    fastTasks: ["bundled-protocol"],
+    additionalGroups: [
+      "boundaries",
+      "source-contracts",
+      "extension-package-boundary",
+      "runtime-topology-architecture",
     ],
-    expected: { checkTasks: ["guards"] },
-  },
-  { paths: ["docs/providers/new-provider.md"], expected: { fastTasks: [] } },
-  {
-    paths: ["docs/.generated/sqlite-session-transcript-schema-baseline.sha256"],
-    expected: { additionalGroups: ["source-contracts"] },
-  },
-  {
-    paths: ["apps/shared/OpenClawKit/Sources/OpenClawNativeState/OpenClawNativeStateSQLite.swift"],
-    expected: { additionalGroups: ["boundaries"] },
-  },
-  {
-    paths: ["apps/macos/Sources/OpenClaw/Storage.swift"],
-    expected: { additionalGroups: ["runtime-topology-architecture"] },
-  },
-  {
-    paths: ["apps/android/app/src/main/java/ai/openclaw/app/protocol/OpenClawProtocolConstants.kt"],
-    expected: { fastTasks: ["bundled-protocol"] },
-  },
-  ...["docs/plugins/sdk-subpaths.md", "extensions/discord/skills/discord/SKILL.md"].map((path) => ({
-    paths: ["ui/src/styles/chat.css", path],
-    expected: { fastTasks: [] },
-  })),
-  {
-    paths: ["packages/normalization-core/src/record-coerce.ts"],
-    expected: { checkTasks: expect.arrayContaining(["npm-lock"]) },
-  },
-  { paths: ["src/config/catalog.yaml"], expected: { lint: true, types: false } },
-  {
-    paths: ["src/config/catalog.json"],
-    expected: { lint: true, types: true, madgeImportCycles: false, kyselyGuardrails: false },
-  },
-  {
-    paths: ["src/shared/runtime.js"],
-    expected: { madgeImportCycles: false, kyselyGuardrails: false },
-  },
-  {
-    paths: ["ui/src/runtime.tsx"],
-    expected: {
-      madgeImportCycles: true,
-      kyselyGuardrails: false,
-      checkTasks: ["guards", "dependencies"],
-    },
-  },
-  {
-    paths: ["ui/src/runtime.tsx", "src/config/catalog.json"],
-    expected: { madgeImportCycles: true, kyselyGuardrails: false },
-  },
-  { paths: ["test/openclaw-launcher.e2e.test.ts"], expected: { fastTasks: ["bun-launcher"] } },
-  {
-    paths: ["cli-invocation.mjs"],
-    expected: { fastTasks: expect.arrayContaining(["bun-launcher"]) },
-  },
-  {
-    paths: ["src/infra/sqlite-existing-database.ts"],
-    expected: { fastTasks: ["bun-launcher"] },
-  },
-];
-
-describe("narrow PR check families", () => {
-  it("drops unrelated source guard rows for UI styles", () => {
-    expect(resolveCiCheckFamilyScope(["ui/src/styles/chat.css"])).toEqual({
-      mode: "scoped",
-      checkTasks: [],
-      fastTasks: [],
-      additionalGroups: [],
-      baselineRatchets: false,
-      madgeImportCycles: false,
-      kyselyGuardrails: false,
-      lint: true,
-      types: false,
-    });
+    baselineRatchets: true,
+    madgeImportCycles: true,
+    kyselyGuardrails: true,
+    lint: true,
+    types: true,
   });
+});
 
-  it.each(cases)("selects the check families owned by $paths", ({ paths, expected }) => {
-    expect(resolveCiCheckFamilyScope(paths)).toMatchObject(expected);
+it("does not infer source Kysely work from unrelated UI TypeScript and source JSON", () => {
+  expect(
+    resolveCiCheckFamilyScope(["ui/src/runtime.tsx", "src/config/catalog.json"]),
+  ).toMatchObject({
+    madgeImportCycles: true,
+    kyselyGuardrails: false,
   });
 });

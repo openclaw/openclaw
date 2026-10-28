@@ -53,9 +53,6 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     prompt: params.prompt,
   });
   const hookRunner = getGlobalHookRunner();
-  const isHeartbeatTurn = params.ctx.trigger === "heartbeat";
-  const hasHeartbeatContribution =
-    isHeartbeatTurn && Boolean(hookRunner?.hasHooks("heartbeat_prompt_contribution"));
   const hasPromptBuildHooks = Boolean(hookRunner?.hasHooks("before_prompt_build"));
   const hookCtx = buildAgentHookContext(params.ctx);
   const currentUserMessage = params.currentUserMessage;
@@ -91,20 +88,6 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     hookCtx,
     hookRunner,
   });
-  const heartbeatResult =
-    hasHeartbeatContribution && hookRunner
-      ? await hookRunner
-          .runHeartbeatPromptContribution(
-            {
-              sessionKey: params.ctx.sessionKey,
-              agentId: params.ctx.agentId,
-              heartbeatName: "heartbeat",
-            },
-            hookCtx,
-          )
-          .catch(warnHookFailure("heartbeat_prompt_contribution"))
-      : undefined;
-
   const promptBuildResult =
     hookRunner && hasPromptBuildHooks
       ? await hookRunner
@@ -133,13 +116,11 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
       : developerInstructions;
   const promptPrefix = joinPresentTextSegments([
     turnContext.prependContext,
-    heartbeatResult?.prependContext,
     promptBuildResult?.prependContext,
     authorizedPromptBuildResult?.prependContext,
   ]);
   const promptSuffix = joinPresentTextSegments([
     turnContext.appendContext,
-    heartbeatResult?.appendContext,
     promptBuildResult?.appendContext,
     authorizedPromptBuildResult?.appendContext,
   ]);

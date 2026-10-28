@@ -3,7 +3,7 @@ import type { Command } from "commander";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { normalizeExportText } from "../../transcripts/store-artifacts.js";
-import { TranscriptsStore, type TranscriptsSessionEntry } from "../../transcripts/store.js";
+import { TranscriptsStore } from "../../transcripts/store.js";
 
 type TranscriptsCliOptions = {
   json?: boolean;
@@ -35,103 +35,6 @@ function writeJson(value: unknown): void {
   );
 }
 
-function sanitizeMarkdownForTerminal(markdown: string): string {
-  return markdown.split("\n").map(sanitizeTerminalText).join("\n");
-}
-
-function formatSessionLine(entry: TranscriptsSessionEntry): string {
-  const title = sanitizeTerminalText(entry.session.title?.trim() || "Transcripts");
-  const started = sanitizeTerminalText(entry.session.startedAt || "unknown");
-  const summary = sanitizeTerminalText(entry.hasSummary ? entry.summaryPath : "no summary.md");
-  return `${entry.selector}\t${started}\t${title}\t${summary}`;
-}
-
-async function listCommand(options: TranscriptsCliOptions): Promise<void> {
-  const sessions = await createStore().listSessionEntries();
-  if (options.json) {
-    writeJson(
-      sessions.map((entry) => ({
-        sessionId: entry.session.sessionId,
-        selector: entry.selector,
-        date: entry.selector.slice(0, 10),
-        title: entry.session.title,
-        startedAt: entry.session.startedAt,
-        stoppedAt: entry.session.stoppedAt,
-        source: entry.session.source,
-        path: entry.sessionDir,
-        summaryPath: entry.summaryPath,
-        hasSummary: entry.hasSummary,
-      })),
-    );
-    return;
-  }
-  if (sessions.length === 0) {
-    writeLine("No transcripts found.");
-    return;
-  }
-  for (const session of sessions) {
-    writeLine(formatSessionLine(session));
-  }
-}
-
-async function showCommand(sessionSelector: string, options: TranscriptsCliOptions): Promise<void> {
-  const store = createStore();
-  const entry = await store.readSessionEntry(sessionSelector);
-  if (!entry) {
-    throw new Error(`transcripts session not found: ${sessionSelector}`);
-  }
-  const storedSummary = await store.readSummary(entry.session);
-  const materializedMarkdown =
-    storedSummary.markdown === undefined ? undefined : normalizeExportText(storedSummary.markdown);
-  // `show` is an explicit export boundary: keep the shipped summary path current.
-  await store.materializeSessionArtifacts(entry.session, "summary");
-  if (options.json) {
-    writeJson({
-      session: entry.session,
-      selector: entry.selector,
-      path: entry.sessionDir,
-      summaryPath: entry.summaryPath,
-      summary: materializedMarkdown ?? null,
-    });
-    return;
-  }
-  if (materializedMarkdown === undefined) {
-    throw new Error(`summary.md not found for transcripts session: ${sessionSelector}`);
-  }
-  process.stdout.write(sanitizeMarkdownForTerminal(materializedMarkdown));
-}
-
-async function pathCommand(selector: string, options: TranscriptsPathOptions): Promise<void> {
-  const store = createStore();
-  const entry = await store.readSessionEntry(selector);
-  if (!entry) {
-    throw new Error(`transcripts session not found: ${selector}`);
-  }
-  const kind = options.dir
-    ? "all"
-    : options.metadata
-      ? "metadata"
-      : options.transcript
-        ? "transcript"
-        : "summary";
-  const artifacts = await store.materializeSessionArtifacts(entry.session, kind);
-  const selectedPath = kind === "all" ? artifacts.sessionDir : artifacts[`${kind}Path`];
-  const exists = kind !== "summary" || artifacts.hasSummary;
-  if (options.json) {
-    writeJson({
-      sessionId: entry.session.sessionId,
-      selector: entry.selector,
-      path: selectedPath,
-      exists,
-    });
-    return;
-  }
-  if (!exists) {
-    throw new Error(`summary.md not found for transcripts session: ${selector}`);
-  }
-  writeLine(selectedPath);
-}
-
 export function registerTranscriptsCli(program: Command): void {
   const transcripts = program.command("transcripts").description("Inspect stored transcripts");
 
@@ -139,14 +42,72 @@ export function registerTranscriptsCli(program: Command): void {
     .command("list")
     .description("List stored transcript sessions")
     .option("--json", "Print JSON")
-    .action(listCommand);
+    .action(async (options: TranscriptsCliOptions): Promise<void> => {
+      const sessions = await createStore().listSessionEntries();
+      if (options.json) {
+        writeJson(
+          sessions.map((entry) => ({
+            sessionId: entry.session.sessionId,
+            selector: entry.selector,
+            date: entry.selector.slice(0, 10),
+            title: entry.session.title,
+            startedAt: entry.session.startedAt,
+            stoppedAt: entry.session.stoppedAt,
+            source: entry.session.source,
+            path: entry.sessionDir,
+            summaryPath: entry.summaryPath,
+            hasSummary: entry.hasSummary,
+          })),
+        );
+        return;
+      }
+      if (sessions.length === 0) {
+        writeLine("No transcripts found.");
+        return;
+      }
+      for (const session of sessions) {
+        const title = sanitizeTerminalText(session.session.title?.trim() || "Transcripts");
+        const started = sanitizeTerminalText(session.session.startedAt || "unknown");
+        const summary = sanitizeTerminalText(
+          session.hasSummary ? session.summaryPath : "no summary.md",
+        );
+        writeLine(`${session.selector}\t${started}\t${title}\t${summary}`);
+      }
+    });
 
   transcripts
     .command("show")
     .description("Print and materialize a transcript summary")
     .argument("<session>", "Transcripts session id or YYYY-MM-DD/session selector")
     .option("--json", "Print JSON")
-    .action(showCommand);
+    .action(async (sessionSelector: string, options: TranscriptsCliOptions): Promise<void> => {
+      const store = createStore();
+      const entry = await store.readSessionEntry(sessionSelector);
+      if (!entry) {
+        throw new Error(`transcripts session not found: ${sessionSelector}`);
+      }
+      const storedSummary = await store.readSummary(entry.session);
+      const materializedMarkdown =
+        storedSummary.markdown === undefined
+          ? undefined
+          : normalizeExportText(storedSummary.markdown);
+      // `show` is an explicit export boundary: keep the shipped summary path current.
+      await store.materializeSessionArtifacts(entry.session, "summary");
+      if (options.json) {
+        writeJson({
+          session: entry.session,
+          selector: entry.selector,
+          path: entry.sessionDir,
+          summaryPath: entry.summaryPath,
+          summary: materializedMarkdown ?? null,
+        });
+        return;
+      }
+      if (materializedMarkdown === undefined) {
+        throw new Error(`summary.md not found for transcripts session: ${sessionSelector}`);
+      }
+      process.stdout.write(materializedMarkdown.split("\n").map(sanitizeTerminalText).join("\n"));
+    });
 
   transcripts
     .command("path")
@@ -156,5 +117,34 @@ export function registerTranscriptsCli(program: Command): void {
     .option("--metadata", "Materialize and print metadata.json")
     .option("--transcript", "Materialize and print transcript.jsonl")
     .option("--json", "Print JSON")
-    .action(pathCommand);
+    .action(async (selector: string, options: TranscriptsPathOptions): Promise<void> => {
+      const store = createStore();
+      const entry = await store.readSessionEntry(selector);
+      if (!entry) {
+        throw new Error(`transcripts session not found: ${selector}`);
+      }
+      const kind = options.dir
+        ? "all"
+        : options.metadata
+          ? "metadata"
+          : options.transcript
+            ? "transcript"
+            : "summary";
+      const artifacts = await store.materializeSessionArtifacts(entry.session, kind);
+      const selectedPath = kind === "all" ? artifacts.sessionDir : artifacts[`${kind}Path`];
+      const exists = kind !== "summary" || artifacts.hasSummary;
+      if (options.json) {
+        writeJson({
+          sessionId: entry.session.sessionId,
+          selector: entry.selector,
+          path: selectedPath,
+          exists,
+        });
+        return;
+      }
+      if (!exists) {
+        throw new Error(`summary.md not found for transcripts session: ${selector}`);
+      }
+      writeLine(selectedPath);
+    });
 }

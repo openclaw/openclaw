@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { realpathSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
@@ -8,11 +9,13 @@ import { assertStateDatabaseAccessAllowed } from "./gateway-state-owner.js";
 import type { PostgresSyncConnection } from "./postgres-sync/connection.js";
 import { parseSqliteFileGeneration } from "./sqlite-file-generation.js";
 import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
-import { observeSqliteNativeClose } from "./sqlite-native-observer.js";
 import { runSqliteReadOnlyWorkerSync } from "./sqlite-readonly-worker.js";
 import { truncateSqliteWal } from "./sqlite-wal-checkpoint.js";
+import { readMatchingUpdateDatabaseGeneration } from "./update-database-generations.js";
 
 export type UpdateDoctorMigrationCapture = {
+  /** Captured SQLite sources admitted by this Doctor session. */
+  openedSqlitePaths?: Set<string>;
   expected(pathname: string): string | null | undefined;
   assertCurrent(): void;
   accept(pathname: string, before: string | null, after: string | null): void;
@@ -28,11 +31,13 @@ type DoctorMigrationBackup = (
   db: DatabaseSync,
   options: { path: string; env: NodeJS.ProcessEnv; tables: readonly string[] },
 ) => { capture: MigrationSource; backupPath: string };
+type DoctorMigrationFullBackup = { path: string; generation?: string };
 const captures = new AsyncLocalStorage<{
   capture?: UpdateDoctorMigrationCapture;
   source?: MigrationSource;
   assertMigrationCurrent?: () => void;
   backup?: DoctorMigrationBackup;
+  fullBackups?: Map<string, DoctorMigrationFullBackup>;
 }>();
 
 /** Doctor's existing maintenance interval owns the publication receipt. */
@@ -52,7 +57,21 @@ export function runWithDoctorMigrationBackup<T>(
   backup: DoctorMigrationBackup,
   operation: () => T,
 ): T {
-  return captures.run({ ...captures.getStore(), backup }, operation);
+  return captures.run({ ...captures.getStore(), backup, fullBackups: new Map() }, operation);
+}
+
+/** Only the general Doctor backup owner admits full images for this maintenance run. */
+export function recordDoctorMigrationFullBackup(
+  sourcePath: string,
+  backup: DoctorMigrationFullBackup,
+): void {
+  captures.getStore()?.fullBackups?.set(realpathSync.native(sourcePath), backup);
+}
+
+export function getDoctorMigrationFullBackup(
+  sourcePath: string,
+): DoctorMigrationFullBackup | undefined {
+  return captures.getStore()?.fullBackups?.get(realpathSync.native(sourcePath));
 }
 
 export function getDoctorMigrationBackup(
@@ -111,42 +130,6 @@ function readSqliteFiles(pathname: string) {
   );
 }
 
-/** Attribute only this committed owner's journal/WAL cleanup and shared-memory removal. */
-function observeMigrationClose(
-  db: DatabaseSync,
-  pathname: string,
-  capture: UpdateDoctorMigrationCapture,
-  expected: string | null,
-  assertCurrent: () => void,
-) {
-  const maintenance = getOpenClawDatabaseMaintenanceScope();
-  let closed = false;
-  observeSqliteNativeClose(db, () => {
-    if (closed) {
-      return;
-    }
-    closed = true;
-    // A later migration on this handle owns its final postimage.
-    if (capture.expected(pathname) !== expected) {
-      return;
-    }
-    try {
-      if (getOpenClawDatabaseMaintenanceScope() !== maintenance) {
-        throw new Error("SQLite migration close lost its maintenance scope.");
-      }
-      assertCurrent();
-      const after = readSqliteGeneration(pathname);
-      assertCurrent();
-      capture.accept(pathname, expected, after);
-    } catch (error) {
-      // Failed attribution must not strand a resource that SQLite already closed.
-      capture.refuse(
-        `SQLite migration native close could not be verified: ${formatErrorMessage(error)}`,
-      );
-    }
-  });
-}
-
 /** A source proof exists only within its verified migration's lexical interval. */
 export function getUpdateDoctorMigrationSource(pathname: string) {
   const source = captures.getStore()?.source;
@@ -179,6 +162,7 @@ export function runUpdateSqliteMigration<T>(
   }
   const { capture } = context;
   const expected = capture.expected(pathname);
+  const opened = capture.openedSqlitePaths?.has(pathname);
   if (typeof expected !== "string" && !(expected === null && options?.created)) {
     return operation();
   }
@@ -214,10 +198,22 @@ export function runUpdateSqliteMigration<T>(
             throw new Error("Created SQLite migration family is no longer empty.");
           }
         }
-        const before = expected === null ? null : readSqliteGeneration(pathname);
+        // Before native exclusion, a cold read-only open may add an empty WAL
+        // index to the captured family. Exclusive handles keep the isolated read:
+        // closing a raw source descriptor here would release their process locks.
+        const before =
+          expected === null
+            ? null
+            : opened || mode === "exclusive"
+              ? readSqliteGeneration(pathname)
+              : readMatchingUpdateDatabaseGeneration(pathname, expected);
         assertCurrent();
+        if (before === undefined || (!opened && mode === "exclusive" && before !== expected)) {
+          throw new Error(`SQLite migration source changed after update capture: ${pathname}`);
+        }
+        capture.openedSqlitePaths?.add(pathname);
         if (before !== expected) {
-          throw new Error("SQLite migration source changed after update capture.");
+          capture.accept(pathname, expected, before);
         }
         if (mode !== "exclusive") {
           // Start WAL in normal mode: a cold exclusive WAL cannot later return
@@ -243,11 +239,12 @@ export function runUpdateSqliteMigration<T>(
           const after = readSqliteGeneration(pathname);
           assertCurrent();
           capture.accept(pathname, before, after);
-          observeMigrationClose(db, pathname, capture, after, assertCurrent);
           return result;
         });
       } catch (error) {
-        capture.refuse("SQLite migration publication could not be verified.");
+        capture.refuse(
+          `SQLite migration publication could not be verified: ${formatErrorMessage(error)}`,
+        );
         throw error;
       }
     },
@@ -274,10 +271,12 @@ export function beginUpdateSqliteCompanion(db: DatabaseSync, pathname: string, c
   }
   const before = created && expected === null ? null : readSqliteGeneration(pathname);
   assertCurrent();
-  if (before !== expected) {
+  // Session settlement owns the final postimage of paths this Doctor already opened.
+  if (!capture.openedSqlitePaths?.has(pathname) && before !== expected) {
     capture.refuse("Migration companion changed after update capture.");
     throw new Error("Database migration companion no longer matches its capture.");
   }
+  capture.openedSqlitePaths?.add(pathname);
   return {
     complete() {
       assertCurrent();

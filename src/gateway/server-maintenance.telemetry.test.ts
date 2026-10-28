@@ -37,15 +37,15 @@ vi.mock("../infra/telemetry.js", () => ({
   checkTelemetryUpdate: checkTelemetryUpdateMock,
 }));
 
-// These default readers are unused by the supplied callbacks and native work fixture.
-vi.mock("../agents/worktrees/owner-protection.js", () => ({
-  createManagedWorktreeOwnerPolicy: () => forbiddenDefaultAdapter("worktree owner policy"),
-}));
-
-// mock-isolation: Worker-free timers inject GC and reject accidental default worktree access.
+// mock-isolation: Worker-free timers mock GC and reject accidental default worktree access.
 vi.mock("../agents/worktrees/service.js", () => ({
   WORKTREE_GC_INTERVAL_MS: 60 * 60_000,
   managedWorktrees: { gc: () => forbiddenDefaultAdapter("worktree GC") },
+}));
+
+// mock-isolation: Worker-free timers reject accidental default manifest database sweeps.
+vi.mock("./worker-environments/local-workspace-gc.js", () => ({
+  sweepLocalWorkspaceManifests: () => forbiddenDefaultAdapter("workspace manifest GC"),
 }));
 
 vi.mock("../infra/delivery-queue-sqlite.js", () => ({
@@ -91,9 +91,7 @@ function createMaintenanceDeps() {
     broadcast: vi.fn(),
     refreshGatewayHealthSnapshot: vi.fn(state.refreshGatewayHealthSnapshot),
     logHealth: { info: vi.fn(), error: vi.fn() },
-    runWorktreeGc: vi.fn(async (): Promise<void> => {}),
     runDeliveryQueueMediaGc: vi.fn(async (): Promise<void> => {}),
-    runManagedOutgoingMediaGc: vi.fn(async (): Promise<void> => {}),
   };
 }
 
@@ -176,7 +174,10 @@ describe("gateway telemetry maintenance", () => {
           },
         });
       } else if (owner === "worktree") {
-        state.runWorktreeGc.mockImplementation(run);
+        state.worktreeGc.mockImplementation(async () => {
+          await run();
+          return state.worktreeGcResult;
+        });
       }
       devicePairCleanupMock.mockImplementation(({ scheduler }) => {
         if (owner === "device-pair") {
@@ -237,18 +238,17 @@ describe("gateway telemetry maintenance", () => {
       const check = createDeferredCore<null>();
       const thaw = createDeferredCore<boolean>();
       checkTelemetryUpdateMock.mockReturnValue(check.promise);
-      const restartRunningChannels = vi.fn<TimerOptions["restartRunningChannels"]>(
+      const restartRunningChannels = vi.fn<(shouldContinue: () => boolean) => Promise<boolean>>(
         () => thaw.promise,
       );
       const state = createMaintenanceDeps();
-      const {
-        runWorktreeGc,
-        runDeliveryQueueMediaGc,
-        logHealth,
-        refreshGatewayHealthSnapshot,
-        broadcast,
-      } = state;
-      const timers = await startMaintenance({ ...state, restartRunningChannels });
+      const timers = await startMaintenance({
+        ...state,
+        channelManager: {
+          ...state.channelManager,
+          captureAccountRestart: () => restartRunningChannels,
+        },
+      });
       try {
         vi.setSystemTime(Date.now() + 75_000);
         await vi.advanceTimersByTimeAsync(30_000);
@@ -258,27 +258,31 @@ describe("gateway telemetry maintenance", () => {
           markGatewayRestartDraining();
         } else if (drain === "scheduler") {
           state.scheduler.beginClose();
-          expect(restartRunningChannels.mock.calls[0]?.[1]?.()).toBe(false);
+          expect(restartRunningChannels.mock.calls[0]?.[0]?.()).toBe(false);
         }
         const stopped = vi.fn();
         const stopping = timers.stopPeriodicTasks().finally(stopped);
-        refreshGatewayHealthSnapshot.mockRejectedValue(
+        state.refreshGatewayHealthSnapshot.mockRejectedValue(
           new Error("Gateway health refresh owner is closed"),
         );
-        broadcast.mockClear();
+        state.broadcast.mockClear();
         state.dedupe.set("retained-during-drain", { ts: 0, ok: true });
         thaw.resolve(true);
 
         await vi.advanceTimersByTimeAsync(2 * 60 * 60_000);
 
-        expect(logHealth.error).not.toHaveBeenCalled();
-        expect(refreshGatewayHealthSnapshot).toHaveBeenCalledOnce();
-        expect(broadcast).not.toHaveBeenCalled();
-        expect(runWorktreeGc).not.toHaveBeenCalled();
-        expect(runDeliveryQueueMediaGc).not.toHaveBeenCalled();
+        for (const producer of [
+          state.logHealth.error,
+          state.broadcast,
+          state.worktreeGc,
+          state.runDeliveryQueueMediaGc,
+        ]) {
+          expect(producer).not.toHaveBeenCalled();
+        }
+        expect(state.refreshGatewayHealthSnapshot).toHaveBeenCalledOnce();
         expect(checkTelemetryUpdateMock).toHaveBeenCalledOnce();
         expect(state.dedupe.has("retained-during-drain")).toBe(true);
-        expect(restartRunningChannels.mock.calls[0]?.[1]?.()).toBe(false);
+        expect(restartRunningChannels.mock.calls[0]?.[0]?.()).toBe(false);
         await vi.advanceTimersByTimeAsync(0);
         expect(stopped).not.toHaveBeenCalled();
         check.resolve(null);
@@ -298,7 +302,6 @@ describe("gateway telemetry maintenance", () => {
       .mockRejectedValueOnce(new Error("offline"))
       .mockReturnValue(check.promise);
     const maintenanceState = createMaintenanceDeps();
-    const { logHealth } = maintenanceState;
     const timers = await startMaintenance(maintenanceState);
 
     expect(generateSecureIntMock).toHaveBeenNthCalledWith(1, 5 * 60_000);
@@ -306,10 +309,8 @@ describe("gateway telemetry maintenance", () => {
     expect(checkTelemetryUpdateMock).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(checkTelemetryUpdateMock).toHaveBeenCalledWith(maintenanceState.getRuntimeConfig, {
-      surface: "gateway",
-    });
-    expect(logHealth.error).not.toHaveBeenCalled();
+    expect(checkTelemetryUpdateMock).toHaveBeenCalledWith(maintenanceState.getRuntimeConfig);
+    expect(maintenanceState.logHealth.error).not.toHaveBeenCalled();
     expect(generateSecureIntMock).toHaveBeenNthCalledWith(2, 5 * 60_000);
 
     await vi.advanceTimersByTimeAsync(420_000);

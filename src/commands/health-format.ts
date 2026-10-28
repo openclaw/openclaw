@@ -8,6 +8,22 @@ import { isGatewayTransportError } from "../gateway/transport-error.js";
 import { formatDurationHuman } from "../infra/format-time/format-duration.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 
+function formatHealthDiagnosticText(text: string): string {
+  // Mask complete values before splitting; terminal cleanup can join secret fragments.
+  const redacted = redactToolPayloadText(text);
+  return redactToolPayloadText(
+    redacted
+      .split(/\r?\n|[\u2028\u2029]/u)
+      .map(sanitizeTerminalText)
+      .join("\n"),
+  );
+}
+
+export function formatHealthDiagnosticNote(text: string): string {
+  // The note renderer collapses whitespace, which can reconstruct a registered secret.
+  return redactToolPayloadText(formatHealthDiagnosticText(text).replace(/[^\S\n]+/gu, " "));
+}
+
 export function formatContextEngineHealthLine(summary: HealthSummary): string | null {
   const quarantined = summary.contextEngines?.quarantined ?? [];
   if (quarantined.length === 0) {
@@ -28,7 +44,8 @@ export function formatGatewayClosedDiagnostic(err: unknown): string | undefined 
   if (!isGatewayTransportError(err) || err.kind !== "closed" || err.code === undefined) {
     return undefined;
   }
-  return `Gateway connect failed: ${sanitizeTerminalText(err.message.split("\n", 1)[0] ?? "")}`;
+  const message = formatHealthDiagnosticNote(err.message).split("\n", 1)[0] ?? "";
+  return redactToolPayloadText(`Gateway connect failed: ${message}`);
 }
 
 const formatKv = (line: string, rich: boolean) => {
@@ -52,12 +69,12 @@ const formatKv = (line: string, rich: boolean) => {
 export function formatHealthCheckFailure(err: unknown, opts: { rich?: boolean } = {}): string {
   const rich = opts.rich ?? isRich();
   const raw = String(err);
-  const message = err instanceof Error ? err.message : raw;
 
   if (!rich) {
-    return `Health check failed: ${raw}`;
+    return redactToolPayloadText(`Health check failed: ${formatHealthDiagnosticText(raw)}`);
   }
 
+  const message = formatHealthDiagnosticText(err instanceof Error ? err.message : raw);
   const lines = message
     .split("\n")
     .map((l) => l.trimEnd())
@@ -76,7 +93,7 @@ export function formatHealthCheckFailure(err: unknown, opts: { rich?: boolean } 
   for (const line of detailLines) {
     out.push(`  ${formatKv(line, rich)}`);
   }
-  return out.join("\n");
+  return redactToolPayloadText(out.join("\n"));
 }
 
 const formatProbeLine = (

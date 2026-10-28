@@ -16,6 +16,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CommunicationEndpoint } from "../sessions/communication-admission.js";
 import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.metadata.js";
 import type { PersistedUserTurnMessage } from "../sessions/user-turn-transcript.types.js";
+import type { PendingInputRecoveryTrace } from "./pending-input-recovery-trace.js";
 import {
   readSessionSendDelivery,
   type SessionSendDelivery,
@@ -54,6 +55,7 @@ export async function prepareSessionSendRecoveryCommunication(params: {
   /** Revalidate the retained input and its recovery owner. */
   assertCurrent: () => void;
   signal?: AbortSignal;
+  trace?: PendingInputRecoveryTrace;
 }) {
   const load = async (
     side: "source" | "target",
@@ -82,10 +84,10 @@ export async function prepareSessionSendRecoveryCommunication(params: {
     }
     return current;
   };
-  const [source, target] = await Promise.all([
-    load("source", params.delivery.source),
-    load("target", params.delivery.target),
-  ]);
+  const loadEndpoints = () =>
+    Promise.all([load("source", params.delivery.source), load("target", params.delivery.target)]);
+  const [source, target] = await (params.trace?.measure("sessionLoadMs", loadEndpoints) ??
+    loadEndpoints());
   if (
     target.agentId !== params.target.agentId ||
     target.sessionKey !== params.target.sessionKey ||
@@ -102,24 +104,29 @@ export async function prepareSessionSendRecoveryCommunication(params: {
     return undefined;
   }
   // The accepted input survives its sender turn; a triggering turn cannot lend it authority.
-  return withoutGatewayToolCallerIdentity(() =>
-    prepareSessionsSendCommunication({
-      config: params.config,
-      source,
-      target,
-      message: params.delivery.message,
-      dispatchMessage: params.delivery.message,
-      inputProvenance: params.inputProvenance,
-      access: { sandboxed: params.delivery.sandboxed },
-      allowApproval: false,
-      // Accepted results retain their input owner's return route across recovery.
-      acceptedReply: params.delivery.returnedResult ? params.assertCurrent : undefined,
-      assertSourceCurrent: params.assertCurrent,
-      callGateway: async () => {
-        throw new Error("Session delivery recovery requires current direct access");
-      },
-      signal: params.signal,
-    }),
+  const prepareCommunication = () =>
+    withoutGatewayToolCallerIdentity(() =>
+      prepareSessionsSendCommunication({
+        config: params.config,
+        source,
+        target,
+        message: params.delivery.message,
+        dispatchMessage: params.delivery.message,
+        inputProvenance: params.inputProvenance,
+        access: { sandboxed: params.delivery.sandboxed },
+        allowApproval: false,
+        // Accepted results retain their input owner's return route across recovery.
+        acceptedReply: params.delivery.returnedResult ? params.assertCurrent : undefined,
+        assertSourceCurrent: params.assertCurrent,
+        callGateway: async () => {
+          throw new Error("Session delivery recovery requires current direct access");
+        },
+        signal: params.signal,
+      }),
+    );
+  return (
+    params.trace?.measure("communicationAdmissionMs", prepareCommunication) ??
+    prepareCommunication()
   );
 }
 

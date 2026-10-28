@@ -1,7 +1,7 @@
 // Machine-owned values retired from openclaw.json live in the shared state database.
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state-row.js";
+import { isStateSchemaVersionAtLeast } from "./openclaw-state-db-admission.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
@@ -51,8 +51,7 @@ export function readConfigMachineStateCommandInDatabase(
     type: command.type,
     // Activation may precede deferred publication; never issue authority before v19.
     row:
-      command.type === "operator.channelPolicy" &&
-      (getAdmittedSqliteSchemaFacts(database)?.userVersion ?? 0) < 19
+      command.type === "operator.channelPolicy" && !isStateSchemaVersionAtLeast(database, 19)
         ? undefined
         : readConfigMachineStateRowInDatabase(database, command.type),
   };

@@ -253,13 +253,12 @@ export function resolveControlUiPluginAuthCookieGrants(
   params: {
     requestPath: string;
     generation: string | undefined;
-    nowMs?: number;
   },
 ): ControlUiPluginTabAuthGrant[] {
   const ingress = getRemoteControlUiIngressContext(req);
   assertRemoteControlUiIngressCurrent(ingress);
   const principal = ingress?.resolvePrincipal();
-  const now = asDateTimestampMs(params.nowMs ?? Date.now());
+  const now = asDateTimestampMs(Date.now());
   if (now === undefined) {
     return [];
   }

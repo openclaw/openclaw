@@ -2,6 +2,7 @@ import { createEffect, createSignal, onCleanup } from "solid-js";
 import type { SessionsListResult } from "../api/types.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
+import { isRestrictedSessionGuest } from "../app/operator-access.ts";
 import type { SessionListSnapshot } from "../lib/sessions/session-capability.ts";
 import {
   loadStoredSidebarSessionOwnerFilter,
@@ -39,7 +40,9 @@ export class SessionOwnerFilter {
       this.ownerFacet = null;
       this.value = {
         ...(gateway && selfUserId
-          ? loadStoredSidebarSessionOwnerFilter(gateway.connection.gatewayUrl, selfUserId)
+          ? loadStoredSidebarSessionOwnerFilter(gateway.connection.gatewayUrl, selfUserId, {
+              guest: isRestrictedSessionGuest(gateway.snapshot.hello?.auth ?? null),
+            })
           : { ownerId: null, involvingMe: false }),
         scope,
       };

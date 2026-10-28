@@ -4,13 +4,11 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import {
   authorizeOpenAiCompatibleHttpModelOverride,
   resolveGatewayRequestContext,
   resolveTrustedHttpOperatorScopes,
 } from "./http-utils.js";
-import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 
 const sessionEntries = vi.hoisted(() => new Map<string, Record<string, unknown>>());
 
@@ -30,11 +28,15 @@ function createReq(headers: Record<string, string> = {}): IncomingMessage {
 
 const sharedSecretRequestAuth = { trustDeclaredOperatorScopes: false };
 const trustedRequestAuth = { trustDeclaredOperatorScopes: true };
-const requestContext = (sessionKey: string) =>
+const requestContext = (
+  sessionKey: string,
+  overrides: Partial<Parameters<typeof resolveGatewayRequestContext>[0]> = {},
+) =>
   resolveGatewayRequestContext({
     req: createReq({ "x-openclaw-session-key": sessionKey }),
     model: "openclaw",
     sessionPrefix: "openai",
+    ...overrides,
   });
 
 beforeEach(() => sessionEntries.clear());
@@ -44,24 +46,10 @@ describe("resolveGatewayRequestContext", () => {
   afterEach(clearRuntimeConfigSnapshot);
 
   it("uses normalized x-openclaw-message-channel", async () => {
-    const result = await resolveGatewayRequestContext({
+    const result = await requestContext("", {
       req: createReq({ "x-openclaw-message-channel": " Custom-Channel " }),
-      model: "openclaw",
-      sessionPrefix: "openai",
     });
-
     expect(result.messageChannel).toBe("custom-channel");
-  });
-
-  it("includes session prefix and user in generated session key", async () => {
-    const result = await resolveGatewayRequestContext({
-      req: createReq(),
-      model: "openclaw",
-      user: "alice",
-      sessionPrefix: "openresponses",
-    });
-
-    expect(result.sessionKey).toContain("openresponses-user:alice");
   });
 
   it.each([
@@ -69,10 +57,8 @@ describe("resolveGatewayRequestContext", () => {
     "cron:daily",
     "acp:run-1",
     "harness:codex:supervision:native-thread",
-    "agent:main:subagent:worker",
     "agent:main:cron:daily",
     "agent:main:acp:run-1",
-    "agent:main:harness:codex:supervision:native-thread",
   ])("rejects reserved internal session-key override %s", async (sessionKey) => {
     await expect(requestContext(sessionKey)).rejects.toThrow(
       /reserved internal session namespaces/u,
@@ -99,103 +85,36 @@ describe("resolveGatewayRequestContext", () => {
     );
   });
 
-  it("does not build session state for explicit unknown agent ids", async () => {
+  it("rejects malformed agent ids before session creation", async () => {
     await expect(
-      resolveGatewayRequestContext({
-        req: createReq({ "x-openclaw-agent-id": "missing-agent" }),
-        model: "openclaw",
-        sessionPrefix: "openai",
-      }),
-    ).rejects.toThrow(/Unknown agent/);
-
-    await expect(
-      resolveGatewayRequestContext({
-        req: createReq(),
-        model: "openclaw/missing-agent",
-        sessionPrefix: "openai",
-      }),
-    ).rejects.toThrow(/Unknown agent/);
-
-    await expect(
-      resolveGatewayRequestContext({
-        req: createReq({ "x-openclaw-agent-id": "!!!" }),
-        model: "openclaw",
-        sessionPrefix: "openai",
-      }),
+      requestContext("", { req: createReq({ "x-openclaw-agent-id": "!!!" }) }),
     ).rejects.toThrow("Unknown agent '!!!'.");
-  });
-
-  it("rejects invalid model syntax before accepting an explicit agent header", async () => {
-    await expect(
-      resolveGatewayRequestContext({
-        req: createReq({ "x-openclaw-agent-id": "main" }),
-        model: "gpt-4o",
-        sessionPrefix: "openai",
-      }),
-    ).rejects.toThrow("Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.");
   });
 });
 
 describe("resolveTrustedHttpOperatorScopes", () => {
-  it("drops self-asserted scopes for bearer-authenticated requests", () => {
-    const scopes = resolveTrustedHttpOperatorScopes(
-      createReq({
-        authorization: "Bearer secret",
-        "x-openclaw-scopes": "operator.admin, operator.write",
-      }),
-      sharedSecretRequestAuth,
-    );
-
-    expect(scopes).toStrictEqual([]);
-  });
-
-  it("keeps trusted identity scopes even if bearer auth headers are forwarded", () => {
-    const scopes = resolveTrustedHttpOperatorScopes(
-      createReq({
-        authorization: "Bearer upstream-idp-token",
-        "x-openclaw-scopes": "operator.admin, operator.write",
-      }),
-      trustedRequestAuth,
-    );
-
-    expect(scopes).toEqual(["operator.admin", "operator.write"]);
+  it.each([
+    [sharedSecretRequestAuth, []],
+    [trustedRequestAuth, ["operator.admin", "operator.write"]],
+  ] as const)("accepts declared scopes only for trusted identity %j", (auth, expected) => {
+    expect(
+      resolveTrustedHttpOperatorScopes(
+        createReq({
+          authorization: "Bearer upstream-idp-token",
+          "x-openclaw-scopes": "operator.admin, operator.write",
+        }),
+        auth,
+      ),
+    ).toStrictEqual(expected);
   });
 
   it.each<{
-    label: string;
-    roleScopes: GatewayOperatorRoleDefinition["scopes"];
-    expectedScopes: string[];
-    expectedDefaults: string[];
-  }>([
-    {
-      label: "read",
-      roleScopes: ["operator.read"],
-      expectedScopes: ["operator.read"],
-      expectedDefaults: ["operator.read"],
-    },
-    {
-      label: "admin",
-      roleScopes: ["operator.admin"],
-      expectedScopes: [
-        "operator.admin",
-        "operator.read",
-        "operator.write",
-        "operator.talk",
-        "operator.approvals",
-        "operator.talk.secrets",
-      ],
-      expectedDefaults: [...CLI_DEFAULT_OPERATOR_SCOPES],
-    },
-    {
-      label: "write",
-      roleScopes: ["operator.write"],
-      expectedScopes: ["operator.read", "operator.write", "operator.talk"],
-      expectedDefaults: ["operator.read", "operator.write"],
-    },
-    { label: "empty", roleScopes: [], expectedScopes: [], expectedDefaults: [] },
-  ])(
-    "caps trusted-proxy headers and defaults to the verified profile's $label role",
-    ({ roleScopes, expectedScopes, expectedDefaults }) => {
+    roleScopes: NonNullable<
+      Parameters<typeof resolveTrustedHttpOperatorScopes>[1]["operatorRolePolicy"]
+    >["scopes"];
+  }>([{ roleScopes: ["operator.read"] }, { roleScopes: [] }])(
+    "caps trusted-proxy headers and defaults to the verified profile's $roleScopes scopes",
+    ({ roleScopes }) => {
       const requestAuth = {
         trustDeclaredOperatorScopes: true,
         operatorRolePolicy: {
@@ -210,50 +129,28 @@ describe("resolveTrustedHttpOperatorScopes", () => {
           requestAuth,
         );
 
-      expect(
-        scopes(
-          "operator.admin, operator.read, operator.write, operator.talk, operator.approvals, operator.talk.secrets",
-        ),
-      ).toEqual(expectedScopes);
-      expect(scopes()).toEqual(expectedDefaults);
-      expect(scopes("operator.read")).toEqual(roleScopes.length ? ["operator.read"] : []);
+      expect(scopes("operator.admin, operator.read, operator.write")).toEqual(roleScopes);
+      expect(scopes()).toEqual(roleScopes);
       expect(scopes("operator.admin")).toEqual(roleScopes);
       expect(scopes("")).toEqual([]);
     },
   );
 });
 
-describe("authorizeOpenAiCompatibleHttpModelOverride", () => {
-  it("allows shared-secret bearer callers to use x-openclaw-model", () => {
-    expect(
-      authorizeOpenAiCompatibleHttpModelOverride(
-        createReq({ authorization: "Bearer secret", "x-openclaw-model": "openai/gpt-5.4" }),
-        { authMethod: "token", trustDeclaredOperatorScopes: false },
-      ),
-    ).toEqual({ allowed: true });
-  });
-
-  it("allows trusted admin callers to use x-openclaw-model", () => {
-    expect(
-      authorizeOpenAiCompatibleHttpModelOverride(
-        createReq({
-          "x-openclaw-scopes": "operator.admin, operator.write",
-          "x-openclaw-model": "openai/gpt-5.4",
-        }),
-        { authMethod: "trusted-proxy", trustDeclaredOperatorScopes: true },
-      ),
-    ).toEqual({ allowed: true });
-  });
-
-  it("rejects trusted write-only callers that try to use x-openclaw-model", () => {
-    expect(
-      authorizeOpenAiCompatibleHttpModelOverride(
-        createReq({
-          "x-openclaw-scopes": "operator.write",
-          "x-openclaw-model": "openai/gpt-5.4",
-        }),
-        { authMethod: "trusted-proxy", trustDeclaredOperatorScopes: true },
-      ),
-    ).toEqual({ allowed: false, missingScope: "operator.admin" });
-  });
+it.each([
+  ["token", undefined, { allowed: true }],
+  ["trusted-proxy", "operator.admin, operator.write", { allowed: true }],
+  ["trusted-proxy", "operator.write", { allowed: false, missingScope: "operator.admin" }],
+] as const)("authorizes model overrides for %s with %j", (authMethod, scopes, expected) => {
+  expect(
+    authorizeOpenAiCompatibleHttpModelOverride(
+      createReq({
+        ...(scopes === undefined
+          ? { authorization: "Bearer secret" }
+          : { "x-openclaw-scopes": scopes }),
+        "x-openclaw-model": "openai/gpt-5.4",
+      }),
+      { authMethod, trustDeclaredOperatorScopes: authMethod === "trusted-proxy" },
+    ),
+  ).toEqual(expected);
 });

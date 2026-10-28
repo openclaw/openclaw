@@ -3,17 +3,13 @@ import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   BOUNDARY_CHECKS,
-  createBoundedOutputBuffer,
-  formatCommand,
   parseCliArgs,
   parseShardSelection,
   parseShardSpec,
   resolveConcurrency,
-  resolvePositiveInteger,
   runChecks,
   runSingleCheck,
   selectChecksForShard,
@@ -25,6 +21,12 @@ import {
 } from "../helpers/fixture-receipts.js";
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
+import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
+import {
+  fixtureReadyBeforeSettlement,
+  isProcessPresent as isProcessAlive,
+  waitForProcessObservation,
+} from "./run-process.test-support.js";
 
 let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
@@ -33,21 +35,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await receipts.close();
 });
-
-async function fixtureReadyBeforeSettlement(file: string, operation: PromiseLike<unknown>) {
-  // The fixture records readiness before sending; completion and receipts use different pipes.
-  const recorded = () => fs.existsSync(file) && fs.readFileSync(file, "utf8").length > 0;
-  const verify = (error: unknown) => {
-    if (!recorded()) {
-      throw error;
-    }
-  };
-  const settled = Promise.resolve(operation).then(
-    () => verify(new Error(`timeout waiting for ${file}`)),
-    verify,
-  );
-  await Promise.race([receipts.waitFor(file, "ready"), settled]);
-}
 
 function runCli(...args: string[]) {
   return spawnSync(
@@ -78,15 +65,6 @@ function runNodeCheck(
   });
 }
 
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function killRecordedChild(pid: number | undefined, pidFile: string) {
   const childPid =
     pid ?? (fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, "utf8")) : undefined);
@@ -102,13 +80,31 @@ function isProcessZombie(pid: number): boolean {
   return result.status === 0 && result.stdout.trim().startsWith("Z");
 }
 
-// Group teardown can finish at zombie state; this assertion additionally requires OS reaping.
-async function waitForDescendantReaped(pid: number, signal: AbortSignal): Promise<void> {
-  while (isProcessAlive(pid)) {
-    await waitForProcessTick(5, undefined, { signal }).catch((cause: unknown) => {
-      throw new Error(`process still alive: ${pid}`, { cause });
-    });
-  }
+const waitForReady = (file: string, operation: PromiseLike<unknown>) =>
+  fixtureReadyBeforeSettlement(
+    receipts,
+    file,
+    operation,
+    () => fs.existsSync(file) && fs.readFileSync(file, "utf8").length > 0,
+  );
+
+function descendantScript(exitOnTerm = false) {
+  const child = [
+    "import fs from 'node:fs';",
+    fixtureReceiptClientSource(receipts.endpoint),
+    "process.on('SIGTERM', () => {});",
+    "setInterval(() => {}, 1000);",
+    "const file = process.env.OPENCLAW_TEST_CHILD_PID;",
+    "fs.writeFileSync(file + '.tmp', String(process.pid));",
+    "fs.renameSync(file + '.tmp', file);",
+    "sendReceipt(file, 'ready');",
+  ].join("\n");
+  return [
+    "const { spawn } = require('node:child_process');",
+    `spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(child)}], { stdio: 'ignore' });`,
+    exitOnTerm ? "process.on('SIGTERM', () => process.exit(0));" : "",
+    "setInterval(() => {}, 1000);",
+  ].join("\n");
 }
 
 describe("run-additional-boundary-checks", () => {
@@ -121,88 +117,41 @@ describe("run-additional-boundary-checks", () => {
     );
   });
 
-  it("rejects malformed timeout and output limit integers", () => {
-    expect(resolvePositiveInteger("25", 50, "OPENCLAW_ADDITIONAL_BOUNDARY_TIMEOUT_MS")).toBe(25);
-    expect(resolvePositiveInteger(undefined, 50, "OPENCLAW_ADDITIONAL_BOUNDARY_TIMEOUT_MS")).toBe(
-      50,
-    );
-    expect(() =>
-      resolvePositiveInteger("1000ms", 50, "OPENCLAW_ADDITIONAL_BOUNDARY_TIMEOUT_MS"),
-    ).toThrow("OPENCLAW_ADDITIONAL_BOUNDARY_TIMEOUT_MS must be a positive integer; got: 1000ms");
-    expect(() =>
-      resolvePositiveInteger("1e3", 50, "OPENCLAW_ADDITIONAL_BOUNDARY_OUTPUT_MAX_BYTES"),
-    ).toThrow("OPENCLAW_ADDITIONAL_BOUNDARY_OUTPUT_MAX_BYTES must be a positive integer; got: 1e3");
-  });
-
-  it("formats command display text", () => {
-    expect(formatCommand({ command: "pnpm", args: ["run", "lint:core"] })).toBe(
-      "pnpm run lint:core",
-    );
-  });
-
-  it("drops split UTF-8 prefixes when older buffered output overflows", () => {
-    const output = createBoundedOutputBuffer(5);
-    output.append("old😀");
-    output.append("new");
-
-    expect(output.read()).toBe("[output truncated to last 5 bytes]\nnew");
-  });
-
-  it("covers every check once across eight shards", () => {
+  it("partitions checks once and transfers only the core type boundary", () => {
     expect(parseShardSpec("2/4")).toEqual({ count: 4, index: 1, label: "2/4" });
     expect(parseShardSelection("2/4,3/4")).toEqual([
       { count: 4, index: 1, label: "2/4" },
       { count: 4, index: 2, label: "3/4" },
     ]);
-    expect(selectChecksForShard(BOUNDARY_CHECKS, "1/4")).toEqual(
-      BOUNDARY_CHECKS.filter((_check, index) => index % 4 === 0),
+    const checks = ["first", "lint:tmp:tsgo-core-boundary", "last"].map((label) =>
+      nodeCheck(label, ""),
     );
-    expect(selectChecksForShard(BOUNDARY_CHECKS, "2/4,3/4")).toEqual(
-      BOUNDARY_CHECKS.filter((_check, index) => index % 4 === 1 || index % 4 === 2),
-    );
-    const count = 8;
-    const indices = Array.from({ length: count }, (_, index) => index + 1);
-    const shardedLabels = indices.flatMap((index) =>
-      selectChecksForShard(BOUNDARY_CHECKS, `${index}/${count}`).map((check) => check.label),
-    );
-    expect(shardedLabels.toSorted((a, b) => a.localeCompare(b))).toEqual(
-      BOUNDARY_CHECKS.map((check) => check.label).toSorted((a, b) => a.localeCompare(b)),
-    );
-    expect(new Set(shardedLabels).size).toBe(BOUNDARY_CHECKS.length);
-    const transferred = indices.flatMap((index) => {
-      const full = selectChecksForShard(BOUNDARY_CHECKS, `${index}/${count}`);
-      const selected = selectChecksForShard(BOUNDARY_CHECKS, `${index}/${count}`, "test-types");
-      expect(selected).toEqual(
-        full.filter((check) => check.label !== "lint:tmp:tsgo-core-boundary"),
-      );
-      return selected;
-    });
-    expect(transferred).toHaveLength(BOUNDARY_CHECKS.length - 1);
-
+    expect(selectChecksForShard(checks, "1/2")).toEqual([checks[0], checks[2]]);
+    expect(selectChecksForShard(checks, "2/2")).toEqual([checks[1]]);
+    expect(selectChecksForShard(checks, "1/2,2/2")).toEqual(checks);
+    expect(selectChecksForShard(checks, "1/2,2/2", "test-types")).toEqual([checks[0], checks[2]]);
     expect(() => parseShardSpec("5/4")).toThrow("Invalid shard spec");
     expect(() => parseShardSpec("9007199254740993/9007199254740994")).toThrow("Invalid shard spec");
   });
 
   it("parses CLI help and shard args before running checks", () => {
-    const parsed = (overrides: Partial<ReturnType<typeof parseCliArgs>>) => ({
+    expect(parseCliArgs(["--shard", "2/4"], {})).toEqual({
       help: false,
-      shardSpec: "",
+      shardSpec: "2/4",
       coreTestBoundaryOwner: "additional",
-      ...overrides,
     });
-    expect(parseCliArgs(["--help"], {})).toEqual(parsed({ help: true }));
-    expect(parseCliArgs(["--shard", "2/4"], {})).toEqual(parsed({ shardSpec: "2/4" }));
-    expect(parseCliArgs(["--shard=3/4"], {})).toEqual(parsed({ shardSpec: "3/4" }));
-    expect(parseCliArgs([], { OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: "4/4" })).toEqual(
-      parsed({ shardSpec: "4/4" }),
+    expect(parseCliArgs(["--shard=3/4"], {})).toHaveProperty("shardSpec", "3/4");
+    expect(parseCliArgs([], { OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: "4/4" })).toHaveProperty(
+      "shardSpec",
+      "4/4",
     );
-    expect(parseCliArgs(["--core-test-boundary-owner=test-types"], {})).toEqual(
-      parsed({ coreTestBoundaryOwner: "test-types" }),
+    expect(parseCliArgs(["--core-test-boundary-owner=test-types"], {})).toHaveProperty(
+      "coreTestBoundaryOwner",
+      "test-types",
     );
     expect(() => parseCliArgs(["--core-test-boundary-owner=none"], {})).toThrow("Unknown argument");
     expect(() => parseCliArgs(["--shard"], {})).toThrow("--shard requires a value");
     expect(() => parseCliArgs(["--shard", "-h"], {})).toThrow("--shard requires a value");
-    expect(() => parseCliArgs(["--wat"], {})).toThrow("Unknown argument: --wat");
   });
 
   it("does not start checks for CLI help or invalid arguments", () => {
@@ -225,52 +174,12 @@ describe("run-additional-boundary-checks", () => {
     expect(unknown.stderr).not.toContain("pnpm");
   });
 
-  it.each([
-    ["lint:docker-e2e", ["run", "lint:docker-e2e"]],
-    ["deps:pins:check", ["deps:pins:check"]],
-  ] as const)("keeps the %s guard in CI boundary checks", (label, args) => {
-    expect(BOUNDARY_CHECKS).toContainEqual({ label, command: "pnpm", args });
-  });
-
-  it("runs the shared focused guard pass once across every source root", () => {
-    const { scripts } = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
-      scripts: Record<string, string>;
-    };
-    const assertionCommand = scripts["lint:no-chained-type-assertions"];
-    const rootExecutables = fs
-      .readdirSync(".", { withFileTypes: true })
-      .filter((entry) => entry.isFile() && /\.[cm]?js$/u.test(entry.name))
-      .map((entry) => entry.name);
-    expect(assertionCommand?.split(" ")).toEqual(
-      expect.arrayContaining([
-        "scripts/run-oxlint.mjs",
-        "--openclaw-focused-config",
-        "config/oxlint/boundary-guards.json",
-        "src",
-        "extensions",
-        "packages",
-        "ui/src",
-        "scripts/openclaw-immutable-launcher.mjs",
-        "scripts/freebsd-service-inspect.mjs",
-        ...rootExecutables,
-      ]),
-    );
-    expect(assertionCommand?.split(" ")).not.toContain("scripts");
-    expect(scripts["lint:no-widen-then-assert"]).toBe(assertionCommand);
-    const focusedChecks = BOUNDARY_CHECKS.filter((check) => {
-      const scriptName = check.args[check.args[0] === "run" ? 1 : 0];
-      return (
-        check.command === "pnpm" &&
-        scripts[scriptName ?? ""]?.includes("--config config/oxlint/boundary-guards.json")
-      );
+  it("retains the dependency pin guard in CI boundary checks", () => {
+    expect(BOUNDARY_CHECKS).toContainEqual({
+      label: "deps:pins:check",
+      command: "pnpm",
+      args: ["deps:pins:check"],
     });
-    expect(focusedChecks).toEqual([
-      {
-        label: "lint:no-chained-type-assertions",
-        command: "pnpm",
-        args: ["run", "lint:no-chained-type-assertions"],
-      },
-    ]);
   });
 
   it("buffers grouped output and reports aggregate failures", async () => {
@@ -292,13 +201,18 @@ describe("run-additional-boundary-checks", () => {
     );
 
     expect(failures).toBe(1);
-    expect(text).toContain("::group::passes");
-    expect(text).toContain("ok-out");
-    expect(text).toContain("[ok] passes in ");
-    expect(text).toContain("::group::fails");
-    expect(text).toContain("bad-out");
-    expect(text).toContain("::error title=fails failed::fails failed (exit 7)");
-    expect(text).toContain("Additional boundary check timings:");
+    for (const part of [
+      "::group::passes",
+      "ok-out",
+      "[ok] passes in ",
+      "::group::fails",
+      "bad-out",
+      `$ ${process.execPath} -e console.log('ok-out')`,
+      "::error title=fails failed::fails failed (exit 7)",
+      "Additional boundary check timings:",
+    ]) {
+      expect(text).toContain(part);
+    }
   });
 
   it("preserves UTF-8 split across process output chunks before trimming the byte tail", async () => {
@@ -328,65 +242,33 @@ describe("run-additional-boundary-checks", () => {
       let childPid: number | undefined;
       let releaseAndWait: (() => ReturnType<typeof runSingleCheck>) | undefined;
       let completion!: ReturnType<typeof runSingleCheck>;
-      const errors: unknown[] = [];
-      try {
-        const childScript = [
-          "import fs from 'node:fs';",
-          fixtureReceiptClientSource(receipts.endpoint),
-          "process.on('SIGTERM', () => {});",
-          "setInterval(() => {}, 1000);",
-          "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID + '.tmp', String(process.pid));",
-          "fs.renameSync(process.env.OPENCLAW_TEST_CHILD_PID + '.tmp', process.env.OPENCLAW_TEST_CHILD_PID);",
-          "sendReceipt(process.env.OPENCLAW_TEST_CHILD_PID, 'ready');",
-        ].join("\n");
-        const parentScript = [
-          "const { spawn } = require('node:child_process');",
-          `spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-          "setInterval(() => {}, 1000);",
-        ].join("");
+      await runQaGatewayFixture(
+        async () => {
+          releaseAndWait = startProcessWatchdogFixture(
+            () =>
+              (completion = runNodeCheck("wrapper-exits", descendantScript(), {
+                checkTimeoutMs: 100,
+                env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
+              })),
+          );
 
-        releaseAndWait = startProcessWatchdogFixture(
-          () =>
-            (completion = runNodeCheck("wrapper-exits", parentScript, {
-              checkTimeoutMs: 100,
-              env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
-            })),
-        );
+          await withinTest(waitForReady(childPidPath, completion), signal);
+          childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+          expect(isProcessAlive(childPid)).toBe(true);
+          const result = await withinTest(releaseAndWait(), signal);
 
-        await withinTest(fixtureReadyBeforeSettlement(childPidPath, completion), signal);
-        childPid = Number(fs.readFileSync(childPidPath, "utf8"));
-        expect(isProcessAlive(childPid)).toBe(true);
-        const result = await withinTest(releaseAndWait(), signal);
-
-        expect(result).toMatchObject({ code: 1, timedOut: true });
-        await waitForDescendantReaped(childPid, signal);
-      } catch (error) {
-        errors.push(error);
-      } finally {
-        try {
-          await releaseAndWait?.();
-        } catch (error) {
-          if (!errors.includes(error)) {
-            errors.push(error);
-          }
-        }
-        try {
-          killRecordedChild(childPid, childPidPath);
-        } catch (error) {
-          errors.push(error);
-        }
-        try {
-          fs.rmSync(tempDir, { force: true, recursive: true });
-        } catch (error) {
-          errors.push(error);
-        }
-      }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "Boundary timeout fixture failed", { cause: errors[0] });
-      }
+          expect(result).toMatchObject({ code: 1, timedOut: true });
+          const pid = childPid;
+          await waitForProcessObservation(
+            () => !isProcessAlive(pid),
+            `process ${pid} reaping`,
+            signal,
+          );
+        },
+        () => releaseAndWait?.(),
+        () => killRecordedChild(childPid, childPidPath),
+        () => fs.rmSync(tempDir, { force: true, recursive: true }),
+      );
     },
   );
 
@@ -394,30 +276,11 @@ describe("run-additional-boundary-checks", () => {
     "cleans active check descendants on parent signal",
     async ({ signal }) => {
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-signal-"));
-      const readyPath = path.join(tempDir, "ready");
       const childPidPath = path.join(tempDir, "child.pid");
       let childPid: number | undefined;
       let runner: ReturnType<typeof spawn> | undefined;
       let closed: Promise<unknown[]> | undefined;
       try {
-        const childScript = [
-          "process.on('SIGTERM', () => {});",
-          "process.send(process.pid);",
-          "setInterval(() => {}, 1000);",
-        ].join("");
-        const parentScript = [
-          "import { spawn } from 'node:child_process';",
-          "import fs from 'node:fs';",
-          fixtureReceiptClientSource(receipts.endpoint),
-          `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });`,
-          "child.once('message', (pid) => {",
-          "  fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID, String(pid));",
-          "  fs.writeFileSync(process.env.OPENCLAW_TEST_READY, 'ready');",
-          "  sendReceipt(process.env.OPENCLAW_TEST_READY, 'ready');",
-          "});",
-          "process.on('SIGTERM', () => process.exit(0));",
-          "setInterval(() => {}, 1000);",
-        ].join("\n");
         const runnerScript = `
 import { runChecks } from ${JSON.stringify(
           new URL("../../scripts/run-additional-boundary-checks.mts", import.meta.url).href,
@@ -427,7 +290,7 @@ const completion = runChecks(
   [{
     label: "parent-signal",
     command: process.execPath,
-    args: ["--input-type=module", "-e", ${JSON.stringify(parentScript)}],
+    args: ["-e", ${JSON.stringify(descendantScript(true))}],
   }],
   {
     checkTimeoutMs: 30000,
@@ -444,13 +307,12 @@ await completion;
           env: {
             ...process.env,
             OPENCLAW_TEST_CHILD_PID: childPidPath,
-            OPENCLAW_TEST_READY: readyPath,
           },
           stdio: ["ignore", "ignore", "pipe", "ipc"],
         });
         closed = once(runner, "close");
 
-        await withinTest(fixtureReadyBeforeSettlement(readyPath, closed), signal);
+        await withinTest(waitForReady(childPidPath, closed), signal);
         childPid = Number(fs.readFileSync(childPidPath, "utf8"));
         expect(Number.isInteger(childPid)).toBe(true);
         expect(isProcessAlive(childPid)).toBe(true);

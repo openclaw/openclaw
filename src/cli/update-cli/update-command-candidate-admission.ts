@@ -195,7 +195,7 @@ export function applyUpdateCandidateAdmission(params: {
             }
           : {}),
       },
-      { env: run.env },
+      run,
     );
     for (const warning of [
       ...(result.warning ? [result.warning] : []),
@@ -204,7 +204,7 @@ export function applyUpdateCandidateAdmission(params: {
       recordUpdateRunStep(
         run.runId,
         { step: `warning:${warning.code}`, status: "completed", detail: warning.message },
-        { env: run.env },
+        run,
       );
       defaultRuntime.error(`Warning: ${warning.message}`);
     }

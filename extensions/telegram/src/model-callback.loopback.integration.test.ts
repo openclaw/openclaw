@@ -1,9 +1,19 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import { Bot } from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { listSessionEntries } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  createEmptyPluginRegistry,
+  mockPublishedModelRuntimeForTest,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  getSessionEntryAsync,
+  listSessionEntriesAsync,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { TelegramCallbackMessageRuntime } from "./bot-handlers.callback-router-controls.js";
@@ -39,11 +49,7 @@ vi.mock("openclaw/plugin-sdk/models-provider-runtime", async (importOriginal) =>
 type TelegramApiRequest = { method: string; payload: Record<string, unknown> };
 
 async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+  return JSON.parse((await consumeBuffer(request)).toString("utf8")) as Record<string, unknown>;
 }
 
 function sendJson(response: ServerResponse, result: unknown): void {
@@ -180,14 +186,17 @@ function configureRouter(apiRoot: string, storePath: string, steps: string[] = [
     processMessageWithReplyChain: async () => {
       throw new Error("model callback must not enter generic callback dispatch");
     },
-    resolveTelegramSessionState: async () => ({
-      agentId: "main",
-      ...(media ? {} : { bindingMode: { kind: "none" } }),
-      sessionEntry: undefined,
-      sessionKey: `agent:main:telegram:direct:1234${media ? ":media" : ""}`,
-      storePath,
-      model: undefined,
-    }),
+    resolveTelegramSessionState: async () => {
+      const sessionKey = `agent:main:telegram:direct:1234${media ? ":media" : ""}`;
+      return {
+        agentId: "main",
+        ...(media ? {} : { bindingMode: { kind: "none" } }),
+        sessionEntry: await getSessionEntryAsync({ agentId: "main", sessionKey, storePath }),
+        sessionKey,
+        storePath,
+        model: undefined,
+      };
+    },
   } as unknown as TelegramCallbackMessageRuntime;
   const bot = new Bot(TOKEN, { botInfo: telegramBotInfoForTest, client: { apiRoot } });
   const router = createTelegramCallbackRouter({
@@ -207,9 +216,12 @@ function configureRouter(apiRoot: string, storePath: string, steps: string[] = [
 }
 
 describe("Telegram model callback loopback", () => {
-  afterEach(resetTelegramClientOptionsCacheForTests);
+  afterEach(() => {
+    resetTelegramClientOptionsCacheForTests();
+    resetPluginRuntimeStateForTest();
+  });
 
-  it("sends, authorizes, resolves, persists, answers, and edits an opaque callback", async () => {
+  it("browses equivalent routes and selects the retained runtime and an opaque model over HTTP", async () => {
     const stateDir = sessionDirs.make();
     let sentMessage: Record<string, unknown> | undefined;
     await withApi(
@@ -235,11 +247,12 @@ describe("Telegram model callback loopback", () => {
         } else if (method === "answerCallbackQuery") {
           sendJson(response, true);
         } else if (method === "editMessageText") {
-          sendJson(response, {
+          sentMessage = {
             ...sentMessage,
             text: payload.text,
             reply_markup: payload.reply_markup,
-          });
+          };
+          sendJson(response, sentMessage);
         } else {
           sendError(response, 404, method);
         }
@@ -248,32 +261,141 @@ describe("Telegram model callback loopback", () => {
         const storePath = join(stateDir, "sessions.json");
         const callbackSteps: string[] = [];
         const { config, bot } = configureRouter(apiRoot, storePath, callbackSteps);
-        await sendMessageTelegram(String(CHAT_ID), "Select a model:", {
+        config.agents = {
+          defaults: {
+            model: "anthropic/claude-opus-4-6",
+            models: {
+              "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
+              [`${PROVIDER}/${MODEL}`]: {},
+            },
+          },
+        };
+        const registry = createEmptyPluginRegistry();
+        registry.cliBackends.push({
+          pluginId: "anthropic",
+          source: "fixture",
+          backend: {
+            id: "claude-cli",
+            modelProvider: "anthropic",
+            config: { command: "unused-fixture-cli" },
+          },
+        });
+        setActivePluginRegistry(registry);
+        const catalog = [
+          { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus" },
+          { provider: "claude-cli", id: "claude-opus-4-6", name: "Claude Opus (CLI)" },
+          { provider: PROVIDER, id: MODEL, name: MODEL, api: "ollama" as const },
+        ];
+        // Fix external inventory/auth facts; grouping, callback routing, HTTP and persistence stay real.
+        await mockPublishedModelRuntimeForTest({
+          config,
+          facts: {
+            authModes: { "claude-cli": "api_key" },
+            modelCatalog: { entries: catalog, routeVariants: catalog },
+          },
+          paths: { agentDir: join(stateDir, "agent"), workspaceDir: stateDir },
+          authStore: {
+            version: 1,
+            profiles: Object.fromEntries(
+              ["anthropic", "claude-cli", PROVIDER].map((provider) => [
+                provider,
+                { type: "api_key" as const, provider, key: "synthetic-key" },
+              ]),
+            ),
+          },
+        });
+        const actual = await vi.importActual<
+          typeof import("openclaw/plugin-sdk/models-provider-runtime")
+        >("openclaw/plugin-sdk/models-provider-runtime");
+        callbackMocks.buildModelsProviderData.mockImplementation(async (...args) => {
+          callbackSteps.push("catalog");
+          return actual.buildPreparedModelsProviderData(...args);
+        });
+        await sendMessageTelegram(String(CHAT_ID), "Browse models:", {
           cfg: config,
           token: TOKEN,
-          buttons: modelButtons(),
+          buttons: [[{ text: "Browse providers", callback_data: "mdl_prov" }]],
         });
 
-        const callbackData = (
-          sentMessage?.reply_markup as {
-            inline_keyboard?: Array<Array<{ callback_data?: string }>>;
+        let updateId = 0;
+        const tap = async (data: string) => {
+          if (!sentMessage) {
+            throw new Error("Expected the sent model keyboard message");
           }
-        )?.inline_keyboard?.[0]?.[0]?.callback_data;
-        expect(callbackData).toMatch(/^mdl1~m:[A-Za-z0-9_-]{43}$/);
-        expect(Buffer.byteLength(callbackData ?? "", "utf8")).toBeLessThanOrEqual(64);
+          await bot.handleUpdate({
+            update_id: ++updateId,
+            callback_query: {
+              id: `loopback-callback-${updateId}`,
+              chat_instance: "loopback-chat",
+              data,
+              from: { id: 9, is_bot: false, first_name: "Operator", username: "operator" },
+              message: sentMessage as never,
+            },
+          });
+        };
+        const renderedButtons = () =>
+          (
+            sentMessage?.reply_markup as {
+              inline_keyboard?: Array<Array<{ text: string; callback_data: string }>>;
+            }
+          )?.inline_keyboard?.flat() ?? [];
+        const selectButton = async (
+          predicate: (button: ReturnType<typeof renderedButtons>[number]) => boolean,
+        ) => {
+          const button = renderedButtons().find(predicate);
+          expect(button).toBeDefined();
+          await tap(button!.callback_data);
+        };
 
-        if (!sentMessage) {
-          throw new Error("Expected the sent model keyboard message");
-        }
-        await tapModel(bot, callbackData, sentMessage);
+        await tap("mdl_prov");
+        expect(renderedButtons().map((button) => button.text)).toEqual([
+          "anthropic (1)",
+          "ollama (1)",
+        ]);
+        await selectButton((button) => button.text === "anthropic (1)");
+        await selectButton((button) => button.text.includes("Claude Opus"));
+        expect(requests.at(-1)?.payload.text).toContain(
+          "Runtime set to <b>claude-cli</b> from configured policy.",
+        );
+        const defaultEntry = await getSessionEntryAsync({
+          agentId: "main",
+          sessionKey: "agent:main:telegram:direct:1234",
+          storePath,
+        });
+        expect(defaultEntry).toBeDefined();
+        expect(defaultEntry?.modelOverride).toBeUndefined();
+        expect(defaultEntry?.agentRuntimeOverride).toBeUndefined();
+
+        await tap("mdl_prov");
+        await selectButton((button) => button.text === "ollama (1)");
+        const modelButton = renderedButtons().find((button) =>
+          button.callback_data.startsWith("mdl1~m:"),
+        );
+        expect(modelButton?.callback_data).toMatch(/^mdl1~m:[A-Za-z0-9_-]{43}$/);
+        expect(Buffer.byteLength(modelButton?.callback_data ?? "", "utf8")).toBeLessThanOrEqual(64);
+        await tap(modelButton!.callback_data);
 
         expect(requests.map(({ method }) => method)).toEqual([
           "sendMessage",
-          "answerCallbackQuery",
-          "editMessageText",
+          ...Array.from({ length: 6 }, () => ["answerCallbackQuery", "editMessageText"]).flat(),
         ]);
-        expect(callbackSteps).toEqual(["context", "sender", "model", "catalog"]);
-        expect(listSessionEntries({ storePath })[0]?.entry).toMatchObject({
+        // Compact callbacks cross generic-interactive and model auth; opaque refs skip generic dispatch.
+        expect(callbackSteps).toEqual([
+          ...Array.from({ length: 5 }, () => [
+            "context",
+            "sender",
+            "model",
+            "model",
+            "catalog",
+          ]).flat(),
+          "context",
+          "sender",
+          "model",
+          "catalog",
+        ]);
+        expect(
+          (await listSessionEntriesAsync({ agentId: "main", storePath }))[0]?.entry,
+        ).toMatchObject({
           providerOverride: PROVIDER,
           modelOverride: MODEL,
           modelOverrideSource: "user",

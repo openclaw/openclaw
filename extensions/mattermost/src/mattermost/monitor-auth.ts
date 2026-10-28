@@ -14,6 +14,9 @@ import { mattermostIngressIdentity, normalizeMattermostAllowEntry } from "./ingr
 import type { ChatType, OpenClawConfig } from "./runtime-api.js";
 import { isDangerousNameMatchingEnabled, resolveAllowlistMatchSimple } from "./runtime-api.js";
 
+export const MATTERMOST_PAIRING_QUEUE_FULL_TEXT =
+  "DM pairing is full, so no pairing request was saved. Ask the bot owner to approve or dismiss pending requests in Settings → Channels → DM access requests, then try again.";
+
 export function normalizeMattermostAllowList(entries: Array<string | number>): string[] {
   const normalized = entries
     .map((entry) => normalizeMattermostAllowEntry(String(entry)))
@@ -50,8 +53,10 @@ export function isMattermostSenderAllowed(params: {
   return match.allowed;
 }
 
-function mapMattermostChannelTypeToChatType(channelType?: string | null): ChatType {
-  const normalized = channelType?.trim().toUpperCase();
+export function resolveMattermostTrustedChatKind(params: {
+  channelType?: string | null;
+}): ChatType {
+  const normalized = params.channelType?.trim().toUpperCase();
   if (!normalized) {
     return "direct";
   }
@@ -62,16 +67,6 @@ function mapMattermostChannelTypeToChatType(channelType?: string | null): ChatTy
     return "group";
   }
   return "channel";
-}
-
-export function resolveMattermostTrustedChatKind(params: {
-  channelType?: string | null;
-  fallback?: ChatType;
-}): ChatType {
-  const channelType = params.channelType?.trim();
-  return channelType
-    ? mapMattermostChannelTypeToChatType(channelType)
-    : (params.fallback ?? "direct");
 }
 
 type MattermostCommandDenyReason =
@@ -243,7 +238,7 @@ export async function authorizeMattermostCommandInvocation(params: {
     };
   }
 
-  const kind = mapMattermostChannelTypeToChatType(channelInfo.type);
+  const kind = resolveMattermostTrustedChatKind({ channelType: channelInfo.type });
   const chatType = kind;
   const channelName = channelInfo.name ?? "";
   const channelDisplay = channelInfo.display_name ?? channelName;

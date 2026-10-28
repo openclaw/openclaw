@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { getInternalToolExecutionPreparer } from "../../../../packages/agent-core/src/internal-hooks.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import {
@@ -15,22 +15,21 @@ import { AgentRunTerminalOutcomeError } from "../../agent-run-terminal-error.js"
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
 import type { createOpenClawCodingTools } from "../../agent-tools.js";
 import { Agent, type AgentEvent } from "../../runtime/index.js";
-import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
 import { SessionManager } from "../../sessions/session-manager.js";
-import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
+import { createQueuedAssistantStream } from "../../test-helpers/assistant-event-stream.test-support.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { formatToolExecutionGatedMessage } from "../../tool-policy-shared.js";
 import { isToolResultError } from "../../tool-result-error.js";
 import type { ToolSearchCatalogRef } from "../../tool-search.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
+import { createAgentBackedAttemptSession } from "./attempt-agent.test-support.js";
 import {
   cleanupTempPaths,
   createContextEngineAttemptRunner,
   createContextEngineBootstrapAndAssemble,
-  createDefaultEmbeddedSession,
   getHoisted,
   preloadRunEmbeddedAttemptForTests,
   resetEmbeddedAttemptHarness,
@@ -123,61 +122,37 @@ describe("runEmbeddedAttempt tool boundaries", () => {
         toolExecutionAllow: ["read"],
         sessionManager,
         config: { tools: { codeMode: Boolean(code), toolSearch: false } },
-        createSession: () => {
-          const session = createDefaultEmbeddedSession();
-          const options = hoisted.createAgentSessionMock.mock.calls.at(-1)?.[0];
-          if (!options?.customTools) {
-            throw new Error("Expected the embedded attempt to supply custom tools");
-          }
-          const allTools = options.customTools.map((definition) => wrapToolDefinition(definition));
-          expect(allTools.map((tool) => tool.name)).toContain(code ? "exec" : toolName);
-          let turn = 0;
-          const agent = new Agent({
-            initialState: { model: options.model, tools: allTools },
-            // AgentSession's result middleware normally classifies structured tool failures.
-            afterToolCall: async ({ result, isError }) => ({
-              isError: isError || isToolResultError(result),
-            }),
-            streamFn: () => {
-              const first = turn++ === 0;
-              const message = makeAgentAssistantMessage({
-                content: first ? [call] : [{ type: "text", text: "Denied as expected." }],
-                api: options.model.api,
-                provider: options.model.provider,
-                model: options.model.id,
-                stopReason: first ? "toolUse" : "stop",
-              });
-              const stream = createAssistantMessageEventStream();
-              queueMicrotask(() => {
-                stream.push({ type: "done", reason: first ? "toolUse" : "stop", message });
-                stream.end();
-              });
-              return stream;
-            },
-          });
-          agent.subscribe((event) => {
-            if (event.type === "tool_execution_end") {
-              outcomes.push(event);
-            }
-          });
-          // SAFETY: This session fixture delegates its agent operations to the real loop below.
-          session.agent = agent as typeof session.agent;
-          Object.defineProperty(session, "messages", {
-            get: () => agent.state.messages,
-            set: (messages) => {
-              agent.state.messages = messages;
-            },
-          });
-          session.setActiveToolsByName = (names) => {
-            agent.state.tools = allTools.filter((tool) => names.includes(tool.name));
-          };
-          session.getActiveToolNames = () => agent.state.tools.map((tool) => tool.name);
-          session.prompt = async (prompt, opts) => {
-            opts?.preflightResult?.(true);
-            await agent.prompt(prompt);
-          };
-          return session;
-        },
+        createSession: () =>
+          createAgentBackedAttemptSession((model, allTools) => {
+            expect(allTools.map((tool) => tool.name)).toContain(code ? "exec" : toolName);
+            let turn = 0;
+            const agent = new Agent({
+              initialState: { model, tools: allTools },
+              // AgentSession's result middleware normally classifies structured tool failures.
+              afterToolCall: async ({ result, isError }) => ({
+                isError: isError || isToolResultError(result),
+              }),
+              streamFn: () => {
+                const first = turn++ === 0;
+                const message = makeAgentAssistantMessage({
+                  content: first ? [call] : [{ type: "text", text: "Denied as expected." }],
+                  api: model.api,
+                  provider: model.provider,
+                  model: model.id,
+                  stopReason: first ? "toolUse" : "stop",
+                });
+                return createQueuedAssistantStream((push) => {
+                  push({ type: "done", reason: first ? "toolUse" : "stop", message });
+                });
+              },
+            });
+            agent.subscribe((event) => {
+              if (event.type === "tool_execution_end") {
+                outcomes.push(event);
+              }
+            });
+            return agent;
+          }),
       });
       const outcome = outcomes.find((event) => event.toolName === (code ? "exec" : toolName));
       const denial = formatToolExecutionGatedMessage(toolName, ["read"]);

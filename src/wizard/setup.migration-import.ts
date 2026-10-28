@@ -8,11 +8,7 @@ import {
   listAvailableManifestContractPlugins,
   loadManifestContractSnapshot,
 } from "../plugins/manifest-contract-eligibility.js";
-import type {
-  MigrationPlan,
-  MigrationProviderContext,
-  MigrationProviderPlugin,
-} from "../plugins/types.js";
+import type { MigrationProviderContext, MigrationProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { t } from "./i18n/index.js";
@@ -204,49 +200,6 @@ export async function listSetupMigrationOptions(params: {
   return options;
 }
 
-async function selectSetupMigrationProvider(params: {
-  opts: OnboardOptions;
-  baseConfig: OpenClawConfig;
-  detections: readonly SetupMigrationDetection[];
-  providerDescriptors?: readonly SetupMigrationProviderDescriptor[];
-  prompter: WizardPrompter;
-  allowBack: boolean;
-}): Promise<string | undefined> {
-  const options = await listSetupMigrationOptions({
-    baseConfig: params.baseConfig,
-    detections: params.detections,
-    providerDescriptors: params.providerDescriptors,
-  });
-  const requestedProviderId = params.opts.importFrom?.trim();
-  if (requestedProviderId) {
-    return assertListedMigrationProvider(requestedProviderId, options);
-  }
-  if (options.length === 0) {
-    throw new Error("No migration providers found.");
-  }
-  const prompt = {
-    message: t("wizard.migration.source"),
-    options: options.map((option) => ({
-      value: option.providerId,
-      label: option.label,
-      ...(option.hint ? { hint: option.hint } : {}),
-    })),
-    initialValue: params.detections[0]?.providerId ?? options[0]?.providerId,
-  };
-  if (!params.allowBack) {
-    params.prompter.disableBackNavigation?.();
-    return assertListedMigrationProvider(await params.prompter.select(prompt), options);
-  }
-  const selection = await runWizardWithPromptNavigationScope(
-    params.prompter,
-    async (prompter) => await prompter.select(prompt),
-  );
-  if (selection.status === "back") {
-    return undefined;
-  }
-  return assertListedMigrationProvider(selection.value, options);
-}
-
 /** Undefined means cancellation; unknown ids receive the same guidance as `openclaw migrate`. */
 function assertListedMigrationProvider(
   providerId: string | undefined,
@@ -281,36 +234,6 @@ async function withSetupMigrationProvider<T>(
   });
 }
 
-async function createSetupMigrationPlan(params: {
-  provider: MigrationProviderPlugin;
-  ctx: MigrationProviderContext;
-  importSecrets: boolean;
-  nonInteractive: boolean;
-  prompter: WizardPrompter;
-}): Promise<{ ctx: MigrationProviderContext; plan: MigrationPlan }> {
-  let ctx = { ...params.ctx, includeSecrets: params.importSecrets };
-  let plan = await params.provider.plan(ctx);
-  if (
-    params.nonInteractive ||
-    params.importSecrets ||
-    !plan.items.some(
-      (item) => item.kind === "auth" || item.kind === "secret" || item.sensitive === true,
-    )
-  ) {
-    return { ctx, plan };
-  }
-  const includeSecrets = await params.prompter.confirm({
-    message: t("wizard.migration.includeCredentials"),
-    initialValue: true,
-  });
-  if (!includeSecrets) {
-    return { ctx, plan };
-  }
-  ctx = { ...ctx, includeSecrets: true };
-  plan = await params.provider.plan(ctx);
-  return { ctx, plan };
-}
-
 export async function runSetupMigrationImport(params: {
   opts: OnboardOptions;
   baseConfig: OpenClawConfig;
@@ -339,14 +262,44 @@ export async function runSetupMigrationImport(params: {
     import("../config/paths.js"),
     import("../commands/onboard-helpers.js"),
   ]);
-  const providerId = await selectSetupMigrationProvider({
-    opts: params.opts,
-    baseConfig: params.baseConfig,
-    detections: params.detections,
-    providerDescriptors: params.providerDescriptors,
-    prompter: params.prompter,
-    allowBack: params.allowProviderBack === true,
-  });
+  const { opts, baseConfig, detections, providerDescriptors, prompter } = params;
+  const allowBack = params.allowProviderBack === true;
+  async function selectSetupMigrationProvider(): Promise<string | undefined> {
+    const options = await listSetupMigrationOptions({
+      baseConfig,
+      detections,
+      providerDescriptors,
+    });
+    const requestedProviderId = opts.importFrom?.trim();
+    if (requestedProviderId) {
+      return assertListedMigrationProvider(requestedProviderId, options);
+    }
+    if (options.length === 0) {
+      throw new Error("No migration providers found.");
+    }
+    const prompt = {
+      message: t("wizard.migration.source"),
+      options: options.map((option) => ({
+        value: option.providerId,
+        label: option.label,
+        ...(option.hint ? { hint: option.hint } : {}),
+      })),
+      initialValue: detections[0]?.providerId ?? options[0]?.providerId,
+    };
+    if (!allowBack) {
+      prompter.disableBackNavigation?.();
+      return assertListedMigrationProvider(await prompter.select(prompt), options);
+    }
+    const selection = await runWizardWithPromptNavigationScope(
+      prompter,
+      async (navigationPrompter) => await navigationPrompter.select(prompt),
+    );
+    if (selection.status === "back") {
+      return undefined;
+    }
+    return assertListedMigrationProvider(selection.value, options);
+  }
+  const providerId = await selectSetupMigrationProvider();
   if (!providerId) {
     return { kind: "back" };
   }
@@ -426,19 +379,33 @@ export async function runSetupMigrationImport(params: {
       if (params.opts.skipBootstrap) {
         targetConfig = applySkipBootstrapConfig(targetConfig);
       }
-      const { ctx, plan } = await createSetupMigrationPlan({
-        provider,
-        ctx: {
-          config: targetConfig,
-          stateDir,
-          source: sourceDir,
-          overwrite: false,
-          logger: migrationLogger,
-        },
-        importSecrets: Boolean(params.opts.importSecrets),
-        nonInteractive: Boolean(params.opts.nonInteractive),
-        prompter: params.prompter,
-      });
+      const importSecrets = Boolean(params.opts.importSecrets);
+      const nonInteractive = Boolean(params.opts.nonInteractive);
+      let ctx: MigrationProviderContext = {
+        config: targetConfig,
+        stateDir,
+        source: sourceDir,
+        overwrite: false,
+        logger: migrationLogger,
+        includeSecrets: importSecrets,
+      };
+      let plan = await provider.plan(ctx);
+      if (
+        !nonInteractive &&
+        !importSecrets &&
+        plan.items.some(
+          (item) => item.kind === "auth" || item.kind === "secret" || item.sensitive === true,
+        )
+      ) {
+        const includeSecrets = await params.prompter.confirm({
+          message: t("wizard.migration.includeCredentials"),
+          initialValue: true,
+        });
+        if (includeSecrets) {
+          ctx = { ...ctx, includeSecrets: true };
+          plan = await provider.plan(ctx);
+        }
+      }
       const plannedSourceSnapshotHash = await buildSetupMigrationPlanSourceSnapshot(plan);
       assertDeferredMigrationApplyContract(provider, plan);
       await params.prompter.note(

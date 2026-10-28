@@ -17,19 +17,15 @@ function ownPropertySchema(schema: JsonSchema, key: string): JsonSchema | undefi
   return properties && Object.hasOwn(properties, key) ? properties[key] : undefined;
 }
 
-function decimalPlaces(value: number): number {
-  const text = String(value).toLowerCase();
-  const [coefficient = "", exponentText] = text.split("e");
-  const fractionLength = coefficient.split(".")[1]?.length ?? 0;
-  const exponent = Number(exponentText ?? 0);
-  return Math.max(0, fractionLength - exponent);
-}
-
 function normalizePrecision(value: number, step: number | undefined): number {
   if (!step) {
     return value;
   }
-  const places = decimalPlaces(step);
+  const text = String(step).toLowerCase();
+  const [coefficient = "", exponentText] = text.split("e");
+  const fractionLength = coefficient.split(".")[1]?.length ?? 0;
+  const exponent = Number(exponentText ?? 0);
+  const places = Math.max(0, fractionLength - exponent);
   return places <= 100 ? Number(value.toFixed(places)) : value;
 }
 
@@ -42,20 +38,6 @@ function greatestCommonDivisor(left: bigint, right: bigint): bigint {
     b = remainder;
   }
   return a;
-}
-
-function leastCommonMultiple(left: bigint, right: bigint): bigint {
-  return (left / greatestCommonDivisor(left, right)) * right;
-}
-
-function integerCompatibleStep(multipleOf: number): number {
-  const { numerator, denominator } = decimalRational(multipleOf)!;
-  const divisor = greatestCommonDivisor(numerator, denominator);
-  const step = Number(numerator / divisor);
-  if (!Number.isFinite(step) || step <= 0) {
-    return 1;
-  }
-  return step;
 }
 
 function alignToStep(value: number, step: number, direction: "ceil" | "floor" | "round"): number {
@@ -154,7 +136,9 @@ function combinedMultipleOf(schemas: JsonSchema[]): number | undefined {
     const nextNumerator = rational.numerator / divisor;
     const nextDenominator = rational.denominator / divisor;
     numerator =
-      numerator === undefined ? nextNumerator : leastCommonMultiple(numerator, nextNumerator);
+      numerator === undefined
+        ? nextNumerator
+        : (numerator / greatestCommonDivisor(numerator, nextNumerator)) * nextNumerator;
     denominator =
       denominator === undefined
         ? nextDenominator
@@ -372,12 +356,16 @@ export function numericInputConstraints(schema: JsonSchema): NumericInputConstra
       ? "number"
       : schemaType(schema);
   const multipleOf = combinedMultipleOf(schemas);
-  const numericStep =
-    type === "integer"
-      ? multipleOf === undefined
-        ? 1
-        : integerCompatibleStep(multipleOf)
-      : multipleOf;
+  let numericStep = multipleOf;
+  if (type === "integer") {
+    numericStep = 1;
+    if (multipleOf !== undefined) {
+      const { numerator, denominator } = decimalRational(multipleOf)!;
+      const divisor = greatestCommonDivisor(numerator, denominator);
+      const step = Number(numerator / divisor);
+      numericStep = !Number.isFinite(step) || step <= 0 ? 1 : step;
+    }
+  }
   const lowerBound = effectiveNumericBound(schemas, "lower");
   const upperBound = effectiveNumericBound(schemas, "upper");
   return {

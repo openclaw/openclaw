@@ -187,6 +187,7 @@ openclaw infer image describe --file ./photo.jpg --model ollama/qwen2.5vl:7b --p
 Notes:
 
 - Use `image edit` when starting from existing input files; `--size`, `--aspect-ratio`, or `--resolution` add geometry hints on providers/models that support them.
+- `image generate` and `image edit` accept positive numeric `W:H` aspect ratios, including `7:5` and `1.5:1`. Malformed values such as `16x9`, `16/9`, or `0:5` fail before a provider request or output file is created.
 - `--output-format png --background transparent` with `--model openai/gpt-image-1.5` gives transparent-background OpenAI PNG output; `--openai-background` is an OpenAI-specific alias for the same hint. Providers that do not declare background support report it as an ignored override (see `ignoredOverrides` in the [JSON envelope](#json-output)).
 - `--quality low|medium|high|auto` works for providers that support image-quality hints, including OpenAI. OpenAI also accepts `--openai-moderation low|auto`.
 - `image providers --json` lists which bundled image providers are discoverable, configured, selected, and which generation/edit capabilities each exposes.
@@ -322,11 +323,17 @@ Stable top-level fields:
 - `transport`
 - `provider`
 - `model`
+- `usage` (observed model-run usage, when available)
+- `lastCallUsage` (observed usage from the last model API call, when available)
 - `attempts`
 - `inputs` (image attachments sent with the request, when applicable)
 - `outputs`
 - `ignoredOverrides` (hint keys a provider does not support, when applicable)
 - `error`
+
+For `model.run`, both transports expose normalized token counts such as `input`, `output`, `cacheRead`, `cacheWrite`, `reasoningTokens`, and `total`, plus usage availability and recorded cost metadata when supplied. Missing observations are omitted; adapter-default zeros are not treated as measurements. Explicitly measured zero counts are preserved, and explicitly unavailable usage is represented by `usageReport.state: "unavailable"` without invented token counts or cost.
+
+With `--local`, a run is one completion, so `usage` and `lastCallUsage` contain the same snapshot. With `--gateway`, `usage` keeps the runtime's aggregate billing usage (which can span multiple calls or candidates), while `lastCallUsage` describes only the last physical API call. Cost values and their provenance come from the existing runtime accounting; the CLI does not estimate them.
 
 For generated media commands, `outputs` contains files written by OpenClaw. Use the `path`, `mimeType`, `size`, and any media-specific dimensions in that array for automation instead of parsing human-readable stdout.
 

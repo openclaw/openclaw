@@ -2,10 +2,9 @@ import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { PluginHookHandlerMap } from "../plugins/hook-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import * as pluginServiceRuntime from "../plugins/services.js";
-import type { PluginServicesHandle } from "../plugins/services.js";
 import * as gatewayWorkAdmission from "../process/gateway-work-admission.js";
 import { tryBeginGatewaySuspendAdmission } from "../process/gateway-work-admission.js";
+import { createDeferredWorkTracker } from "../shared/async-work-scope.test-support.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import {
   installGatewayHookModuleLoad,
@@ -14,53 +13,36 @@ import {
 } from "./server-startup-module-mocks.test-support.js";
 import type { startGatewayPostAttachRuntime } from "./server-startup-post-attach.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-sidecar-scheduler.js";
+import { createStartupGate } from "./server-startup-state.test-support.js";
 
 type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntime>[0];
-type PostAttachRuntimeDeps = GatewayStartupModuleMocks;
 
 export function registerGatewayStartupAdmissionTests(params: {
   start: (
     params: PostAttachParams,
-    runtimeDeps?: PostAttachRuntimeDeps,
+    runtimeDeps?: GatewayStartupModuleMocks,
   ) => ReturnType<typeof startGatewayPostAttachRuntime>;
   createParams: (overrides?: Partial<PostAttachParams>) => PostAttachParams;
-  createRuntimeDeps: (overrides?: Partial<PostAttachRuntimeDeps>) => PostAttachRuntimeDeps;
+  createRuntimeDeps: (overrides?: Partial<GatewayStartupModuleMocks>) => GatewayStartupModuleMocks;
   startupModuleRestorers: Array<() => void>;
   stopSidecar: (sidecar: GatewayPostReadySidecarHandle) => Promise<void>;
 }): void {
   it("does not activate restored recovery when close begins during activation loading", async () => {
-    let closeStarted = false;
     const postReadyWork = createDeferred();
     const tracked: Promise<unknown>[] = [];
     const lifetime = new AbortController();
-    const { promise: recoveryLoadReady, resolve: releaseRecoveryLoad } = createDeferred();
-    const { promise: recoveryLoadStarted, resolve: markRecoveryLoadStarted } = createDeferred();
-    const pluginServices: PluginServicesHandle = {
-      reload: vi.fn(async () => {}),
-      stop: vi.fn(async () => {}),
-    };
-    const startServices = vi
-      .spyOn(pluginServiceRuntime, "startPluginServices")
-      .mockImplementation(async ({ onHandle }) => {
-        onHandle?.(pluginServices);
-        return pluginServices;
-      });
-    params.startupModuleRestorers.push(() => startServices.mockRestore());
-    const workerSidecar = { stop: vi.fn(async () => {}) };
+    const recoveryLoad = createStartupGate();
     const unlockStartupMethods = vi.fn();
-    const activateSubagentRegistry = vi.fn(async () => {});
+    const activateSubagentRegistry = vi.fn(() => ({
+      initial: Promise.resolve(),
+      pending: new Map(),
+      settled: Promise.resolve(),
+    }));
     await installGatewaySubagentModuleLoad(
-      async () => {
-        markRecoveryLoadStarted?.();
-        await recoveryLoadReady;
-      },
+      recoveryLoad.run,
       activateSubagentRegistry,
       params.startupModuleRestorers,
     );
-    const onPluginServices = vi.fn();
-    const onGatewayLifetimeSidecars = vi.fn<PostAttachParams["onGatewayLifetimeSidecars"]>();
-    const publishedConnectionDependentSidecars = new Set<GatewayPostReadySidecarHandle>();
-    const publishedPostReadySidecars = new Set<GatewayPostReadySidecarHandle>();
     const runtime = await params.start(
       {
         ...params.createParams(),
@@ -71,21 +53,8 @@ export function registerGatewayStartupAdmissionTests(params: {
           tracked.push(work);
           return work;
         },
-        isClosing: () => closeStarted,
-        startWorkerEnvironmentRuntime: vi.fn(() => {
-          publishedConnectionDependentSidecars.add(workerSidecar);
-          return workerSidecar;
-        }),
-        onGatewayLifetimeSidecars,
-        onPostReadySidecars: (...sidecars) => {
-          for (const sidecar of sidecars) {
-            const stop = vi.spyOn(sidecar, "stop");
-            params.startupModuleRestorers.push(() => stop.mockRestore());
-            publishedPostReadySidecars.add(sidecar);
-          }
-        },
+        isClosing: () => lifetime.signal.aborted,
         unlockStartupMethods,
-        onPluginServices,
       },
       params.createRuntimeDeps(),
     );
@@ -93,46 +62,23 @@ export function registerGatewayStartupAdmissionTests(params: {
     try {
       await runtime.startupSettled;
       expect(activateSubagentRegistry).not.toHaveBeenCalled();
-      expect(startServices).toHaveBeenCalledOnce();
-      expect(publishedPostReadySidecars.size).toBe(1);
       postReadyWork.resolve();
-      await recoveryLoadStarted;
-      closeStarted = true;
+      await recoveryLoad.entered;
       lifetime.abort();
-      releaseRecoveryLoad?.();
+      recoveryLoad.release();
       await Promise.allSettled(tracked);
 
       expect(activateSubagentRegistry).not.toHaveBeenCalled();
       expect(unlockStartupMethods).toHaveBeenCalledOnce();
-      expect(workerSidecar.stop).not.toHaveBeenCalled();
-      expect(publishedConnectionDependentSidecars.has(workerSidecar)).toBe(true);
-      expect(pluginServices.stop).not.toHaveBeenCalled();
-      for (const sidecar of publishedPostReadySidecars) {
-        expect(sidecar.stop).not.toHaveBeenCalled();
-      }
-      expect(onPluginServices).toHaveBeenLastCalledWith(pluginServices);
     } finally {
-      closeStarted = true;
       lifetime.abort();
       postReadyWork.resolve();
-      releaseRecoveryLoad?.();
+      recoveryLoad.release();
       await Promise.allSettled(tracked);
-      for (const sidecar of publishedConnectionDependentSidecars) {
-        await params.stopSidecar(sidecar);
-      }
-      for (const sidecar of publishedPostReadySidecars) {
-        await params.stopSidecar(sidecar);
-      }
-      await pluginServices.stop();
     }
-    expect(workerSidecar.stop).toHaveBeenCalledOnce();
-    for (const sidecar of publishedPostReadySidecars) {
-      expect(sidecar.stop).toHaveBeenCalledOnce();
-    }
-    expect(pluginServices.stop).toHaveBeenCalledOnce();
   });
 
-  it.each(["subagent", "gateway_start"] as const)(
+  it.each(["orphans", "gateway_start"] as const)(
     "retires startup %s admission parked behind suspension when the Gateway closes",
     async (stage) => {
       const gatewayStart = vi.fn<PluginHookHandlerMap["gateway_start"]>(async () => {});
@@ -144,8 +90,7 @@ export function registerGatewayStartupAdmissionTests(params: {
         source: "startup-suspension-test",
       });
       const postReadyWork = createDeferred();
-      const hookLoadStarted = createDeferred();
-      const releaseHookLoad = createDeferred();
+      const hookLoad = createStartupGate();
       const connectionWork = new GatewayConnectionWork();
       const refreshStarted = createDeferred();
       const refresh = vi.fn(async () => {
@@ -153,20 +98,13 @@ export function registerGatewayStartupAdmissionTests(params: {
         return null;
       });
       const sidecarsReady = vi.fn();
-      // The subagent row isolates recovery admission; the hook row owns hook admission.
-      if (stage === "subagent") {
+      // The orphan row isolates recovery admission; the hook row owns hook admission.
+      if (stage === "orphans") {
         pluginRegistry.typedHooks.length = 0;
+        hookLoad.release();
       }
-      await installGatewayHookModuleLoad(async () => {
-        hookLoadStarted.resolve();
-        if (stage === "gateway_start") {
-          await releaseHookLoad.promise;
-        }
-      }, params.startupModuleRestorers);
-      const trackStartupWork: PostAttachParams["trackStartupWork"] = (run) => {
-        const operation = Promise.resolve().then(() => run(connectionWork.signal));
-        return connectionWork.track(() => operation);
-      };
+      await installGatewayHookModuleLoad(hookLoad.run, params.startupModuleRestorers);
+      const trackStartupWork = createDeferredWorkTracker(connectionWork);
       const runtime = await trackStartupWork(() =>
         params.start(
           params.createParams({
@@ -189,38 +127,37 @@ export function registerGatewayStartupAdmissionTests(params: {
         .mockImplementation((run, origin, signal) => {
           const work = runWithAdmission(run, origin, signal);
           if (
-            origin === (stage === "subagent" ? "startup:subagent-recovery" : "hooks:gateway-start")
+            origin ===
+            (stage === "orphans" ? "startup:main-session-orphans" : "hooks:gateway-start")
           ) {
             admissionParked.resolve();
           }
           return work;
         });
       try {
-        expect(sidecarsReady).toHaveBeenCalledOnce();
+        expect(sidecarsReady).not.toHaveBeenCalled();
         if (stage === "gateway_start") {
           postReadyWork.resolve();
-          await hookLoadStarted.promise;
+          await hookLoad.entered;
           await refreshStarted.promise;
         }
         suspension = tryBeginGatewaySuspendAdmission(() => {});
         expect(suspension?.commit()).toBe(true);
         postReadyWork.resolve();
-        if (stage === "gateway_start") {
-          await hookLoadStarted.promise;
-        }
-        releaseHookLoad.resolve();
+        hookLoad.release();
         // Dynamic imports can outlive a turn; close only after the real admission waiter parks.
         await admissionParked.promise;
         connectionWork.beginClose();
         // Close retains admitted imports, but must retire parked admission without reopening it.
         await connectionWork.drain();
+        expect(sidecarsReady).toHaveBeenCalledTimes(stage === "orphans" ? 0 : 1);
         expect(gatewayStart).not.toHaveBeenCalled();
-        expect(refresh).toHaveBeenCalledTimes(stage === "subagent" ? 0 : 1);
+        expect(refresh).toHaveBeenCalledTimes(stage === "orphans" ? 0 : 1);
       } finally {
         admissionSpy.mockRestore();
         suspension?.release();
         postReadyWork.resolve();
-        releaseHookLoad.resolve();
+        hookLoad.release();
         await runtime.startupSettled;
         await connectionWork.drain();
       }

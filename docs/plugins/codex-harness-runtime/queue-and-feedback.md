@@ -23,6 +23,13 @@ complete message remains queued for a follow-up turn. Preparation and the
 `turn/steer` acknowledgment do not confirm transcript commitment. A message sent
 to Codex without a confirmed transcript commit is not replayed automatically.
 
+Before a terminal tool result interrupts the native turn, OpenClaw closes new
+steering admission and waits up to one second for already submitted input to
+receive its consumption notification. If the notification arrives, the input
+is confirmed committed. If the grace period expires, it retains the uncertain,
+non-replayable outcome. Explicit cancellation and aborts do not wait for this
+grace period.
+
 When Codex confirms the transcript commit, OpenClaw saves completed visible assistant
 items before the steered user message, including items before a tool or sleep
 handoff. Each item keeps its own identity so later steers do not duplicate it.

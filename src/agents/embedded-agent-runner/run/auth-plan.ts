@@ -11,7 +11,6 @@ import {
   ensureAuthProfileStoreAsync,
   ensureAuthProfileStoreWithoutExternalProfilesAsync,
 } from "../../model-auth.js";
-import { recordModelFallbackStop } from "../../model-fallback-stop.js";
 import { OPENAI_PROVIDER_ID } from "../../openai-routing.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import { isConfiguredKeyAuthSource } from "../../provider-model-auth-source-plan.js";
@@ -25,6 +24,7 @@ import {
   type PreparedAgentRuntimeAuth,
   type PreparedAgentRuntimeAuthAttempt,
 } from "../../runtime-plan/prepare-auth.js";
+import { createUnrecordedScheduledAccountRefusal } from "../../scheduled-unrecorded-account.js";
 import { resolveModelAsync } from "../model.js";
 import type { PreparedNativeSessionRuntime } from "./model-setup.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -89,6 +89,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   const authStoreOptions = {
     migrationProvider: params.provider,
     config: runParams.config,
+    inheritedAuthDir: params.preparedModelRuntime?.inheritedAuthDir,
     profileId: runParams.authProfileId,
     allowKeychainPrompt: false,
   };
@@ -216,24 +217,24 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     }
     // Legacy jobs have no trustworthy account history. Their env or provider-config key is
     // the only one they can use, so it keeps running; an eligible stored account needs adoption.
-    if (
+    const unrecorded =
       runParams.trigger === "cron" &&
       !runParams.authProfileBinding &&
-      !runParams.scheduledRuntimeAuthority &&
-      prepared.attempts.some(({ plan }) => {
-        const source = plan.credentialSource;
-        return (
-          source?.kind === "profile" ||
-          (source?.kind === "direct" && !isConfiguredKeyAuthSource(source))
-        );
-      })
-    ) {
-      const refusal = new Error(
-        "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
-      );
-      // Another model would only bypass the operator's account choice.
-      recordModelFallbackStop(refusal);
-      throw refusal;
+      !runParams.scheduledRuntimeAuthority
+        ? prepared.attempts.find(({ plan }) => {
+            const source = plan.credentialSource;
+            return (
+              source?.kind === "profile" ||
+              (source?.kind === "direct" && !isConfiguredKeyAuthSource(source))
+            );
+          })
+        : undefined;
+    if (unrecorded) {
+      throw createUnrecordedScheduledAccountRefusal({
+        runtime: harness.id,
+        modelRef: `${params.provider}/${params.modelId}`,
+        profileId: unrecorded.kind === "profile" ? unrecorded.profileId : undefined,
+      });
     }
     return prepared;
   };

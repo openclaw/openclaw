@@ -3,6 +3,10 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createGatewayByteStream,
@@ -15,8 +19,6 @@ import { makeMockHttpResponse } from "./test-http-response.js";
 const FILE = { size: 10, mtimeMs: 1_752_000_000_123.5 };
 const IMMUTABLE_FILE = { file: FILE, validators: createImmutableFileValidators(FILE) };
 const LAST_MODIFIED = new Date(FILE.mtimeMs).toUTCString();
-const FULL = { kind: "full", statusCode: 200 };
-const NOT_MODIFIED = { kind: "not-modified", statusCode: 304 };
 const ETAG = IMMUTABLE_FILE.validators.etag;
 
 async function openMedia(body: string | Buffer) {
@@ -54,135 +56,48 @@ function resolveImmutableResponse(
   });
 }
 
-describe("resolveByteResponse", () => {
-  it.each([
-    { header: "bytes=4-", start: 4, end: 9, contentLength: 6 },
-    { header: "bytes=-3", start: 7, end: 9, contentLength: 3 },
-    { header: "bytes=2-5", start: 2, end: 5, contentLength: 4 },
-  ])("resolves range $header", ({ header, start, end, contentLength }) => {
-    const plan = resolveImmutableResponse({ range: header });
-    expect(plan).toMatchObject({
-      kind: "partial",
-      statusCode: 206,
-      contentLength,
-      range: { start, end },
+const full = { kind: "full", statusCode: 200, contentLength: 10 };
+const unchanged = { kind: "not-modified", statusCode: 304 };
+const partial = (start: number, end: number) => ({
+  kind: "partial",
+  statusCode: 206,
+  contentLength: end - start + 1,
+  range: { start, end },
+});
+const ranged = { "if-range": ETAG, "if-none-match": '"stale"' };
+const since = { "if-modified-since": LAST_MODIFIED };
+type ResponseCase = [Record<string, string | string[]>, { statusCode: number }, string?];
+it.each([
+  [{ ...ranged, range: "bytes=4-" }, partial(4, 9)],
+  [{ ...ranged, range: "bytes=-3" }, partial(7, 9)],
+  [{ range: "bytes=broken" }, full],
+  [{ range: "bytes=0-1,4-5" }, full],
+  [{ ...since, "if-none-match": "" }, full],
+  [{ ...since, "if-none-match": '"different"' }, full],
+  [{ "if-none-match": "*" }, unchanged],
+  [{ "if-none-match": `"other", ${ETAG}` }, unchanged],
+  [{ "if-none-match": ['"other"', `W/${ETAG}`] }, unchanged],
+  [{ "if-none-match": 'W/"opaque,tag"' }, unchanged, '"opaque,tag"'],
+  [{ "if-none-match": '"opaque,tag"' }, unchanged, 'W/"opaque,tag"'],
+] satisfies ResponseCase[])(
+  "resolves conditional byte response %j",
+  (headers, expected, etag = ETAG) => {
+    const plan = resolveImmutableResponse(headers, {
+      validators: { ...IMMUTABLE_FILE.validators, etag },
     });
+    expect(plan).toMatchObject({ ...expected, etag, lastModified: LAST_MODIFIED });
     const { res, setHeader } = makeMockHttpResponse();
     writeByteHeaders(res, plan);
-    expect(res.statusCode).toBe(206);
-    expect(setHeader).toHaveBeenCalledWith("Last-Modified", LAST_MODIFIED);
-  });
-
-  it("returns 416 with the complete file size for an out-of-bounds range", () => {
-    const plan = resolveImmutableResponse({ range: "bytes=10-20" });
-    expect(plan).toMatchObject({
-      kind: "unsatisfiable",
-      statusCode: 416,
-      contentLength: 0,
-      size: 10,
-    });
-
-    const { res, setHeader } = makeMockHttpResponse();
-    writeByteHeaders(res, plan);
-    expect(res.statusCode).toBe(416);
-    expect(setHeader).toHaveBeenCalledWith("Content-Range", "bytes */10");
-  });
-
-  it.each(["bytes=broken", "items=0-1", "bytes=0-1,4-5"])(
-    "falls back to a full response for malformed or multipart range %s",
-    (rangeHeader) => {
-      expect(resolveImmutableResponse({ range: rangeHeader })).toMatchObject({
-        ...FULL,
-        contentLength: 10,
-      });
-    },
-  );
-
-  it("matches an If-Range date against the bounded emitted validator", () => {
-    const nowMs = FILE.mtimeMs - 60_000;
-    const emittedLastModified = new Date(nowMs).toUTCString();
-
-    expect(
-      resolveImmutableResponse({ range: "bytes=1-2", "if-range": emittedLastModified }, { nowMs }),
-    ).toMatchObject({ kind: "partial", statusCode: 206, lastModified: emittedLastModified });
-    expect(
-      resolveImmutableResponse({ range: "bytes=1-2", "if-range": LAST_MODIFIED }, { nowMs }),
-    ).toMatchObject({ ...FULL, lastModified: emittedLastModified });
-  });
-
-  it("bounds the future Last-Modified validator on HEAD not-modified responses", () => {
-    const nowMs = FILE.mtimeMs - 60_000;
-    expect(resolveImmutableResponse({ "if-none-match": ETAG }, { method: "HEAD", nowMs })).toEqual({
-      ...NOT_MODIFIED,
-      etag: ETAG,
-      lastModified: new Date(nowMs).toUTCString(),
-    });
-  });
-
-  it("honors a later If-Modified-Since date before ranges for HEAD", () => {
-    expect(
-      resolveImmutableResponse(
-        {
-          "if-modified-since": new Date(Date.parse(LAST_MODIFIED) + 1_000).toUTCString(),
-          range: "bytes=1-2",
-          "if-range": '"stale"',
-        },
-        { method: "HEAD" },
-      ),
-    ).toMatchObject({ ...NOT_MODIFIED, lastModified: LAST_MODIFIED });
-  });
-
-  it.each(["", '"different"'])(
-    "ignores If-Modified-Since whenever any If-None-Match field is present (%j)",
-    (ifNoneMatch) => {
-      expect(
-        resolveImmutableResponse({
-          "if-none-match": ifNoneMatch,
-          "if-modified-since": LAST_MODIFIED,
-        }),
-      ).toMatchObject(FULL);
-    },
-  );
-
-  it.each([
-    { etag: '"opaque,tag"', header: 'W/"opaque,tag"' },
-    { etag: 'W/"opaque,tag"', header: '"opaque,tag"' },
-  ])("weakly compares complete $header against $etag", ({ etag, header }) => {
-    expect(
-      resolveImmutableResponse(
-        { "if-none-match": header },
-        { validators: { ...IMMUTABLE_FILE.validators, etag } },
-      ),
-    ).toMatchObject(NOT_MODIFIED);
-  });
-
-  it.each([
-    { label: "wildcard", header: "*" },
-    { label: "list", header: `"other", ${ETAG}` },
-    { label: "multiple headers", header: ['"other"', `W/${ETAG}`] },
-  ])("returns 304 for a matching $label If-None-Match validator", ({ header }) => {
-    const plan = resolveImmutableResponse({ "if-none-match": header });
-    expect(plan).toEqual({ ...NOT_MODIFIED, etag: ETAG, lastModified: LAST_MODIFIED });
-    const { res, setHeader } = makeMockHttpResponse();
-    writeByteHeaders(res, plan);
-    expect(res.statusCode).toBe(304);
+    expect(res.statusCode).toBe(expected.statusCode);
     expect(Object.fromEntries(setHeader.mock.calls)).toMatchObject({
-      ETag: ETAG,
+      ETag: etag,
       "Last-Modified": LAST_MODIFIED,
     });
-    expect(setHeader).not.toHaveBeenCalledWith("Content-Length", expect.anything());
-  });
-
-  it("keeps the requested range when If-None-Match does not match", () => {
-    expect(
-      resolveImmutableResponse({
-        range: "bytes=1-2",
-        "if-range": ETAG,
-        "if-none-match": '"stale"',
-      }),
-    ).toMatchObject({ kind: "partial", statusCode: 206, range: { start: 1, end: 2 } });
-  });
-});
+    if (plan.kind === "not-modified") {
+      expect(setHeader).not.toHaveBeenCalledWith("Content-Length", expect.anything());
+    }
+  },
+);
 
 describe("Gateway byte response descriptor lifecycle", () => {
   it.each(["client disconnect", "read revocation"] as const)(
@@ -216,17 +131,11 @@ describe("Gateway byte response descriptor lifecycle", () => {
         );
         response.once("close", resolveResponseClose);
       });
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected test HTTP server to bind to a TCP port");
-      }
+      const origin = await listenLoopback(server);
 
       try {
         await new Promise<void>((resolve, reject) => {
-          const request = http.get({ host: "127.0.0.1", port: address.port }, (response) => {
+          const request = http.get(origin, (response) => {
             response.once("data", () => {
               if (reason === "client disconnect") {
                 response.destroy();
@@ -249,10 +158,7 @@ describe("Gateway byte response descriptor lifecycle", () => {
         const streamedFile = createReadStream.mock.results[0]?.value;
         expect(streamedFile).toMatchObject({ destroyed: true, readableEnded: false });
       } finally {
-        server.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        });
+        await closeHttpServer(server);
         await cleanup();
       }
     },

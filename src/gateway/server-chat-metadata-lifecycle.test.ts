@@ -1,25 +1,17 @@
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import * as authRevisionRuntime from "../agents/auth-profiles/runtime-snapshots.js";
-import type { RuntimeAuthProfileStore } from "../agents/auth-profiles/types.js";
-import * as catalogRuntime from "../agents/prepared-model-catalog.js";
+import { createPreparedAccountCatalogAccess } from "../agents/prepared-model-runtime.catalog-auth.js";
+import {
+  notifyPreparedModelRuntimePublication,
+  registerPreparedModelRuntimePublicationListener,
+} from "../agents/prepared-model-runtime.publication-events.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getSessionCostUsageUpdatedAt,
   publishSessionCostUsageUpdated,
 } from "../infra/session-cost-usage-events.js";
-import {
-  bumpSkillsSnapshotVersion,
-  getSkillsSnapshotVersion,
-  notifySkillsWatchAvailable,
-  registerSkillsChangeListener,
-  resetSkillsRefreshStateForTest,
-} from "../skills/runtime/refresh-state.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
-import { createChatMetadataOwner } from "./server-methods/chat-metadata-runtime.test-support.js";
-import * as projectionRuntime from "./server-methods/chat-metadata-session-projection.js";
-import * as commands from "./server-methods/commands-list-result.js";
 import { createPreparedReadHandler } from "./server-methods/prepared-read.js";
 import type {
   GatewayRequestContext,
@@ -64,9 +56,6 @@ vi.mock("../skills/runtime/refresh.js", async (importOriginal) => ({
 const { createGatewayChatMetadataLifecycle } = await import("./server-chat-metadata-lifecycle.js");
 const { ChatMetadataSnapshotUnavailableError } =
   await import("./server-methods/chat-metadata-facts.js");
-const authSnapshots = await vi.importActual<
-  typeof import("../agents/auth-profiles/runtime-snapshots.js")
->("../agents/auth-profiles/runtime-snapshots.js");
 
 const config = {} as OpenClawConfig;
 const context = {} as GatewayRequestContext;
@@ -112,14 +101,79 @@ function createLifecycle(warn = vi.fn()) {
   };
 }
 
+async function attachLifecycle(overrides: Partial<GatewayRequestContext> = {}) {
+  const fixture = createLifecycle();
+  const lifecycle = await fixture.lifecycle;
+  const requestContext = { ...context, ...overrides };
+  await lifecycle.attachContext(requestContext, fixture.sidecarOwner.publish);
+  return { ...fixture, lifecycle, requestContext };
+}
+
+function expectMetadataBroadcast(broadcast: Mock, payload: Record<string, unknown>) {
+  expect(broadcast).toHaveBeenCalledExactlyOnceWith("chat.metadata.changed", payload, {
+    dropIfSlow: true,
+  });
+}
+
+it("broadcasts only downgrade onset and recovery for alternating service-tier responses", async () => {
+  vi.useFakeTimers({ now: 1_000 });
+  mocks.registerModelListener.mockImplementation(registerPreparedModelRuntimePublicationListener);
+  const broadcast = vi.fn();
+  await attachLifecycle({ broadcast });
+  const retirement = new AbortController();
+  const catalog = createPreparedAccountCatalogAccess(
+    () => true,
+    retirement.signal,
+    {},
+    () => {
+      notifyPreparedModelRuntimePublication({
+        phase: "catalog-observation",
+        modelFactsChanged: false,
+        agentId: "main",
+      });
+    },
+  );
+  try {
+    const record = catalog.prepareServiceTierObserver({
+      selectedCredential: { source: "direct", provider: "openai", identityKey: "direct:openai" },
+    });
+    const route = {
+      modelId: "fixture-model",
+      runtimeId: "openclaw",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      requestedTier: "ultrafast",
+    };
+    for (let index = 0; index < 100; index++) {
+      record({ ...route, responseTier: index % 2 === 0 ? "priority" : "ultrafast" });
+      vi.advanceTimersByTime(500);
+    }
+    const payload = {
+      agentId: "main",
+      modelCatalogChanged: true,
+      authChanged: false,
+      commandsChanged: false,
+    };
+    expectMetadataBroadcast(broadcast, payload);
+    expect(mocks.refresh).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(60_000);
+    expect(broadcast).toHaveBeenCalledTimes(2);
+    expect(broadcast).toHaveBeenLastCalledWith("chat.metadata.changed", payload, {
+      dropIfSlow: true,
+    });
+    vi.advanceTimersByTime(60_000);
+    expect(broadcast).toHaveBeenCalledTimes(2);
+  } finally {
+    retirement.abort();
+  }
+});
+
 it.each([false, true])(
   "publishes usage completion (failed: %s) without rebuilding metadata and retires its listener on stop",
   async (failed) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const broadcast = vi.fn();
-    const { lifecycle: pending, sidecarOwner } = createLifecycle();
-    const lifecycle = await pending;
-    await lifecycle.attachContext({ ...context, broadcast }, sidecarOwner.publish);
+    const { sidecarOwner } = await attachLifecycle({ broadcast });
     expect(mocks.refresh).toHaveBeenCalledOnce();
     mocks.refresh.mockClear();
     expect(sidecarOwner.snapshot()).toHaveLength(1);
@@ -127,18 +181,14 @@ it.each([false, true])(
     if (!failed) {
       await vi.advanceTimersByTimeAsync(500);
     }
-    expect(broadcast).toHaveBeenCalledExactlyOnceWith(
-      "chat.metadata.changed",
-      {
-        agentId: "main",
-        usageUpdatedAt: expect.any(Number),
-        modelCatalogChanged: false,
-        authChanged: false,
-        commandsChanged: false,
-        ...(failed ? { usageRefreshFailed: true } : {}),
-      },
-      { dropIfSlow: true },
-    );
+    expectMetadataBroadcast(broadcast, {
+      agentId: "main",
+      usageUpdatedAt: expect.any(Number),
+      modelCatalogChanged: false,
+      authChanged: false,
+      commandsChanged: false,
+      ...(failed ? { usageRefreshFailed: true } : {}),
+    });
     expect(mocks.refresh).not.toHaveBeenCalled();
     await sidecarOwner.stop();
     expect(mocks.stop).toHaveBeenCalledOnce();
@@ -153,9 +203,7 @@ it.each([false, true])(
 it("coalesces usage batches by agent without delaying failures or extending the window", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const broadcast = vi.fn();
-  const { lifecycle: pending, sidecarOwner } = createLifecycle();
-  const lifecycle = await pending;
-  await lifecycle.attachContext({ ...context, broadcast }, sidecarOwner.publish);
+  const { sidecarOwner } = await attachLifecycle({ broadcast });
   for (let index = 0; index < 112; index++) {
     publishSessionCostUsageUpdated("main");
     publishSessionCostUsageUpdated("other");
@@ -198,7 +246,7 @@ it("coalesces usage batches by agent without delaying failures or extending the 
 
 it("retires model choices at its config commit before pending metadata settles", async () => {
   const broadcast = vi.fn();
-  let committedConfig: OpenClawConfig = {};
+  let committedConfig: OpenClawConfig = { agents: { entries: { main: {} } } };
   const ownedContext = {
     ...context,
     broadcast,
@@ -217,27 +265,25 @@ it("retires model choices at its config commit before pending metadata settles",
     await entered.promise;
     publishOperatorRoleConfigChange({});
     expect(broadcast).not.toHaveBeenCalled();
-    committedConfig = { auth: { profiles: { account: { provider: "fixture", mode: "api_key" } } } };
+    committedConfig = {
+      ...committedConfig,
+      auth: { profiles: { account: { provider: "fixture", mode: "api_key" } } },
+    };
+    publishOperatorRoleConfigChange(ownedContext);
+    expect(broadcast).not.toHaveBeenCalled();
+    committedConfig = { ...committedConfig, agents: { entries: { main: {}, "new-agent": {} } } };
     publishOperatorRoleConfigChange(ownedContext);
     expect(broadcast).not.toHaveBeenCalled();
     committedConfig = { ...committedConfig, models: { mode: "replace" } };
     publishOperatorRoleConfigChange(ownedContext);
-    expect(broadcast).toHaveBeenCalledExactlyOnceWith(
-      "chat.metadata.changed",
-      { modelSelectionChanged: true, commandsChanged: false },
-      { dropIfSlow: true },
-    );
+    expectMetadataBroadcast(broadcast, { modelSelectionChanged: true, commandsChanged: false });
     broadcast.mockClear();
     committedConfig = {
       ...committedConfig,
       agents: { defaults: { modelPolicy: { allow: ["fixture/allowed"] } } },
     };
     publishOperatorRoleConfigChange(ownedContext);
-    expect(broadcast).toHaveBeenCalledExactlyOnceWith(
-      "chat.metadata.changed",
-      { modelSelectionChanged: true, commandsChanged: false },
-      { dropIfSlow: true },
-    );
+    expectMetadataBroadcast(broadcast, { modelSelectionChanged: true, commandsChanged: false });
   } finally {
     release.resolve();
     await attaching;
@@ -248,458 +294,76 @@ it("retires model choices at its config commit before pending metadata settles",
   expect(broadcast).not.toHaveBeenCalled();
 });
 
-async function createRealMetadataLifecycle(
-  options: {
-    attach?: boolean;
-    ownerAvailable?: boolean;
-    authStore?: RuntimeAuthProfileStore;
-    skillsWorkspaceDir?: string;
-  } = {},
-) {
-  const actual = await vi.importActual<typeof import("./server-methods/chat-metadata-runtime.js")>(
-    "./server-methods/chat-metadata-runtime.js",
-  );
-  let owner = createChatMetadataOwner(config, "before-publication");
-  let ownerAvailable = options.ownerAvailable ?? true;
-  const revision = 0;
-  let latestRefresh = Promise.resolve();
-  const refresh = vi.fn<() => Promise<void>>();
-  const buildCommands = vi.fn(async () => ({ commands: [] }));
-  const broadcast = vi.fn();
-  if (options.skillsWorkspaceDir) {
-    owner = { ...owner, workspaceDir: options.skillsWorkspaceDir };
-    mocks.registerSkillsListener.mockImplementation(registerSkillsChangeListener);
-  }
-  if (options.authStore) {
-    authSnapshots.setRuntimeAuthProfileStoreSnapshot(options.authStore, owner.agentDir);
-    mocks.registerAuthListener.mockImplementation(
-      authSnapshots.registerRuntimeAuthProfileStoreMutationListener,
-    );
-  }
-  vi.spyOn(catalogRuntime, "getPublishedPreparedModelCatalogOwnerSnapshot").mockImplementation(
-    () => (ownerAvailable ? owner : undefined),
-  );
-  if (!options.authStore) {
-    vi.spyOn(authRevisionRuntime, "getRuntimeAuthProfileStoreMetadataRevision").mockReturnValue(
-      revision,
-    );
-  }
-  vi.spyOn(commands, "buildCommandsListResult").mockImplementation(buildCommands);
-  vi.spyOn(projectionRuntime, "prepareChatMetadataModelProjection").mockImplementation(
-    async ({ facts }) => ({
-      modelCatalog: facts.modelCatalog.entries,
-      read: () => ({ models: facts.modelCatalog.entries }),
-      isCurrent: () => true,
-    }),
-  );
-  mocks.createRuntime.mockImplementation(
-    (params: Parameters<typeof actual.createGatewayChatMetadataRuntime>[0]) => {
-      const runtime = actual.createGatewayChatMetadataRuntime(params);
-      refresh.mockImplementation(() => {
-        latestRefresh = runtime.refresh();
-        return latestRefresh;
-      });
-      return { ...runtime, refresh };
-    },
-  );
-  const { lifecycle: pendingLifecycle, sidecarOwner, warn } = createLifecycle();
-  const lifecycle = await pendingLifecycle;
-  const attach = () =>
-    lifecycle.attachContext(
-      { broadcast } as unknown as GatewayRequestContext,
-      sidecarOwner.publish,
-    );
-  if (options.attach !== false) {
-    await attach();
-  }
-  const modelEvent = (event: { phase: string; error?: Error; modelFactsChanged?: boolean }) =>
-    mocks.registerModelListener.mock.calls[0]![0](event);
-  const authEvent = () => mocks.registerAuthListener.mock.calls[0]![0]();
-  return {
-    lifecycle,
-    attach,
-    buildCommands,
-    broadcast,
-    refresh,
-    publishAuthStore(store: RuntimeAuthProfileStore) {
-      authSnapshots.updateRuntimeAuthProfileStoreSnapshot(store, owner.agentDir);
-      return latestRefresh;
-    },
-    warn,
-    modelEvent,
-    replaceOwner() {
-      owner = createChatMetadataOwner(config, "after-publication");
-      ownerAvailable = true;
-      modelEvent({ phase: "published" });
-    },
-    invalidateOwner() {
-      ownerAvailable = false;
-      modelEvent({ phase: "invalidated" });
-    },
-    events: {
-      skills: () => mocks.registerSkillsListener.mock.calls[0]![0]({ reason: "watch" }),
-      auth: () => authEvent(),
-      catalog: () => modelEvent({ phase: "catalog-published" }),
-      catalogFailure: () =>
-        modelEvent({ phase: "catalog-failed", error: new Error("catalog failed") }),
-      owner: () => modelEvent({ phase: "invalidated" }),
-    },
-    async stop() {
-      await sidecarOwner.stop();
-      if (options.authStore) {
-        authSnapshots.clearRuntimeAuthProfileStoreSnapshotCore(owner.agentDir);
-      }
-    },
-  };
-}
-
 describe("gateway chat metadata lifecycle", () => {
-  it("ignores coverage-only skills events and publishes completed revisions", async () => {
-    resetSkillsRefreshStateForTest();
-    const workspaceDir = "/tmp/chat-metadata-skills";
-    const version = getSkillsSnapshotVersion(workspaceDir);
-    const harness = await createRealMetadataLifecycle({ skillsWorkspaceDir: workspaceDir });
-    try {
-      const before = await harness.lifecycle.read({ agentId: "main" });
-      harness.refresh.mockClear();
-      harness.broadcast.mockClear();
-      notifySkillsWatchAvailable({ workspaceDir, sourceScope: {} });
-      expect(getSkillsSnapshotVersion(workspaceDir)).toBe(version);
-      expect(await harness.lifecycle.read({ agentId: "main" })).toEqual(before);
-      expect(harness.refresh).not.toHaveBeenCalled();
-      expect(harness.broadcast).not.toHaveBeenCalled();
-      expect(harness.buildCommands).toHaveBeenCalledOnce();
-
-      bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
-      await harness.lifecycle.read({ agentId: "main" });
-      expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(version);
-      expect(harness.refresh).toHaveBeenCalledOnce();
-      expect(harness.buildCommands).toHaveBeenCalledTimes(2);
-      expect(harness.broadcast).toHaveBeenCalledExactlyOnceWith(
-        "chat.metadata.changed",
-        { modelCatalogChanged: false, authChanged: false },
-        { dropIfSlow: true },
-      );
-    } finally {
-      await harness.stop();
-      resetSkillsRefreshStateForTest();
+  it("coalesces availability flips without delaying credential changes and cancels on stop", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { sidecarOwner } = await attachLifecycle({ broadcast: vi.fn() });
+    mocks.refresh.mockClear();
+    const listener = mocks.registerAuthListener.mock.calls[0]![0];
+    for (let index = 0; index < 100; index++) {
+      listener({ availabilityOnly: true });
     }
-  });
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(499);
+    listener({ availabilityOnly: true });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mocks.refresh).toHaveBeenCalledOnce();
 
-  it.each([true])(
-    "keeps bookkeeping from refreshing or broadcasting metadata (inherited: %s)",
-    async (inherited) => {
-      const store: RuntimeAuthProfileStore = {
-        version: 1,
-        profiles: { "test:primary": { type: "token", provider: "test", token: "synthetic-token" } },
-      };
-      const harness = await createRealMetadataLifecycle({ authStore: store });
-      try {
-        const before = await harness.lifecycle.read({ agentId: "main" });
-        harness.refresh.mockClear();
-        harness.broadcast.mockClear();
-        for (let count = 1; count <= 3; count += 1) {
-          await harness.publishAuthStore({
-            ...store,
-            ...(inherited ? { runtimeInheritsMainState: true } : {}),
-            lastGood: { test: "test:primary" },
-            usageStats: {
-              "test:primary": {
-                lastUsed: count,
-                errorCount: count,
-                failureCounts: { timeout: count },
-                lastFailureAt: count,
-                lastProbeAt: count,
-              },
-            },
-          });
-          expect(harness.refresh).not.toHaveBeenCalled();
-          harness.modelEvent({ phase: "catalog-published", modelFactsChanged: false });
-          expect(await harness.lifecycle.read({ agentId: "main" })).toEqual(before);
-          harness.refresh.mockClear();
-        }
-        expect(harness.buildCommands).toHaveBeenCalledOnce();
-        expect(harness.broadcast).not.toHaveBeenCalled();
-      } finally {
-        await harness.stop();
-      }
-    },
-  );
-
-  it.each<{ name: string; change: Partial<RuntimeAuthProfileStore> }>([
-    {
-      name: "token rotated",
-      change: {
-        profiles: { "test:primary": { type: "token", provider: "test", token: "rotated-token" } },
-      },
-    },
-  ])("refreshes and broadcasts metadata when $name", async ({ change }) => {
-    const store: RuntimeAuthProfileStore = {
-      version: 1,
-      profiles: { "test:primary": { type: "token", provider: "test", token: "synthetic-token" } },
-    };
-    const harness = await createRealMetadataLifecycle({ authStore: store });
-    try {
-      await harness.lifecycle.read({ agentId: "main" });
-      harness.refresh.mockClear();
-      harness.broadcast.mockClear();
-      await harness.publishAuthStore({ ...store, ...change });
-      expect(harness.refresh).toHaveBeenCalledOnce();
-      expect(harness.broadcast).toHaveBeenCalledExactlyOnceWith(
-        "chat.metadata.changed",
-        { modelCatalogChanged: true, authChanged: true, commandsChanged: false },
-        { dropIfSlow: true },
-      );
-      await harness.lifecycle.read({ agentId: "main" });
-      expect(harness.buildCommands).toHaveBeenCalledTimes(2);
-      await harness.publishAuthStore(store);
-      expect(harness.broadcast).toHaveBeenCalledTimes(2);
-    } finally {
-      await harness.stop();
-    }
-  });
-
-  it("waits for owner publication when no owner is available", async () => {
-    const harness = await createRealMetadataLifecycle({
-      attach: false,
-      ownerAvailable: false,
-    });
-    let settled = false;
-    const readMetadata = () =>
-      harness.lifecycle.read({ agentId: "main" }).then(
-        (value) => {
-          settled = true;
-          return value;
-        },
-        (error: unknown) => {
-          settled = true;
-          return error;
-        },
-      );
-    let read: Promise<unknown> | undefined;
-    try {
-      await harness.attach();
-      expect(harness.warn).not.toHaveBeenCalled();
-      await expect(harness.lifecycle.read({ agentId: "main" })).rejects.toBeInstanceOf(
-        ChatMetadataSnapshotUnavailableError,
-      );
-      harness.invalidateOwner();
-      read = readMetadata();
-      await nextEventLoopTurn();
-      expect(harness.warn).not.toHaveBeenCalled();
-      expect(settled).toBe(false);
-      harness.replaceOwner();
-      await expect(read).resolves.toMatchObject({
-        models: [expect.objectContaining({ id: "after-publication" })],
-      });
-    } finally {
-      await harness.stop();
-      await read;
-    }
-  });
-
-  it.each(["auth", "owner"] as const)(
-    "retains a terminal metadata failure through a later %s invalidation",
-    async (event) => {
-      const harness = await createRealMetadataLifecycle();
-      const failure = new Error("prepared owner publication failed");
-      let read: Promise<void> | undefined;
-      try {
-        harness.invalidateOwner();
-        harness.modelEvent({ phase: "failed", error: failure });
-        await expect(harness.lifecycle.read({ agentId: "main" })).rejects.toBe(failure);
-        harness.events[event]();
-        let outcome: unknown = Symbol("pending");
-        read = harness.lifecycle.read({ agentId: "main" }).then(
-          (value) => {
-            outcome = value;
-          },
-          (error: unknown) => {
-            outcome = error;
-          },
-        );
-        await nextEventLoopTurn();
-
-        expect(outcome).toBe(failure);
-        harness.replaceOwner();
-        await expect(harness.lifecycle.read({ agentId: "main" })).resolves.toMatchObject({
-          models: [expect.objectContaining({ id: "after-publication" })],
-        });
-      } finally {
-        await harness.stop();
-        await read;
-      }
-    },
-  );
-
-  it("broadcasts settled metadata through the production lifecycle without a failure feedback loop", async () => {
-    const actual = await vi.importActual<
-      typeof import("./server-methods/chat-metadata-runtime.js")
-    >("./server-methods/chat-metadata-runtime.js");
-    const owner = {
-      ...createChatMetadataOwner(config, "model"),
-      createStores: () => {
-        throw new Error("metadata must not create live model stores");
-      },
-    };
-    const getPreparedOwner = vi
-      .spyOn(catalogRuntime, "getPublishedPreparedModelCatalogOwnerSnapshot")
-      .mockReturnValue(undefined);
-    let available = false;
-    let revision = 0;
-    vi.spyOn(projectionRuntime, "prepareChatMetadataModelProjection").mockImplementation(
-      async () => {
-        const projection = {
-          modelCatalog: owner.modelCatalog.entries,
-          models: [{ id: "model", name: "model", provider: "test", available }],
-        };
-        return { ...projection, read: () => projection, isCurrent: () => true };
-      },
-    );
-    vi.spyOn(authRevisionRuntime, "getRuntimeAuthProfileStoreMetadataRevision").mockImplementation(
-      () => revision,
-    );
-    vi.spyOn(commands, "buildCommandsListResult").mockResolvedValue({ commands: [] });
-    mocks.createRuntime.mockImplementation(actual.createGatewayChatMetadataRuntime);
-    const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle();
-    const lifecycle = await pendingLifecycle;
-    const outcomes: unknown[] = [];
-    const reads: Promise<void>[] = [];
-    const broadcast = vi.fn(() => {
-      // Read immediately from the outbound boundary: the replacement must already be settled.
-      reads.push(
-        lifecycle.read({ agentId: "main" }).then(
-          (metadata) => {
-            outcomes.push(metadata.models);
-          },
-          (error: unknown) => {
-            outcomes.push(error instanceof Error ? error.message : error);
-          },
-        ),
-      );
-    });
-    await lifecycle.attachContext(
-      { broadcast } as unknown as GatewayRequestContext,
-      sidecarOwner.publish,
-    );
-    await Promise.all(reads);
-    expect(outcomes).toEqual([expect.stringContaining("metadata is unavailable")]);
-    expect(broadcast).toHaveBeenCalledOnce();
-    getPreparedOwner.mockReturnValue(owner);
+    listener({ availabilityOnly: true });
+    listener({ availabilityOnly: false });
+    expect(mocks.refresh).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(mocks.refresh).toHaveBeenCalledTimes(2);
+    listener({ availabilityOnly: true });
     const modelListener = mocks.registerModelListener.mock.calls[0]![0];
-    const authListener = mocks.registerAuthListener.mock.calls[0]![0];
-    modelListener({ phase: "published" });
-    await vi.waitFor(() => expect(outcomes).toHaveLength(2));
-    expect(outcomes[1]).toEqual([expect.objectContaining({ available: false })]);
-
     modelListener({ phase: "invalidated" });
-    available = true;
-    revision += 1;
-    authListener();
-    expect(broadcast).toHaveBeenCalledTimes(2);
+    modelListener({ phase: "failed", error: new Error("replacement failed") });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(mocks.refresh).toHaveBeenCalledTimes(2);
     modelListener({ phase: "published" });
-    await vi.waitFor(() => expect(outcomes).toHaveLength(3));
-    expect(outcomes[2]).toEqual([expect.objectContaining({ available: true })]);
-
-    available = false;
-    revision += 1;
-    authListener();
-    await vi.waitFor(() => expect(outcomes).toHaveLength(4));
-    expect(outcomes[3]).toEqual([expect.objectContaining({ available: false })]);
-
-    modelListener({ phase: "invalidated" });
-    modelListener({ phase: "failed", error: new Error("owner publication failed") });
-    await Promise.all(reads);
-    await expect(lifecycle.read({ agentId: "main" })).rejects.toThrow("owner publication failed");
-    expect(outcomes[4]).toBe("owner publication failed");
-    expect(broadcast.mock.calls).toEqual(
-      Array.from({ length: 5 }, (_, index) => [
-        "chat.metadata.changed",
-        {
-          modelCatalogChanged: true,
-          authChanged: true,
-          ...(index === 3 ? { commandsChanged: false } : {}),
-        },
-        { dropIfSlow: true },
-      ]),
-    );
+    expect(mocks.refresh).toHaveBeenCalledTimes(3);
+    listener({ availabilityOnly: true });
+    await sidecarOwner.stop();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(mocks.refresh).toHaveBeenCalledTimes(3);
   });
 
-  it("joins pending metadata work before Gateway lifetime shutdown", async () => {
-    const actual = await vi.importActual<
-      typeof import("./server-methods/chat-metadata-runtime.js")
-    >("./server-methods/chat-metadata-runtime.js");
-    const entered = createDeferred();
-    const release = createDeferred();
-    const events: string[] = [];
-    const owner = createChatMetadataOwner(config, "shutdown-model");
-    let ownerAvailable = true;
-    let revision = 0;
-    let held = false;
-    const holdWork = async () => {
-      if (held) {
-        entered.resolve();
-        await release.promise;
-        events.push("work settled");
-      }
-    };
-    vi.spyOn(projectionRuntime, "prepareChatMetadataModelProjection").mockImplementation(
-      async () => {
-        await holdWork();
-        return {
-          modelCatalog: owner.modelCatalog.entries,
-          read: () => ({ models: owner.modelCatalog.entries }),
-          isCurrent: () => true,
-        };
-      },
-    );
-    vi.spyOn(catalogRuntime, "getPublishedPreparedModelCatalogOwnerSnapshot").mockImplementation(
-      () => (ownerAvailable ? owner : undefined),
-    );
-    vi.spyOn(authRevisionRuntime, "getRuntimeAuthProfileStoreMetadataRevision").mockImplementation(
-      () => revision,
-    );
-    vi.spyOn(commands, "buildCommandsListResult").mockResolvedValue({ commands: [] });
-    mocks.createRuntime.mockImplementation(actual.createGatewayChatMetadataRuntime);
-    const { lifecycle: pendingLifecycle, sidecarOwner, warn } = createLifecycle();
-    const lifecycle = await pendingLifecycle;
+  it("ignores watcher availability but refreshes published skill changes", async () => {
+    await attachLifecycle();
+    mocks.refresh.mockClear();
+    const listener = mocks.registerSkillsListener.mock.calls[0]![0];
+    listener({ reason: "watch-available" });
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    listener({ reason: "watch" });
+    expect(mocks.refresh).toHaveBeenCalledOnce();
+  });
+
+  it("forwards settled runtime publications to connected clients", async () => {
     const broadcast = vi.fn();
-    await lifecycle.attachContext(
-      { broadcast } as unknown as GatewayRequestContext,
-      sidecarOwner.publish,
-    );
-    held = true;
-    revision += 1;
-    mocks.registerModelListener.mock.calls[0]![0]({ phase: "published" });
-    const read = lifecycle.read({ agentId: "main" }).then(
-      (result) => {
-        events.push("read settled");
-        return result;
-      },
-      (error: unknown) => {
-        events.push("read settled");
-        return error;
-      },
-    );
+    await attachLifecycle({ broadcast });
+    const change = { modelCatalogChanged: true, authChanged: true, commandsChanged: false };
+    mocks.createRuntime.mock.calls[0]![0].onChanged(change);
+    expectMetadataBroadcast(broadcast, change);
+  });
+
+  it("joins runtime shutdown before releasing the Gateway sidecar", async () => {
+    const release = createDeferred();
+    mocks.stop.mockReturnValue(release.promise);
+    const { sidecarOwner } = await attachLifecycle();
+    let stopped = false;
+    const stopping = sidecarOwner.stop().then(() => {
+      stopped = true;
+    });
     try {
-      await entered.promise;
-      const stopping = sidecarOwner.stop().then(() => {
-        ownerAvailable = false;
-        events.push("shutdown completed");
-      });
+      await nextEventLoopTurn();
+      expect(mocks.stop).toHaveBeenCalledOnce();
+      expect(stopped).toBe(false);
       release.resolve();
       await stopping;
-      const result = await read;
-
-      expect(events).toEqual(["work settled", "read settled", "shutdown completed"]);
-      expect(result).toBeInstanceOf(ChatMetadataSnapshotUnavailableError);
-      await expect(lifecycle.read({ agentId: "main" })).rejects.toThrow("stopped");
-      await expect(lifecycle.refresh()).rejects.toThrow("stopped");
-      await expect(lifecycle.readStartup({ agentId: "main" })).resolves.toBeUndefined();
-      expect(warn).not.toHaveBeenCalled();
+      expect(stopped).toBe(true);
     } finally {
       release.resolve();
-      await read;
+      await stopping;
     }
   });
 
@@ -740,14 +404,16 @@ describe("gateway chat metadata lifecycle", () => {
         const modelListener = mocks.registerModelListener.mock.calls[0]![0];
         const authListener = mocks.registerAuthListener.mock.calls[0]![0];
         const skillsListener = mocks.registerSkillsListener.mock.calls[0]![0];
-        for (const listener of [modelListener, authListener, skillsListener]) {
-          expect(listener).toEqual(expect.any(Function));
-        }
         if (startup === "owner invalidated") {
           modelListener({ phase: "invalidated" });
+          const failure = new Error("owner publication failed");
+          modelListener({ phase: "failed", error: failure });
+          modelListener({ phase: "invalidated" });
+          expect(mocks.fail).toHaveBeenCalledExactlyOnceWith(failure);
+          expect(mocks.invalidate).toHaveBeenCalledOnce();
           modelListener({ phase: "catalog-published" });
-          modelListener({ phase: "catalog-failed", error: new Error("obsolete catalog failed") });
-          authListener();
+          modelListener({ phase: "catalog-failed" });
+          authListener({ availabilityOnly: false });
           skillsListener({ reason: "watch" });
           expect(mocks.refresh).toHaveBeenCalledOnce();
           expect(warn).not.toHaveBeenCalled();
@@ -755,7 +421,7 @@ describe("gateway chat metadata lifecycle", () => {
           expect(mocks.refresh).toHaveBeenCalledTimes(2);
           expect(warn).not.toHaveBeenCalled();
         } else {
-          authListener();
+          authListener({ availabilityOnly: false });
           expect(mocks.refresh).toHaveBeenCalledTimes(2);
           skillsListener({ reason: "watch" });
           expect(mocks.refresh).toHaveBeenCalledTimes(3);
@@ -768,25 +434,15 @@ describe("gateway chat metadata lifecycle", () => {
   );
 
   it.each([
-    {
-      phase: "catalog-observation",
-      modelFactsChanged: false,
-      refreshStatusChanged: false,
-      refreshes: false,
-    },
-    { modelFactsChanged: true, refreshStatusChanged: false, refreshes: true },
-    { modelFactsChanged: false, refreshStatusChanged: false, refreshes: false },
-    { modelFactsChanged: undefined, refreshStatusChanged: false, refreshes: true },
-    { modelFactsChanged: false, refreshStatusChanged: true, refreshes: true },
-    {
-      phase: "catalog-status",
-      modelFactsChanged: false,
-      refreshStatusChanged: false,
-      refreshes: false,
-    },
-  ])(
-    "refreshes catalog metadata only for a change (%j)",
-    async ({ phase = "catalog-published", modelFactsChanged, refreshStatusChanged, refreshes }) => {
+    ["catalog-observation", false, false, false],
+    ["catalog-published", true, false, true],
+    ["catalog-published", false, false, false],
+    ["catalog-published", undefined, false, true],
+    ["catalog-published", false, true, true],
+    ["catalog-status", false, false, false],
+  ] as const)(
+    "refreshes catalog metadata only for a change (%s, facts=%s, status=%s)",
+    async (phase, modelFactsChanged, refreshStatusChanged, refreshes) => {
       const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle();
       const lifecycle = await pendingLifecycle;
       const requestContext = { ...context, broadcast: vi.fn(), getRuntimeConfig: () => config };
@@ -830,16 +486,12 @@ describe("gateway chat metadata lifecycle", () => {
 
         expect(payloadJson).toBe("{}");
         if (phase === "catalog-observation") {
-          expect(requestContext.broadcast).toHaveBeenCalledExactlyOnceWith(
-            "chat.metadata.changed",
-            {
-              agentId: "main",
-              modelCatalogChanged: true,
-              authChanged: false,
-              commandsChanged: false,
-            },
-            { dropIfSlow: true },
-          );
+          expectMetadataBroadcast(requestContext.broadcast, {
+            agentId: "main",
+            modelCatalogChanged: true,
+            authChanged: false,
+            commandsChanged: false,
+          });
         }
         expect(produce).toHaveBeenCalledTimes(2);
         expect(mocks.invalidate).not.toHaveBeenCalled();

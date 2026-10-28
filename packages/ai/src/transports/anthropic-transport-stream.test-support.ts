@@ -1,88 +1,58 @@
 import type { Model } from "@openclaw/llm-core";
-import type { Mock } from "vitest";
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 import { configureAiTransportHost, type AiTransportHost } from "../host.js";
+import { anthropicModel } from "../provider-transport-parity.test-support.js";
 
 export type AnthropicMessagesModel = Model<"anthropic-messages">;
+type Wire = Record<string, unknown>;
+const endpoints = new Map([
+  ["api.anthropic.com", "anthropic-public"],
+  ["openrouter.ai", "openrouter"],
+]);
 
 function resolveTestEndpointClass(baseUrl?: string): string {
   const trimmed = baseUrl?.trim();
   if (!trimmed) {
     return "default";
   }
-  try {
-    const url = new URL(trimmed.includes("://") ? trimmed : `https://${trimmed}`);
-    const hostname = url.hostname.toLowerCase();
-    if (hostname === "api.anthropic.com") {
-      return "anthropic-public";
-    }
-    if (hostname === "openrouter.ai") {
-      return "openrouter";
-    }
-    if (hostname === "api.xiaomimimo.com" || hostname.endsWith(".xiaomimimo.com")) {
-      return "xiaomi-native";
-    }
-    return "custom";
-  } catch {
+  const url = URL.parse(trimmed.includes("://") ? trimmed : `https://${trimmed}`);
+  if (!url) {
     return "invalid";
   }
+  const hostname = url.hostname.toLowerCase();
+  return (
+    endpoints.get(hostname) ?? (hostname.endsWith(".xiaomimimo.com") ? "xiaomi-native" : "custom")
+  );
 }
 
-export function serializeSseEvents(events: Record<string, unknown>[]): string {
+export function serializeSseEvents(events: Wire[]): string {
   return events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
 }
 
-function createRawSseResponse(body: string): Response {
-  return new Response(body, {
-    status: 200,
+export function createSseResponse(events: Wire[] = []): Response {
+  return new Response(serializeSseEvents(events), {
     headers: { "content-type": "text/event-stream" },
   });
 }
 
-export function createSseResponse(events: Record<string, unknown>[] = []): Response {
-  return createRawSseResponse(serializeSseEvents(events));
-}
+export const anthropicMessageStart = (message: Wire) => ({ type: "message_start", message });
+const event = <T extends Wire>(type: string, fields: T) => ({ type, ...fields });
 
-export function anthropicMessageStart(message: Record<string, unknown>) {
-  return { type: "message_start", message };
-}
+export const anthropicMessageDelta = (delta: Wire, usage?: Wire) =>
+  event("message_delta", { delta, usage });
 
-export function anthropicMessageDelta(
-  delta: Record<string, unknown>,
-  usage?: Record<string, unknown>,
-) {
-  // An absent usage object serializes the event without the key, matching proxies that
-  // close a turn with stop_reason alone.
-  return { type: "message_delta", delta, usage };
-}
+export const anthropicContentBlockStart = (index: number, content_block: Wire) =>
+  event("content_block_start", { index, content_block });
 
-export function anthropicContentBlockStart(index: number, content_block: Record<string, unknown>) {
-  return { type: "content_block_start", index, content_block };
-}
-
-export function anthropicContentBlockDelta(index: number, delta: Record<string, unknown>) {
-  return { type: "content_block_delta", index, delta };
-}
+export const anthropicContentBlockDelta = (index: number, delta: Wire) =>
+  event("content_block_delta", { index, delta });
 
 export function makeAnthropicTransportModel(
   overrides: Partial<AnthropicMessagesModel> = {},
 ): AnthropicMessagesModel {
-  return {
-    id: "claude-sonnet-4-6",
-    name: "Claude Sonnet 4.6",
-    api: "anthropic-messages",
-    provider: "anthropic",
-    baseUrl: "https://api.anthropic.com",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200000,
-    maxTokens: 8192,
-    ...overrides,
-  };
+  return Object.assign(structuredClone(anthropicModel), { maxTokens: 8192 }, overrides);
 }
 
-/** Route Anthropic transport requests to a fetch mock that answers with an empty turn by default. */
 export function installAnthropicTransportTestHost(params: {
   coreTransportHost: AiTransportHost;
   buildModelFetch: Mock;

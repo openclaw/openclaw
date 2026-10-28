@@ -16,7 +16,7 @@ import {
   type SqliteWorkerBackend,
   type SqliteWorkerCommand,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
-import { pickKeyframeId } from "./analyze.js";
+import { MAX_FRAMES_PER_CALL, pickKeyframeId } from "./analyze.js";
 import { isLogbookWriteOperation } from "./store-contract.js";
 import type {
   LogbookBatchInput,
@@ -26,7 +26,6 @@ import type {
   LogbookStandup,
   LogbookTimeline,
 } from "./store-contract.js";
-import { createLogbookFrameQueries } from "./store-frame-queries.js";
 import { createLogbookDatabase, LOGBOOK_SQLITE_BUSY_TIMEOUT_MS } from "./store-schema-admission.js";
 import { toBatch, toCard, toFrame, type LogbookDatabase } from "./store-schema.js";
 import type { LogbookBatch, LogbookCard, LogbookFrame, LogbookObservation } from "./types.js";
@@ -58,7 +57,75 @@ class LogbookDatabaseStore {
       this.db = db;
       this.database = database;
       this.query = getNodeSqliteKysely<LogbookDatabase>(db);
-      const { framesQuery, sampledBatchFrames } = createLogbookFrameQueries(db, this.query);
+      // Timestamp ties follow insertion ids, matching existing SQLite reads.
+      const framesQuery = this.query
+        .selectFrom("frames")
+        .select([
+          "id",
+          "captured_at_ms",
+          "day",
+          "path",
+          "screen_index",
+          "width",
+          "height",
+          "byte_size",
+          "idle",
+        ])
+        .orderBy("captured_at_ms", "asc")
+        .orderBy("id", "asc");
+      const sampledBatchFrames = prepareSqliteQuerySync<number, Parameters<typeof toFrame>[0]>(
+        db,
+        (p) => {
+          const sampledIds = this.query
+            .with("ordered_frames", (cte) =>
+              cte
+                .selectFrom("frames")
+                .select("id")
+                .select((eb) => [
+                  eb.fn
+                    .agg<number>("row_number", [])
+                    .over((ob) => ob.orderBy("captured_at_ms", "asc").orderBy("id", "asc"))
+                    .as("ordinal"),
+                  eb.fn.countAll<number>().over().as("total"),
+                ])
+                .where(
+                  "batch_id",
+                  "=",
+                  p((batchId) => batchId),
+                ),
+            )
+            .selectFrom("ordered_frames")
+            .select("id")
+            .where((eb) => {
+              const step = eb(
+                eb.cast<number>(eb("total", "-", eb.val(1)), "real"),
+                "/",
+                eb.val(MAX_FRAMES_PER_CALL - 1),
+              );
+              return eb.or([
+                eb("total", "<=", MAX_FRAMES_PER_CALL),
+                ...Array.from({ length: MAX_FRAMES_PER_CALL }, (_, index) =>
+                  // FLOOR keeps positive Math.round ordinals independent of integer-cast rounding.
+                  eb(
+                    "ordinal",
+                    "=",
+                    eb(
+                      eb.cast<number>(
+                        eb.fn<number>("floor", [
+                          eb(eb(eb.val(index), "*", step), "+", eb.val(0.5)),
+                        ]),
+                        "integer",
+                      ),
+                      "+",
+                      eb.val(1),
+                    ),
+                  ),
+                ),
+              ]);
+            });
+          return framesQuery.where("id", "in", sampledIds);
+        },
+      );
       this.framesQuery = framesQuery;
       // Keep native integer overflow rejection while omitting unused frame strings.
       this.frameMetadataQuery = framesQuery
@@ -184,6 +251,14 @@ class LogbookDatabaseStore {
     }
   }
 
+  private runTransaction<T>(operationLabel: string, operation: () => T): T {
+    return runSqliteImmediateTransactionSync(this.db, operation, {
+      busyTimeoutMs: LOGBOOK_SQLITE_BUSY_TIMEOUT_MS,
+      databaseLabel: "logbook",
+      operationLabel,
+    });
+  }
+
   get connection(): EngineConnection {
     return this.db;
   }
@@ -263,37 +338,29 @@ class LogbookDatabaseStore {
       throw new Error("Logbook batch requires at least one frame");
     }
     const now = Date.now();
-    return runSqliteImmediateTransactionSync(
-      this.db,
-      () => {
-        const result = this.statements.insertBatch({ ...params, now });
-        const batchId = expectDefined(result.rows[0], "Logbook inserted batch").id;
-        for (let offset = 0; offset < params.frameIds.length; offset += WRITE_BATCH_SIZE) {
-          const frameIds = params.frameIds.slice(offset, offset + WRITE_BATCH_SIZE);
-          const assigned = executeSqliteQuerySync(
-            this.db,
-            this.query
-              .updateTable("frames")
-              .set({ batch_id: batchId })
-              .where("id", "in", frameIds)
-              .where("batch_id", "is", null)
-              .returning("id"),
-          );
-          const assignedIds = new Set(assigned.rows.map((row) => row.id));
-          for (const frameId of frameIds) {
-            if (!assignedIds.delete(frameId)) {
-              throw new Error(`Logbook frame ${frameId} is missing or already batched`);
-            }
+    return this.runTransaction("logbook.batch.create", () => {
+      const result = this.statements.insertBatch({ ...params, now });
+      const batchId = expectDefined(result.rows[0], "Logbook inserted batch").id;
+      for (let offset = 0; offset < params.frameIds.length; offset += WRITE_BATCH_SIZE) {
+        const frameIds = params.frameIds.slice(offset, offset + WRITE_BATCH_SIZE);
+        const assigned = executeSqliteQuerySync(
+          this.db,
+          this.query
+            .updateTable("frames")
+            .set({ batch_id: batchId })
+            .where("id", "in", frameIds)
+            .where("batch_id", "is", null)
+            .returning("id"),
+        );
+        const assignedIds = new Set(assigned.rows.map((row) => row.id));
+        for (const frameId of frameIds) {
+          if (!assignedIds.delete(frameId)) {
+            throw new Error(`Logbook frame ${frameId} is missing or already batched`);
           }
         }
-        return batchId;
-      },
-      {
-        busyTimeoutMs: LOGBOOK_SQLITE_BUSY_TIMEOUT_MS,
-        databaseLabel: "logbook",
-        operationLabel: "logbook.batch.create",
-      },
-    );
+      }
+      return batchId;
+    });
   }
 
   setBatchStatus(input: LogbookOperations["setBatchStatus"]["input"]): void {
@@ -344,31 +411,23 @@ class LogbookDatabaseStore {
     day,
     segments,
   }: LogbookOperations["replaceObservations"]["input"]): void {
-    runSqliteImmediateTransactionSync(
-      this.db,
-      () => {
-        this.statements.deleteObservations(batchId);
-        for (let offset = 0; offset < segments.length; offset += WRITE_BATCH_SIZE) {
-          executeSqliteQuerySync(
-            this.db,
-            this.query.insertInto("observations").values(
-              segments.slice(offset, offset + WRITE_BATCH_SIZE).map((segment) => ({
-                batch_id: batchId,
-                day,
-                start_ms: segment.startMs,
-                end_ms: segment.endMs,
-                text: segment.text,
-              })),
-            ),
-          );
-        }
-      },
-      {
-        busyTimeoutMs: LOGBOOK_SQLITE_BUSY_TIMEOUT_MS,
-        databaseLabel: "logbook",
-        operationLabel: "logbook.observations.replace",
-      },
-    );
+    this.runTransaction("logbook.observations.replace", () => {
+      this.statements.deleteObservations(batchId);
+      for (let offset = 0; offset < segments.length; offset += WRITE_BATCH_SIZE) {
+        executeSqliteQuerySync(
+          this.db,
+          this.query.insertInto("observations").values(
+            segments.slice(offset, offset + WRITE_BATCH_SIZE).map((segment) => ({
+              batch_id: batchId,
+              day,
+              start_ms: segment.startMs,
+              end_ms: segment.endMs,
+              text: segment.text,
+            })),
+          ),
+        );
+      }
+    });
   }
 
   observationsInRange({
@@ -430,49 +489,38 @@ class LogbookDatabaseStore {
     startMs,
     endMs,
     drafts,
-    selectKeyframes = false,
   }: LogbookOperations["replaceCardsInWindow"]["input"]): void {
     const now = Date.now();
-    runSqliteImmediateTransactionSync(
-      this.db,
-      () => {
-        const frames = selectKeyframes
-          ? executeSqliteQuerySync(
-              this.db,
-              this.frameMetadataQuery
-                .where("captured_at_ms", ">=", startMs)
-                .where("captured_at_ms", "<", endMs),
-            ).rows.map((row) => ({ id: row.id, capturedAtMs: row.captured_at_ms }))
-          : undefined;
-        this.statements.deleteCards({ day, startMs, endMs });
-        for (let offset = 0; offset < drafts.length; offset += WRITE_BATCH_SIZE) {
-          executeSqliteQuerySync(
-            this.db,
-            this.query.insertInto("cards").values(
-              drafts.slice(offset, offset + WRITE_BATCH_SIZE).map((draft) => ({
-                day: draft.day,
-                start_ms: draft.startMs,
-                end_ms: draft.endMs,
-                title: draft.title,
-                summary: draft.summary,
-                detail: draft.detail,
-                category: draft.category,
-                app_primary: draft.appPrimary ?? null,
-                app_secondary: draft.appSecondary ?? null,
-                distractions: JSON.stringify(draft.distractions),
-                keyframe_id: (frames ? pickKeyframeId(draft, frames) : draft.keyframeId) ?? null,
-                updated_ms: now,
-              })),
-            ),
-          );
-        }
-      },
-      {
-        busyTimeoutMs: LOGBOOK_SQLITE_BUSY_TIMEOUT_MS,
-        databaseLabel: "logbook",
-        operationLabel: "logbook.cards.replace",
-      },
-    );
+    this.runTransaction("logbook.cards.replace", () => {
+      const frames = executeSqliteQuerySync(
+        this.db,
+        this.frameMetadataQuery
+          .where("captured_at_ms", ">=", startMs)
+          .where("captured_at_ms", "<", endMs),
+      ).rows.map((row) => ({ id: row.id, capturedAtMs: row.captured_at_ms }));
+      this.statements.deleteCards({ day, startMs, endMs });
+      for (let offset = 0; offset < drafts.length; offset += WRITE_BATCH_SIZE) {
+        executeSqliteQuerySync(
+          this.db,
+          this.query.insertInto("cards").values(
+            drafts.slice(offset, offset + WRITE_BATCH_SIZE).map((draft) => ({
+              day: draft.day,
+              start_ms: draft.startMs,
+              end_ms: draft.endMs,
+              title: draft.title,
+              summary: draft.summary,
+              detail: draft.detail,
+              category: draft.category,
+              app_primary: draft.appPrimary ?? null,
+              app_secondary: draft.appSecondary ?? null,
+              distractions: JSON.stringify(draft.distractions),
+              keyframe_id: pickKeyframeId(draft, frames) ?? null,
+              updated_ms: now,
+            })),
+          ),
+        );
+      }
+    });
   }
 
   listDays(): LogbookDay[] {
@@ -558,28 +606,20 @@ class LogbookDatabaseStore {
       rmSync(row.path, { force: true });
       days.add(row.day);
     }
-    const deleted = runSqliteImmediateTransactionSync(
-      this.db,
-      () => {
-        let count = 0;
-        for (let offset = 0; offset < rows.length; offset += FRAME_PRUNE_BATCH_SIZE) {
-          const batch = rows.slice(offset, offset + FRAME_PRUNE_BATCH_SIZE);
-          const ids = batch.map((row) => row.id);
-          // ON DELETE SET NULL clears surviving cards' keyframes in the same commit.
-          const result = executeSqliteQuerySync(
-            this.db,
-            this.query.deleteFrom("frames").where("id", "in", ids),
-          );
-          count += Number(expectDefined(result.numAffectedRows, "Logbook pruned frame count"));
-        }
-        return count;
-      },
-      {
-        busyTimeoutMs: LOGBOOK_SQLITE_BUSY_TIMEOUT_MS,
-        databaseLabel: "logbook",
-        operationLabel: "logbook.frames.prune",
-      },
-    );
+    const deleted = this.runTransaction("logbook.frames.prune", () => {
+      let count = 0;
+      for (let offset = 0; offset < rows.length; offset += FRAME_PRUNE_BATCH_SIZE) {
+        const batch = rows.slice(offset, offset + FRAME_PRUNE_BATCH_SIZE);
+        const ids = batch.map((row) => row.id);
+        // ON DELETE SET NULL clears surviving cards' keyframes in the same commit.
+        const result = executeSqliteQuerySync(
+          this.db,
+          this.query.deleteFrom("frames").where("id", "in", ids),
+        );
+        count += Number(expectDefined(result.numAffectedRows, "Logbook pruned frame count"));
+      }
+      return count;
+    });
     for (const day of days) {
       // Best-effort: removes now-empty day directories, keeps non-empty ones.
       try {

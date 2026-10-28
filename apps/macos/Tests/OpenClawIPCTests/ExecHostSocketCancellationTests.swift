@@ -6,6 +6,7 @@ import Testing
 @testable import OpenClaw
 
 @Suite(.serialized, .testWaitLimit)
+@MainActor
 struct ExecHostSocketCancellationTests {
     enum Cancellation: CaseIterable {
         case disconnect
@@ -18,7 +19,7 @@ struct ExecHostSocketCancellationTests {
 
     @Test
     func `normal request half-close still receives native execution result`() async throws {
-        try await self.withServer { server, root, fixture in
+        try await self.withServer(usePolicyOwner: true) { server, root, fixture in
             let client = fixture.client
             try self.send(command: ["/usr/bin/printf", "half-close-ok"], root: root, client: client)
             #expect(shutdown(client, SHUT_WR) == 0)
@@ -114,52 +115,62 @@ struct ExecHostSocketCancellationTests {
 
     @Test
     func `cancelled native executor never starts a command`() async throws {
-        let root = try ExecApprovalsSocketTestSupport.makeRoot()
-        defer { try? FileManager.default.removeItem(at: root) }
-        try await self.seed(root)
-        let sentinel = root.appendingPathComponent("unexpected")
-        let request = ExecHostRequest(command: ["/usr/bin/touch", sentinel.path], cwd: root.path)
-        let response = await Task.detached {
-            withUnsafeCurrentTask { $0?.cancel() }
-            return await ExecApprovalsStore.withStateDirectory(root) {
-                await ExecHostExecutor.handle(request)
-            }
-        }.value
-        #expect(!response.ok)
-        #expect(!FileManager.default.fileExists(atPath: sentinel.path))
+        try await TestIsolation.withIsolatedState {
+            let root = try ExecApprovalsSocketTestSupport.makeRoot()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let sentinel = root.appendingPathComponent("unexpected")
+            let request = ExecHostRequest(command: ["/usr/bin/touch", sentinel.path], cwd: root.path)
+            let response = await Task.detached {
+                withUnsafeCurrentTask { $0?.cancel() }
+                return await ExecApprovalsStore.withStateDirectory(root) {
+                    await ExecHostExecutor.handle(request)
+                }
+            }.value
+            #expect(!response.ok)
+            #expect(!FileManager.default.fileExists(atPath: sentinel.path))
+        }
     }
 
     private func withServer(
         admissionDelay: Duration = .zero,
+        usePolicyOwner: Bool = false,
         _ body: (ExecApprovalsSocketServer, URL, CancellationFixture) async throws -> Void) async throws
     {
-        let root = try ExecApprovalsSocketTestSupport.makeRoot()
-        defer { try? FileManager.default.removeItem(at: root) }
-        try await self.seed(root)
-        let fixture = try CancellationFixture(root: root)
-        let server = ExecApprovalsSocketServer(
-            socketPath: root.appendingPathComponent("exec.sock").path,
-            token: "test-token",
-            onPrompt: { _ in .deny },
-            onExec: { request in
-                if admissionDelay > .zero { try? await Task.sleep(for: admissionDelay) }
-                let response = await ExecApprovalsStore.withStateDirectory(root) {
-                    await ExecHostExecutor.handle(request)
-                }
-                fixture.record(response)
-                return response
-            },
-            onUnexpectedStop: { _ in })
-        do {
-            try #require(await server.start())
-            fixture.client = try self.connect(root)
-            try await body(server, root, fixture)
-        } catch {
-            print("native fixture failure: \(fixture.diagnostics)")
+        try await TestIsolation.withIsolatedState {
+            let root = try ExecApprovalsSocketTestSupport.makeRoot()
+            defer { try? FileManager.default.removeItem(at: root) }
+            if usePolicyOwner {
+                try await self.seed(root)
+            }
+            let fixture = try CancellationFixture(root: root)
+            let server = ExecApprovalsSocketServer(
+                socketPath: root.appendingPathComponent("exec.sock").path,
+                token: "test-token",
+                onPrompt: { _ in .deny },
+                onExec: { request in
+                    if admissionDelay > .zero { try? await Task.sleep(for: admissionDelay) }
+                    let response = if usePolicyOwner {
+                        await ExecApprovalsStore.withStateDirectory(root) {
+                            await ExecHostExecutor.handle(request)
+                        }
+                    } else {
+                        await ExecApprovalsSocketTestSupport.runApprovedCommand(request)
+                    }
+                    fixture.record(response)
+                    return response
+                },
+                onUnexpectedStop: { _ in })
+            do {
+                try #require(await server.start())
+                fixture.client = try self.connect(root)
+                try await body(server, root, fixture)
+            } catch {
+                print("native fixture failure: \(fixture.diagnostics)")
+                await fixture.cleanUp(server: server)
+                throw error
+            }
             await fixture.cleanUp(server: server)
-            throw error
         }
-        await fixture.cleanUp(server: server)
     }
 
     private func seed(_ root: URL) async throws {

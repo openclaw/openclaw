@@ -13,6 +13,7 @@ import {
   PLUGIN_COMMAND_DISPATCH,
   type PluginCommandExecutionReplyOptions,
 } from "../../plugins/plugin-command-runtime.js";
+import { createPluginRequesterModels } from "../../plugins/requester-models.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import { buildPluginCommandContext } from "./commands-context.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -65,48 +66,78 @@ export const handlePluginCommand: CommandHandler = async (params, allowTextComma
       }
     : undefined;
 
-  const result = await executePluginCommandDispatch(dispatch, {
-    ...buildPluginCommandContext(params),
-    sessionId: targetSessionEntry?.sessionId,
-    sessionTarget,
-    sessionFile: sessionTarget ? formatSqliteSessionFileMarker(sessionTarget) : undefined,
-    authProfileId: targetSessionEntry?.authProfileOverride,
-    commandBody: command.commandBodyNormalized,
-    ...(sessionTarget
-      ? {
-          runtimeContext: {
-            compactCurrent: async (invocationSignal, assertOwnerCurrent) => {
-              if (!params.command.isAuthorizedSender) {
-                return { compacted: false, reason: "compaction requires authorization" };
-              }
-              const compaction = await handleCompactCommand(
-                {
-                  ...params,
-                  command: { ...params.command, commandBodyNormalized: "/compact" },
-                  commandInvocationSignal: invocationSignal,
-                  compactionSessionEntry: targetSessionEntry,
-                  opts: {
-                    ...params.opts,
-                    abortSignal:
-                      invocationSignal && params.opts?.abortSignal
-                        ? AbortSignal.any([invocationSignal, params.opts.abortSignal])
-                        : (invocationSignal ?? params.opts?.abortSignal),
-                  },
-                },
-                true,
-                assertOwnerCurrent,
-              );
-              return (
-                compaction?.sessionCompaction ?? {
-                  compacted: false,
-                  reason: "compaction unavailable",
+  const execute = async (
+    createSubagents?: import("../../plugins/runtime/native-subagent-context.js").NativeSubagentCommandFactory,
+  ) =>
+    await executePluginCommandDispatch(dispatch, {
+      ...buildPluginCommandContext(params),
+      sessionId: targetSessionEntry?.sessionId,
+      sessionTarget,
+      sessionFile: sessionTarget ? formatSqliteSessionFileMarker(sessionTarget) : undefined,
+      authProfileId: targetSessionEntry?.authProfileOverride,
+      commandBody: command.commandBodyNormalized,
+      ...(sessionTarget
+        ? {
+            runtimeContext: {
+              createSubagents,
+              createModels: ({ signal, assertCurrent }) =>
+                createPluginRequesterModels({
+                  config: cfg,
+                  agentId: targetAgentId,
+                  sessionKey: params.sessionKey,
+                  sessionId: targetSessionEntry?.sessionId,
+                  authority: params.opts?.operatorAuthority,
+                  signal: params.opts?.abortSignal
+                    ? AbortSignal.any([signal, params.opts.abortSignal])
+                    : signal,
+                  assertCurrent,
+                }),
+              compactCurrent: async (invocationSignal, assertOwnerCurrent) => {
+                if (!params.command.isAuthorizedSender) {
+                  return { compacted: false, reason: "compaction requires authorization" };
                 }
-              );
+                const compaction = await handleCompactCommand(
+                  {
+                    ...params,
+                    command: { ...params.command, commandBodyNormalized: "/compact" },
+                    commandInvocationSignal: invocationSignal,
+                    compactionSessionEntry: targetSessionEntry,
+                    opts: {
+                      ...params.opts,
+                      abortSignal:
+                        invocationSignal && params.opts?.abortSignal
+                          ? AbortSignal.any([invocationSignal, params.opts.abortSignal])
+                          : (invocationSignal ?? params.opts?.abortSignal),
+                    },
+                  },
+                  true,
+                  assertOwnerCurrent,
+                );
+                return (
+                  compaction?.sessionCompaction ?? {
+                    compacted: false,
+                    reason: "compaction unavailable",
+                  }
+                );
+              },
             },
+          }
+        : {}),
+    });
+  const withNative = params.opts?.withCommandNativeSubagents;
+  const result =
+    withNative && targetSessionEntry?.sessionId
+      ? await withNative(
+          {
+            agentId: targetAgentId,
+            sessionKey: params.sessionKey,
+            entry: targetSessionEntry,
+            storePath: sessionTarget?.storePath,
+            commandBody: command.commandBodyNormalized,
           },
-        }
-      : {}),
-  });
+          execute,
+        )
+      : await execute();
   const { continueAgent, ...reply } = result;
 
   return {

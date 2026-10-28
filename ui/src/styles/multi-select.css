@@ -83,13 +83,6 @@ openclaw-multi-select {
   color: var(--text);
 }
 
-.multi-select__chip-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .multi-select__chip-icon {
   width: 16px;
   height: 16px;

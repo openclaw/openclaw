@@ -263,6 +263,8 @@ failures become failed `exec` or `wait` results. The model can read the error,
 correct its code, inspect the current state, and continue with the normal tool
 surface. A failed cell does not impose a separate recovery mode or mutation budget.
 
+Source syntax errors are detected before guest execution. Their parser-message text is bounded to 240 UTF-16 units and clipped at a Unicode code-point boundary.
+
 OpenClaw does not automatically replay a failed program. Earlier calls may have
 changed state, and a failed call may have partially applied. Inspect authoritative
 state before deciding what remains, and do not repeat completed actions. This

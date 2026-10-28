@@ -1,13 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { DEFAULT_WORKER_PENDING_BYTES } from "@openclaw/worker-runtime";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createEmptyCostUsageTotals } from "../../infra/session-cost-usage-totals.js";
 import type { SessionCostSummary } from "../../infra/session-cost-usage.types.js";
+import { workerTaskPoolEntrypoints } from "../../infra/worker-task-pool-runtime.test-support.js";
+import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import type {
+  PoolFixtureInput,
+  PoolFixtureResult,
+} from "../../infra/worker-task-pool.test-support.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -32,6 +40,9 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
   const actual = await vi.importActual<typeof import("../../infra/session-cost-usage.js")>(
     "../../infra/session-cost-usage.js",
   );
+  const loadSessionCostSummariesFromCache = vi.fn(async ({ sessions }: { sessions: unknown[] }) =>
+    tokenBatch(sessions.length),
+  );
   return {
     ...actual,
     resolveUsageSessionSource: vi.fn(actual.resolveUsageSessionSource),
@@ -46,8 +57,14 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
           ]
         : [],
     ),
-    loadSessionCostSummariesFromCache: vi.fn(async ({ sessions }: { sessions: unknown[] }) =>
-      tokenBatch(sessions.length),
+    loadSessionCostSummariesFromCache,
+    // Overview reads fold the same per-session fixture into family rows.
+    loadSessionUsageOverviewFromCache: vi.fn(
+      async (params: Parameters<typeof actual.loadSessionUsageOverviewFromCache>[0]) =>
+        (await import("./usage.test-support.js")).overviewFromSessionSummaries(
+          params,
+          loadSessionCostSummariesFromCache,
+        ),
     ),
     loadSessionUsageTimeSeries: vi.fn(async () => ({ sessionId: "s-opus", points: [] })),
     loadSessionLogs: vi.fn(async () => []),
@@ -56,6 +73,7 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
 import {
   discoverAllSessions,
   loadSessionCostSummariesFromCache,
+  loadSessionUsageOverviewFromCache,
   loadSessionLogs,
   loadSessionUsageTimeSeries,
   resolveUsageSessionSource,
@@ -66,6 +84,7 @@ import {
   createUsageSessionStoreFixture,
   freshUsageBatch,
   invokeUsage,
+  overviewFromSessionSummaries,
   usageReply,
   usageTotals,
   type UsageSessionStoreFixture,
@@ -204,86 +223,204 @@ it.each(["client cancellation", "time budget"] as const)(
   },
 );
 
-it.each(["time", "report allowance"])(
-  "keeps completed batches after exhausting %s",
-  async (budget) => {
-    const timed = budget === "time";
-    if (timed) {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    }
-    const started = createDeferred();
-    const release = createDeferred();
-    const discovered = discovery;
-    const originalDiscovery = discovered.getMockImplementation()!;
-    const load = summaryLoader;
-    const originalLoad = load.getMockImplementation()!;
-    discovered.mockResolvedValue(discoveredRows("budget", 257, true));
-    load.mockImplementation(async ({ sessions, reportBudgetBytes }) => {
-      if (timed && sessions.some(({ sessionId }) => sessionId === "budget-256")) {
-        const signal = getAsyncWorkSignal()!;
-        const abort = () => release.resolve();
-        signal.addEventListener("abort", abort, { once: true });
-        started.resolve();
-        try {
-          await release.promise;
-          signal.throwIfAborted();
-        } finally {
-          signal.removeEventListener("abort", abort);
-        }
-      }
-      if (!timed) {
-        return {
-          summaries: sessions.map(() =>
-            reportBudgetBytes === 0 ? null : { ...createEmptyCostUsageTotals(), totalTokens: 7 },
-          ),
-          remainingReportBytes: 0,
-          cacheStatus: {
-            status: reportBudgetBytes === 0 ? "partial" : "fresh",
-            cachedFiles: reportBudgetBytes === 0 ? 0 : sessions.length,
-            pendingFiles: reportBudgetBytes === 0 ? sessions.length : 0,
-            staleFiles: 0,
-          },
-        };
-      }
-      return tokenBatch(sessions.length, 7);
+it("returns complete family usage while other reports occupy worker input capacity", async () => {
+  const families = [
+    { key: "agent:opus:capacity-first", prefix: "capacity-first", count: 2049 },
+    { key: "agent:opus:capacity-second", prefix: "capacity-second", count: 2048 },
+  ];
+  const storePath =
+    "/tmp/synthetic-usage-admission/retained-team-shaped-session-cost-usage-fixture/agents/opus/agent/openclaw-agent.sqlite";
+  const rows = families.flatMap(({ prefix, count }) =>
+    Array.from({ length: count }, (_, index) => {
+      const sessionId = `${prefix}-${index}`;
+      const sessionFile = `sqlite:opus:${sessionId}:${storePath}`;
+      return {
+        sessionId,
+        sessionFile,
+        mtime: 1000,
+        transcriptFile: {
+          kind: "sqlite" as const,
+          filePath: sessionFile,
+          sourcePath: sessionFile,
+          sessionId,
+          size: 1024,
+          mtimeMs: 1000,
+          eventCount: 4,
+          maxSeq: 4,
+          generation: "synthetic-generation",
+          cold: false,
+        },
+      };
+    }),
+  );
+  projectionFixture = createUsageSessionStoreFixture(
+    Object.fromEntries(
+      families.map(({ key, prefix, count }) => [
+        key,
+        {
+          sessionId: `${prefix}-0`,
+          updatedAt: 1000,
+          usageFamilyKey: key,
+          usageFamilySessionIds: Array.from({ length: count }, (_, index) => `${prefix}-${index}`),
+        },
+      ]),
+    ),
+    families.map(({ key }) => [key, "opus"] as const),
+  );
+  // Charge the observed background queue without allocating its payload. Two
+  // slots let a report finish while the background preparation remains admitted.
+  const pool = new WorkerTaskPool<PoolFixtureInput, PoolFixtureResult>({
+    workerUrl: resolveRuntimeWorkerUrl(workerTaskPoolEntrypoints.worker),
+    maxWorkers: 2,
+    idleTimeoutMs: 0,
+  });
+  const release = createDeferred();
+  const backgroundBytes = 265_155_910;
+  const background = pool.run(
+    async () => {
+      await release.promise;
+      return { label: "background usage reports" };
+    },
+    { inputBytes: backgroundBytes },
+  );
+  const backgroundOutcome = Promise.allSettled([background]);
+  const originalDiscovery = discovery.getMockImplementation()!;
+  const originalLoad = summaryLoader.getMockImplementation()!;
+  try {
+    // Fixture sanity: the full request is larger than the remaining real budget.
+    // The admission charge below omits envelope fields, so it is conservative.
+    expect(2 * JSON.stringify({ sessions: rows }).length).toBeGreaterThan(
+      DEFAULT_WORKER_PENDING_BYTES - backgroundBytes,
+    );
+    discovery.mockResolvedValue(rows);
+    summaryLoader.mockImplementation(async ({ sessions }) => {
+      await pool.run(
+        { label: "family usage report" },
+        { inputBytes: 2 * JSON.stringify({ sessions }).length },
+      );
+      return freshUsageBatch(
+        sessions.map(({ sessionId }) =>
+          sessionId?.startsWith("capacity-first-") ? usageTotals(7, 0.125) : usageTotals(11, 0.25),
+        ),
+      );
     });
-    const params = { ...BASE_USAGE_RANGE, ...(timed ? { projection: "overview" } : {}) };
-    const pending = runSessionsUsage(params);
-    try {
-      if (timed) {
-        await started.promise;
-        await vi.advanceTimersByTimeAsync(15_000);
+    const result = await readSessionsUsage({ agentId: "opus", groupBy: "family" });
+    expect(result.totals).toMatchObject({ totalTokens: 36_871, totalCost: 768.125 });
+    expect(result.cacheStatus).toMatchObject({ status: "fresh", pendingFiles: 0, staleFiles: 0 });
+    expect(result.partial).toBeUndefined();
+    expect(result.sessions).toHaveLength(2);
+    expect(result.sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "agent:opus:capacity-first",
+          usage: expect.objectContaining({ totalTokens: 14_343, totalCost: 256.125 }),
+        }),
+        expect.objectContaining({
+          key: "agent:opus:capacity-second",
+          usage: expect.objectContaining({ totalTokens: 22_528, totalCost: 512 }),
+        }),
+      ]),
+    );
+  } finally {
+    discovery.mockImplementation(originalDiscovery);
+    summaryLoader.mockImplementation(originalLoad);
+    release.resolve();
+    await backgroundOutcome;
+    await pool.close();
+  }
+});
+
+it("keeps completed batches after exhausting the report allowance", async () => {
+  const originalDiscovery = discovery.getMockImplementation()!;
+  const originalLoad = summaryLoader.getMockImplementation()!;
+  discovery.mockResolvedValue(discoveredRows("budget", 1025, true));
+  summaryLoader.mockImplementation(async ({ sessions, reportBudgetBytes }) => ({
+    summaries: sessions.map(() =>
+      reportBudgetBytes === 0 ? null : { ...createEmptyCostUsageTotals(), totalTokens: 7 },
+    ),
+    remainingReportBytes: 0,
+    cacheStatus: {
+      status: reportBudgetBytes === 0 ? "partial" : "fresh",
+      cachedFiles: reportBudgetBytes === 0 ? 0 : sessions.length,
+      pendingFiles: reportBudgetBytes === 0 ? sessions.length : 0,
+      staleFiles: 0,
+    },
+  }));
+  try {
+    const result = await readSessionsUsage({});
+    expect(result).toMatchObject({
+      totals: { totalTokens: 256 * 7 },
+      cacheStatus: { status: "partial", cachedFiles: 256, pendingFiles: 769 },
+    });
+    expect(summaryLoader.mock.calls[1]?.[0].reportBudgetBytes).toBe(0);
+  } finally {
+    discovery.mockImplementation(originalDiscovery);
+    summaryLoader.mockImplementation(originalLoad);
+  }
+});
+
+it("keeps completed agent overviews after exhausting time", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const started = createDeferred();
+  const release = createDeferred();
+  const originalDiscovery = discovery.getMockImplementation()!;
+  const overview = vi.mocked(loadSessionUsageOverviewFromCache);
+  const originalOverview = overview.getMockImplementation()!;
+  discovery.mockImplementation(async ({ agentId }) =>
+    agentId === "main"
+      ? discoveredRows("budget-main", 256, true)
+      : agentId === "opus"
+        ? discoveredRows("budget-opus", 1)
+        : [],
+  );
+  overview.mockImplementation(async (params) => {
+    if (params.agentId === "opus") {
+      const signal = getAsyncWorkSignal()!;
+      const abort = () => release.resolve();
+      signal.addEventListener("abort", abort, { once: true });
+      started.resolve();
+      try {
+        await release.promise;
+        signal.throwIfAborted();
+      } finally {
+        signal.removeEventListener("abort", abort);
       }
-      const result = readResult(await pending);
-      expect(result).toMatchObject({
-        totals: { totalTokens: 256 * 7 },
-        cacheStatus: { status: "partial", cachedFiles: 256, pendingFiles: 1 },
-      });
-      if (timed) {
-        expect(result.sessions).toHaveLength(50);
-        expect(result.partial?.reason).toBe("time-budget");
-        expect(result.overview?.queryWarnings).toContain(result.partial?.message);
-        // A failed refresh can serve the prior subtotal, but must retain its warning.
-        load.mockRejectedValueOnce(new Error("Usage store unavailable"));
-        const fallback = await readSessionsUsage(params);
-        expect(fallback.partial).toEqual(result.partial);
-        // A timed-out subtotal must not be cached as a complete result.
-        load.mockImplementation(originalLoad);
-        const retried = await readSessionsUsage(params);
-        expect(retried.partial).toBeUndefined();
-        expect(retried.cacheStatus?.status).toBe("fresh");
-      } else {
-        expect(load.mock.calls[1]?.[0].reportBudgetBytes).toBe(0);
-      }
-    } finally {
-      release.resolve();
-      await pending;
-      discovered.mockImplementation(originalDiscovery);
-      load.mockImplementation(originalLoad);
-      vi.useRealTimers();
     }
-  },
-);
+    return overviewFromSessionSummaries(params, async ({ sessions }) =>
+      tokenBatch(sessions.length, 7),
+    );
+  });
+  const params = { ...BASE_USAGE_RANGE, agentScope: "all", projection: "overview" };
+  const pending = runSessionsUsage(params);
+  try {
+    await started.promise;
+    await vi.advanceTimersByTimeAsync(15_000);
+    const result = readResult(await pending);
+    // Each agent reads its overview in one worker pass; a finished agent keeps its subtotal.
+    expect(result).toMatchObject({
+      totals: { totalTokens: 256 * 7 },
+      cacheStatus: { status: "partial", cachedFiles: 256, pendingFiles: 1 },
+    });
+    expect(result.sessions).toHaveLength(50);
+    expect(result.partial?.reason).toBe("time-budget");
+    expect(result.overview?.queryWarnings).toContain(result.partial?.message);
+    // A failed refresh can serve the prior subtotal, but must retain its warning.
+    overview.mockRejectedValueOnce(new Error("Usage store unavailable"));
+    const fallback = await readSessionsUsage(params);
+    expect(fallback.partial).toEqual(result.partial);
+    // A timed-out subtotal must not be cached as a complete result.
+    overview.mockImplementation(originalOverview);
+    const retried = await readSessionsUsage(params);
+    expect(retried.partial).toBeUndefined();
+    expect(retried.cacheStatus?.status).toBe("fresh");
+  } finally {
+    release.resolve();
+    await pending;
+    discovery.mockImplementation(originalDiscovery);
+    overview.mockImplementation(originalOverview);
+    vi.useRealTimers();
+  }
+});
 
 it("keeps an identical cold usage request alive when the first client disconnects", async ({
   signal: testSignal,

@@ -5,8 +5,6 @@ import { createCarrierApi } from "../shared/carrier-api.js";
 import { requireSupportedTwilioApiHostname } from "../twilio-region.js";
 
 export class TwilioApiError extends Error {
-  readonly httpStatus: number;
-  readonly responseText: string;
   readonly twilioCode?: number;
 
   constructor(httpStatus: number, responseText: string) {
@@ -14,8 +12,6 @@ export class TwilioApiError extends Error {
     const detail = typeof parsed?.message === "string" ? parsed.message : responseText;
     super(`Twilio API error: ${httpStatus} ${detail}`);
     this.name = "TwilioApiError";
-    this.httpStatus = httpStatus;
-    this.responseText = responseText;
     this.twilioCode = typeof parsed?.code === "number" ? parsed.code : undefined;
   }
 }

@@ -1,29 +1,10 @@
-import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveConfigIncludes, resolveConfigIncludesForTopLevelKey } from "./includes.js";
 import {
-  type IncludeResolver,
-  resolveConfigIncludes,
-  resolveConfigIncludesForTopLevelKey,
-} from "./includes.js";
-
-const CONFIG_DIR = path.join(path.parse(process.cwd()).root, "config");
-const DEFAULT_BASE_PATH = path.join(CONFIG_DIR, "openclaw.json");
-
-function configPath(name: string): string {
-  return path.join(CONFIG_DIR, name);
-}
-
-function createMockResolver(files: Record<string, unknown>): IncludeResolver {
-  return {
-    readFile: (filePath) => {
-      if (filePath in files) {
-        return JSON.stringify(files[filePath]);
-      }
-      throw new Error(`ENOENT: no such file: ${filePath}`);
-    },
-    parseJson: JSON.parse,
-  };
-}
+  CONFIG_FILE as DEFAULT_BASE_PATH,
+  configPath,
+  createMockResolver,
+} from "./includes.test-support.js";
 
 function resolve(obj: unknown, files: Record<string, unknown> = {}) {
   return resolveConfigIncludes(obj, DEFAULT_BASE_PATH, createMockResolver(files));

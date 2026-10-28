@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import * as workspaceOwner from "../../agents/workspace.js";
 import * as configBackup from "../../config/backup-rotation.js";
@@ -12,12 +13,12 @@ import {
 import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as fsSafe from "../../infra/fs-safe.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { callAgentHandler } from "./agents-mutate.test-support.js";
 import { agentsHandlers } from "./agents.js";
 import type { GatewayClient } from "./client-types.js";
 
@@ -64,30 +65,21 @@ function configureIdentity(avatar?: string) {
   };
 }
 function expectSuccess(respond: ReturnType<typeof vi.fn>, payload = expect.anything()) {
-  expect(respond).toHaveBeenCalledWith(true, payload, undefined);
+  expect(respond).toHaveBeenCalledExactlyOnceWith(true, payload, undefined);
 }
 async function expectPersistedAvatar() {
   expect(await readIdentity()).toContain(inlineAvatar);
   expect(await readConfig()).toContain(inlineAvatar);
 }
-async function call(
+function call(
   method: "agents.create" | "agents.update",
   fields: Record<string, unknown> = { avatar: inlineAvatar },
   requester = client,
 ) {
-  const respond = vi.fn();
   const target =
     method === "agents.create" ? { name: "New Avatar Agent", workspace } : { agentId: "existing" };
   const params = { ...target, ...fields };
-  await agentsHandlers[method]!({
-    req: { type: "req", id: "avatar-policy", method, params },
-    params,
-    context,
-    respond,
-    client: requester,
-    isWebchatConnect: () => false,
-  });
-  return respond;
+  return callAgentHandler(agentsHandlers[method]!, method, params, { context, client: requester });
 }
 beforeAll(async () => {
   state = await createOpenClawTestState({ layout: "state-only", label: "agent-avatar-policy" });
@@ -128,8 +120,8 @@ it.each([
   { method: "agents.update", stage: "remote-read" },
   { method: "agents.update", stage: "remote-write" },
 ] as const)("$method: upload revocation at $stage", async ({ method, stage }) => {
-  const entered = createDeferredCore();
-  const resume = createDeferredCore();
+  const entered = createDeferred();
+  const resume = createDeferred();
   const pause = async () => {
     entered.resolve();
     await resume.promise;
@@ -176,12 +168,7 @@ it.each([
   const originalConfig = await readConfig();
   const pending = call(method);
   try {
-    await Promise.race([
-      entered.promise,
-      pending.then(() => {
-        throw new Error(`handler did not reach ${stage}`);
-      }),
-    ]);
+    await awaitGateBeforeSettlement(entered.promise, pending, `handler did not reach ${stage}`);
     const accepted = stage === "config" || stage === "remote-write";
     const admittedIdentity = await readIdentity();
     if (accepted) {
@@ -193,16 +180,9 @@ it.each([
     resume.resolve();
     const respond = await pending;
     if (accepted) {
-      expect(respond).toHaveBeenCalledExactlyOnceWith(
-        true,
-        method === "agents.update" ? updated : expect.anything(),
-        undefined,
-      );
+      expectSuccess(respond, method === "agents.update" ? updated : expect.anything());
       expect(await readConfig()).toContain(inlineAvatar);
       expect(await readIdentity()).toBe(admittedIdentity);
-      if (stage === "remote-write") {
-        expect(writeFile).toHaveBeenCalledTimes(1);
-      }
     } else {
       expect.soft(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, uploadsDisabled);
       expect.soft(await readIdentity()).toBe(originalIdentity);

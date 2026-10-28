@@ -4,9 +4,8 @@
   gap: 8px;
   max-height: min(280px, 36dvh);
   overflow-y: auto;
-  padding: 4px 4px 12px;
-  margin-bottom: 12px;
-  border-bottom: 1px solid var(--border);
+  padding: 4px;
+  margin-bottom: 8px;
 }
 
 .sidebar-pinned-agent {
@@ -60,27 +59,6 @@
   line-height: 16px;
 }
 
-.sidebar-pinned-agent > .sidebar-agent-roster__menu {
-  position: absolute;
-  top: 0;
-  right: 0;
-}
-
-.sidebar-pinned-agent .sidebar-agent-roster__action {
-  opacity: 0;
-}
-
-.sidebar-pinned-agent:is(:hover, :focus-within) .sidebar-agent-roster__action,
-.sidebar-pinned-agent .sidebar-agent-roster__action[aria-expanded="true"] {
-  opacity: 1;
-}
-
-.sidebar-pinned-agent
-  .sidebar-agent-roster__action:is(:hover, :focus-visible, [aria-expanded="true"]) {
-  color: var(--text);
-  background: transparent;
-}
-
 .sidebar-pinned-agent__tooltip {
   --openclaw-tooltip-max-width: min(280px, calc(100vw - 24px));
   --openclaw-tooltip-padding: 12px;
@@ -110,13 +88,4 @@
   overflow: hidden;
   overflow-wrap: anywhere;
   color: var(--muted);
-}
-
-@media (hover: none), (pointer: coarse) {
-  .sidebar-pinned-agent .sidebar-agent-roster__action {
-    opacity: 1;
-    min-width: 32px;
-    min-height: 32px;
-    justify-content: center;
-  }
 }

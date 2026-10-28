@@ -1,6 +1,7 @@
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { renderStorageFailureSummary } from "../agents/failover/assistant-request-failure-copy.js";
+import { ConfigReadOnlyError } from "../config/config-write-guard.js";
 import { copyErrorDiagnostic } from "../infra/error-diagnostics.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
 import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
@@ -18,13 +19,20 @@ export function errorShapeFromError(
   opts?: Parameters<typeof errorShape>[2] & { message?: string },
 ) {
   const { message, ...metadata } = opts ?? {};
+  if (error instanceof ConfigReadOnlyError) {
+    metadata.details = { code: error.code };
+  }
+  const outcomeUnknown = hasSqliteWorkerOutcomeUnknown(error);
   const candidates = collectNestedErrorCandidates(error);
   const ended = candidates.find((candidate) => candidate instanceof IncognitoSessionEndedError);
-  const storageMessage = candidates.some(
-    (candidate) => classifyGatewayStorageFailure(candidate) === "SQLITE_FULL",
-  )
-    ? renderStorageFailureSummary("SQLITE_FULL")
-    : undefined;
+  const storageFailure = classifyGatewayStorageFailure(error);
+  const storageMessage =
+    storageFailure === "unavailable" ||
+    storageFailure === "SQLITE_FULL" ||
+    storageFailure === "session_actor_reconciliation" ||
+    storageFailure === "57014"
+      ? renderStorageFailureSummary(storageFailure)
+      : undefined;
   const shape =
     error instanceof AgentDatabaseAdmissionError
       ? createAgentDatabaseAdmissionErrorShape(error.refusal)
@@ -37,11 +45,25 @@ export function errorShapeFromError(
         : storageMessage
           ? errorShape(ErrorCodes.UNAVAILABLE, storageMessage, {
               ...metadata,
-              // A retryable resource failure must not replay an unacknowledged write.
-              retryable: !hasSqliteWorkerOutcomeUnknown(error) && metadata.retryable !== false,
-              details: { code: "SQLITE_FULL" },
+              ...(storageFailure === "unavailable" && !outcomeUnknown
+                ? {}
+                : {
+                    retryable:
+                      storageFailure === "SQLITE_FULL" &&
+                      !outcomeUnknown &&
+                      metadata.retryable !== false,
+                  }),
+              details: { code: storageFailure },
             })
           : errorShape(code, message ?? formatErrorMessageWithCode(error), metadata);
+  if (outcomeUnknown) {
+    shape.retryable = false;
+  }
+  // Native in-process callers need the original typed failure; it must never
+  // become part of the wire response or serialized dedupe payload.
+  if (error instanceof Error) {
+    Object.defineProperty(shape, "cause", { value: error });
+  }
   copyErrorDiagnostic(error, shape);
   return shape;
 }

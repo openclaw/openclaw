@@ -10,18 +10,12 @@ import { readLaunchdStopTimeout } from "../../infra/launchd-stop-timeout.js";
 import { readSystemdStopTimeout } from "../../infra/systemd-stop-timeout.js";
 import type { GatewayRunSignalAction } from "./run-loop-request.js";
 
-type NativeStopTimeout = { timeoutMs: number; source: string };
-
 // A stop must reach cancellation and durable cleanup before the 30s deployer window.
 const STOP_DRAIN_TIMEOUT_MS = 20_000;
 
 // Only an inconclusive probe may retain the startup budget; a confirmed absence
 // of a native deadline must not constrain an in-process restart.
-async function readNativeStopTimeout(stopping: boolean): Promise<{
-  stop: NativeStopTimeout | null;
-  warning?: string;
-  inconclusive: boolean;
-}> {
+async function readNativeStopTimeout(stopping: boolean) {
   if (process.platform === "linux") {
     const systemd = await readSystemdStopTimeout();
     return {

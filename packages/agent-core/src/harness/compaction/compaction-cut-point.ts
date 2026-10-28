@@ -120,27 +120,15 @@ export function findTurnStartIndex(
   return -1;
 }
 
-/** Cut point selected for compaction. */
-interface CutPointResult {
-  /** Index of the first entry retained after compaction. */
-  firstKeptEntryIndex: number;
-  /** Index of the turn-start entry when the cut splits a turn, otherwise -1. */
-  turnStartIndex: number;
-  /** Whether the selected cut point splits an in-progress turn. */
-  isSplitTurn: boolean;
-}
-
-/** Automatic callers supply the remaining foreground budget and its message estimator. */
-interface CompactionRetentionBudget {
-  maxTokens: number;
-  reserveTokens: number;
-  estimateTokens: (message: AgentMessage) => number;
-}
-
 export interface CompactionRetentionConstraints {
   /** An admitted, unprocessed user remains intact even before its budget is prepared. */
   preserveFromEntryId?: string;
-  budget?: CompactionRetentionBudget;
+  /** Automatic callers supply the remaining foreground budget and its message estimator. */
+  budget?: {
+    maxTokens: number;
+    reserveTokens: number;
+    estimateTokens: (message: AgentMessage) => number;
+  };
 }
 
 function createToolPairCutResolver(messages: AgentMessage[], entryIndexes: number[]) {
@@ -200,7 +188,14 @@ export function findCutPoint(
   endIndex: number,
   keepRecentTokens: number,
   constraints?: CompactionRetentionConstraints,
-): CutPointResult {
+): {
+  /** Index of the first entry retained after compaction. */
+  firstKeptEntryIndex: number;
+  /** Index of the turn-start entry when the cut splits a turn, otherwise -1. */
+  turnStartIndex: number;
+  /** Whether the selected cut point splits an in-progress turn. */
+  isSplitTurn: boolean;
+} {
   const retention = constraints?.budget;
   // Projection validates persisted custom/branch timestamps even outside the
   // retained tail. Keep that eager validation without storing every cut point.

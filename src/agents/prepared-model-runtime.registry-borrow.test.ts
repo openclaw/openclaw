@@ -1,9 +1,10 @@
+import { createToolLoadContext } from "../plugins/tools.test-support.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import {
   createPluginMetadataSnapshot,
   makeRegistry,
@@ -21,6 +22,7 @@ import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-reque
 import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { createEnteredGate } from "./entered-gate.test-support.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import { loadPreparedInboundPluginRegistry } from "./prepared-model-runtime.inbound-registry.js";
 import {
@@ -74,17 +76,13 @@ async function acquireBorrower(
         preferBuiltPluginArtifacts: false,
       }),
     });
-    setPluginRuntimeLoadContext(registry, {
-      rawConfig: config,
-      config,
-      activationSourceConfig: config,
-      autoEnabledReasons: {},
-      workspaceDir,
-      env: process.env,
-      metadataSnapshot: metadata,
-      manifestRegistry: metadata.manifestRegistry,
-      logger: { info() {}, warn() {}, error() {}, debug() {} },
-    });
+    setPluginRuntimeLoadContext(
+      registry,
+      createToolLoadContext(config, workspaceDir, {
+        metadataSnapshot: metadata,
+        manifestRegistry: metadata.manifestRegistry,
+      }),
+    );
     setActivePluginRegistry(registry, undefined, "gateway-bindable", workspaceDir);
     resources.defer(() => clearActivePluginRegistry(registry));
     expect(runInScope(() => loadPreparedInboundPluginRegistry(input, metadata))).toBe(registry);
@@ -112,12 +110,10 @@ it("retires a prepared registry after its borrowing request scope has closed", a
   const record = createPluginRecord({ id: "late-catalog-lease", status: "loaded" });
   registry.plugins.push(record);
   const instance = new PluginInstance(record.id, { record, registry });
-  const entered = createDeferred();
-  const finish = createDeferred();
+  const gate = createEnteredGate();
   const cleaned = vi.fn();
   instance.lifecycle.onDispose(async () => {
-    entered.resolve();
-    await finish.promise;
+    await gate.wait();
     cleaned();
   });
   const borrower = await caller.track(() => {
@@ -130,16 +126,16 @@ it("retires a prepared registry after its borrowing request scope has closed", a
   const closing = Promise.resolve(borrower.run(borrower.release)).then(retired);
   void closing.catch(() => {});
   try {
-    await Promise.race([entered.promise, closing]);
+    await Promise.race([gate.entered, closing]);
     expect(retired).not.toHaveBeenCalled();
-    finish.resolve();
+    gate.release();
     await closing;
     expect(cleaned).toHaveBeenCalledOnce();
     expect(retired).toHaveBeenCalledOnce();
     await expect(caller.track(() => undefined)).rejects.toThrow("Async work scope is closed");
     expect(() => instance.run(() => "retired")).toThrow("reloaded or disabled");
   } finally {
-    finish.resolve();
+    gate.release();
     await closing.catch(() => {});
   }
 });
@@ -167,16 +163,14 @@ it("rejects admission after construction closes", async () => {
 it("retains selected inbound resources until a cancelled initial run inspection settles", async () => {
   await using resources = new AsyncDisposableStack();
   const { registry, input, borrower, instance } = await acquireBorrower(resources);
-  const inspecting = createDeferred();
-  const finishInspection = createDeferred();
+  const gate = createEnteredGate();
   const acquire = runtimePlugins.acquireAgentRuntimePluginRegistry;
   mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValueOnce(createEmptyPluginRegistry());
   const inspection = vi
     .spyOn(runtimePlugins, "acquireAgentRuntimePluginRegistry")
     .mockImplementationOnce(async (...args) => {
       const acquired = await acquire(...args);
-      inspecting.resolve();
-      await finishInspection.promise;
+      await gate.wait();
       return acquired;
     });
   const pending = acquireAgentRunPreparedModelRuntime(
@@ -189,7 +183,7 @@ it("retains selected inbound resources until a cancelled initial run inspection 
   const settled = Promise.allSettled([pending]);
   try {
     await awaitGateBeforeSettlement(
-      inspecting.promise,
+      gate.entered,
       pending,
       "Initial run skipped inspection acquisition",
     );
@@ -197,13 +191,13 @@ it("retains selected inbound resources until a cancelled initial run inspection 
     await borrower[Symbol.asyncDispose]();
     expect(isPluginRegistryRetired(registry)).toBe(false);
     expect(instance.retainedWorkCount).toBeGreaterThan(0);
-    finishInspection.resolve();
+    gate.release();
     await expect(pending).rejects.toThrow("superseded");
     await expect(pending).rejects.toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
     expect(isPluginRegistryRetired(registry)).toBe(true);
     expect(instance.retainedWorkCount).toBe(0);
   } finally {
-    finishInspection.resolve();
+    gate.release();
     await settled;
     inspection.mockRestore();
   }
@@ -215,11 +209,9 @@ it("retains borrowed Gateway work through post-facts projection, then releases i
     resources,
     "gateway",
   );
-  const projecting = createDeferred();
-  const finishProjection = createDeferred();
+  const gate = createEnteredGate();
   mocks.buildPreparedModelCatalogSnapshot.mockImplementationOnce(async () => {
-    projecting.resolve();
-    await finishProjection.promise;
+    await gate.wait();
     return { entries: [], routeVariants: [] };
   });
   const pending = runInScope(async () => {
@@ -229,20 +221,20 @@ it("retains borrowed Gateway work through post-facts projection, then releases i
   const settled = Promise.allSettled([pending]);
   try {
     await awaitGateBeforeSettlement(
-      projecting.promise,
+      gate.entered,
       pending,
       "Preparation skipped live catalog projection",
     );
     await borrower[Symbol.asyncDispose]();
     expect(isPluginRegistryRetired(registry)).toBe(false);
     expect(instance.retainedWorkCount).toBeGreaterThan(0);
-    finishProjection.resolve();
+    gate.release();
     const snapshot = await pending;
     expect(snapshot.pluginRegistry).toBe(registry);
     expect(isPluginRegistryRetired(registry)).toBe(false);
     expect(instance.retainedWorkCount).toBe(0);
   } finally {
-    finishProjection.resolve();
+    gate.release();
     await settled;
   }
 });

@@ -96,7 +96,15 @@ export function SkillStateStatus(props: {
   });
   return (
     <span
-      class={["plugin-catalog-card__status settings-status", `settings-status--${status().tone}`]}
+      class={[
+        "plugin-catalog-card__status settings-status",
+        {
+          "settings-status--danger": status().tone === "danger",
+          "settings-status--warn": status().tone === "warn",
+          "settings-status--muted": status().tone === "muted",
+          "settings-status--ok": status().tone === "ok",
+        },
+      ]}
       role="img"
       tabindex="0"
       aria-label={status().tooltip}

@@ -7,7 +7,8 @@ const MAX_RECOVERY_CHILDREN = 32;
 const MAX_RECOVERY_LABEL_CHARS = 256;
 
 export const SUBAGENT_RESTART_RECOVERY_INSTRUCTION =
-  "Interrupted subagents are not automatically relaunched. Reconcile every listed unfinished " +
+  "Subagents interrupted by a Gateway restart resume automatically when their saved authority " +
+  "can be restored. Reconcile every listed unfinished " +
   "child against its saved history, current status, and the user's requested outcome. Prefer " +
   "a follow-up in the same retained child session when its task is still needed; confirm the " +
   "previous execution has stopped and verify uncertain tool effects before continuing it. " +

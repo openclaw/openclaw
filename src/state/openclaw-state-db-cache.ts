@@ -329,8 +329,53 @@ function publishOpenClawStateDatabase(
   return database;
 }
 
-function getCachedOpenClawStateDatabase(pathname: string, options?: { readOnly: true }) {
-  return withCachedOpenClawStateDatabase(pathname, options, (database) => database);
+/** Looking up an admitted handle does not consume schema or row facts. */
+function getCachedOpenClawStateDatabase(
+  pathname: string,
+  options?: { readOnly: true },
+): OpenClawStateDatabase | undefined {
+  const resolvedPath = resolveDatabasePath({ path: pathname });
+  const runtimeFailure = terminalOpenLatch.get(resolvedPath);
+  if (runtimeFailure) {
+    throw runtimeFailure;
+  }
+  return readCachedOpenClawStateDatabase(resolvedPath, options);
+}
+
+function readCachedOpenClawStateDatabase(
+  resolvedPath: string,
+  options?: { readOnly: true },
+): OpenClawStateDatabase | undefined {
+  const maintenance = getOpenClawDatabaseMaintenanceScope();
+  if (options?.readOnly) {
+    maintenance?.assertReadAdmission();
+  } else {
+    maintenance?.assertAdmission();
+  }
+  assertExistingOpenClawStateSchemaCacheAdmission(resolvedPath, stateDatabaseLifecycle);
+  const database = cachedDatabases.get(resolvedPath);
+  if (database) {
+    if (borrowers.get(database.db)?.retiring) {
+      throw new Error(
+        `OpenClaw state database native borrower cleanup is pending: ${resolvedPath}`,
+      );
+    }
+    touchStateDatabase(database);
+  }
+  return database;
+}
+
+/** Prepared host facts retain admission; native transactions still expose their staged facts. */
+export function prepareOpenClawStateCachedRead(pathname: string) {
+  const resolvedPath = resolveDatabasePath({ path: pathname });
+  const options = { readOnly: true } as const;
+  getCachedOpenClawStateDatabase(resolvedPath, options);
+  // Terminal failures invalidate this admission before closing the native owner.
+  const admission = asyncResources.capture(resolvedPath);
+  return () => {
+    admission.assertCurrent();
+    return readCachedOpenClawStateDatabase(resolvedPath, options);
+  };
 }
 
 /** Keep the admitted revision live while a synchronous reader consumes its row facts. */
@@ -339,25 +384,8 @@ function withCachedOpenClawStateDatabase<T>(
   options: { readOnly: true } | undefined,
   operation: (database: OpenClawStateDatabase) => T,
 ): T | undefined {
-  const resolvedPath = resolveDatabasePath({ path: pathname });
-  const maintenance = getOpenClawDatabaseMaintenanceScope();
-  if (options?.readOnly) {
-    maintenance?.assertReadAdmission();
-  } else {
-    maintenance?.assertAdmission();
-  }
-  assertExistingOpenClawStateSchemaCacheAdmission(resolvedPath, stateDatabaseLifecycle);
-  const runtimeFailure = terminalOpenLatch.get(resolvedPath);
-  if (runtimeFailure) {
-    throw runtimeFailure;
-  }
-  return cacheAdmission.read(resolvedPath, (database) => {
-    if (borrowers.get(database.db)?.retiring) {
-      throw new Error(`OpenClaw state database native borrower cleanup is pending: ${pathname}`);
-    }
-    touchStateDatabase(database);
-    return operation(database);
-  });
+  const database = getCachedOpenClawStateDatabase(pathname, options);
+  return database && cacheAdmission.read(database, operation);
 }
 
 function getOpenClawStateDatabaseIfOpenAtPath(pathname: string): OpenClawStateDatabase | undefined {
@@ -548,6 +576,25 @@ export function closeOpenClawStateDatabase(options?: OpenClawStateDatabaseCloseO
 /** Register a resource owner before it can admit any shared-state worker opens. */
 export const registerOpenClawStateDatabaseAsyncResource = asyncResources.register;
 
+/** Close the admitted file or its canonical path, retaining first-creation identity getters. */
+export function registerOpenClawStatePathAsyncResource(
+  admission: Pick<OpenClawStateDatabaseReadAdmission, "identity">,
+  close: () => Promise<void>,
+): () => void {
+  return registerOpenClawStateDatabaseAsyncResource({
+    close(identity) {
+      if (
+        !identity ||
+        identity.key === admission.identity.key ||
+        identity.canonicalPath === admission.identity.canonicalPath
+      ) {
+        return close();
+      }
+      return Promise.resolve();
+    },
+  });
+}
+
 /** Capture the canonical read generation before any asynchronous worker admission. */
 export const captureOpenClawStateDatabaseReadAdmission = asyncResources.capture;
 
@@ -556,8 +603,12 @@ export const captureOpenClawStateIntegrityAdmission = asyncResources.integrity;
 /** Bind worker-created storage to its captured admission without publishing a native handle. */
 export function publishOpenClawStateDatabaseWorkerAdmission(
   admission: OpenClawStateDatabaseReadAdmission,
+  preparedIdentity?: DatabasePathIdentity,
 ): void {
-  asyncResources.publish(admission.databasePath);
+  if (preparedIdentity) {
+    admission.assertCurrent();
+  }
+  asyncResources.publish(admission.databasePath, preparedIdentity);
   admission.assertCurrent();
 }
 

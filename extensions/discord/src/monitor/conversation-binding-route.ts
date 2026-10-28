@@ -20,7 +20,6 @@ type DiscordConversationBindingRouteParams = {
   runtimeConversationId: string;
   configuredConversationId: string;
   parentConversationId?: string;
-  touchBinding?: boolean;
   inspection?: ConversationBindingInspection;
 };
 
@@ -33,7 +32,8 @@ function prepareDiscordBindingRoute(params: DiscordConversationBindingRouteParam
       baseRoute = params.resolveRoute(selection);
       return baseRoute;
     },
-    touchBinding: params.touchBinding,
+    // Processing owns the awaited activity write after preflight completes.
+    touchBinding: false,
     conversation: {
       channel: "discord",
       accountId: params.accountId,

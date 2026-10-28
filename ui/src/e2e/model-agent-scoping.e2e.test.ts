@@ -54,10 +54,10 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}debug`);
       await gateway.waitForRequest("connect");
-      // Commit the settings takeover before hello so this proof cannot inherit
-      // a transient app sidebar and its unrelated auth-status request.
-      await waitForControlUiRoute(page, { pathname: "/debug", routeId: "debug" });
+      // A cold shell needs hello before it can commit the Debug route.
       await gateway.resolveDeferred("connect");
+      await waitForControlUiRoute(page, { pathname: "/debug", routeId: "debug" });
+      expect(await gateway.getRequests("connect")).toHaveLength(1);
       await gateway.waitForRequest("models.list");
       const modelsListCount = (await gateway.getRequests("models.list")).length;
       const authStatusCount = (await gateway.getRequests("models.authStatus")).length;

@@ -46,18 +46,12 @@ export function projectControllerDiagnosticActivity(
       .map((wait) => wait.deadlineAtMs!);
     return values.length ? Math.max(...values) : undefined;
   };
-  const toolDeadline = state.tools.length
-    ? Math.max(...state.tools.map((tool) => tool.deadlineAtMs))
-    : undefined;
   const explicitToolDeadlines = state.tools
     .filter((tool) => tool.explicitDeadlineAtMs !== undefined)
     .map((tool) => tool.deadlineAtMs);
   const requestTimeouts = (state.requests ?? [])
     .map((request) => request.requestTimeoutMs)
     .filter((timeout): timeout is number => timeout !== undefined);
-  const requestDeadlines = (state.requests ?? [])
-    .map((request) => request.deadlineAtMs)
-    .filter((requestDeadline): requestDeadline is number => requestDeadline !== undefined);
   return {
     hasActiveEmbeddedRun: state.hasActiveAttempt || undefined,
     activeWorkKind: oldestTool
@@ -70,9 +64,6 @@ export function projectControllerDiagnosticActivity(
     activeModelCallRequestTimeoutMs: requestTimeouts.length
       ? Math.max(...requestTimeouts)
       : undefined,
-    activeModelCallRecoveryDeadlineAtMs: requestDeadlines.length
-      ? Math.max(...requestDeadlines)
-      : undefined,
     lastProgressAgeMs: Math.max(0, now - state.semanticProgressAtMs),
     lastProgressReason: state.lastProgressReason,
     activeToolName: oldestTool?.toolName,
@@ -81,7 +72,6 @@ export function projectControllerDiagnosticActivity(
     activeToolDeadlineAtMs: explicitToolDeadlines.length
       ? Math.max(...explicitToolDeadlines)
       : undefined,
-    activeToolRecoveryDeadlineAtMs: toolDeadline,
     activeBackendLivenessDeadlineAtMs: deadline("backend"),
     activeRetryWaitDeadlineAtMs: deadline("retry"),
   };

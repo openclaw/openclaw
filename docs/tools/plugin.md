@@ -198,8 +198,11 @@ Key policy rules:
   work. Stale plugin references stay inert while this is active; re-enable
   plugins before running doctor cleanup if you want stale ids removed.
 - `plugins.deny` wins over allow and per-plugin enablement.
-- `plugins.allow` is an exclusive allowlist. Plugin-owned tools outside the
-  allowlist stay unavailable even when `tools.allow` includes `"*"`.
+- A non-empty `plugins.allow` restricts which plugins can load, with activation
+  exceptions for the selected memory plugin, context-engine plugins whose id
+  matches the selected engine id, and explicitly enabled bundled chat channels. Plugin-owned tools outside the allowlist stay unavailable even
+  when `tools.allow` includes `"*"`; plugin activation and tool availability
+  are separate policy decisions.
 - `plugins.entries.<id>.enabled: false` disables one plugin while keeping its
   config.
 - `plugins.load.paths` adds explicit local plugin files or directories.
@@ -210,10 +213,17 @@ Key policy rules:
 - Bundled plugins follow their built-in default-on/default-off metadata
   unless config explicitly overrides it.
 - `plugins.slots.<slot>` (`memory` or `contextEngine`) picks one plugin for an
-  exclusive category. Slot selection counts as explicit activation and
-  force-enables the selected plugin for that slot, even if it would otherwise
-  be opt-in. `plugins.deny` and `plugins.entries.<id>.enabled: false` still
-  block it.
+  exclusive category. Selecting a memory plugin counts as explicit activation
+  and enables it even when `plugins.allow` omits it or it would otherwise be
+  opt-in. Context-engine selection has the same allowlist exception only when
+  the plugin id matches the selected engine id; a differently named owner must
+  be independently enabled or allowlisted and included in any non-empty
+  `plugins.allow` list. The memory exception includes the implicit `memory-core`
+  selection when `plugins.slots.memory` is unset. To turn off
+  memory plugins, set `plugins.slots.memory: "none"`; to block `memory-core`
+  specifically, use `plugins.deny: ["memory-core"]` or
+  `plugins.entries.memory-core.enabled: false`. Global disable, deny, explicit
+  per-plugin disable, and workspace-origin trust checks still apply.
 - Bundled opt-in plugins can auto-activate when config names one of their
   owned surfaces, such as a provider/model ref, channel config, CLI backend,
   or agent harness runtime.
@@ -386,6 +396,7 @@ If the plugin needs a trust-gated capability, use the applicable remedy below.
 | `install-path-mismatch` | Reinstall the intended package and remove load paths that select another copy.                                                                                                                                       |
 | `owner-ambiguous`       | Refresh the registry and resolve conflicting package ownership before reinstalling.                                                                                                                                  |
 | `provenance-invalid`    | Reinstall from the official source; conflicting or partial provenance is not automatically trusted.                                                                                                                  |
+| `third-party-npm`       | The npm install record is consistent, but the plugin is not official. Reinstalling the same package cannot grant trust-gated capabilities; use an official package if you need them.                                 |
 
 `bundled` and `trusted-official` identify accepted sources. Legacy npm records
 with a consistent official package spec remain valid without extra resolution

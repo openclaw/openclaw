@@ -233,5 +233,6 @@ export function assertDoctorMaintenanceInspection(
   throw new DoctorMaintenanceRefusalError(
     `Doctor could not enter maintenance. Error: ${detail} ${guidance}`,
     { kind: "data-at-risk", reason: "gateway-state-unverified" },
+    { failureFacts: inspection.blockFailureFacts },
   );
 }

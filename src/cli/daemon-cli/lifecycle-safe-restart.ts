@@ -27,11 +27,10 @@ export function resolveGatewayRestartIntentOptions(
 }
 
 /** Request an OpenClaw-aware restart through the running Gateway. */
-type SafeRestartTarget = { pid: number; ownerId: string; port: number };
 
 export async function runSafeGatewayRestart(
   opts: DaemonLifecycleOptions,
-  target?: SafeRestartTarget,
+  target?: { pid: number; ownerId: string; port: number },
 ): Promise<boolean> {
   if (opts.force) {
     throw new Error(

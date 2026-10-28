@@ -2,6 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
 import {
   handleTranscriptContextMenu,
   resetThreadPresentation,
@@ -23,11 +24,7 @@ it("keeps failed context-copy feedback visible and retries before dismissing the
   const fallbackDescriptor = Object.getOwnPropertyDescriptor(document, "execCommand");
   Object.defineProperty(document, "execCommand", { configurable: true, value: () => false });
   onTestFinished(() => {
-    if (fallbackDescriptor) {
-      Object.defineProperty(document, "execCommand", fallbackDescriptor);
-    } else {
-      Reflect.deleteProperty(document, "execCommand");
-    }
+    restorePropertyDescriptor(document, "execCommand", fallbackDescriptor);
   });
   const group = document.body.appendChild(document.createElement("div"));
   group.className = "chat-group assistant";

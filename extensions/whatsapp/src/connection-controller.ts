@@ -173,21 +173,6 @@ function stoppedControllerError(): Error {
   return new Error("WhatsApp connection controller is shutting down");
 }
 
-export function closeWaSocketSoon(
-  sock:
-    | {
-        end?: (error: Error | undefined) => void;
-        ws?: { close?: () => void };
-      }
-    | null
-    | undefined,
-  delayMs = 500,
-): void {
-  setTimeout(() => {
-    closeWaSocket(sock);
-  }, delayMs);
-}
-
 type WhatsAppLoginWaitResult =
   | {
       outcome: "connected";
@@ -245,7 +230,6 @@ export async function waitForWhatsAppLoginResult(params: {
   verbose: boolean;
   runtime: RuntimeEnv;
   waitForConnection?: typeof waitForWaConnection;
-  createSocket?: typeof createWaSocket;
   socketTiming?: WhatsAppSocketTimingOptions;
   onQr?: (qr: string) => void;
   onSocketReplaced?: (sock: WaSocket) => void;
@@ -257,13 +241,12 @@ export async function waitForWhatsAppLoginResult(params: {
   getCredentialPersistenceFailure?: () => CredentialPersistenceFailure | null;
 }): Promise<WhatsAppLoginWaitResult> {
   const wait = params.waitForConnection ?? waitForWaConnection;
-  const createSocket = params.createSocket ?? createWaSocket;
   let currentSock = params.sock;
   const restartedStatuses = new Set<number>();
 
   const replaceLoginSocket = async (): Promise<WhatsAppLoginWaitResult | null> => {
     try {
-      currentSock = await createSocket(false, params.verbose, {
+      currentSock = await createWaSocket(false, params.verbose, {
         authDir: params.authDir,
         ...params.socketTiming,
         onQr: params.onQr,
@@ -422,7 +405,6 @@ export class WhatsAppConnectionController {
       socketTiming?: WhatsAppSocketTimingOptions;
     },
   ) {
-    this.params = { ...params };
     this.accountId = params.accountId;
     this.authDir = params.authDir;
     this.appSilenceTimeoutMs = params.messageTimeoutMs * 4;
@@ -553,9 +535,7 @@ export class WhatsAppConnectionController {
     try {
       return await setupPromise;
     } finally {
-      if (this.connectionSetupPromise === setupPromise) {
-        this.connectionSetupPromise = null;
-      }
+      this.connectionSetupPromise = null;
     }
   }
 

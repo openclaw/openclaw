@@ -18,9 +18,7 @@ import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
   buildDefaultTestCliBackend,
   createCliRunnerPrepareFixture,
-  createTestMcpLoopbackClientGrant,
   createTestMcpLoopbackServer,
-  createTestMcpLoopbackServerConfig,
 } from "../cli-runner.test-helpers.js";
 import {
   providerContextTokenCacheKey,
@@ -28,6 +26,7 @@ import {
 } from "../context-cache.js";
 import { resetContextWindowCacheForTest } from "../context.test-support.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
+import { mockCliMcpPreparation } from "./prepare-mcp.test-support.js";
 import { prepareCliRunContext } from "./prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
@@ -95,28 +94,15 @@ describe("CLI model-routing receipt authority", () => {
       resolvePluginSetupCliBackend: () => undefined,
       resolveRuntimeCliBackends: () => [buildDefaultTestCliBackend()],
     });
-    setCliRunnerPrepareTestDeps({
-      isWorkspaceBootstrapPending: vi.fn(async () => false),
-      makeBootstrapWarn: vi.fn(() => () => undefined),
-      resolveBootstrapContextForRun: vi.fn(async () => ({
-        bootstrapFiles: [],
-        contextFiles: [],
-      })),
+    mockCliMcpPreparation({
       getActiveMcpLoopbackRuntime: vi.fn(() => undefined),
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
-      createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
-      mintMcpLoopbackClientGrant: vi.fn(createTestMcpLoopbackClientGrant),
-      bindMcpLoopbackClientGrantAdmission: vi.fn(() => true),
-      revokeMcpLoopbackClientGrant: vi.fn(() => true),
       resolveMcpLoopbackPolicyTools: vi.fn(() => ({ agentId: "main", tools: [] })),
       resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
-      resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: null, sourcePath: null })),
       prepareClaudeCliSkillsPlugin: vi.fn(async () => ({
         args: [],
         cleanup: vi.fn(async () => undefined),
       })),
-      getCliLiveSessionGeneration: vi.fn(() => undefined),
-      loadManifestModelCatalog: vi.fn(() => []),
     });
     fixture = createCliRunnerPrepareFixture(prepareCliRunContext);
   });

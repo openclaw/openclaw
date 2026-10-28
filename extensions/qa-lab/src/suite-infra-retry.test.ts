@@ -21,7 +21,7 @@ describe("qa suite infrastructure retry", () => {
           });
         }
         return "retried";
-      }, 1);
+      });
 
       expect(result).toBe("retried");
       expect(attempts).toBe(2);

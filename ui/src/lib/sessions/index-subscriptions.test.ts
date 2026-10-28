@@ -1,7 +1,10 @@
 // @vitest-environment node
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -67,19 +70,17 @@ describe("createSessionCapability message subscriptions", () => {
         key: params?.key,
       }));
       const client = { request } as unknown as GatewayBrowserClient;
+      const gateway = createGatewayHarness(client).gateway;
       let scope = { client, epoch: 0 };
       const operations = createSessionScopedOperations({
+        gateway,
         notifyCreated: vi.fn(),
         reportError: vi.fn(),
         connection: { capture: () => scope, isCurrent: (captured) => captured === scope },
         reconcileMutation: async () => ({ status: "stale" }),
       });
       const acquisition = operations.subscribeMessages("agent:main:old");
-      expect(request).toHaveBeenCalledExactlyOnceWith(
-        "sessions.messages.subscribe",
-        { key: "agent:main:old", subscriptionId: expect.any(String) },
-        subscriptionRequestOptions,
-      );
+      expect(request.mock.calls).toEqual([wireCall("subscribe", { key: "agent:main:old" })]);
       if (retirement === "dispose") {
         operations.dispose();
       } else {
@@ -88,10 +89,8 @@ describe("createSessionCapability message subscriptions", () => {
       }
       await expect(acquisition).rejects.toThrow("replaced Gateway connection");
       if (retirement === "dispose") {
-        expect(request).toHaveBeenLastCalledWith(
-          "sessions.messages.unsubscribe",
-          { key: "agent:main:old", subscriptionId: expect.any(String) },
-          subscriptionRequestOptions,
+        expect(request.mock.calls.at(-1)).toEqual(
+          wireCall("unsubscribe", { key: "agent:main:old" }),
         );
       }
       request.mockClear();
@@ -101,6 +100,91 @@ describe("createSessionCapability message subscriptions", () => {
         await operations.unsubscribeMessages(current);
       }
       operations.dispose();
+    },
+  );
+
+  it.each(["accepted", "connect denied", "hello denied", "client replaced", "socket replaced"])(
+    "pipelines selected history after connect dispatch and fences %s admission",
+    async (admission) => {
+      await preloadSessionMessageSubscriptions();
+      const dispatch = createDeferred<boolean>();
+      let connectSent = dispatch.promise;
+      const sent = createDeferred();
+      const initialHistory = { ok: true as const, payload: { messages: [] } };
+      const response = createDeferred<{ key: string; initialHistory: typeof initialHistory }>();
+      const request = vi.fn(async (method: string) => {
+        if (method === "sessions.messages.subscribe") {
+          sent.resolve();
+          return response.promise;
+        }
+        if (method === "sessions.messages.unsubscribe") {
+          return {};
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const client = createTestGatewayClient(request);
+      Object.defineProperty(client, "connectSent", { get: () => connectSent });
+      const { gateway, publish } = createGatewayHarness(client, undefined, {
+        initial: { phase: "reconnecting" },
+      });
+      const connection = createGatewayConnectionLifecycle(gateway.snapshot);
+      const stopGateway = gateway.subscribe(connection.transition);
+      const operations = createSessionScopedOperations({
+        gateway,
+        connection,
+        notifyCreated: vi.fn(),
+        reportError: vi.fn(),
+        reconcileMutation: async () => ({ status: "stale" }),
+      });
+      onTestFinished(() => {
+        operations.dispose();
+        stopGateway();
+      });
+      const key = "agent:main:selected";
+      const options = { initialHistory: { limit: 80 } };
+      const acquisition = operations.subscribeMessages(key, options, { beforeHello: true });
+      const settled = acquisition.then(
+        (subscription) => ({ subscription, error: null }),
+        (error: unknown) => ({ subscription: null, error }),
+      );
+      const rejectedResult = {
+        subscription: null,
+        error: expect.objectContaining({
+          message: expect.stringContaining("replaced Gateway connection"),
+        }),
+      };
+      expect(request).not.toHaveBeenCalled();
+
+      dispatch.resolve(admission !== "connect denied");
+      if (admission === "connect denied") {
+        expect(await settled).toEqual(rejectedResult);
+        expect(request).not.toHaveBeenCalled();
+        return;
+      }
+      await sent.promise;
+      expect(gateway.snapshot.phase).toBe("reconnecting");
+      expect(request.mock.calls).toEqual([wireCall("subscribe", { key, ...options })]);
+
+      if (admission === "socket replaced") {
+        connectSent = Promise.resolve(true);
+      }
+      if (admission !== "hello denied") {
+        publish(true, admission === "client replaced" ? createTestGatewayClient(request) : client);
+      }
+      response.resolve({ key, initialHistory });
+      const result = await settled;
+      if (admission === "accepted") {
+        expect(result).toEqual({
+          subscription: { key, agentId: null, initialHistory },
+          error: null,
+        });
+        if (result.subscription) {
+          await operations.unsubscribeMessages(result.subscription);
+        }
+      } else {
+        expect(result).toEqual(rejectedResult);
+      }
+      expect(request.mock.calls.at(-1)).toEqual(wireCall("unsubscribe", { key }));
     },
   );
 
@@ -188,8 +272,7 @@ describe("createSessionCapability message subscriptions", () => {
       expect([...observers]).toEqual([["work", true]]);
       await sessions.unsubscribeMessages(approval);
       expect(observers.size).toBe(0);
-      expect(main).toEqual({ key: "global", agentId: "main" });
-      expect(work).toEqual({ key: "global", agentId: "work" });
+      expect([main, work]).toEqual(["main", "work"].map((agentId) => ({ key: "global", agentId })));
       expect(request.mock.calls.slice(0, 2)).toEqual([
         wireCall("subscribe", { key: keyFor("main"), agentId: "main" }),
         wireCall("subscribe", { key: keyFor("work"), agentId: "work" }),

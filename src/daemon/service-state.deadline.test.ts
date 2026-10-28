@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { ServiceOwnershipRefusalError } from "./service-inspection-error.js";
+import { fingerprintGatewayServiceDefinition } from "./service-rebind.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type { GatewayService, ReadGatewayServiceStateArgs } from "./service-types.js";
 import {
@@ -43,6 +44,38 @@ beforeEach(() => {
   vi.spyOn(performance, "now").mockImplementation(() => now);
 });
 afterEach(() => vi.restoreAllMocks());
+
+it.each(["ready", "absent", "command-failed", "runtime-failed", "deadline"] as const)(
+  "retains only a successful same-read executable observation: %s",
+  async (outcome) => {
+    const service = createMockGatewayService({
+      readCommand: vi.fn<GatewayService["readCommand"]>(async (_env, options) => {
+        options?.onEffectiveExecutable?.("/runtime/bun");
+        if (outcome === "command-failed") {
+          throw new Error("native cleanup failed");
+        }
+        return outcome === "absent" ? null : command;
+      }),
+      readRuntime: vi.fn(async () => {
+        if (outcome === "runtime-failed") {
+          throw new Error("runtime inspection failed");
+        }
+        return outcome === "deadline"
+          ? expire({ status: "stopped" as const })
+          : { status: "stopped" as const };
+      }),
+    });
+    const state = await inspect(service);
+    expect(state.effectiveExecutable).toBe(outcome === "ready" ? "/runtime/bun" : undefined);
+    if (outcome === "ready") {
+      expect(state.command).toBe(command);
+      expect(await fingerprintGatewayServiceDefinition(state.command)).toBe(
+        await fingerprintGatewayServiceDefinition(command),
+      );
+      expect(command).not.toHaveProperty("effectiveExecutable");
+    }
+  },
+);
 
 function deferredReaders() {
   const load = createDeferred<boolean>();

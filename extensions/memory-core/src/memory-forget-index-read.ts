@@ -1,8 +1,8 @@
+import { withFreshOpenClawAgentDatabaseReadOnly } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import {
   isPostgresSqlConnection,
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { withFreshOpenClawAgentDatabaseReadOnly } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -29,7 +29,6 @@ export async function readMemoryForgetIndexInWorker(
   };
   const params = {
     agentId: request.agentId,
-    changedPaths: new Set(request.changedPaths),
     removedPaths: new Set(request.removedPaths),
     sessionIds: new Set(request.sessionIds),
     excludedSessionIds: new Set(request.excludedSessionIds),
@@ -66,7 +65,7 @@ export async function readMemoryForgetIndexInWorker(
             .as("text"),
         ),
     ).rows;
-    const changedPaths = new Set(params.changedPaths);
+    const changedPaths = new Set(request.changedPaths);
     // Another workspace agent may already have scrubbed the shared file.
     // Its remaining indexed snapshot still owns evidence for this agent's purge.
     for (const chunk of indexedChunks) {

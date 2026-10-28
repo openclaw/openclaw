@@ -20,23 +20,30 @@ const lifecycleStore = createPluginRuntimeStore<MemoryManagerLifecycle>({
 });
 
 // Process-wide: a replacement instance loads its own module graph but must see
-// that its predecessor ran watched indexing. A Gateway restart starts cold again.
+// which agents its predecessor watched. A Gateway restart starts cold again.
 const liveIndexing = resolveGlobalSingleton(
   Symbol.for("openclaw.memoryCore.liveIndexing"),
-  () => ({ started: false }),
+  () => new Set<string>(),
   (state) => {
-    state.started = false;
+    state.clear();
   },
   "close-and-restart",
 );
 
 /** Records that a watched index manager ran in this process. */
-export function markMemoryIndexingLive(): void {
-  liveIndexing.started = true;
+export function markMemoryIndexingLive(agentId: string): void {
+  liveIndexing.add(agentId);
 }
 
-export function hasMemoryIndexingBeenLive(): boolean {
-  return liveIndexing.started;
+/** Removed agents lose their demand; untouched roster additions stay lazy. */
+export function retainMemoryIndexingAgents(configuredAgentIds: readonly string[]): string[] {
+  const configured = new Set(configuredAgentIds);
+  for (const agentId of liveIndexing) {
+    if (!configured.has(agentId)) {
+      liveIndexing.delete(agentId);
+    }
+  }
+  return [...liveIndexing];
 }
 
 export class MemoryManagerReloadError extends Error {

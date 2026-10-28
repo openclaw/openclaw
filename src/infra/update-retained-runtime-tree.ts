@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { collectPluginSafetyInspectedFiles } from "../plugins/plugin-safety-inspected-files.js";
+import { hashFileMutationSnapshotSync } from "./file-descriptor.js";
 import { root as openRoot } from "./fs-safe.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import { copyUpdateCandidatePluginFileBytes } from "./update-candidate-plugin-file.js";
@@ -28,10 +29,8 @@ const isLinkUnsupported = (error: unknown) =>
 /**
  * Retain the admitted tree by hard-linking its files into the private directory.
  *
- * Retention only needs the inventoried inodes to outlive the installer's rename or
- * unlink, so files share their inode with the source and bytes are copied only when
- * the filesystem cannot preserve identity, a plugin boundary checks it, or relocation rewrites it.
- * Source edits during preparation are best effort; publication still checks private links.
+ * Same-inode source edits remain best effort. Changed identities (including
+ * filesystem copy-up) must match inventory before this generation can be used.
  */
 export async function linkUpdateCandidatePluginTrees(
   plan: UpdateCandidatePluginTreePlan,
@@ -39,9 +38,8 @@ export async function linkUpdateCandidatePluginTrees(
     targetStateDir: string;
     candidateRoot: string;
     assertCurrent: () => void;
-    onProgress?: () => void | Promise<void>;
   },
-): Promise<{ linked: number; copied: number }> {
+): Promise<{ linked: number; copied: number } | { unusableReason: string }> {
   const targets = resolveUpdateCandidatePluginTreeTargets(plan, params);
   const { privateRoot, candidateRoot, hostLinks, relocations, destinationFor } = targets;
   const pluginFiles = collectPluginSafetyInspectedFiles(plan.entries);
@@ -80,9 +78,9 @@ export async function linkUpdateCandidatePluginTrees(
     }
   };
   const counts = { linked: 0, copied: 0 };
+  let unusableReason: string | undefined;
   const directories: Array<Extract<UpdateCandidatePluginEntry, { kind: "directory" }>> = [];
   const materialize = async (entry: UpdateCandidatePluginEntry) => {
-    await params.onProgress?.();
     const destination = destinationFor(entry.path);
     const directory = entry.kind === "directory" ? destination : path.dirname(destination);
     // A file may precede its parent's inventory entry; reuse only completed creation.
@@ -121,11 +119,30 @@ export async function linkUpdateCandidatePluginTrees(
         await copyEntry(entry, destination);
         counts.copied += 1;
       } else {
-        const linked = await fs.lstat(destination);
+        const linked = await fs.lstat(destination, { bigint: true });
         if (!linked.isFile()) {
           throw new Error(`Retained runtime entry is not a regular file: ${entry.path}`);
         }
-        if (linked.size > entry.size) {
+        if (linked.dev.toString() !== entry.dev || linked.ino.toString() !== entry.ino) {
+          let failedCheck: string | undefined;
+          if (linked.size !== BigInt(entry.size)) {
+            failedCheck = "size";
+          } else if (Number(linked.mode & 0o7777n) !== entry.mode) {
+            failedCheck = "mode";
+          } else {
+            try {
+              if (hashFileMutationSnapshotSync(destination, linked) !== entry.sha256) {
+                failedCheck = "sha256";
+              }
+            } catch {
+              failedCheck = "sha256";
+            }
+          }
+          if (failedCheck) {
+            unusableReason ??= `Retained runtime verification failed (${failedCheck}): ${entry.path}`;
+            return;
+          }
+        } else if (linked.size > BigInt(entry.size)) {
           throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
         }
         counts.linked += 1;
@@ -141,6 +158,9 @@ export async function linkUpdateCandidatePluginTrees(
     if (files.length && (entry.kind !== "file" || files.length === 4)) {
       await drain();
     }
+    if (unusableReason) {
+      return { unusableReason };
+    }
     if (entry.kind === "file") {
       files.push(entry);
     } else {
@@ -149,6 +169,9 @@ export async function linkUpdateCandidatePluginTrees(
   }
   if (files.length) {
     await drain();
+  }
+  if (unusableReason) {
+    return { unusableReason };
   }
   const privateAliases = await publishUpdateCandidatePluginTreeLinks({
     privateRoot,

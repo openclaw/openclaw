@@ -298,12 +298,7 @@ async function approvedRealpaths(paths: readonly string[]): Promise<string[]> {
 export async function discoverChromeExtensionIds(params: {
   approvedDirs: readonly string[];
   storeExtensionId?: string;
-}): Promise<{
-  discovered: DiscoveredChromeExtension[];
-  storeDiscovered: DiscoveredChromeStoreExtension[];
-  issues: string[];
-  identityMismatches: string[];
-}> {
+}) {
   const platform = process.platform;
   const approved = new Set(
     (await approvedRealpaths(params.approvedDirs)).map((value) => comparablePath(value, platform)),

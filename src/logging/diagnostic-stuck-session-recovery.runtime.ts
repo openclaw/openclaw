@@ -1,3 +1,5 @@
+import { getActiveNativeAttempt } from "../agents/embedded-agent-runner/run-state.js";
+import { reconcileSessionControllerDiagnosticState } from "../sessions/session-controller.state.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { diagnosticLogger as diag } from "./diagnostic-runtime.js";
 import {
@@ -23,6 +25,18 @@ export async function recoverStuckDiagnosticSession(
   const operation = params.operation;
   const base = { sessionId: params.sessionId, sessionKey: params.sessionKey };
   if (!operation) {
+    const state =
+      params.sessionId && getActiveNativeAttempt(params.sessionId)
+        ? undefined
+        : reconcileSessionControllerDiagnosticState(params);
+    if (state) {
+      return reportOutcome({
+        ...base,
+        status: "noop",
+        action: "reconcile_state",
+        reason: state === "waiting" ? "pending_session_work" : "no_active_work",
+      });
+    }
     return { ...base, status: "skipped", action: "observe_only", reason: "missing_session_ref" };
   }
   try {

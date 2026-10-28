@@ -21,7 +21,7 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { replaceSqliteTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
-import { prepareSessionMemoryEntries } from "./session-memory-entry.worker.js";
+import { collectSessionMemoryEntries } from "./session-memory-entry.worker.test-support.js";
 
 const MIB = 1024 * 1024;
 const statements = channel("openclaw.database.statement");
@@ -88,9 +88,9 @@ describe.skipIf(!mixedAgentConnection)(
         options: scope,
       };
       // The batch reads synchronously before the first await.
-      let prepared: ReturnType<typeof prepareSessionMemoryEntries> | undefined;
+      let prepared: ReturnType<typeof collectSessionMemoryEntries> | undefined;
       withEngineStoreAdmission(() => {
-        prepared = prepareSessionMemoryEntries([entry]);
+        prepared = collectSessionMemoryEntries([entry]);
       });
       const [result] = await prepared!;
       expect(result && "entry" in result ? result.entry?.content : undefined).toContain("lobster");

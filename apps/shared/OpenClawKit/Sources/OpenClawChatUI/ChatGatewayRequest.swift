@@ -698,12 +698,13 @@ public enum OpenClawChatGatewayRequests {
         expectedSessionRoutingContract: String?,
         expectedSessionSettings: OpenClawChatSessionSettingsExpectation? = nil,
         supportsSessionSettingsCAS: Bool = false,
+        queueMode: OpenClawChatQueueMode? = nil,
         message: String,
         thinking: String?,
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload],
         runTimeoutMs: Int? = nil,
-        requestTimeoutMs: Int = 30000) -> OpenClawChatGatewayRequest
+        requestTimeoutMs: Int? = nil) -> OpenClawChatGatewayRequest
     {
         var params: [String: AnyCodable] = [
             "sessionKey": AnyCodable(sessionKey),
@@ -716,6 +717,7 @@ public enum OpenClawChatGatewayRequests {
             to: &params,
             key: "expectedSessionRoutingContract")
         self.add(thinking, to: &params, key: "thinking")
+        self.add(queueMode?.rawValue, to: &params, key: "queueMode")
         if supportsSessionSettingsCAS, let expectedSessionSettings {
             params["expectedPermissionMode"] = expectedSessionSettings.permissionMode
                 .map { AnyCodable($0.rawValue) } ?? AnyCodable(NSNull())
@@ -737,7 +739,10 @@ public enum OpenClawChatGatewayRequests {
         return OpenClawChatGatewayRequest(
             method: "chat.send",
             params: params,
-            timeoutMs: Double(requestTimeoutMs))
+            // Admission includes audio transcription; zero waits until the
+            // captured connection closes, the caller cancels, or the ACK arrives.
+            timeoutMs: Double(requestTimeoutMs ??
+                (attachments.contains { $0.mimeType.lowercased().hasPrefix("audio/") } ? 0 : 30000)))
     }
 
     public static func agentWait(

@@ -1,12 +1,5 @@
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 
-type CliRootOptionScanResult = { ok: true; argv: string[] } | { ok: false; error: string };
-
-type CliRootOptionVisitResult =
-  | { kind: "pass" }
-  | { kind: "handled"; consumedNext?: boolean }
-  | { kind: "error"; error: string };
-
 export function scanCliRootOptions(
   argv: string[],
   visit: (params: {
@@ -14,8 +7,11 @@ export function scanCliRootOptions(
     args: string[];
     index: number;
     out: string[];
-  }) => CliRootOptionVisitResult,
-): CliRootOptionScanResult {
+  }) =>
+    | { kind: "pass" }
+    | { kind: "handled"; consumedNext?: boolean }
+    | { kind: "error"; error: string },
+): { ok: true; argv: string[] } | { ok: false; error: string } {
   if (argv.length < 2) {
     return { ok: true, argv };
   }

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent-runner/runs.js";
 import type { EmbeddedAgentRunMeta } from "../agents/embedded-agent.js";
 import { FailoverError } from "../agents/failover-error.js";
 import { createAgentRunSupersededAbortError } from "../agents/run-termination.js";
@@ -11,6 +12,7 @@ import {
   dispatchCronDeliveryMock,
   loadRunCronIsolatedAgentTurn,
   mockRunCronFallbackPassthrough,
+  removeCronRunContinuationSessionIfIdleMock,
   resetRunCronIsolatedAgentTurnHarness,
   resolveAllowedModelRefMock,
   resolveConfiguredModelRefMock,
@@ -90,7 +92,6 @@ async function runCase(name: string, modelRef: ModelRef = defaultModel, localBas
         cronConfig: { triggers: { enabled: true } },
         log: createNoopLogger(),
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         onEvent: (event) => events.push(structuredClone(event)),
         runIsolatedAgentJob: async (runParams) =>
           await runCronIsolatedAgentTurn({
@@ -148,6 +149,38 @@ describe("cron execution diagnostics", { concurrent: false }, () => {
   });
 
   afterAll(() => unavailableEndpoint.release());
+
+  it.each([false, true])(
+    "records the outcome after native cleanup (provider failure=%s)",
+    async (failed) => {
+      if (failed) {
+        runWithModelFallbackMock.mockRejectedValueOnce(new Error("Fixture provider failure"));
+      } else {
+        agentReply({}, [{ text: "Fixture cron result" }]);
+      }
+      let drained: Awaited<ReturnType<typeof abortAndDrainEmbeddedAgentRun>> | undefined;
+      removeCronRunContinuationSessionIfIdleMock.mockImplementation(async (sessionKey) => {
+        const sessionId = sessionKey.slice(sessionKey.lastIndexOf(":run:") + 5);
+        // Exercise the native deletion drain with a virtual deadline, without a paid provider.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+        try {
+          const cleanup = abortAndDrainEmbeddedAgentRun({ sessionId, settleMs: 100 });
+          await vi.advanceTimersByTimeAsync(100);
+          drained = await cleanup;
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      const { finished, history } = await runCase("native cleanup");
+
+      expectOutcomes([finished, history], { status: failed ? "error" : "ok" });
+      expect(drained).toMatchObject({ aborted: false, drained: true });
+      if (failed) {
+        expect(history.error).toContain("Fixture provider failure");
+      }
+    },
+  );
 
   it("persists and emits a real isolated-run local-provider preflight failure", async () => {
     const modelRef = { provider: "ollama", model: "diagnostic-model" };

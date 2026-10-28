@@ -6,6 +6,7 @@ import {
 } from "../host.js";
 import { createNodeLlmRuntime } from "../stream.js";
 import { makeProviderModel } from "./provider-model.test-support.js";
+import { frame, sseResponse } from "./provider-stream.test-support.js";
 import { registerBuiltInApiProviders } from "./register-builtins.js";
 
 const captured = vi.hoisted(() => ({ google: [] as unknown[], mistral: [] as unknown[] }));
@@ -66,9 +67,6 @@ function runtime(transportHost: Partial<AiTransportHost> = {}) {
   const value = createNodeLlmRuntime(undefined, transportHost);
   registerBuiltInApiProviders(value.registry);
   return value;
-}
-function frame(type: string, fields: Record<string, unknown> = {}) {
-  return { type, ...fields };
 }
 function complete(api: string, provider: string, owner = runtime()) {
   return owner.completeSimple(
@@ -133,13 +131,7 @@ it.each(["anthropic-messages", "google-interactions"])(
     const requests: Headers[] = [];
     vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
       requests.push(new Request(input, init).headers);
-      const body = responseFrames(api)
-        .map(
-          (event) =>
-            `${"type" in event ? `event: ${event.type}\n` : ""}data: ${JSON.stringify(event)}\n\n`,
-        )
-        .join("");
-      return new Response(body, { headers: { "content-type": "text/event-stream" } });
+      return sseResponse(responseFrames(api));
     });
     // A warm provider module must retain each invocation's owner.
     const owner = runtime();

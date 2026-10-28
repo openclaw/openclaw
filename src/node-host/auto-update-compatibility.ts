@@ -1,11 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { tryReadJson } from "../infra/json-files.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { statIfExists } from "../infra/path-existence.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "../infra/runtime-process-url.js";
 import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
 import {
   resolveSqliteInspectionBudget,
@@ -137,7 +139,9 @@ export async function assertNodeRuntimeUpdateCompatible(params: {
       );
       const invocation = resolveOpenClawCliInvocation({
         execArgv: resolveRuntimeArgs(),
-        entryPath: path.join(params.packageRoot, "openclaw.mjs"),
+        entryPath: fileURLToPath(
+          resolveExternalPackageRuntimeEntrypointUrl("cliLauncher", params.packageRoot),
+        ),
         args: [
           "database",
           agentId === undefined ? "preflight" : "preflight-agent",

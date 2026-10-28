@@ -1,4 +1,3 @@
-import { channel } from "node:diagnostics_channel";
 import { performance } from "node:perf_hooks";
 import type { SessionEntryCreationPhase } from "../config/sessions/session-accessor.types.js";
 import { areDiagnosticsEnabledForProcess } from "../infra/diagnostic-events.js";
@@ -17,11 +16,9 @@ export type SessionCreatePhase =
   | "response"
   | "handlerExit";
 
-const diagnosticsChannel = channel("openclaw.session.create");
-
 export function startSessionCreateDiagnostics() {
   const logEnabled = areDiagnosticsEnabledForProcess() && sessionLog.isEnabled("warn");
-  if (!logEnabled && !diagnosticsChannel.hasSubscribers) {
+  if (!logEnabled) {
     return undefined;
   }
   const timing = createStageTimingTracker(() => performance.now());
@@ -35,9 +32,7 @@ export function startSessionCreateDiagnostics() {
     [Symbol.dispose]() {
       mark("handlerExit");
       const snapshot = timing.snapshot();
-      const shouldLog =
-        logEnabled && snapshot.totalMs >= 1_000 && areDiagnosticsEnabledForProcess();
-      if (!shouldLog && !diagnosticsChannel.hasSubscribers) {
+      if (snapshot.totalMs < 1_000 || !areDiagnosticsEnabledForProcess()) {
         return;
       }
       const phaseDurationsMs: Record<string, number> = {};
@@ -46,10 +41,7 @@ export function startSessionCreateDiagnostics() {
       }
       const fields = { elapsedMs: snapshot.totalMs, phaseDurationsMs };
       try {
-        diagnosticsChannel.publish(fields);
-        if (shouldLog) {
-          sessionLog.warn("slow session create", fields);
-        }
+        sessionLog.warn("slow session create", fields);
       } catch {
         // Diagnostic sinks cannot replace creation's response or original error.
       }

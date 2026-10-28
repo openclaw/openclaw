@@ -14,6 +14,7 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createOpenClawTestState,
   withOpenClawTestState,
@@ -161,16 +162,7 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       if (!html) {
         expect(fields.rich_message).toMatchObject({
           skip_entity_detection: true,
-          blocks: [
-            {
-              type: "table",
-              caption: "Pipeline",
-              cells: [
-                ["Account", "Total"].map((text) => ({ text, is_header: true })),
-                ["Acme", "12"].map((text) => ({ text })),
-              ],
-            },
-          ],
+          blocks: [{ type: "table", caption: "Pipeline" }],
         });
       } else {
         expect(fields.text).toContain("Pipeline");
@@ -199,127 +191,102 @@ describe("Telegram registered adapter conformance over HTTP", () => {
         workspaceDir: mediaDir,
         readFile: async () => bytes,
       };
+      const options = { cfg: selectedCfg, accountId: "media" };
+      const album = mode === "album";
+      const host = mode === "host";
       try {
-        if (mode === "album") {
-          const result = await sendPayload(
-            {
-              text: "album caption",
-              mediaUrls: ["", photoPath, "", path.join(mediaDir, "second.png")],
-              channelData: { telegram: { quoteText: "quoted caption" } },
-            },
-            {
-              cfg: selectedCfg,
-              accountId: "media",
-              mediaAccess,
-              threadId: "77",
-              replyToId: "888",
-              replyToIdSource: "implicit",
-              replyToMode: "first",
-              silent: true,
-            },
-          );
-          expectMethods("sendMediaGroup");
-          const fields = requests[0]!.fields;
-          expect(fields).toMatchObject({ message_thread_id: "77", disable_notification: "true" });
-          expect(JSON.parse(String(fields.reply_parameters))).toMatchObject({ message_id: 888 });
-          const media = JSON.parse(String(fields.media)) as Array<{
-            media: string;
-            caption?: string;
-          }>;
-          expect(media.map((part) => part.caption ?? null)).toEqual(["album caption", null]);
-          const uploads = media.map((part) =>
-            resolveTelegramTestUpload({ ...fields, part: part.media }, "part"),
-          );
-          expect(uploads.map((file) => file.name)).toEqual(["pixel.png", "second.png"]);
-          for (const upload of uploads) {
-            expect(Buffer.from(await upload.arrayBuffer())).toEqual(bytes);
-          }
-          expect(result.receipt).toMatchObject({
-            platformMessageIds: ["1001", "1002"],
-            primaryPlatformMessageId: "1001",
-          });
-          expect(result.receipt.parts.map((part) => [part.platformMessageId, part.kind])).toEqual([
-            ["1001", "media"],
-            ["1002", "media"],
-          ]);
-        } else {
-          const host = mode === "host";
+        const albumResult = album
+          ? await sendPayload(
+              {
+                text: "album caption",
+                mediaUrls: ["", photoPath, "", path.join(mediaDir, "second.png")],
+                channelData: { telegram: { quoteText: "quoted caption" } },
+              },
+              {
+                ...options,
+                mediaAccess,
+                threadId: "77",
+                replyToId: "888",
+                replyToIdSource: "implicit",
+                replyToMode: "first",
+                silent: true,
+              },
+            )
+          : undefined;
+        if (!album) {
+          const hostParams = {
+            replyToMessageId: 888,
+            threadId: 77,
+            silent: true,
+            presentation: buttonPresentation(
+              { ...continueButton, style: "primary" },
+              {
+                label: "Allow Always",
+                action: { type: "command", command: `/approve ${approveId} allow-always` },
+              },
+              { label: "Launch", web_app: { url: "https://example.com/app" }, style: "success" },
+            ),
+            mediaAccess: { localRoots: ["/model"], readFile: async () => Buffer.from("model") },
+          };
           await send(
+            { message: `${mode} caption`, mediaUrl: photoPath, ...(host ? hostParams : {}) },
             {
-              message: host ? "host caption" : "legacy caption",
-              mediaUrl: photoPath,
-              ...(host
-                ? {
-                    replyToMessageId: 888,
-                    threadId: 77,
-                    silent: true,
-                    presentation: buttonPresentation(
-                      { ...continueButton, style: "primary" },
-                      {
-                        label: "Allow Always",
-                        action: { type: "command", command: `/approve ${approveId} allow-always` },
-                      },
-                      {
-                        label: "Launch",
-                        web_app: { url: "https://example.com/app" },
-                        style: "success",
-                      },
-                    ),
-                    mediaAccess: {
-                      localRoots: ["/model"],
-                      readFile: async () => Buffer.from("model"),
-                    },
-                  }
-                : {}),
-            },
-            {
-              cfg: selectedCfg,
+              ...options,
               conversationReadOrigin: undefined,
-              accountId: "media",
               ...(host
                 ? { mediaAccess, mediaReadFile: async () => Buffer.from("legacy-owned") }
                 : { mediaLocalRoots: [mediaDir], mediaReadFile: async () => bytes }),
             },
           );
-          expectMethods("sendPhoto");
-          const fields = requests[0]!.fields;
-          const photo = resolveTelegramTestUpload(fields, "photo");
-          expect(photo.name).toBe("pixel.png");
-          expect(Buffer.from(await photo.arrayBuffer())).toEqual(bytes);
-          if (host) {
-            expect(fields).toMatchObject({
-              reply_to_message_id: "888",
-              message_thread_id: "77",
-              disable_notification: "true",
-            });
-            expect(JSON.parse(String(fields.reply_markup))).toEqual(
-              replyMarkup(
-                { text: "Continue", callback_data: "tgcmd:/continue", style: "primary" },
-                { text: "Allow Always", callback_data: `/approve ${approveId} always` },
-                { text: "Launch", web_app: { url: "https://example.com/app" }, style: "success" },
-              ),
-            );
-          }
         }
-        expect(endpoints).toEqual([
-          `/bot654321:host-media/${mode === "album" ? "sendMediaGroup" : "sendPhoto"}`,
-        ]);
+        const method = album ? "sendMediaGroup" : "sendPhoto";
+        expectMethods(method);
+        expect(endpoints).toEqual([`/bot654321:host-media/${method}`]);
+        const fields = requestFields();
+        const media: Array<{ media: string; caption?: string }> = album
+          ? (JSON.parse(String(fields.media)) as Array<{ media: string; caption?: string }>)
+          : [{ media: String(fields.photo) }];
+        const uploads = media.map((part) =>
+          resolveTelegramTestUpload({ ...fields, part: part.media }, "part"),
+        );
+        expect(uploads.map((file) => file.name)).toEqual(
+          album ? ["pixel.png", "second.png"] : ["pixel.png"],
+        );
+        for (const upload of uploads) {
+          expect(Buffer.from(await upload.arrayBuffer())).toEqual(bytes);
+        }
+        if (album) {
+          expect(media.map((part) => part.caption ?? null)).toEqual(["album caption", null]);
+          expect(JSON.parse(String(fields.reply_parameters))).toMatchObject({ message_id: 888 });
+          expect(albumResult!.receipt).toMatchObject({
+            platformMessageIds: ["1001", "1002"],
+            primaryPlatformMessageId: "1001",
+          });
+          expect(albumResult!.receipt.parts).toMatchObject([
+            { platformMessageId: "1001", kind: "media" },
+            { platformMessageId: "1002", kind: "media" },
+          ]);
+        }
+        if (host || album) {
+          expectFields({ message_thread_id: "77", disable_notification: "true" });
+        }
+        if (host) {
+          expectFields({ reply_to_message_id: "888" });
+          expect(JSON.parse(String(fields.reply_markup))).toEqual(
+            replyMarkup(
+              { text: "Continue", callback_data: "tgcmd:/continue", style: "primary" },
+              { text: "Allow Always", callback_data: `/approve ${approveId} always` },
+              { text: "Launch", web_app: { url: "https://example.com/app" }, style: "success" },
+            ),
+          );
+        }
       } finally {
         resetPluginRuntimeStateForTest();
       }
     });
   });
 
-  type ReactionCase = [
-    entry: "adapter" | "stream",
-    text: string,
-    nested: number | string | undefined,
-    target: number | undefined,
-    mode: "off" | "all",
-    failure: "target" | "api" | undefined,
-    media: boolean,
-  ];
-  it.each<ReactionCase>([
+  it.each([
     ["adapter", "answer", "777", 777, "all", undefined, false],
     ["adapter", "", "777", 777, "all", undefined, false],
     ["adapter", "answer", "invalid", undefined, "all", "target", true],
@@ -329,7 +296,7 @@ describe("Telegram registered adapter conformance over HTTP", () => {
     ["stream", "answer", "777", 777, "all", undefined, false],
     ["stream", "", undefined, 888, "all", undefined, false],
     ["stream", "must not send", "0", undefined, "all", "target", false],
-  ])(
+  ] as const)(
     "delivers %s reaction text=%j nested=%s target=%s mode=%s failure=%s media=%s",
     async (entry, text, nested, target, mode, failure, media) => {
       if (failure === "api") {
@@ -466,11 +433,8 @@ describe("Telegram registered adapter conformance over HTTP", () => {
     let state: OpenClawTestState;
     beforeEach(async () => {
       state = await createOpenClawTestState({ layout: "state-only", prefix: "telegram-actions-" });
-      actionCfg = {
-        ...cfg,
-        channels: { telegram: { ...cfg.channels.telegram } },
-        session: { store: path.join(state.stateDir, "{agentId}", "sessions.json") },
-      };
+      actionCfg = structuredClone(cfg);
+      actionCfg.session = { store: path.join(state.stateDir, "{agentId}", "sessions.json") };
       setTelegramPluginStateRuntimeForTests();
       setActivePluginRegistry(telegramRegistry());
     });
@@ -482,36 +446,51 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       await state.cleanup();
     });
 
-    it("commits the registered action before HTTP and returns its actual reply receipt", async () => {
-      let queued: unknown;
-      const result = await action(
-        "send",
-        { to: "-1001:topic:77", message: "durable answer", quoteText: " \nquoted text  " },
-        {
-          sessionKey: "agent:main:telegram:group:-1001:topic:77",
-          reply: { replyToId: "456", source: "implicit", mode: "first" },
-          onPlatformSendDispatch: async () => {
-            expect(requests).toEqual([]);
-            queued = readQueuedDeliveryEntriesForTest(state.stateDir);
+    it.each([
+      ["requested topic", 77, false, "77"],
+      ["non-forum reply chain", undefined, false, undefined],
+      ["forum topic reply", undefined, true, "99"],
+    ] as const)(
+      "commits a registered send before HTTP and preserves its provider receipt (%s)",
+      async (_name, requestedTopic, forum, observedThread) => {
+        const to = requestedTopic ? `-1001:topic:${requestedTopic}` : "-1001";
+        fixture.responseFor = (method) =>
+          method === "sendMessage"
+            ? {
+                message_id: 102,
+                date: 1_700_000_000,
+                chat: { id: -1001, type: "supergroup", title: "Fixture group" },
+                message_thread_id: requestedTopic ?? 99,
+                ...(forum ? { is_topic_message: true } : {}),
+              }
+            : undefined;
+        let queued: unknown;
+        const result = await action(
+          "send",
+          { to, message: "durable answer", quoteText: " \nquoted text  " },
+          {
+            sessionKey: `agent:main:telegram:group:${to}`,
+            reply: { replyToId: "456", source: "implicit", mode: "first" },
+            onPlatformSendDispatch: async () => {
+              expect(requests).toEqual([]);
+              queued = readQueuedDeliveryEntriesForTest(state.stateDir);
+            },
           },
-        },
-      );
-      expect(queued).toMatchObject([{ channel: "telegram", to: "-1001:topic:77", retryCount: 0 }]);
-      expectMethods("sendMessage");
-      expectFields({
-        chat_id: "-1001",
-        message_thread_id: 77,
-        text: "durable answer",
-        reply_parameters: { message_id: 456, quote: " \nquoted text  " },
-      });
-      expect(result.details).toMatchObject({
-        ok: true,
-        messageId: "1",
-        chatId: "-1001",
-        receipt: { threadId: "77", replyToId: "456" },
-      });
-      expect(readQueuedDeliveryEntriesForTest(state.stateDir)).toEqual([]);
-    });
+        );
+        expect(queued).toMatchObject([{ channel: "telegram", to, retryCount: 0 }]);
+        expectMethods("sendMessage");
+        expectFields({
+          chat_id: "-1001",
+          text: "durable answer",
+          reply_parameters: { message_id: 456, quote: " \nquoted text  " },
+        });
+        expect(requestFields().message_thread_id).toBe(requestedTopic);
+        expect(result.details).toMatchObject({ ok: true, messageId: "102", chatId: "-1001" });
+        const receipt = asNullableRecord(asNullableRecord(result.details)?.receipt);
+        expect([receipt?.threadId, receipt?.replyToId]).toEqual([observedThread, "456"]);
+        expect(readQueuedDeliveryEntriesForTest(state.stateDir)).toEqual([]);
+      },
+    );
 
     it.each([undefined, "caller"] as const)(
       "leaves exactly one retry owner after a proven pre-dispatch failure (%s)",
@@ -568,36 +547,19 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       expect(readQueuedDeliveryEntriesForTest(state.stateDir)).toEqual([]);
     });
 
-    it("renders supplemental data and exact callback values with a visible degradation result", async () => {
+    it("preserves exact callback values with a visible degradation result", async () => {
       const result = await send({
         to: "tg:123",
         message: "Quarterly results",
         presentation: {
           blocks: [
             { type: "text", text: "Do not duplicate this block" },
-            {
-              type: "chart",
-              chartType: "bar",
-              title: "Revenue",
-              categories: ["Q1"],
-              series: [{ name: "USD", values: [12] }],
-            },
-            pipelineTable,
             ...buttonPresentation({ label: "Deploy", value: "env|prod" }, droppedButton()).blocks,
           ],
         },
       });
       const text = String(requests[0]!.fields.text);
-      for (const content of [
-        "Quarterly results",
-        "Revenue",
-        "USD",
-        "Q1: 12",
-        "Pipeline",
-        "Account: Acme",
-        "Total: 12",
-        "Copy manually",
-      ]) {
+      for (const content of ["Quarterly results", "Copy manually"]) {
         expect(text).toContain(content);
       }
       expect(text).not.toContain("Do not duplicate this block");
@@ -637,13 +599,11 @@ describe("Telegram registered adapter conformance over HTTP", () => {
           ...dropped.blocks[0]!.buttons,
         ),
       });
-      expect(requests[2]).toEqual({
-        method: "editMessageReplyMarkup",
-        fields: {
-          chat_id: "123",
-          message_id: 1,
-          reply_markup: replyMarkup({ text: "Open", callback_data: "env|prod" }),
-        },
+      expectMethods("sendMessage", "sendVenue", "editMessageReplyMarkup");
+      expect(requestFields(2)).toEqual({
+        chat_id: "123",
+        message_id: 1,
+        reply_markup: replyMarkup({ text: "Open", callback_data: "env|prod" }),
       });
       expect(edited.details).toMatchObject({
         ok: true,

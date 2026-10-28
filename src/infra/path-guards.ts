@@ -11,6 +11,16 @@ export {
 } from "@openclaw/fs-safe/path";
 export { isPathInside };
 
+/** Checks a relative-path result without resolving or changing its separators. */
+export function relativePathEscapesRoot(relativePath: string): boolean {
+  return (
+    relativePath === ".." ||
+    relativePath.startsWith("../") ||
+    relativePath.startsWith("..\\") ||
+    path.isAbsolute(relativePath)
+  );
+}
+
 /** Returns true only when target is a descendant of root, not root itself. */
 export function isPathStrictlyInside(root: string, target: string): boolean {
   return isPathInside(root, target) && !isPathInside(target, root);

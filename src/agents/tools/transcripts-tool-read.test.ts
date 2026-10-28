@@ -16,12 +16,6 @@ import type {
 } from "../../transcripts/provider-types.js";
 import { type TranscriptsStore, transcriptSessionSelector } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
-import {
-  createToolSearchCatalogRef,
-  registerHeadlessToolSearchCatalog,
-} from "../tool-search-catalog.js";
-import { resolveToolSearchConfig } from "../tool-search-config.js";
-import { ToolSearchRuntime } from "../tool-search-runtime.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
 import { useTranscriptTestState } from "./transcripts-tool.test-support.js";
 
@@ -75,25 +69,13 @@ function registerActiveCapture() {
   });
 }
 
-function tool(channel = false) {
+function run(params: Record<string, unknown>, channel = false) {
   return createTranscriptsTool({
-    stateDir,
     agentId: "reader-agent",
     caller: channel
       ? { kind: "channel", channel: "discord", senderId: "reader", groupSpace: "team", roleIds: [] }
       : { kind: "operator", source: "local" },
-  });
-}
-function run(params: Record<string, unknown>, channel = false) {
-  return tool(channel).execute("read", params);
-}
-function readThroughCatalog() {
-  const catalogRef = createToolSearchCatalogRef();
-  registerHeadlessToolSearchCatalog({ catalogRef, tools: [tool()] });
-  const runtime = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig(), {
-    validateInput: true,
-  });
-  return runtime.callValue("transcripts", { action: "show", sessionId: "meeting" });
+  }).execute("read", params);
 }
 function expectNotes(result: Awaited<ReturnType<typeof run>>, text: string) {
   expect(result.content).toEqual([{ type: "text", text: expect.stringContaining(text) }]);
@@ -148,10 +130,7 @@ describe("transcripts read actions", () => {
       await release.promise;
       return { ok: true, value: undefined };
     });
-    getProvider.mockReturnValue({
-      id: "voice",
-      accessControl: { channelId: "discord", authorize },
-    });
+    provider(authorize);
     const params = { action: "show", selector };
     const reading = run(params, true);
     try {
@@ -252,7 +231,7 @@ describe("transcripts read actions", () => {
 
   it("bounds model-facing notes and reports active captures without summaries", async () => {
     registerActiveCapture();
-    await expect(readThroughCatalog()).resolves.toMatchObject({
+    expect((await run({ action: "show", sessionId: "meeting" })).details).toMatchObject({
       active: true,
       text: "No summary exists yet for this meeting. Capture is active.",
     });
@@ -267,7 +246,7 @@ describe("transcripts read actions", () => {
     expect(text.text).toContain(
       `[truncated; run openclaw transcripts show ${selector} for the full notes]`,
     );
-    await expect(readThroughCatalog()).resolves.toMatchObject({ text: text.text });
+    expect(shown.details).toMatchObject({ text: text.text });
     for (let index = 0; index < 50; index++) {
       await saveSession({ sessionId: `meeting-${index}`, title: "Long title ".repeat(40) });
     }

@@ -4,8 +4,38 @@ import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import {
+  resolveSessionCreatorActor,
+  sessionCreatorProfileId,
+  sessionIsolationProfileId,
+} from "../config/sessions/session-entry-provenance.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { prepareSessionCreateParent } from "./session-create-inheritance.js";
+import {
+  prepareSessionCreateParent,
+  resolveSessionCreateInheritance,
+} from "./session-create-inheritance.js";
+
+it("keeps autonomous spawn creator separate from the inherited human sandbox", () => {
+  const { creation } = resolveSessionCreateInheritance({
+    request: {
+      cfg: {},
+      creation: { via: "spawn", actor: { type: "agent", id: "main" } },
+    },
+    parent: {
+      target: { agentId: "main", canonicalKey: "agent:main:parent" },
+      entry: {
+        sessionId: "sandboxed-parent",
+        updatedAt: 1,
+        sandbox: "required",
+        createdActor: { type: "human", source: "profile", id: "historical-human" },
+      },
+    },
+  });
+  expect(creation?.sandbox).toBe("required");
+  expect(sessionIsolationProfileId(creation?.actor)).toBe("historical-human");
+  expect(sessionCreatorProfileId(creation?.actor)).toBeUndefined();
+  expect(resolveSessionCreatorActor(creation?.actor)).toEqual({ type: "agent", id: "main" });
+});
 
 it("inherits an in-process parent update after warming discovery", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

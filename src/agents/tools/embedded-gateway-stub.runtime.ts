@@ -13,10 +13,10 @@ export {
   resolveStoredSessionKeyForAgentStore,
 } from "../../gateway/session-store-key.js";
 export { resolveEffectiveChatHistoryMaxChars } from "../../gateway/chat-display-projection.js";
-export { getMaxChatHistoryMessagesBytes } from "../../gateway/server-constants.js";
-export { decodeChatHistoryPageCursor } from "../../gateway/server-methods/chat-history-page-cursor.js";
+export { getMaxChatHistoryMessagesBytes } from "../../gateway/chat-history-budget.js";
+export { decodeChatHistoryPageCursor } from "../../gateway/chat-history-page-cursor.js";
 export { readChatHistoryPage } from "../../gateway/server-methods/chat-history-pages.js";
-export { prepareChatHistoryResponsePage } from "../../gateway/server-methods/chat-history-response-page.js";
+export { prepareChatHistoryResponsePage } from "../../gateway/chat-history-response-page.js";
 export { listProjectedSessions } from "../../gateway/session-utils-list.js";
 export { loadGatewaySessionEntryReadOnlyInWorker } from "../../gateway/session-utils-store-worker.js";
 export { withPreparedSessionResolve } from "../../gateway/sessions-resolve.js";

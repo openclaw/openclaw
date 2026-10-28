@@ -1,4 +1,4 @@
-import { assert, describe, expect, it } from "vitest";
+import { assert, expect, it } from "vitest";
 import { applyModelDefaults } from "../config/defaults.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { validateConfigObjectRaw } from "../config/validation-core.js";
@@ -12,12 +12,6 @@ type AuthoredModelRow = Pick<ModelDefinitionConfig, "id" | "name"> &
     cost?: Partial<ModelDefinitionConfig["cost"]>;
   };
 
-type ProducerCase = {
-  name: string;
-  rows: AuthoredModelRow[];
-  expected: Pick<ModelDefinitionConfig, "name" | "reasoning" | "input" | "contextWindow" | "cost">;
-};
-
 const metadata = createPluginMetadataSnapshotFixture({
   plugins: [
     {
@@ -29,89 +23,63 @@ const metadata = createPluginMetadataSnapshotFixture({
     },
   ],
 });
-const alias: AuthoredModelRow = {
-  id: "legacy",
-  name: "Alias",
-  contextWindow: 16_000,
-  reasoning: true,
-  input: ["text", "image"],
-};
 const exact = { id: "selected", name: "Exact", contextWindow: 96_000 };
-const expectedDefaults: ProducerCase["expected"] = {
-  name: "Exact",
+const expectedDefaults = {
+  ...exact,
   reasoning: false,
   input: ["text"],
-  contextWindow: 96_000,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
 
-describe("prepared inline row defaults", () => {
-  it.each<ProducerCase>([
-    {
-      name: "sparse exact after alias",
-      rows: [alias, exact],
-      expected: expectedDefaults,
-    },
-    {
-      name: "same-spelling cost and capability omissions",
-      rows: [
-        { ...exact, cost: { input: 7 } },
-        {
-          ...exact,
-          name: "Later duplicate",
-          contextWindow: 128_000,
-          reasoning: true,
-          input: ["image"],
-          cost: { input: 9, output: 8, cacheRead: 0.5 },
-        },
-      ],
-      expected: {
+it.each([false, true])("selects rows before applying defaults (duplicate: %s)", (duplicate) => {
+  const alias: AuthoredModelRow = {
+    id: "legacy",
+    name: "Alias",
+    contextWindow: 16_000,
+    reasoning: true,
+    input: ["text", "image"],
+  };
+  const later: AuthoredModelRow = {
+    ...exact,
+    name: "Later duplicate",
+    contextWindow: 128_000,
+    reasoning: true,
+    input: ["image"],
+    cost: { input: 9, output: 8, cacheRead: 0.5 },
+  };
+  const rows = duplicate ? [{ ...exact, cost: { input: 7 } }, later] : [alias, exact];
+  const expected = duplicate
+    ? {
         ...expectedDefaults,
         reasoning: true,
         input: ["image"],
         cost: { input: 7, output: 8, cacheRead: 0.5, cacheWrite: 0 },
-      },
-    },
-  ])("selects $name before capabilities become runtime defaults", ({ rows, expected }) => {
-    const parsed = validateConfigObjectRaw({
-      models: {
-        providers: {
-          "row-selection-fixture": {
-            api: "openai-completions",
-            baseUrl: "https://fixture.invalid/v1",
-            models: rows,
-          },
-        },
-      },
-    });
-    assert(parsed.ok);
-    const source = structuredClone(parsed.config);
-    const config = applyModelDefaults(parsed.config, {
-      manifestRegistry: metadata.manifestRegistry,
-    });
-    const inline = buildInlineProviderModels(config.models?.providers ?? {}, {
-      providerMetadataOwners: metadata.owners,
-    });
-    const configured = prepareConfiguredRuntimeModels({
-      config,
-      inlineProviderModels: inline,
-      configuredModelRefs: [{ provider: "row-selection-fixture", modelId: "selected" }],
-      metadataSnapshot: metadata,
-      providerStaticModels: [],
-      resolveStaticCatalogModel: () => undefined,
-      matchesStaticModelId: createStaticModelIdMatcher({ manifestPlugins: metadata }),
-    });
-    const expectedModel = {
-      id: "selected",
-      ...expected,
-      api: "openai-completions",
-      baseUrl: "https://fixture.invalid/v1",
-    };
-    expect(config.models?.providers?.["row-selection-fixture"]?.models).toMatchObject([
-      { id: "selected", ...expected },
-    ]);
-    expect(inline).toMatchObject([expectedModel]);
-    expect(configured.map(({ model }) => model)).toMatchObject([expectedModel]);
-    expect(parsed.config).toEqual(source);
+      }
+    : expectedDefaults;
+  const provider = { api: "openai-completions" as const, baseUrl: "https://fixture.invalid/v1" };
+  const parsed = validateConfigObjectRaw({
+    models: { providers: { "row-selection-fixture": { ...provider, models: rows } } },
   });
+  assert(parsed.ok);
+  const source = structuredClone(parsed.config);
+  const config = applyModelDefaults(parsed.config, {
+    manifestRegistry: metadata.manifestRegistry,
+  });
+  const inline = buildInlineProviderModels(config.models?.providers ?? {}, {
+    providerMetadataOwners: metadata.owners,
+  });
+  const configured = prepareConfiguredRuntimeModels({
+    config,
+    inlineProviderModels: inline,
+    configuredModelRefs: [{ provider: "row-selection-fixture", modelId: "selected" }],
+    metadataSnapshot: metadata,
+    providerStaticModels: [],
+    resolveStaticCatalogModel: () => undefined,
+    matchesStaticModelId: createStaticModelIdMatcher({ manifestPlugins: metadata }),
+  });
+  const expectedModel = { ...expected, ...provider };
+  expect(config.models?.providers?.["row-selection-fixture"]?.models).toMatchObject([expected]);
+  expect(inline).toMatchObject([expectedModel]);
+  expect(configured.map(({ model }) => model)).toMatchObject([expectedModel]);
+  expect(parsed.config).toEqual(source);
 });

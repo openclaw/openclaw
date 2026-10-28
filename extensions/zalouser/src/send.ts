@@ -16,11 +16,6 @@ type ZalouserSendOptions = ZaloSendOptions & {
 
 const ZALO_TEXT_LIMIT = 2000;
 
-type StyledTextChunk = {
-  text: string;
-  styles?: ZaloSendOptions["textStyles"];
-};
-
 export async function sendMessageZalouser(
   threadId: string,
   text: string,
@@ -32,12 +27,19 @@ export async function sendMessageZalouser(
       ? parseZalouserTextStyles(text)
       : { text, styles: transportOptions.textStyles };
   const textChunkLimit = transportOptions.textChunkLimit ?? ZALO_TEXT_LIMIT;
-  const chunks = splitStyledText(
-    prepared.text,
-    (prepared.styles?.length ?? 0) > 0 ? prepared.styles : undefined,
-    textChunkLimit,
-    transportOptions.textChunkMode,
-  );
+  const chunkText = prepared.text;
+  const styles = (prepared.styles?.length ?? 0) > 0 ? prepared.styles : undefined;
+  const mode = transportOptions.textChunkMode;
+  const chunks =
+    chunkText.length === 0
+      ? [{ text: chunkText, styles: undefined }]
+      : chunkTextRanges(chunkText, {
+          limit: textChunkLimit,
+          mode: mode === "newline" ? "preferred" : "hard",
+        }).map(({ start, end }) => ({
+          text: chunkText.slice(start, end),
+          styles: sliceTextStyles(styles, start, end),
+        }));
 
   let lastResult: ChannelMessageSendResult | null = null;
   const accepted: ChannelMessageSendResult[] = [];
@@ -94,23 +96,4 @@ export async function sendImageZalouser(
     caption: undefined,
     mediaUrl: imageUrl,
   });
-}
-
-function splitStyledText(
-  text: string,
-  styles: ZaloSendOptions["textStyles"],
-  limit: number,
-  mode: ZaloSendOptions["textChunkMode"],
-): StyledTextChunk[] {
-  if (text.length === 0) {
-    return [{ text, styles: undefined }];
-  }
-
-  return chunkTextRanges(text, {
-    limit,
-    mode: mode === "newline" ? "preferred" : "hard",
-  }).map(({ start, end }) => ({
-    text: text.slice(start, end),
-    styles: sliceTextStyles(styles, start, end),
-  }));
 }

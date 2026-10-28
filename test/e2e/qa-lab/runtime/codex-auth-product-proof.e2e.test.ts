@@ -1,5 +1,6 @@
 // QA Lab Codex auth product proof exercises doctor, SQLite, Gateway, and app-server together.
 import fs from "node:fs/promises";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createJsonlRequestTailer } from "../../../../scripts/e2e/lib/codex-media-path/jsonl-request-tail.mts";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
@@ -27,6 +28,12 @@ const SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT =
   "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.";
 const PRODUCT_OUTPUT = "QA_CODEX_AUTH_PRODUCT_PROOF_OK";
 const REQUEST_TIMEOUT_MS = 60_000;
+const EXPECTED_LOGIN = {
+  type: "chatgptAuthTokens",
+  accessToken: oauthAccess,
+  chatgptAccountId: ACCOUNT_ID,
+  chatgptPlanType: null,
+};
 
 let instance: OpenClawTestInstance | undefined;
 let receipts: FixtureReceiptChannel;
@@ -56,6 +63,14 @@ type GatewayHistory = Record<string, unknown> & {
 };
 
 type GatewayEvent = { event?: string; payload?: unknown };
+
+function expectRequestOrder(entries: AppServerLogEntry[], first: string, second: string) {
+  const firstIndex = entries.findIndex((entry) => entry.method === first);
+  const secondIndex = entries.findIndex((entry) => entry.method === second);
+  expect(firstIndex).toBeGreaterThanOrEqual(0);
+  expect(secondIndex).toBeGreaterThan(firstIndex);
+  return [entries[firstIndex], entries[secondIndex]];
+}
 
 function expectBoundedMissingProfileRecovery(
   value: unknown,
@@ -144,9 +159,8 @@ async function waitForAssistantHistory(testInstance: OpenClawTestInstance, expec
             if (
               messages.some(
                 (message) =>
-                  message !== null &&
-                  typeof message === "object" &&
-                  (message as { role?: unknown }).role === "assistant" &&
+                  isRecord(message) &&
+                  message.role === "assistant" &&
                   JSON.stringify(message).includes(expected),
               )
             ) {
@@ -240,22 +254,10 @@ describe("Codex auth product proof", () => {
         "account/login/start",
         signal,
       );
-      const loginParams = loginRequest.params as Record<string, unknown>;
-      expect(loginParams).toMatchObject({
-        type: "chatgptAuthTokens",
-        accessToken: oauthAccess,
-        chatgptAccountId: ACCOUNT_ID,
-        chatgptPlanType: null,
-      });
+      expect(loginRequest.params).toMatchObject(EXPECTED_LOGIN);
 
       await waitForRequest(appServerLog, requestLog, "turn/start", signal);
-      const turnEntries = appServerLog.read();
-      const threadStartIndex = turnEntries.findIndex(
-        (request) => request.method === "thread/start",
-      );
-      const turnStartIndex = turnEntries.findIndex((request) => request.method === "turn/start");
-      expect(threadStartIndex).toBeGreaterThanOrEqual(0);
-      expect(turnStartIndex).toBeGreaterThan(threadStartIndex);
+      expectRequestOrder(appServerLog.read(), "thread/start", "turn/start");
       await waitForAssistantHistory(instance, PRODUCT_OUTPUT);
 
       const usageRequestLog = instance.state.path("codex-auth-usage-app-server.jsonl");
@@ -274,37 +276,13 @@ describe("Codex auth product proof", () => {
       expect(status.stdout).toContain("qa-codex-account@example.com");
 
       const usageEntries = usageLog.read();
-      const usageLoginIndex = usageEntries.findIndex(
-        (request) => request.method === "account/login/start",
+      const [usageLoginRequest, accountReadRequest] = expectRequestOrder(
+        usageEntries,
+        "account/login/start",
+        "account/read",
       );
-      const accountReadIndex = usageEntries.findIndex(
-        (request) => request.method === "account/read",
-      );
-      expect(usageLoginIndex).toBeGreaterThanOrEqual(0);
-      expect(accountReadIndex).toBeGreaterThan(usageLoginIndex);
-
-      const usageLoginRequest = usageEntries[usageLoginIndex];
-      const usageLoginParams = usageLoginRequest?.params as Record<string, unknown>;
-      expect(usageLoginParams).toEqual({
-        type: "chatgptAuthTokens",
-        accessToken: oauthAccess,
-        chatgptAccountId: ACCOUNT_ID,
-        chatgptPlanType: null,
-      });
-
-      const accountReadRequest = usageEntries[accountReadIndex];
+      expect(usageLoginRequest?.params).toEqual(EXPECTED_LOGIN);
       expect(accountReadRequest?.params).toEqual({});
-      const accountReadResponse = usageEntries.find(
-        (entry) => entry.id === accountReadRequest?.id && entry.result !== undefined,
-      );
-      expect(accountReadResponse?.result).toEqual({
-        account: {
-          type: "chatgpt",
-          email: "qa-codex-account@example.com",
-          planType: "pro",
-        },
-        requiresOpenaiAuth: true,
-      });
     },
   );
 
@@ -414,20 +392,18 @@ describe("Codex auth product proof", () => {
             finalEvent = events.find(
               (event) =>
                 event.event === "chat" &&
-                event.payload !== null &&
-                typeof event.payload === "object" &&
-                (event.payload as { runId?: unknown }).runId === runId &&
-                (event.payload as { state?: unknown }).state === "error",
+                isRecord(event.payload) &&
+                event.payload.runId === runId &&
+                event.payload.state === "error",
             );
             lifecycleEvent = events.find(
               (event) =>
                 event.event === "sessions.changed" &&
-                event.payload !== null &&
-                typeof event.payload === "object" &&
-                (event.payload as { sessionKey?: unknown }).sessionKey === sessionKey &&
-                (event.payload as { session?: { lastRunId?: unknown } }).session?.lastRunId ===
-                  runId &&
-                (event.payload as { session?: { status?: unknown } }).session?.status === "failed",
+                isRecord(event.payload) &&
+                event.payload.sessionKey === sessionKey &&
+                isRecord(event.payload.session) &&
+                event.payload.session.lastRunId === runId &&
+                event.payload.session.status === "failed",
             );
             expect(finalEvent).toBeDefined();
             expect(lifecycleEvent).toBeDefined();

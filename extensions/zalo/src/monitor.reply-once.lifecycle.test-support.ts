@@ -1,11 +1,10 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
-// Zalo test support covers monitor.reply once.lifecycle plugin behavior.
-import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createLifecycleMonitorSetup,
   createTextUpdate,
-  postWebhookReplay,
+  replayLifecycleWebhook,
+  withStoppedMonitor,
 } from "./test-support/lifecycle-test-support.js";
 import {
   loadCachedLifecycleMonitorModule,
@@ -15,12 +14,22 @@ import {
   startWebhookLifecycleMonitor,
 } from "./test-support/monitor-mocks-test-support.js";
 
+type Reply = PluginRuntime["channel"]["reply"];
+type Session = PluginRuntime["channel"]["session"];
+
 describe("Zalo reply-once lifecycle", () => {
-  const finalizeInboundContextMock = vi.fn((ctx: Record<string, unknown>) => ctx);
-  const recordInboundSessionMock = vi.fn(
+  const textUpdate = createTextUpdate({
+    messageId: "zalo-replay",
+    userId: "user-1",
+    userName: "User One",
+    chatId: "dm-chat-1",
+    text: "check https://example.com",
+  });
+  const finalizeContext = vi.fn((ctx: Record<string, unknown>) => ctx);
+  const recordSession = vi.fn(
     async (_input: { sessionKey?: string; ctx?: Record<string, unknown> }) => undefined,
   );
-  const dispatchReplyWithBufferedBlockDispatcherMock = vi.fn();
+  const dispatchReply = vi.fn();
 
   beforeAll(async () => {
     await loadCachedLifecycleMonitorModule("zalo-reply-once-lifecycle");
@@ -30,154 +39,116 @@ describe("Zalo reply-once lifecycle", () => {
     await resetLifecycleTestState();
     setLifecycleRuntimeCore({
       reply: {
-        finalizeInboundContext:
-          finalizeInboundContextMock as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
+        finalizeInboundContext: finalizeContext as unknown as Reply["finalizeInboundContext"],
         dispatchReplyWithBufferedBlockDispatcher:
-          dispatchReplyWithBufferedBlockDispatcherMock as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
+          dispatchReply as unknown as Reply["dispatchReplyWithBufferedBlockDispatcher"],
       },
       session: {
-        recordInboundSession:
-          recordInboundSessionMock as unknown as PluginRuntime["channel"]["session"]["recordInboundSession"],
+        recordInboundSession: recordSession as unknown as Session["recordInboundSession"],
       },
     });
   });
 
-  afterAll(async () => {
-    await resetLifecycleTestState();
-  });
+  afterAll(resetLifecycleTestState);
 
-  function createReplyOnceMonitorSetup() {
+  function startMonitor() {
     const setup = createLifecycleMonitorSetup({
       accountId: "acct-zalo-lifecycle",
       dmPolicy: "open",
     });
-    return {
+    return startWebhookLifecycleMonitor({
       ...setup,
+      cacheKey: "zalo-reply-once-lifecycle",
       config: {
         ...setup.config,
         session: { dmScope: "per-channel-peer" as const },
       },
-    };
+    });
   }
 
-  function requireRecordInboundSessionArgs() {
-    const [call] = recordInboundSessionMock.mock.calls;
-    if (!call) {
-      throw new Error("expected inbound session record call");
-    }
-    const [recordArgs] = call;
-    return recordArgs;
-  }
-
-  it("routes one accepted webhook event to one visible reply across duplicate replay", async () => {
-    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
+  it.each(["message.text.received", "message.unsupported.received"])(
+    "routes %s text to one visible reply across duplicate replay",
+    async (eventName) => {
+      dispatchReply.mockImplementation(async ({ dispatcherOptions, replyOptions }) => {
         await replyOptions.turnAdoptionLifecycle?.onAdopted();
         await dispatcherOptions.deliver({ text: "zalo reply once" });
-      },
-    );
+      });
 
-    const monitor = await startWebhookLifecycleMonitor({
-      ...createReplyOnceMonitorSetup(),
-      cacheKey: "zalo-reply-once-lifecycle",
-    });
+      const monitor = await startMonitor();
 
-    try {
-      await withServer(
-        (req, res) => {
-          void monitor.route.handler(req, res);
-        },
-        async (baseUrl) => {
-          const { first, replay } = await postWebhookReplay({
-            baseUrl,
-            path: "/hooks/zalo",
-            secret: "supersecret",
-            payload: createTextUpdate({
-              messageId: `zalo-replay-${Date.now()}`,
-              userId: "user-1",
-              userName: "User One",
-              chatId: "dm-chat-1",
-            }),
-          });
+      await withStoppedMonitor(monitor, async () => {
+        await replayLifecycleWebhook(monitor, { ...textUpdate, event_name: eventName });
 
-          expect(first.status).toBe(200);
-          expect(replay.status).toBe(200);
-          await monitor.waitForIdle();
-        },
-      );
+        expect(dispatchReply).toHaveBeenCalledTimes(1);
+        expect(dispatchReply.mock.calls[0]?.[0].ctx.BodyForAgent).toBe("check https://example.com");
+        expect(recordSession).toHaveBeenCalledTimes(1);
+        const recordArgs = recordSession.mock.calls[0]?.[0];
+        expect(recordArgs).toMatchObject({
+          sessionKey: "agent:main:zalo:direct:dm-chat-1",
+          ctx: {
+            MessageSid: "zalo-replay",
+            AccountId: "acct-zalo-lifecycle",
+            SessionKey: "agent:main:zalo:direct:dm-chat-1",
+            From: "zalo:user-1",
+            To: "zalo:dm-chat-1",
+          },
+        });
+        expect(sendMessageMock.mock.calls).toEqual([
+          [
+            "zalo-token",
+            expect.objectContaining({ chat_id: "dm-chat-1", text: "zalo reply once" }),
+            undefined,
+          ],
+        ]);
+      });
+    },
+  );
 
-      expect(recordInboundSessionMock).toHaveBeenCalledTimes(1);
-      const recordArgs = requireRecordInboundSessionArgs();
-      expect(recordArgs?.sessionKey).toBe("agent:main:zalo:direct:dm-chat-1");
-      expect(recordArgs?.ctx?.AccountId).toBe("acct-zalo-lifecycle");
-      expect(recordArgs?.ctx?.SessionKey).toBe("agent:main:zalo:direct:dm-chat-1");
-      expect(recordArgs?.ctx?.From).toBe("zalo:user-1");
-      expect(recordArgs?.ctx?.To).toBe("zalo:dm-chat-1");
-      expect(recordArgs?.ctx?.MessageSid).toContain("zalo-replay-");
-      expect(sendMessageMock).toHaveBeenCalledTimes(1);
-      const [sendToken, sendPayload, sendOptions] = sendMessageMock.mock.calls[0] as [
-        string,
-        { chat_id?: string; text?: string },
-        unknown,
-      ];
-      expect(sendToken).toBe("zalo-token");
-      expect(sendPayload.chat_id).toBe("dm-chat-1");
-      expect(sendPayload.text).toBe("zalo reply once");
-      expect(sendOptions).toBeUndefined();
-    } finally {
-      await monitor.stop();
-    }
-  });
+  it.each([undefined, " \t "])(
+    "logs unsupported events with no usable text (%j) without sending a reply",
+    async (text) => {
+      const monitor = await startMonitor();
+      await withStoppedMonitor(monitor, async () => {
+        await replayLifecycleWebhook(
+          monitor,
+          {
+            ...textUpdate,
+            event_name: "message.unsupported.received",
+            message: { ...textUpdate.message, text },
+          },
+          true,
+        );
+
+        expect(monitor.runtime.log).toHaveBeenCalledWith(
+          expect.stringContaining("Zalo unsupported message has no recoverable text"),
+        );
+        expect(dispatchReply).not.toHaveBeenCalled();
+        expect(recordSession).not.toHaveBeenCalled();
+        expect(sendMessageMock).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it("does not emit a second visible reply when replay arrives after a post-send failure", async () => {
     let dispatchAttempts = 0;
-    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        dispatchAttempts += 1;
-        expect(replyOptions.turnAdoptionLifecycle).toBeDefined();
-        await replyOptions.turnAdoptionLifecycle?.onAdopted();
-        await dispatcherOptions.deliver({ text: "zalo reply after failure" });
-        if (dispatchAttempts === 1) {
-          throw new Error("post-send failure");
-        }
-      },
-    );
-
-    const monitor = await startWebhookLifecycleMonitor({
-      ...createReplyOnceMonitorSetup(),
-      cacheKey: "zalo-reply-once-lifecycle",
+    dispatchReply.mockImplementation(async ({ dispatcherOptions, replyOptions }) => {
+      dispatchAttempts += 1;
+      expect(replyOptions.turnAdoptionLifecycle).toBeDefined();
+      await replyOptions.turnAdoptionLifecycle?.onAdopted();
+      await dispatcherOptions.deliver({ text: "zalo reply after failure" });
+      if (dispatchAttempts === 1) {
+        throw new Error("post-send failure");
+      }
     });
 
-    try {
-      await withServer(
-        (req, res) => {
-          void monitor.route.handler(req, res);
-        },
-        async (baseUrl) => {
-          const { first, replay } = await postWebhookReplay({
-            baseUrl,
-            path: "/hooks/zalo",
-            secret: "supersecret",
-            payload: createTextUpdate({
-              messageId: `zalo-retry-${Date.now()}`,
-              userId: "user-1",
-              userName: "User One",
-              chatId: "dm-chat-1",
-            }),
-            beforeReplay: monitor.waitForIdle,
-          });
+    const monitor = await startMonitor();
 
-          expect(first.status).toBe(200);
-          expect(replay.status).toBe(200);
-          await monitor.waitForIdle();
-        },
-      );
+    await withStoppedMonitor(monitor, async () => {
+      await replayLifecycleWebhook(monitor, textUpdate, true);
 
-      expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
+      expect(dispatchReply).toHaveBeenCalledTimes(1);
       expect(sendMessageMock).toHaveBeenCalledTimes(1);
       expect(monitor.runtime.error).not.toHaveBeenCalled();
-    } finally {
-      await monitor.stop();
-    }
+    });
   });
 });

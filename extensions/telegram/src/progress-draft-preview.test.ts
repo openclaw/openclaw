@@ -1,14 +1,18 @@
-import { buildChannelProgressDraftLineForEntry } from "openclaw/plugin-sdk/channel-outbound";
+import { buildChannelProgressDraftLineForEntry as lineFor } from "openclaw/plugin-sdk/channel-outbound";
 import { describe, expect, it } from "vitest";
-import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js";
+import { renderTelegramProgressDraftPreview as renderPreview } from "./progress-draft-preview.js";
 
-describe("progress draft item labels", () => {
-  it.each([false, true])("renders plain notes as literal prose (rich=%s)", (richMessages) => {
+describe.each([false, true])("progress draft item labels (rich=%s)", (richMessages) => {
+  function render(snapshot: Parameters<typeof renderPreview>[0], maxLineChars = 40) {
+    return renderPreview(snapshot, { richMessages, toolProgress: true, maxLines: 8, maxLineChars });
+  }
+
+  it("renders plain notes as literal prose", () => {
     for (const label of [undefined, "Working"]) {
       const note = "**Check** <queue> & `jobs` https://example.test";
-      const preview = renderTelegramProgressDraftPreview(
+      const preview = render(
         { label, statusHeadline: note, statusHeadlineFormat: "plain", lines: [] },
-        { richMessages, toolProgress: true, maxLines: 8, maxLineChars: 120 },
+        120,
       );
       expect(preview.linkPreview).toBe(false);
       if (richMessages) {
@@ -26,29 +30,36 @@ describe("progress draft item labels", () => {
     }
   });
 
-  it.each([false, true])(
-    "renders authored preambles without internal titles (rich=%s)",
-    (richMessages) => {
-      const line = buildChannelProgressDraftLineForEntry(undefined, {
-        event: "item",
-        itemKind: "preamble",
-        itemId: "preamble-1",
-        title: "Preamble",
-        progressText: "I'll list the **workspace** first.",
-      })!;
-      const preview = renderTelegramProgressDraftPreview(
-        { lines: [line] },
-        { richMessages, toolProgress: true, maxLines: 8, maxLineChars: 120 },
-      );
-      expect(preview.text).toBe(
-        richMessages ? "I'll list the workspace first." : "I'll list the <b>workspace</b> first.",
-      );
-    },
-  );
+  // Item input, raw tool formatting, HTML/rich text (undefined = length bound).
+  it.each([
+    [{ itemKind: "preamble", title: "Preamble", progressText: "**p**" }, false, ["<b>p</b>", "p"]],
+    [
+      { name: "read", title: "Read " + "/directory".repeat(8), status: "running" },
+      false,
+      undefined,
+    ],
+    [
+      { name: "read", summary: "from…f", status: "failed" },
+      true,
+      ["<b>📖 Read</b> from…f <i>failed</i>", "📖 Read from…f failed"],
+    ],
+  ] as const)("renders item %j", (input, raw, expected) => {
+    const line = lineFor(
+      undefined,
+      { event: "item", ...input },
+      raw ? { toolIcons: true, detailMode: "raw" } : undefined,
+    )!;
+    const text = render({ lines: [line] }).text;
+    if (expected === undefined) {
+      expect(Array.from(text.replace(/<[^>]*>/g, "")).length).toBeLessThanOrEqual(40);
+    } else {
+      expect(text).toBe(expected[Number(richMessages)]);
+    }
+  });
 
-  it.each([false, true])("budgets the complete raw command row (rich=%s)", (richMessages) => {
+  it("budgets the complete raw command row", () => {
     for (const status of ["running", "completed"]) {
-      const line = buildChannelProgressDraftLineForEntry(
+      const line = lineFor(
         { streaming: { mode: "progress", progress: { commandText: "raw" } } },
         {
           event: "item",
@@ -59,11 +70,7 @@ describe("progress draft item labels", () => {
         },
         { toolIcons: true, detailMode: "raw" },
       )!;
-      const preview = renderTelegramProgressDraftPreview(
-        { lines: [line] },
-        { richMessages, toolProgress: true, maxLines: 8, maxLineChars: 40 },
-      );
-      const text = preview.text.replace(/<[^>]*>/g, "");
+      const text = render({ lines: [line] }).text.replace(/<[^>]*>/g, "");
       expect(Array.from(text).length).toBeLessThanOrEqual(40);
       expect(text).toContain("🛠️ Exec ");
       expect(text).toContain("…");
@@ -71,41 +78,5 @@ describe("progress draft item labels", () => {
         expect(text).toMatch(/ running$/);
       }
     }
-  });
-
-  it.each([false, true])("budgets oversized prepared labels (rich=%s)", (richMessages) => {
-    const line = buildChannelProgressDraftLineForEntry(undefined, {
-      event: "item",
-      name: "read",
-      title: "Read /workspace/a-very-long-directory-name/another-directory/file.txt",
-      status: "running",
-    })!;
-    const preview = renderTelegramProgressDraftPreview(
-      { lines: [line] },
-      { richMessages, toolProgress: true, maxLines: 8, maxLineChars: 40 },
-    );
-    expect(Array.from(preview.text.replace(/<[^>]*>/g, "")).length).toBeLessThanOrEqual(40);
-  });
-
-  it.each([false, true])("preserves already fitting Read rows (rich=%s)", (richMessages) => {
-    const line = buildChannelProgressDraftLineForEntry(
-      undefined,
-      {
-        event: "item",
-        name: "read",
-        summary: "from…p/deep/file.txt",
-        status: "failed",
-      },
-      { toolIcons: true, detailMode: "raw" },
-    )!;
-    const preview = renderTelegramProgressDraftPreview(
-      { lines: [line] },
-      { richMessages, toolProgress: true, maxLines: 8, maxLineChars: 40 },
-    );
-    expect(preview.text).toBe(
-      richMessages
-        ? "📖 Read from…p/deep/file.txt failed"
-        : "<b>📖 Read</b> from…p/deep/file.txt <i>failed</i>",
-    );
   });
 });

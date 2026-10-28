@@ -104,23 +104,38 @@ export function createDedicatedNodeLeaseAttestations(
       signal?: AbortSignal,
     ) {
       // Observations can stop at drain; provider mutations retain their settlement owner.
-      const inspectionSignal = signal
-        ? AbortSignal.any([signal, getGatewayRestartDrainSignal()])
-        : getGatewayRestartDrainSignal();
-      inspectionSignal.throwIfAborted();
+      signal?.throwIfAborted();
+      getGatewayRestartDrainSignal().throwIfAborted();
+      const timeout = new AbortController();
+      const timer = setTimeout(
+        () => timeout.abort(new Error("Worker provider inspection exceeded its 15s budget")),
+        15_000,
+      );
+      timer.unref();
+      const inspectionSignal = AbortSignal.any([
+        timeout.signal,
+        getGatewayRestartDrainSignal(),
+        ...(signal ? [signal] : []),
+      ]);
       const inspection = await options
-        .callProvider(record.environmentId, () =>
-          provider.inspect({ ...lease, signal: inspectionSignal }),
+        .callProvider(
+          record.environmentId,
+          "inspect",
+          () => provider.inspect({ ...lease, signal: inspectionSignal }),
+          undefined,
+          inspectionSignal,
         )
         .then((result) => ({
           ...requireWorkerLeaseStatus(result),
           explicitlyDedicated: result.status === "active" && result.sharedHost === false,
         }))
         .catch(async (error: unknown) => {
-          inspectionSignal.throwIfAborted();
+          signal?.throwIfAborted();
+          getGatewayRestartDrainSignal().throwIfAborted();
           await options.saveError(record, error);
           return undefined;
-        });
+        })
+        .finally(() => clearTimeout(timer));
       inspectionSignal.throwIfAborted();
       if (inspection) {
         assertCurrent(record);

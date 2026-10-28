@@ -2,7 +2,7 @@ import { flush } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { ChannelAvatarContent } from "./channel-avatar.tsx";
+import { ChannelAvatar } from "./channel-avatar.tsx";
 
 it("keeps its fallback mounted through loading, a decoded image, and an image error", async () => {
   vi.useFakeTimers();
@@ -11,9 +11,9 @@ it("keeps its fallback mounted through loading, a decoded image, and an image er
   vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:channel-face");
   const revoke = vi.spyOn(URL, "revokeObjectURL");
   const view = mountSolid(() => (
-    <ChannelAvatarContent routeUrl="/channel-avatar/room" authReady={true}>
+    <ChannelAvatar routeUrl="/channel-avatar/room" authReady={true}>
       <button>Room</button>
-    </ChannelAvatarContent>
+    </ChannelAvatar>
   ));
   const fallback = view.getByRole("button", { name: "Room" });
   try {

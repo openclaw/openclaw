@@ -6,6 +6,7 @@ import { normalizeCardsPayload } from "./normalization.ts";
 import {
   getWorkboardRuntime,
   getWorkboardState,
+  notifyWorkboard,
   workboardHasActiveWrites,
   type WorkboardClientContext,
 } from "./runtime.ts";
@@ -51,7 +52,7 @@ export async function loadWorkboard(params: LoadWorkboardParams): Promise<boolea
     state.error = null;
   }
   state.lastRefreshError = null;
-  params.requestUpdate?.();
+  notifyWorkboard(params.host);
   const loadPromise: Promise<boolean> = Promise.resolve().then(async () => {
     try {
       if (params.refreshDiagnostics) {
@@ -139,7 +140,7 @@ export async function loadWorkboard(params: LoadWorkboardParams): Promise<boolea
         }
         delete runtime.loadPromise;
       }
-      params.requestUpdate?.();
+      notifyWorkboard(params.host);
     }
   });
   runtime.loadPromise = loadPromise;
@@ -158,16 +159,15 @@ export async function refreshWorkboard(
     return false;
   }
   state.lastRefreshError = null;
-  params.requestUpdate?.();
+  notifyWorkboard(params.host);
   if (!params.client) {
     state.lastRefreshError = "Gateway client unavailable";
-    params.requestUpdate?.();
+    notifyWorkboard(params.host);
     return false;
   }
   const refreshed = await loadWorkboard({
     host: params.host,
     client: params.client,
-    requestUpdate: params.requestUpdate,
     force: true,
     refreshDiagnostics: params.refreshDiagnostics,
     preserveError: passive,
@@ -177,7 +177,7 @@ export async function refreshWorkboard(
   } else if (refreshed) {
     state.lastRefreshAt = Date.now();
   }
-  params.requestUpdate?.();
+  notifyWorkboard(params.host);
   return refreshed;
 }
 

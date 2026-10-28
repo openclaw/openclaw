@@ -510,9 +510,7 @@ async function serveAuthorizedSessionHistory(
       return;
     }
     streamStopped = true;
-    if (streamResources.heartbeat) {
-      clearInterval(streamResources.heartbeat);
-    }
+    clearInterval(streamResources.heartbeat);
     streamResources.unsubscribe?.();
     sharing?.release();
     streamClosed.resolve();

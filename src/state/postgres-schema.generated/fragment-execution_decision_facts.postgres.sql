@@ -34,8 +34,8 @@ CREATE TABLE "execution_decision_facts" (
   UNIQUE ("occurred_at", "receipt_id")
 );
 
-CREATE INDEX "execution_decision_facts_context_occurred_idx" ON "execution_decision_facts" (("context_id") ASC NULLS FIRST, ("occurred_at") ASC NULLS FIRST, ("receipt_id") ASC NULLS FIRST);
+CREATE INDEX "execution_decision_facts_context_occurred_idx" ON "execution_decision_facts" (("context_id") ASC, ("occurred_at") ASC, ("receipt_id") ASC);
 
-CREATE UNIQUE INDEX "execution_decision_facts_cursor_id_idx" ON "execution_decision_facts" (("cursor_id") ASC NULLS FIRST);
+CREATE UNIQUE INDEX "execution_decision_facts_cursor_id_idx" ON "execution_decision_facts" (("cursor_id") ASC);
 
-CREATE INDEX "execution_decision_facts_run_occurred_idx" ON "execution_decision_facts" (("run_id") ASC NULLS FIRST, ("occurred_at") ASC NULLS FIRST, ("receipt_id") ASC NULLS FIRST);
+CREATE INDEX "execution_decision_facts_run_occurred_idx" ON "execution_decision_facts" (("run_id") ASC, ("occurred_at") ASC, ("receipt_id") ASC);

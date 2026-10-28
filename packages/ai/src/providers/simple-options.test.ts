@@ -1,21 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type { Model } from "../types.js";
+import { makeProviderModel } from "./provider-model.test-support.js";
 import { buildBaseOptions, clampMaxTokensToModel } from "./simple-options.js";
 
 function makeModel(overrides: Partial<Model> = {}): Model {
-  return {
-    id: "test-model",
+  return makeProviderModel("test-api", "test-provider", "test-model", {
     name: "Test Model",
-    api: "test-api",
-    provider: "test-provider",
     baseUrl: "https://example.test",
     reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 10_000,
     maxTokens: 9_000,
     ...overrides,
-  };
+  });
 }
 
 describe("simple stream max-token clamp", () => {

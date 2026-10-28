@@ -58,36 +58,27 @@ describe("buildQaGatewayConfig", () => {
     },
   );
 
-  it("uses only active full-mock observer registrations across endpoint aliases", () => {
-    const baseUrl = "http://127.0.0.1:44082";
-    const observerUrl = `${baseUrl}/debug/session`;
-    const build = (providerBaseUrl: string) =>
-      buildConfig({ providerBaseUrl }).models?.providers?.["mock-openai"]?.request;
-    const dispose = registerQaSessionObserver(baseUrl, observerUrl);
-    try {
-      for (const endpoint of [baseUrl, `${baseUrl}/`, `${baseUrl}/v1`, `${baseUrl}/v1/`]) {
-        expect(build(endpoint)).toEqual({
-          allowPrivateNetwork: true,
-          headers: { [QA_SESSION_OBSERVER_HEADER]: observerUrl },
-        });
-      }
-      expect(build(`${baseUrl}/other`)).toEqual({ allowPrivateNetwork: true });
-      dispose();
-      expect(build(baseUrl)).toEqual({ allowPrivateNetwork: true });
-    } finally {
-      dispose();
-    }
-  });
-
   it.each(["openclaw", "codex"] as const)(
-    "keeps explicit observer routing scoped to the mock provider (%s)",
+    "scopes registered and explicit observers to the active mock route (%s)",
     (forcedRuntime) => {
+      const baseUrl = "http://127.0.0.1:44080";
+      const registeredUrl = `${baseUrl}/debug/session`;
       const sessionObserverUrl = "http://127.0.0.1:44081/debug/session";
-      const dispose = registerQaSessionObserver(
-        "http://127.0.0.1:44080",
-        "http://127.0.0.1:44080/debug/session",
-      );
+      const request = (providerBaseUrl: string) =>
+        buildConfig({ providerBaseUrl, forcedRuntime }).models?.providers?.["mock-openai"]?.request;
+      const expectedRequest = (url?: string) =>
+        forcedRuntime === "codex"
+          ? undefined
+          : {
+              allowPrivateNetwork: true,
+              ...(url ? { headers: { [QA_SESSION_OBSERVER_HEADER]: url } } : {}),
+            };
+      const dispose = registerQaSessionObserver(baseUrl, registeredUrl);
       try {
+        for (const endpoint of [baseUrl, `${baseUrl}/`, `${baseUrl}/v1`, `${baseUrl}/v1/`]) {
+          expect(request(endpoint)).toEqual(expectedRequest(registeredUrl));
+        }
+        expect(request(`${baseUrl}/other`)).toEqual(expectedRequest());
         const cfg = buildConfig({
           providerBaseUrl: "http://127.0.0.1:44080/v1",
           mockSessionObserverUrl: sessionObserverUrl,
@@ -97,12 +88,7 @@ describe("buildQaGatewayConfig", () => {
 
         expect(cfg.plugins?.entries?.["qa-lab"]).toEqual({ enabled: true });
         expect(cfg.models?.providers?.["mock-openai"]?.request).toEqual(
-          forcedRuntime === "codex"
-            ? undefined
-            : {
-                allowPrivateNetwork: true,
-                headers: { [QA_SESSION_OBSERVER_HEADER]: sessionObserverUrl },
-              },
+          expectedRequest(sessionObserverUrl),
         );
         expect(
           cfg.models?.providers?.openai?.request?.headers?.[QA_SESSION_OBSERVER_HEADER],
@@ -114,6 +100,8 @@ describe("buildQaGatewayConfig", () => {
             )?.compat?.sendSessionIdHeader,
           ).toBe(true);
         }
+        dispose();
+        expect(request(baseUrl)).toEqual(expectedRequest());
       } finally {
         dispose();
       }

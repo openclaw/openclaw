@@ -9,8 +9,8 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { CronEventInput, CronEventRunOptions } from "./event-source.js";
+import { cronTestDeps, cronTestInput } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
 import {
   createCronServiceWithStateForTest,
@@ -77,32 +77,27 @@ async function fixture(overrides: Partial<CronServiceDeps> = {}) {
   const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>(async () => ({
     status: "ok",
   }));
-  const { cron, state } = createCronServiceWithStateForTest({
-    scheduler: createTestGatewayScheduler(),
-    storePath,
-    cronEnabled: true,
-    defaultAgentId: "main",
-    nowMs: () => Date.now(),
-    log: logger,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
-    runIsolatedAgentJob,
-    ...overrides,
-  });
+  const { cron, state } = createCronServiceWithStateForTest(
+    cronTestDeps({
+      storePath,
+      defaultAgentId: "main",
+      log: logger,
+      runIsolatedAgentJob,
+      ...overrides,
+    }),
+  );
   services.push(cron);
   await cron.start();
-  const input: CronJobCreate = {
+  const input: CronJobCreate = cronTestInput({
     name: "event handler",
-    enabled: true,
     schedule: {
       kind: "event",
       source: "mcp-events",
       options: { server: "test", name: "changed", arguments: { a: 1, b: 2 } },
     },
-    sessionTarget: "isolated",
     wakeMode: "now",
     payload: { kind: "agentTurn", message: "Summarize the received change.", toolsAllow: ["read"] },
-  };
+  });
   const job = await cron.add(input);
   const queue = eventQueue(job);
   const run = (options: CronEventRunOptions) => cron.runEvent(job.id, options);
@@ -298,9 +293,9 @@ describe("event automation durable admission", () => {
           await entered.promise;
         } else {
           cronStore.noteCronJobsStoreCommit(cronStoreKey(f.storePath));
-          const load = cronStore.loadCronJobsStoreWithConfigJobs;
+          const load = cronStore.loadCronJobsStoreWithConfigJobsByKey;
           const delayed = vi
-            .spyOn(cronStore, "loadCronJobsStoreWithConfigJobs")
+            .spyOn(cronStore, "loadCronJobsStoreWithConfigJobsByKey")
             .mockImplementationOnce(async (...args) => {
               const loaded = await load(...args);
               entered.resolve();

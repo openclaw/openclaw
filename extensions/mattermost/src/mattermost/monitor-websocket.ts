@@ -70,7 +70,7 @@ type CreateMattermostConnectOnceOpts = {
   runtime: RuntimeEnv;
   nextSeq: () => number;
   onPosted: (rawEvent: string) => Promise<void>;
-  onReaction?: (payload: MattermostEventPayload) => Promise<void>;
+  onReaction: (payload: MattermostEventPayload) => Promise<void>;
   /**
    * Called periodically to check whether the bot account has been modified
    * (e.g. disabled then re-enabled) since the WebSocket was opened.
@@ -78,7 +78,7 @@ type CreateMattermostConnectOnceOpts = {
    * the value recorded at connect time, the connection is terminated so the
    * reconnect loop can establish a fresh one.
    */
-  getBotUpdateAt?: () => Promise<number>;
+  getBotUpdateAt: () => Promise<number>;
 };
 
 export function createMattermostConnectOnce(
@@ -105,7 +105,6 @@ export function createMattermostConnectOnce(
     });
     const onAbort = () => ws.terminate();
     opts.abortSignal?.addEventListener("abort", onAbort, { once: true });
-    const getBotUpdateAt = opts.getBotUpdateAt;
 
     try {
       return await new Promise<void>((resolve, reject) => {
@@ -158,7 +157,7 @@ export function createMattermostConnectOnce(
         };
 
         const scheduleHealthCheck = () => {
-          if (!getBotUpdateAt || stopped) {
+          if (stopped) {
             return;
           }
           healthCheckTimer = setTimeout(() => {
@@ -168,11 +167,11 @@ export function createMattermostConnectOnce(
         };
 
         const runHealthCheck = async () => {
-          if (!getBotUpdateAt || stopped) {
+          if (stopped) {
             return;
           }
           try {
-            const current = await getBotUpdateAt();
+            const current = await opts.getBotUpdateAt();
             if (stopped) {
               return;
             }
@@ -236,10 +235,8 @@ export function createMattermostConnectOnce(
           // After such a cycle the WebSocket silently stops delivering events even
           // though the connection itself stays alive.  Comparing update_at detects
           // this reliably regardless of how quickly the cycle happens.
-          if (getBotUpdateAt) {
-            // Use a recursive timeout so only one REST poll can be in flight at a time.
-            void runHealthCheck();
-          }
+          // Use a recursive timeout so only one REST poll can be in flight at a time.
+          void runHealthCheck();
         });
 
         ws.on("pong", () => {
@@ -269,9 +266,6 @@ export function createMattermostConnectOnce(
           }
 
           if (payload.event === "reaction_added" || payload.event === "reaction_removed") {
-            if (!opts.onReaction) {
-              return;
-            }
             try {
               await opts.onReaction(payload);
             } catch (err) {

@@ -116,7 +116,7 @@ function runChangedPathsWorkflow(repo: string, base: string, env: NodeJS.Process
   expect(steps[1]).toEqual({
     name: "Setup supported Node runtime",
     uses: "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
-    with: { "node-version": "24.21.0", "package-manager-cache": false },
+    with: { "node-version": "24.22.1", "package-manager-cache": false },
   });
   expect(ensureIndex).toBeGreaterThan(1);
   // The fixture already has a supported Node; exercise the repository-owned preparation below.
@@ -246,7 +246,7 @@ describe("run-opengrep.sh", () => {
     );
     expect(sarif.version).toBe("2.1.0");
     expect(sarif.runs[0].tool.driver.name).toBe("Opengrep OSS");
-    expect(sarif.runs[0].tool.driver.semanticVersion).toBe("1.30.2");
+    expect(sarif.runs[0].tool.driver.semanticVersion).toBe("1.31.0");
     expect(sarif.runs[0].results).toEqual([]);
     expect(fs.existsSync(argsPath)).toBe(false);
   });

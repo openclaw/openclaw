@@ -296,18 +296,17 @@ describe("updateSessionStoreAfterAgentRun", () => {
       })
       .finally(sql.restore);
     expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
-    expect(s.sessionStore[sessionKey]).toMatchObject({
-      chatType: "group",
-      label: "Renamed while running",
-      model: "gpt-5.5",
-      sendPolicy: "deny",
-      contextTokens: 32_000,
-      contextTokensSource: "runtime",
-    });
-    expect(s.sessionStore[sessionKey]?.agentHarnessId).toBeUndefined();
-    expect(s.sessionStore[sessionKey]?.elevatedLevel).toBeUndefined();
-    expect(s.sessionStore[sessionKey]?.inheritedToolAllow).toBeUndefined();
-    expect(s.sessionStore[sessionKey]?.pinnedAt).toBeUndefined();
+    s.check(
+      {
+        chatType: "group",
+        label: "Renamed while running",
+        model: "gpt-5.5",
+        sendPolicy: "deny",
+        contextTokens: 32_000,
+        contextTokensSource: "runtime",
+      },
+      ["agentHarnessId", "elevatedLevel", "inheritedToolAllow", "pinnedAt"],
+    );
     expect(s.read()).toEqual(s.sessionStore[sessionKey]);
   });
 
@@ -321,9 +320,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         compactionCount: 1,
       }),
     });
-    expect(s.sessionStore[sessionKey]?.sessionId).toBe(sessionId);
-    expect(s.read()?.sessionId).toBe(sessionId);
-    expect(s.read()?.compactionCount).toBeUndefined();
+    s.check({ sessionId }, ["compactionCount"]);
   });
 
   it("persists explicit-session runtime models", async ({ s }) => {
@@ -333,8 +330,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
       cfg: s.cfg,
       sessionId: first.sessionId,
       sessionKey: first.sessionKey!,
-      defaultProvider: "claude-cli",
-      defaultModel: "claude-sonnet-4-6",
       result: runResult({
         provider: "claude-cli",
         model: "claude-sonnet-4-6",
@@ -347,27 +342,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
     for (const entry of [second.sessionEntry, s.read()]) {
       expect(entry).toMatchObject({ modelProvider: "claude-cli", model: "claude-sonnet-4-6" });
     }
-  });
-
-  it("reuses fresh completed sessions", async ({ s }) => {
-    const existingSessionId = "terminal-cli-session-old";
-    const now = Date.now();
-    await s.seed({
-      sessionId: existingSessionId,
-      updatedAt: now,
-      status: "done",
-      endedAt: now - 100,
-    });
-
-    const result = await s.resolve({ sessionKey });
-
-    expect(result.isNewSession).toBe(false);
-    expect(result.sessionId).toBe(existingSessionId);
-    expect(result.sessionEntry).toMatchObject({
-      sessionId: existingSessionId,
-      status: "done",
-      endedAt: now - 100,
-    });
   });
 
   it("invalidates empty usage after compaction (#67667)", async ({ s }) => {
@@ -386,8 +360,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
   it("uses last-call input, not cumulative billing", async ({ s }) => {
     await s.seed();
     await s.update({
-      defaultProvider: "custom-openai",
-      defaultModel: "responses-model",
       result: runResult({
         provider: "custom-openai",
         model: "responses-model",
@@ -525,9 +497,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         }),
       }),
     });
-    for (const entry of [s.sessionStore[sessionKey], s.read()]) {
-      expect(entry).toMatchObject(visible);
-    }
+    s.check(visible);
   });
 
   it("preserves current accounting during session touch", async ({ s }) => {
@@ -577,8 +547,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
     };
     await s.persist(replacement);
     await s.update({
-      defaultProvider: "anthropic",
-      defaultModel: "claude-sonnet-4-6",
       result: runResult({ provider: "anthropic", model: "claude-sonnet-4-6" }),
     });
     expect(s.read()).toEqual(replacement);

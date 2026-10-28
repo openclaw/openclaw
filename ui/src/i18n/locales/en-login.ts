@@ -3,6 +3,15 @@ import { en } from "./en.ts";
 
 // Recovery copy follows the lazy login and plugin views; the loader label stays eager.
 const enLogin = {
+  connection: {
+    help: {
+      title: "How to connect",
+      step1: "Start the gateway on your host machine:",
+      step2: "Get a tokenized dashboard URL:",
+      step3: "Paste the Gateway URL and secret above, or open that URL directly.",
+      docsLink: "Read the docs →",
+    },
+  },
   login: {
     unsupportedBrowser: {
       title: "Update your browser to use OpenClaw",
@@ -183,6 +192,7 @@ const enLogin = {
 
 export const registerLoginEnglish = Object.assign(
   () => {
+    Object.assign(en.connection.help, enLogin.connection.help);
     Object.assign(en.login, enLogin.login);
   },
   { catalog: enLogin },

@@ -1,3 +1,4 @@
+import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { isIncognitoSessionKey } from "../../../src/shared/incognito-session-key.js";
 import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
 import { bootRosterSchema } from "../lib/sessions/session-boot-roster-schema.ts";
@@ -14,8 +15,45 @@ const userFields = {
   identity: json.optional(identity),
 };
 const user = json.object(userFields);
+const sessionKey = json.refine(text, (key) => !isIncognitoSessionKey(key));
+const attention = json.enumeration([
+  "none",
+  "error",
+  "question",
+  "approval",
+  ...SESSION_AGENT_ATTENTION_ICON_IDS,
+]);
+const childrenState = {
+  attention: json.optional(attention),
+  runningChildCount: json.optional(json.number),
+  queuedChildCount: json.optional(json.number),
+  unreadChildCount: json.optional(json.number),
+  failedChildCount: json.optional(json.number),
+};
+const state = json.object({
+  unread: json.optional(json.boolean),
+  isRunVisuallyActive: json.optional(json.boolean),
+  hasAutomation: json.optional(json.boolean),
+  status: json.optional(
+    json.enumeration(["queued", "running", "done", "failed", "interrupted", "killed", "timeout"]),
+  ),
+  ...childrenState,
+  ownAttention: json.optional(attention),
+  subagentSummary: json.optional(json.object(childrenState)),
+  workSession: json.optional(json.boolean),
+  acpSession: json.optional(json.boolean),
+  workspaceKind: json.optional(json.enumeration(["worktree", "checkout"])),
+  pullRequest: json.optional(
+    json.object({
+      numbers: json.array(json.number, 20),
+      state: json.enumeration(["open", "draft", "merged", "closed"]),
+    }),
+  ),
+  pullRequestCount: json.optional(json.number),
+  hasApproval: json.optional(json.boolean),
+});
 const sessionFields = {
-  key: json.refine(text, (key) => !isIncognitoSessionKey(key)),
+  key: sessionKey,
   label: text,
   agentId: optionalText,
   subtitle: optionalText,
@@ -25,6 +63,7 @@ const sessionFields = {
   childrenDisplayMode: json.optional(
     json.enumeration(["collapsed-by-user", "expanded", "expanded-fully"]),
   ),
+  childLoadParentKeys: json.optional(json.array(sessionKey)),
   icon: optionalText,
   color: optionalText,
   pinned: json.boolean,
@@ -33,14 +72,18 @@ const sessionFields = {
   category: optionalText,
   boardFace: json.optional(json.enumeration(["chat", "dashboard"])),
   incognito: json.optional(json.literal(false)),
+  state: json.optional(state),
 };
 export type SidebarSnapshotSession = json.SnapshotObject<typeof sessionFields> & {
   children: SidebarSnapshotSession[];
 };
-const session: json.SnapshotReader<SidebarSnapshotSession> = json.object({
-  ...sessionFields,
-  children: json.lazy(() => json.array(session)),
-});
+const session: json.SnapshotReader<SidebarSnapshotSession> = json.refine(
+  json.object({
+    ...sessionFields,
+    children: json.lazy(() => json.array(session)),
+  }),
+  (row) => row.children.length === 0 || row.childLoadParentKeys !== undefined,
+);
 const sectionId = json.checked(
   (value): value is SidebarSessionSection<unknown>["id"] =>
     typeof value === "string" &&
@@ -64,7 +107,7 @@ export const sidebarSnapshotSchema = json.object({
         !entry.startsWith("session:") || !isIncognitoSessionKey(entry.slice("session:".length)),
     ),
   ),
-  sessions: json.array(session),
+  issuesCount: json.optional(json.number),
   sections: json.array(
     json.object({
       id: sectionId,

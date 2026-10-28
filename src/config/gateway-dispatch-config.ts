@@ -26,7 +26,6 @@ const GATEWAY_DISPATCH_TOP_LEVEL_KEYS = [
 type GatewayDispatchConfigReadOptions = {
   configPath?: string;
   env?: NodeJS.ProcessEnv;
-  logger?: Pick<Console, "warn" | "error">;
 };
 
 function resolveGatewayDispatchConfig(value: unknown, env: NodeJS.ProcessEnv): OpenClawConfig {
@@ -92,11 +91,9 @@ export async function readGatewayDispatchConfigWithShellEnvFallback(
   const enabled =
     shouldEnableShellEnvFallback(env) || firstRead.config.env?.shellEnv?.enabled === true;
   if (enabled && !shouldDeferShellEnvFallback(env)) {
-    const { applied } = loadShellEnvFallback({
-      enabled: true,
+    const applied = loadShellEnvFallback({
       env,
       expectedKeys: [...GATEWAY_DISPATCH_SHELL_ENV_EXPECTED_KEYS],
-      logger: options.logger ?? console,
       timeoutMs: firstRead.config.env?.shellEnv?.timeoutMs ?? resolveShellEnvFallbackTimeoutMs(env),
     });
     if (applied.length > 0) {

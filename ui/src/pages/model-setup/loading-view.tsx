@@ -1,3 +1,4 @@
+import { Repeat } from "solid-js";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { renderNativeModelSetupLoading } from "./native-model-setup.tsx";
@@ -20,26 +21,28 @@ function renderLoadingSection(
         </>
       ) : undefined}
       <div class="model-setup__rows">
-        {Array.from({ length: params.rows ?? 1 }, (_, index) => (
-          <div class="model-setup__row model-setup__loading-row">
-            <span class="model-setup__loading-icon skeleton" />
-            <span class="model-setup__loading-copy">
-              {index === 0 && params.status ? (
-                <>
-                  {" "}
-                  <span class="model-setup__loading-status">{params.status}</span>{" "}
-                </>
-              ) : (
-                <>
-                  {" "}
-                  <span class="skeleton skeleton-line skeleton-line--medium" />{" "}
-                </>
-              )}
-              <span class="skeleton skeleton-line skeleton-line--long" />
-            </span>
-            <span class="model-setup__loading-action skeleton" />
-          </div>
-        ))}
+        <Repeat count={params.rows ?? 1}>
+          {(index) => (
+            <div class="model-setup__row model-setup__loading-row">
+              <span class="model-setup__loading-icon skeleton" />
+              <span class="model-setup__loading-copy">
+                {index === 0 && params.status ? (
+                  <>
+                    {" "}
+                    <span class="model-setup__loading-status">{params.status}</span>{" "}
+                  </>
+                ) : (
+                  <>
+                    {" "}
+                    <span class="skeleton skeleton-line skeleton-line--medium" />{" "}
+                  </>
+                )}
+                <span class="skeleton skeleton-line skeleton-line--long" />
+              </span>
+              <span class="model-setup__loading-action skeleton" />
+            </div>
+          )}
+        </Repeat>
       </div>
     </section>
   );

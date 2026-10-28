@@ -4,7 +4,6 @@ import type { PluginCompatRecord } from "./types.js";
 const PREPARATION = {
   status: "deprecated",
   owner: "sdk",
-  introduced: "2026-10-13",
   deprecated: "2026-10-13",
   warningStarts: "2026-10-13",
   removeAfter: "2026-12-31",
@@ -17,17 +16,12 @@ export const ASYNC_SQLITE_PREPARATION_COMPAT_RECORDS = [
   {
     ...PREPARATION,
     code: "provider-model-capabilities-sync-read",
-    introduced: "2026-09-08",
     replacement:
       "Await loadOpenRouterModelCapabilities(modelId), then read getLoadedOpenRouterModelCapabilities(modelId). The synchronous getter remains compatible through 2026-12-31; removal ships in the first January 2027 stable release.",
     docsPath: "/plugins/sdk-migration/sqlite-async",
     surfaces: [
       "openclaw/plugin-sdk/provider-stream.getOpenRouterModelCapabilities",
       "openclaw/plugin-sdk/provider-stream-family.getOpenRouterModelCapabilities",
-    ],
-    tests: [
-      "src/agents/embedded-agent-runner/openrouter-model-capabilities.test.ts",
-      "src/plugins/compat/registry.test.ts",
     ],
   },
   {
@@ -44,10 +38,6 @@ export const ASYNC_SQLITE_PREPARATION_COMPAT_RECORDS = [
       "api.runtime.agent.session.getSessionEntry",
       "api.runtime.agent.session.getConversationSession",
     ],
-    tests: [
-      "src/plugin-sdk/session-store-runtime.async.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
   },
   {
     ...PREPARATION,
@@ -56,10 +46,6 @@ export const ASYNC_SQLITE_PREPARATION_COMPAT_RECORDS = [
       "Await resolveTranscriptSessionKeyBySessionIdAsync from session-store-runtime. It preserves exact historical session-window resolution, including session IDs no longer selected by the current entry.",
     docsPath: "/plugins/sdk-migration/async-transcript-and-tts",
     surfaces: ["openclaw/plugin-sdk/session-store-runtime.resolveTranscriptSessionKeyBySessionId"],
-    tests: [
-      "src/plugin-sdk/session-store-runtime.async.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
   },
   {
     ...PREPARATION,
@@ -70,10 +56,6 @@ export const ASYNC_SQLITE_PREPARATION_COMPAT_RECORDS = [
     surfaces: [
       "SessionPendingInputReceipt.complete",
       "UserTurnTranscriptRecorder.completeProcessing",
-    ],
-    tests: [
-      "src/config/sessions/session-pending-input-operations.test.ts",
-      "src/plugins/compat/registry.test.ts",
     ],
   },
   {
@@ -87,7 +69,6 @@ export const ASYNC_SQLITE_PREPARATION_COMPAT_RECORDS = [
       "openclaw/plugin-sdk/session-transcript-runtime.createSessionCatalogSourceActorProjector",
       "openclaw/plugin-sdk/session-transcript-runtime.createSessionCatalogGitHubLinker",
     ],
-    tests: ["src/gateway/session-catalog-identity.test.ts", "src/plugins/compat/registry.test.ts"],
   },
   {
     ...PREPARATION,
@@ -103,7 +84,6 @@ export const ASYNC_SQLITE_PREPARATION_COMPAT_RECORDS = [
       "openclaw/plugin-sdk/conversation-binding-inspection-runtime.inspectConversationBinding",
       "openclaw/plugin-sdk/exec-approvals-runtime.loadExecApprovals",
     ],
-    tests: ["src/plugin-sdk/command-auth-native.test.ts", "src/plugins/compat/registry.test.ts"],
   },
   {
     ...PREPARATION,
@@ -130,11 +110,6 @@ export const ASYNC_SQLITE_PREPARATION_COMPAT_RECORDS = [
       "openclaw/plugin-sdk/approval-runtime.doesApprovalRequestMatchChannelAccount",
       "openclaw/plugin-sdk/approval-native-runtime.doesApprovalRequestSelectChannelAccount",
     ],
-    tests: [
-      "src/plugin-sdk/approval-native-helpers.test.ts",
-      "src/plugin-sdk/approval-delivery-helpers.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
   },
   {
     ...PREPARATION,
@@ -154,11 +129,6 @@ export const ASYNC_SQLITE_PREPARATION_COMPAT_RECORDS = [
       "openclaw/plugin-sdk/proxy-capture.captureWsEvent",
       "openclaw/plugin-sdk/proxy-capture.finalizeDebugProxyCapture",
       "DebugProxyCaptureContext.captureWsEvent",
-    ],
-    tests: [
-      "src/proxy-capture/store.async.test.ts",
-      "src/proxy-capture/runtime.lifecycle.test.ts",
-      "src/plugins/compat/registry.test.ts",
     ],
   },
 ] as const satisfies readonly PluginCompatRecord[];

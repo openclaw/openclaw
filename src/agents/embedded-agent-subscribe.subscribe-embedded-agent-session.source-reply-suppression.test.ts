@@ -1,6 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { recordEmbeddedToolReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
 import {
   createSubscribedSessionHarness,
@@ -60,6 +60,7 @@ function createBlockReplyHarness(
     blockReplyBreak,
     ...options,
   });
+  onTestFinished(() => subscription.unsubscribe());
   return {
     emit,
     onBlockReply,
@@ -263,26 +264,22 @@ describe("subscribeEmbeddedAgentSession", () => {
 
   it("tracks media-only message tool sends as messaging delivery", async () => {
     const { emit, subscription } = createBlockReplyHarness("message_end");
-    try {
-      await emitMessageToolLifecycle(emit, "", {
-        media: "file:///tmp/render.mp4",
-      });
-      await subscription.waitForPendingEvents();
+    await emitMessageToolLifecycle(emit, "", {
+      media: "file:///tmp/render.mp4",
+    });
+    await subscription.waitForPendingEvents();
 
-      expect(subscription.didSendViaMessagingTool()).toBe(true);
-      expect(subscription.getMessagingToolSentMediaUrls()).toEqual(["file:///tmp/render.mp4"]);
-      const expectedUrls = Array.from({ length: 200 }, (_, index) => `file:///img-${index}.jpg`);
-      await emitMessageToolLifecycle(emit, "", {
-        toolCallId: "tool-message-media-cap",
-        details: { deliveryStatus: "sent", mediaUrls: [...expectedUrls] },
-      });
-      await subscription.waitForPendingEvents();
+    expect(subscription.didSendViaMessagingTool()).toBe(true);
+    expect(subscription.getMessagingToolSentMediaUrls()).toEqual(["file:///tmp/render.mp4"]);
+    const expectedUrls = Array.from({ length: 200 }, (_, index) => `file:///img-${index}.jpg`);
+    await emitMessageToolLifecycle(emit, "", {
+      toolCallId: "tool-message-media-cap",
+      details: { deliveryStatus: "sent", mediaUrls: [...expectedUrls] },
+    });
+    await subscription.waitForPendingEvents();
 
-      expect(subscription.getMessagingToolSentMediaUrls()).toEqual(expectedUrls);
-      expect(subscription.getMessagingToolSentMediaUrls()).not.toContain("file:///tmp/render.mp4");
-    } finally {
-      subscription.unsubscribe();
-    }
+    expect(subscription.getMessagingToolSentMediaUrls()).toEqual(expectedUrls);
+    expect(subscription.getMessagingToolSentMediaUrls()).not.toContain("file:///tmp/render.mp4");
   });
 
   it("does not let an earlier approval prompt suppress the next user reply", async () => {
@@ -313,7 +310,6 @@ describe("subscribeEmbeddedAgentSession", () => {
       "The new request has its own answer.",
     ]);
     expect(subscription.didSendDeterministicApprovalPrompt()).toBe(false);
-    subscription.unsubscribe();
   });
 
   it.each([
@@ -363,7 +359,6 @@ describe("subscribeEmbeddedAgentSession", () => {
         "The new request still needs its own reply.",
       ]);
       expect(subscription.getSourceReplyDeliveryState()).toBe("missing");
-      subscription.unsubscribe();
     },
   );
 
@@ -400,7 +395,6 @@ describe("subscribeEmbeddedAgentSession", () => {
 
     expect(subscription.endsWithSourceProgress()).toBe(false);
     expect(subscription.getSourceReplyDeliveryState()).toBe("missing");
-    subscription.unsubscribe();
   });
 
   it("suppresses text-only tool summaries after message-tool-only delivery", async () => {

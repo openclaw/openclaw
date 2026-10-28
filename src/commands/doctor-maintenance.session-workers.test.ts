@@ -1,26 +1,18 @@
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
-import {
-  deleteSessionEntryLifecycle,
-  loadExactSessionEntryReadOnly,
-  loadTranscriptEvents,
-  loadTranscriptEventsSync,
-  replaceSessionEntry,
-} from "../config/sessions/session-accessor.js";
+import * as sessions from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { markCanonicalSessionValidationPending } from "../config/sessions/session-canonical-key.js";
 import { certifySessionCanonicalValidationPending } from "../config/sessions/session-canonical-validation-readiness.js";
 import { hasPendingCanonicalSessionValidation } from "../config/sessions/session-canonical-validation.js";
-import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import {
   restoreSessionColdTranscript,
   runSessionColdStorageMaintenance,
 } from "../config/sessions/session-cold-storage.js";
 import {
   createSessionColdStorageFixture,
-  historicalId,
   maintenanceConfig,
 } from "../config/sessions/session-cold-storage.test-support.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
@@ -32,15 +24,13 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { beginDoctorMaintenance } from "./doctor-maintenance.js";
+import { beginDoctorRepair } from "./doctor-maintenance.admission.test-support.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 
+const withState = (run: Parameters<typeof withOpenClawTestState>[1]) =>
+  withOpenClawTestState({ scenario: "external-service", label: "doctor-workers" }, run);
 async function withMaintenance<T>(run: () => T) {
-  const maintenance = await beginDoctorMaintenance({
-    options: { repair: true, nonInteractive: true },
-    root: null,
-    runtime: { log() {}, error() {}, exit() {} },
-  });
+  const maintenance = await beginDoctorRepair();
   if (!maintenance) {
     throw new Error("Expected Doctor maintenance ownership");
   }
@@ -51,162 +41,141 @@ async function withMaintenance<T>(run: () => T) {
   }
 }
 
-describe("Doctor maintenance with session workers", () => {
-  it("certifies pending canonical rows under Doctor without changing them or retaining worker leases", async () => {
-    await withOpenClawTestState(
-      { scenario: "external-service", label: "doctor-canonical-worker" },
-      async (state) => {
-        setRuntimeConfigSnapshot({});
-        const options = { agentId: "main", env: state.env };
-        const scopes = ["first", "second"].map((name) => ({
-          agentId: options.agentId,
-          env: options.env,
-          sessionId: `doctor-canonical-${name}`,
-          sessionKey: `agent:main:doctor-canonical-${name}`,
-        }));
-        await withMaintenance(async () => {
-          for (const scope of scopes) {
-            await replaceSessionEntry(scope, {
-              sessionId: scope.sessionId,
-              updatedAt: 1,
-              lastRunError: `Preserve the exact row for ${scope.sessionId}.`,
-            });
-          }
-          const database = openOpenClawAgentDatabase(options);
-          const rows = () =>
-            executeSqliteQuerySync(
-              database.db,
-              getNodeSqliteKysely<Pick<DB, "session_nodes">>(database.db)
-                .selectFrom("session_nodes")
-                .selectAll()
-                .orderBy("session_key"),
-            ).rows;
-          const before = rows();
-          expect(before).toHaveLength(2);
-          runOpenClawAgentWriteTransaction(markCanonicalSessionValidationPending, options);
-          expect(hasPendingCanonicalSessionValidation(database)).toBe(true);
-
-          await certifySessionCanonicalValidationPending(options);
-
-          expect(hasPendingCanonicalSessionValidation(database)).toBe(false);
-          expect(rows()).toEqual(before);
+it("certifies pending rows without changing them or retaining worker leases", async () => {
+  await withState(async (state) => {
+    setRuntimeConfigSnapshot({});
+    const options = { agentId: "main", env: state.env };
+    const scopes = ["first", "second"].map((name) => ({
+      agentId: options.agentId,
+      env: options.env,
+      sessionId: `doctor-canonical-${name}`,
+      sessionKey: `agent:main:doctor-canonical-${name}`,
+    }));
+    await withMaintenance(async () => {
+      for (const scope of scopes) {
+        await sessions.replaceSessionEntry(scope, {
+          sessionId: scope.sessionId,
+          updatedAt: 1,
+          lastRunError: `Preserve ${scope.sessionId}.`,
         });
-        await withMaintenance(() => {
-          for (const scope of scopes) {
-            expect(loadExactSessionEntryReadOnly(scope)?.entry.sessionId).toBe(scope.sessionId);
-          }
-        });
-      },
-    );
+      }
+      const database = openOpenClawAgentDatabase(options);
+      const rows = () =>
+        executeSqliteQuerySync(
+          database.db,
+          getNodeSqliteKysely<Pick<DB, "session_nodes">>(database.db)
+            .selectFrom("session_nodes")
+            .selectAll()
+            .orderBy("session_key"),
+        ).rows;
+      const before = rows();
+      expect(before).toHaveLength(2);
+      runOpenClawAgentWriteTransaction(markCanonicalSessionValidationPending, options);
+      expect(hasPendingCanonicalSessionValidation(database)).toBe(true);
+      await certifySessionCanonicalValidationPending(options);
+      expect(hasPendingCanonicalSessionValidation(database)).toBe(false);
+      expect(rows()).toEqual(before);
+    });
+    await withMaintenance(() => {
+      for (const scope of scopes) {
+        expect(sessions.loadExactSessionEntryReadOnly(scope)?.entry.sessionId).toBe(
+          scope.sessionId,
+        );
+      }
+    });
   });
+});
 
-  it.each([false, true])(
-    "preserves migrated history, archives deletion, and drains workers before another repair (in-place: %s)",
-    async (inPlace) => {
-      await withOpenClawTestState(
-        { scenario: "external-service", label: "doctor-session-workers" },
-        async (state) => {
-          const sharedStore = inPlace ? state.statePath("shared.sqlite") : undefined;
-          const cfg: OpenClawConfig = {
-            agents: { entries: { ops: {} } },
-            plugins: { enabled: false },
-            ...(sharedStore ? { session: { store: sharedStore } } : {}),
-          };
-          await state.writeConfig(cfg);
-          const sessionId = "doctor-migrated-history";
-          const sessionScope = (agentId: string) => ({
-            agentId,
-            env: state.env,
-            sessionId,
-            sessionKey: `agent:${agentId}:doctor`,
-            storePath: sharedStore ?? path.join(state.sessionsDir(agentId), "sessions.json"),
-          });
-          const source = sessionScope("main");
-          const destination = sessionScope("ops");
-          const events = [
-            { type: "session", id: sessionId, version: 3 },
-            {
-              type: "message",
-              id: "doctor-history-message",
-              parentId: null,
-              message: { role: "user", content: "Preserve this history through Doctor repair." },
-            },
-          ];
-          await withMaintenance(async () => {
-            if (sharedStore) {
-              openOpenClawAgentDatabase({ agentId: "main", path: sharedStore, env: state.env });
-            }
-            await replaceSessionEntry(source, { sessionId, updatedAt: Date.now() });
-            await replaceTranscriptEvents(source, events);
-            await waitForSessionTranscriptIndexReconcile({
-              agentId: "main",
-              env: state.env,
-              ...(sharedStore ? { path: sharedStore } : {}),
-            });
-
-            await noteSessionTranscriptHealth({
-              cfg,
-              env: state.env,
-              shouldRepair: true,
-              postSessionPluginMigrationPlanBound: true,
-            });
-            expect(loadExactSessionEntryReadOnly(source)).toBeUndefined();
-            expect(loadExactSessionEntryReadOnly(destination)?.entry.sessionId).toBe(sessionId);
-            await expect(loadTranscriptEvents(destination)).resolves.toEqual(events);
-
-            const deleted = await deleteSessionEntryLifecycle({
-              agentId: destination.agentId,
-              archiveTranscript: true,
-              storePath: destination.storePath,
-              target: {
-                canonicalKey: destination.sessionKey,
-                storeKeys: [destination.sessionKey],
-              },
-            });
-            expect(deleted.deleted).toBe(true);
-            expect(loadExactSessionEntryReadOnly(destination)).toBeUndefined();
-            expect(deleted.archivedTranscripts).toHaveLength(1);
-            expect(
-              readSessionArchiveContentSync(deleted.archivedTranscripts[0]!.archivedPath),
-            ).toBe(`${events.map((event) => JSON.stringify(event)).join("\n")}\n`);
-          });
-
-          await withMaintenance(() => {
-            expect(loadExactSessionEntryReadOnly(source)).toBeUndefined();
-            expect(loadExactSessionEntryReadOnly(destination)).toBeUndefined();
-          });
+it.each([false, true])(
+  "migrates and archives history, then drains workers (in-place: %s)",
+  async (inPlace) => {
+    await withState(async (state) => {
+      const sharedStore = inPlace ? state.statePath("shared.sqlite") : undefined;
+      const cfg: OpenClawConfig = {
+        agents: { entries: { ops: {} } },
+        plugins: { enabled: false },
+        ...(sharedStore ? { session: { store: sharedStore } } : {}),
+      };
+      await state.writeConfig(cfg);
+      const sessionId = "doctor-migrated-history";
+      const scope = (agentId: string) => ({
+        agentId,
+        env: state.env,
+        sessionId,
+        sessionKey: `agent:${agentId}:doctor`,
+        storePath: sharedStore ?? path.join(state.sessionsDir(agentId), "sessions.json"),
+      });
+      const source = scope("main"),
+        destination = scope("ops");
+      const events = [
+        { type: "session", id: sessionId, version: 3 },
+        {
+          type: "message",
+          id: "history",
+          parentId: null,
+          message: { role: "user", content: "Preserve this history." },
         },
-      );
-    },
-  );
-
-  it("archives and restores exact cold history while Doctor holds maintenance ownership", async () => {
-    await withOpenClawTestState(
-      { scenario: "external-service", label: "doctor-cold-workers" },
-      async (state) => {
-        const fixture = await withMaintenance(async () => {
-          const seeded = await createSessionColdStorageFixture(
-            path.join(state.agentDir(), "openclaw-agent.sqlite"),
-          );
-          const events = loadTranscriptEventsSync(seeded.scope);
-          await expect(
-            runSessionColdStorageMaintenance({
-              config: maintenanceConfig(seeded.scope.storePath),
-            }),
-          ).resolves.toEqual({ archivedTranscripts: 1, externalizedTranscripts: 0 });
-          expect(readSessionColdTranscript(seeded.database(), historicalId)).toBeDefined();
-          expect(() => loadTranscriptEventsSync(seeded.scope)).toThrow(
-            expect.objectContaining({ code: "TRANSCRIPT_COLD" }),
-          );
-
-          await restoreSessionColdTranscript(seeded.scope);
-          expect(readSessionColdTranscript(seeded.database(), historicalId)).toBeUndefined();
-          expect(loadTranscriptEventsSync(seeded.scope)).toEqual(events);
-          expect(seeded.snapshot()).toEqual(seeded.original);
-          return seeded;
+      ];
+      await withMaintenance(async () => {
+        if (sharedStore) {
+          openOpenClawAgentDatabase({ agentId: "main", path: sharedStore, env: state.env });
+        }
+        await sessions.replaceSessionEntry(source, { sessionId, updatedAt: Date.now() });
+        await replaceTranscriptEvents(source, events);
+        await waitForSessionTranscriptIndexReconcile({
+          agentId: "main",
+          env: state.env,
+          ...(sharedStore ? { path: sharedStore } : {}),
         });
-        expect(fixture.snapshot()).toEqual(fixture.original);
-      },
-    );
+        await noteSessionTranscriptHealth({
+          cfg,
+          env: state.env,
+          shouldRepair: true,
+          postSessionPluginMigrationPlanBound: true,
+        });
+        expect(sessions.loadExactSessionEntryReadOnly(source)).toBeUndefined();
+        expect(sessions.loadExactSessionEntryReadOnly(destination)?.entry.sessionId).toBe(
+          sessionId,
+        );
+        await expect(sessions.loadTranscriptEvents(destination)).resolves.toEqual(events);
+        const deleted = await sessions.deleteSessionEntryLifecycle({
+          agentId: destination.agentId,
+          archiveTranscript: true,
+          storePath: destination.storePath,
+          target: { canonicalKey: destination.sessionKey, storeKeys: [destination.sessionKey] },
+        });
+        expect(deleted.deleted).toBe(true);
+        expect(sessions.loadExactSessionEntryReadOnly(destination)).toBeUndefined();
+        expect(deleted.archivedTranscripts).toHaveLength(1);
+        expect(readSessionArchiveContentSync(deleted.archivedTranscripts[0]!.archivedPath)).toBe(
+          `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
+        );
+      });
+      await withMaintenance(() => {
+        expect(sessions.loadExactSessionEntryReadOnly(source)).toBeUndefined();
+        expect(sessions.loadExactSessionEntryReadOnly(destination)).toBeUndefined();
+      });
+    });
+  },
+);
+
+it("archives and restores exact cold history under Doctor maintenance", async () => {
+  await withState(async (state) => {
+    const fixture = await withMaintenance(async () => {
+      const seeded = await createSessionColdStorageFixture(
+        path.join(state.agentDir(), "openclaw-agent.sqlite"),
+      );
+      const events = sessions.loadTranscriptEventsSync(seeded.scope);
+      await expect(
+        runSessionColdStorageMaintenance({ config: maintenanceConfig(seeded.scope.storePath) }),
+      ).resolves.toEqual({ archivedTranscripts: 1, externalizedTranscripts: 0 });
+      expect(() => sessions.loadTranscriptEventsSync(seeded.scope)).toThrow(
+        expect.objectContaining({ code: "TRANSCRIPT_COLD" }),
+      );
+      await restoreSessionColdTranscript(seeded.scope);
+      expect(sessions.loadTranscriptEventsSync(seeded.scope)).toEqual(events);
+      return seeded;
+    });
+    expect(fixture.snapshot()).toEqual(fixture.original);
   });
 });

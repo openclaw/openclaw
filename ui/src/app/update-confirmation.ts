@@ -19,7 +19,7 @@ export type UpdateProgress = {
 };
 
 // Keep the lazy confirmation entry independent of the application context.
-type UpdateProgressSources = {
+export function createUpdateProgressWatcher(context: {
   gateway: {
     snapshot: { phase: string };
     subscribe: (listener: () => void) => () => void;
@@ -34,11 +34,7 @@ type UpdateProgressSources = {
     };
     subscribe: (listener: () => void) => () => void;
   };
-};
-
-export function createUpdateProgressWatcher(
-  context: UpdateProgressSources,
-): (listener: (progress: UpdateProgress) => void) => () => void {
+}): (listener: (progress: UpdateProgress) => void) => () => void {
   return (listener) => {
     const emit = () => {
       const update = context.overlays.snapshot;

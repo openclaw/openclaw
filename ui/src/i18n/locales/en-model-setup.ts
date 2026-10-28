@@ -170,9 +170,30 @@ const enModelSetup = {
       manualEntry: "Use manual entry",
       browserInstructions: "Complete sign-in in your browser, then return here.",
       waiting: "Waiting for sign-in…",
+      signInTitle: "Continue in your browser",
+      deviceCodeTitle: "Enter this code in your browser",
+      signInPage: "The sign-in page",
+      browserOpened:
+        "{provider} is open in a new tab. Approve access there. This window updates by itself.",
+      browserOpenedContinue:
+        "{provider} is open in a new tab. Approve access there, then choose Continue.",
+      deviceCodeOpened:
+        "{provider} is open in a new tab. Make sure it shows the same code before you approve.",
+      deviceCodeEnter: "Enter this code on the provider's sign-in page.",
+      waitingForProvider: "Waiting for {provider}…",
+      reopenSignIn: "Reopen browser tab",
+      tryAgain: "Try again",
+      tabDidNotOpen: "Tab didn't open?",
+      copySignInLink: "Copy sign-in link",
+      stillWaiting:
+        "Still waiting. If you already approved, the tab may have opened in another browser or profile. Try again from here.",
+      deviceCodeExpired:
+        "This code expired. Nothing was connected. Close this window and start sign-in again.",
+      cancelSignIn: "Cancel sign-in",
       deviceCodeWarning:
-        "Continue only if you started this sign-in yourself. If a website or another person gave you this code, cancel.",
+        "Continue only if you started this sign-in. If someone sent you this code, cancel.",
       expires: "Expires in {count} minutes",
+      expiresSoon: "Expires in less than a minute",
       cancelled: "Provider sign-in was cancelled.",
       finishingStep: "Setup is finishing the current step. You can cancel when it finishes.",
       cancelFailed: "Could not confirm cancellation: {error}",
@@ -183,7 +204,6 @@ const enModelSetup = {
       gatewayReconnecting: "The Gateway is not responding. Waiting for it to reconnect.",
       notComplete: "Sign-in finished, but model setup is not complete yet.",
     },
-    waitingForApproval: "Waiting for approval in your browser…",
     providerConnected: "{provider} is connected",
   },
 } satisfies TranslationMap;

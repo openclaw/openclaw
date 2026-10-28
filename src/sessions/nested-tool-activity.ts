@@ -57,7 +57,9 @@ export function createNestedToolActivity(
     : "[Nested tool input omitted: exceeds display limit]";
   const result = boundedJsonUtf8Bytes(details.result, 32_768).complete
     ? details.result
-    : { content: [{ type: "text", text: "[Nested tool output omitted: exceeds display limit]" }] };
+    : {
+        content: [{ type: "text", text: "[Nested tool output omitted: exceeds display limit]" }],
+      };
   return getActivitySchema().parse({
     role: "custom",
     customType: NESTED_TOOL_ACTIVITY_CUSTOM_TYPE,

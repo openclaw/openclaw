@@ -311,6 +311,38 @@ it("keeps the selected provider when excess optional routes fill the client budg
   );
 });
 
+it("binds the actual wire Access rather than trusting the requested model alone", async () => {
+  const h = harness();
+  const controller = new AbortController();
+  const model = vi.fn(
+    (ref: { provider: string; model: string; cyberAccessProgram?: string } | undefined) => {
+      if (ref?.cyberAccessProgram === "daybreak_red") {
+        throw new Error("Access denied");
+      }
+      return { assertCurrent: () => {}, signal: controller.signal, release: () => {} };
+    },
+  );
+  const bind = modelBinding(h.client, {
+    captureModelSource: async () => ({
+      ...captureDefaults,
+      source: { assertCurrent() {}, release() {}, bindModelExecution: model },
+    }),
+  });
+  const request = requestFor(controller.signal, {
+    body: { model: "a", access_programs: { cyber: "daybreak_blue" } },
+  });
+  const execution = await bind(request);
+  expect(model).toHaveBeenLastCalledWith({
+    provider: "fixture",
+    model: "a",
+    cyberAccessProgram: "daybreak_blue",
+  });
+  execution.release();
+  await expect(
+    bind({ ...request, body: { model: "a", access_programs: { cyber: "daybreak_red" } } }),
+  ).rejects.toThrow(CodexInferenceAuthorizationError);
+});
+
 it.each(["/alpha/search", "/images/generations"])("binds %s ownership", async (path) => {
   const h = harness();
   const controller = new AbortController();
@@ -339,7 +371,11 @@ it.each(["/alpha/search", "/images/generations"])("binds %s ownership", async (p
   expect(captureModelSource).toHaveBeenCalledWith(
     expect.objectContaining({ client: h.client, threadId: "root", turnId: "native-turn" }),
   );
-  expect(model).toHaveBeenCalledWith({ provider: "fixture", model: "allowed" });
+  expect(model).toHaveBeenCalledWith({
+    provider: "fixture",
+    model: "allowed",
+    cyberAccessProgram: "standard",
+  });
   execution.release();
   expect(release).toHaveBeenCalledOnce();
   await expect(bind({ ...request, body: { model: "denied" } })).rejects.toThrow(
@@ -603,6 +639,10 @@ it.each([
   { env: { HTTPS_PROXY: proxyUrl }, supported: true },
   { env: { HTTPS_PROXY: " " + proxyUrl + " " }, supported: false },
   { env: { HTTPS_PROXY: proxyUrl, REQUEST_METHOD: "GET" }, supported: false },
+  { env: { ...bothProxies, NO_PROXY: "127.0.0.1,example.com" }, supported: false },
+  { env: { ...bothProxies, NO_PROXY: "127.0.0.1,10.0.0.0/8" }, supported: false },
+  { env: { ...bothProxies, NO_PROXY: "127.0.0.1,127.0.0.0/16" }, supported: false },
+  { env: { ...bothProxies, NO_PROXY: "127.0.0.1,*.localhost" }, supported: false },
 ])("qualifies native/relay proxies (%j)", async ({ env, supported }) => {
   for (const [key, value] of Object.entries(env)) {
     vi.stubEnv(key, value);

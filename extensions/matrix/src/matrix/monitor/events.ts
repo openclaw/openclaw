@@ -39,28 +39,6 @@ function formatMatrixPostHealthySyncDecryptionHint(accountId: string): string {
   );
 }
 
-function isFreshPostHealthySyncDecryptFailure(params: {
-  event: MatrixRawEvent;
-  healthySyncSinceMs?: number;
-  nowMs: number;
-}): boolean {
-  const { event, healthySyncSinceMs, nowMs } = params;
-  if (typeof healthySyncSinceMs !== "number" || !Number.isFinite(healthySyncSinceMs)) {
-    return false;
-  }
-  const eventTs = event.origin_server_ts;
-  if (!Number.isFinite(eventTs) || eventTs <= 0) {
-    return false;
-  }
-  if (eventTs < healthySyncSinceMs) {
-    return false;
-  }
-  if (eventTs > nowMs + 60_000) {
-    return false;
-  }
-  return true;
-}
-
 function createMatrixPostHealthySyncDecryptFailureTracker(params: {
   getHealthySyncSinceMs?: () => number | undefined;
 }) {
@@ -90,12 +68,15 @@ function createMatrixPostHealthySyncDecryptFailureTracker(params: {
         trackedHealthySyncSinceMs = healthySyncSinceMs;
         resetObservations();
       }
+      if (typeof healthySyncSinceMs !== "number" || !Number.isFinite(healthySyncSinceMs)) {
+        return { freshAfterHealthySync: false, failureCount: 0 } as const;
+      }
+      const eventTs = event.origin_server_ts;
       if (
-        !isFreshPostHealthySyncDecryptFailure({
-          event,
-          healthySyncSinceMs,
-          nowMs,
-        })
+        !Number.isFinite(eventTs) ||
+        eventTs <= 0 ||
+        eventTs < healthySyncSinceMs ||
+        eventTs > nowMs + 60_000
       ) {
         return { freshAfterHealthySync: false, failureCount: 0 } as const;
       }
@@ -181,6 +162,7 @@ export function registerMatrixMonitorEvents(params: {
   needsRoomAliasesForConfig: boolean;
   getRoomInfo: ReturnType<typeof createMatrixRoomInfoResolver>["getRoomInfo"];
   invalidateMemberDisplayName?: (roomId: string, userId: string) => void;
+  invalidateRoomName?: (roomId: string) => void;
   logVerboseMessage: (message: string) => void;
   warnedEncryptedRooms: Set<string>;
   warnedCryptoMissingRooms: Set<string>;
@@ -200,6 +182,7 @@ export function registerMatrixMonitorEvents(params: {
     readStoreAllowFrom,
     directTracker,
     invalidateMemberDisplayName,
+    invalidateRoomName,
     logVerboseMessage,
     warnedEncryptedRooms,
     warnedCryptoMissingRooms,
@@ -429,6 +412,9 @@ export function registerMatrixMonitorEvents(params: {
       logVerboseMessage(
         `matrix: member event room=${roomId} stateKey=${stateKey} membership=${membership ?? "unknown"}`,
       );
+    }
+    if (eventType === EventType.RoomName) {
+      invalidateRoomName?.(roomId);
     }
 
     routeVerificationEvent(roomId, event);

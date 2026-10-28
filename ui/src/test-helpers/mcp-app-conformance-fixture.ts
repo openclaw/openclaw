@@ -10,10 +10,10 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 
 const require = createRequire(import.meta.url);
+const httpRequests = channel("http.server.request.start");
 
 export function observeMcpAppHttpResponses(gatewayPort: number) {
   const responses: ServerResponse[] = [];
-  const requests = channel("http.server.request.start");
   const onRequest = (message: unknown) => {
     // SAFETY: Node publishes these exact objects before the real HTTP request handler runs.
     const { request, response } = message as {
@@ -28,8 +28,8 @@ export function observeMcpAppHttpResponses(gatewayPort: number) {
       responses.push(response);
     }
   };
-  requests.subscribe(onRequest);
-  return { responses, stop: () => requests.unsubscribe(onRequest) };
+  httpRequests.subscribe(onRequest);
+  return { responses, stop: () => httpRequests.unsubscribe(onRequest) };
 }
 
 export function observeMcpAppRequests(page: Page) {
@@ -180,7 +180,7 @@ export async function mountControlUiHost(
 import { createApplicationGateway } from "/src/app/gateway-store.ts";
 import { waitForGatewayClient } from "/src/app/gateway-readiness.ts";
 import { loadSettings } from "/src/app/settings.ts";
-import "/src/components/mcp-app-view-registration.ts";
+import "/src/components/mcp-app-view.tsx";
 import { applicationContext } from "/src/app/context.ts";
 window.mcpConformanceApplicationContext = applicationContext;
 import { MCP_APP_MESSAGE_EVENT } from "/src/components/mcp-app-security.ts";
@@ -190,7 +190,6 @@ window.mcpConformanceConnect = async ({ gatewayUrl, authValue, sessionKey }) => 
     { ...loadSettings(), gatewayUrl, token: authValue, sessionKey },
     "",
     "",
-    undefined,
     { persistDefaultConnectionSettings: false, ownsWarmBoot: false },
   );
   gateway.start();
@@ -293,6 +292,10 @@ export async function waitForTextContaining(
   } else {
     await assertion.not.toContain(expected);
   }
+}
+
+export function readMcpAppModule(): Promise<string> {
+  return fs.readFile(require.resolve("@modelcontextprotocol/ext-apps/app-with-deps"), "utf8");
 }
 
 export function appHtml(appModuleUrl: string): string {
@@ -482,10 +485,10 @@ class ObservedStdioTransport extends StdioServerTransport {
 }
 const appUri = "ui://conformance/app";
 const server = new McpServer({ name: "mcp-app-conformance", version: "1.0.0" });
-const show = server.registerTool("show", { description: "Show the conformance app" }, async () => ({
-  content: [{ type: "text", text: "initial-result" }],
-  structuredContent: { value: "initial-result" },
-}));
+const toolResult = (value, extra = {}) => ({
+  content: [{ type: "text", text: value }], structuredContent: { value, ...extra },
+});
+const show = server.registerTool("show", { description: "Show the conformance app" }, async () => toolResult("initial-result"));
 show.update({ _meta: { ui: { resourceUri: appUri } } });
 const appOnly = server.registerTool("app_companion", { description: "App-only companion" }, async ({ mcpReq }) => {
   const request = requests.get(mcpReq.id);
@@ -510,10 +513,7 @@ const appOnly = server.registerTool("app_companion", { description: "App-only co
   } finally {
     mcpReq.signal.removeEventListener("abort", onAbort);
   }
-  return {
-    content: [{ type: "text", text: "companion-called" }],
-    structuredContent: { value: "companion-called", invocation },
-  };
+  return toolResult("companion-called", { invocation });
 });
 const arm = server.registerTool("arm_refresh", { description: "Arm fixture catalog response delay" }, async ({ mcpReq }) => {
   const scenario = requests.get(mcpReq.id)?.scenario;
@@ -527,7 +527,7 @@ appOnly.update({ _meta: { ui: { visibility: ["app"] } } });
 const cleanupSave = server.registerTool("cleanup_save", { description: "Save App state before unmount" }, async ({ mcpReq }) => {
   const scenario = requests.get(mcpReq.id)?.scenario;
   record("cleanup-save", { scenario, requestId: mcpReq.id });
-  return { content: [{ type: "text", text: "saved" }], structuredContent: { value: "saved" } };
+  return toolResult("saved");
 });
 cleanupSave.update({ _meta: { ui: { visibility: ["app"] } } });
 const modelOnly = server.registerTool("model_only", { description: "Model-only tool" }, async () => ({

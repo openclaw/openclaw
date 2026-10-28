@@ -1,5 +1,10 @@
 import type { DecisionBatch, DecisionBatchResult } from "./types.js";
-import { decisionEntry, finiteJson, isPlainDecisionRecord } from "./validation-common.js";
+import {
+  decisionEntry,
+  finiteJson,
+  isPlainDecisionRecord,
+  validDecisionCriteria,
+} from "./validation-common.js";
 
 /** A caller contract defect is not a provider outage. Never include evidence in errors. */
 export class DecisionContractError extends Error {
@@ -40,32 +45,10 @@ export function validateDecisionBatch(batch: unknown): batch is DecisionBatch {
     ) {
       throw new DecisionContractError();
     }
-    if (q.type === "choice") {
-      if (
-        !isPlainDecisionRecord(q.criteria) ||
-        Object.keys(q.criteria).length < 2 ||
-        !Object.entries(q.criteria).every(
-          ([label, description]) => label.length > 0 && decisionEntry(description),
-        )
-      ) {
-        throw new DecisionContractError();
-      }
-    } else if (q.type === "score") {
-      if (!Array.isArray(q.criteria) || q.criteria.length < 2 || !q.criteria.every(decisionEntry)) {
-        throw new DecisionContractError();
-      }
-    } else if (q.type === "boolean") {
-      if (
-        q.criteria !== undefined &&
-        q.criteria !== null &&
-        (!isPlainDecisionRecord(q.criteria) ||
-          !Object.entries(q.criteria).every(
-            ([key, value]) => (key === "true" || key === "false") && decisionEntry(value),
-          ))
-      ) {
-        throw new DecisionContractError();
-      }
-    } else {
+    if (
+      (q.type !== "choice" && q.type !== "score" && q.type !== "boolean") ||
+      !validDecisionCriteria(q.type, q.criteria)
+    ) {
       throw new DecisionContractError();
     }
   }

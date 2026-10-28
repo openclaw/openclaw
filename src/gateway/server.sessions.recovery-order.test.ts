@@ -1,6 +1,8 @@
 import { expect, test, vi } from "vitest";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
 import { claimAgentSessionWriter } from "../agents/embedded-agent-runner/run/session-bootstrap.js";
 import { commitMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-store.js";
+import { recoverStore } from "../agents/main-session-recovery/main-session-restart-recovery-store.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
   loadSessionEntry,
@@ -12,6 +14,7 @@ import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as storeWrites from "../shared/store-writer-queue.js";
+import { createMockGatewayRecoveryRuntime } from "./server-recovery-runtime.test-support.js";
 import { seedExhaustedRecovery } from "./server.sessions.recovery.test-support.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import { writeSessionStore } from "./test-helpers.js";
@@ -25,6 +28,55 @@ import type { WorkerPlacementDispatchService } from "./worker-environments/place
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+
+test.each([
+  { code: "INVALID_REQUEST", message: "missing scope: operator.write", retryable: false },
+  { code: "UNAVAILABLE", message: "Gateway is restarting", retryable: true },
+])("sessions.recover resumes after three rejected dispatches: $message", async (error) => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionKey = "agent:main:dashboard:rejected-recovery";
+  const sessionId = "rejected-recovery-session";
+  const target = { agentId: "main", sessionKey, storePath };
+  await writeSessionStore({ entries: { [sessionKey]: { sessionId, updatedAt: 1_000 } } });
+  await commitMainSessionRecovery({
+    target,
+    command: { kind: "mark_interrupted", cycleId: "rejected-cycle", now: 2_000 },
+  });
+  await seedSessionTranscript({
+    ...target,
+    sessionId,
+    messages: [{ role: "user", content: "Finish the interrupted task." }],
+  });
+  const dispatchAgent = vi.fn().mockRejectedValue(new GatewayClientRequestError(error));
+  const handledSessionKeys = new Set<string>();
+  for (let pass = 0; pass < 3; pass++) {
+    expect(
+      await recoverStore({
+        storeAgentId: "main",
+        storePath,
+        cfg: getRuntimeConfig(),
+        handledSessionKeys,
+        gatewayRuntime: createMockGatewayRecoveryRuntime({ dispatchAgent }),
+      }),
+    ).toEqual({ started: 0, settled: 0, failed: 1, skipped: 0 });
+  }
+  expect(dispatchAgent).toHaveBeenCalledTimes(3);
+  expect(loadSessionEntry(target)).toMatchObject({
+    status: "interrupted",
+    abortedLastRun: true,
+    mainRestartRecovery: { chargedAttempts: 0 },
+  });
+  expect(loadSessionEntry(target)?.mainRestartRecovery?.tombstone).toBeUndefined();
+  const recovered = await directSessionReq("sessions.recover", { key: sessionKey });
+  expect(recovered, JSON.stringify(recovered.error)).toMatchObject({
+    ok: true,
+    payload: { key: sessionKey, sessionId, continuation: { status: "started" } },
+  });
+  expect(loadSessionEntry(target)?.archivedAt).toBeUndefined();
+  expect(JSON.stringify(await loadTranscriptEvents({ ...target, sessionId }))).toContain(
+    "Finish the interrupted task.",
+  );
+});
 
 test.each([false, true])("queues cloud recovery (revoked=%s)", async (revokeAuthority) => {
   const { storePath } = await createSessionStoreDir();

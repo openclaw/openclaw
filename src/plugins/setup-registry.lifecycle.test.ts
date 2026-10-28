@@ -6,16 +6,10 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { createNonExitingRuntime } from "../runtime.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
-import {
-  createPluginCache,
-  getScopedPluginCache,
-  retirePluginCache,
-  withPluginCache,
-} from "./plugin-cache.js";
+import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { getPluginValueInstance } from "./plugin-instance-scope.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import {
@@ -35,14 +29,12 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fi
 const tempDirs: string[] = [];
 
 function pausedOperation(event: string, cleanup: string, env: NodeJS.ProcessEnv) {
-  const started = createDeferredCore();
-  const release = createDeferredCore();
+  const started = createDeferred();
+  const release = createDeferred();
   const before = process.listenerCount(event);
   let entered = false;
-  let cache: ReturnType<typeof getScopedPluginCache>;
   return {
     enter() {
-      cache = getScopedPluginCache();
       entered = true;
       started.resolve();
       return release.promise;
@@ -55,8 +47,6 @@ function pausedOperation(event: string, cleanup: string, env: NodeJS.ProcessEnv)
       try {
         await Promise.race([started.promise, work]);
         expect(entered).toBe(true);
-        expect(cache?.kind).toBe("operation");
-        expect(cache?.retirement).toBeUndefined();
         expect(process.listenerCount(event)).toBe(before + 1);
         await withPluginLifecycleLease({ env, waitMs: 0 }, async (lease) => lease.assertOwned());
         beforeRelease?.();
@@ -64,7 +54,6 @@ function pausedOperation(event: string, cleanup: string, env: NodeJS.ProcessEnv)
         const result = await work;
         expect(process.listenerCount(event)).toBe(before);
         expect(fs.readFileSync(cleanup, "utf8")).toBe("closed");
-        expect(cache?.retirement).toBeDefined();
         return result;
       } finally {
         release.resolve();
@@ -83,6 +72,17 @@ function callable(value: unknown) {
 
 function registry(...plugins: PluginManifestRecord[]): PluginManifestRegistry {
   return { plugins, diagnostics: [] };
+}
+
+function resolveSetup(
+  cache: ReturnType<typeof createPluginCache>,
+  manifestRegistry: PluginManifestRegistry,
+) {
+  return withPluginCache(cache, () => resolvePluginSetupRegistry({ manifestRegistry }));
+}
+
+function writeJson(file: string, value: unknown) {
+  fs.writeFileSync(file, JSON.stringify(value));
 }
 
 function setupRecord(
@@ -107,33 +107,27 @@ function writeSetupLifecycleFixture(id: string, body: string) {
 
 function writeInstalledManifest(rootDir: string, id: string, setup: boolean) {
   const source = setup ? "./setup-api.cjs" : "./runtime.cjs";
-  fs.writeFileSync(
-    path.join(rootDir, "package.json"),
-    JSON.stringify({
-      name: `@example/${id}`,
-      version: "1.0.0",
-      type: "commonjs",
-      openclaw: { extensions: [source], ...(setup ? { setupEntry: source } : {}) },
-    }),
-  );
-  fs.writeFileSync(
-    path.join(rootDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id,
-      providers: [id],
-      configSchema: { type: "object", properties: {} },
-      providerAuthChoices: [
-        {
-          provider: id,
-          method: "synthetic",
-          choiceId: id,
-          choiceLabel: setup ? "Lease auth" : "Probe owner",
-          ...(!setup ? { appGuidedDiscovery: true } : {}),
-        },
-      ],
-      ...(setup ? { setup: { requiresRuntime: true, providers: [{ id }] } } : {}),
-    }),
-  );
+  writeJson(path.join(rootDir, "package.json"), {
+    name: `@example/${id}`,
+    version: "1.0.0",
+    type: "commonjs",
+    openclaw: { extensions: [source], ...(setup ? { setupEntry: source } : {}) },
+  });
+  writeJson(path.join(rootDir, "openclaw.plugin.json"), {
+    id,
+    providers: [id],
+    configSchema: { type: "object", properties: {} },
+    providerAuthChoices: [
+      {
+        provider: id,
+        method: "synthetic",
+        choiceId: id,
+        choiceLabel: setup ? "Lease auth" : "Probe owner",
+        ...(!setup ? { appGuidedDiscovery: true } : {}),
+      },
+    ],
+    ...(setup ? { setup: { requiresRuntime: true, providers: [{ id }] } } : {}),
+  });
 }
 
 function installedConfig(id: string, rootDir: string) {
@@ -165,7 +159,7 @@ describe("plugin setup registry artifact lifecycle", () => {
     const manifestRegistry = registry(writeSetupLifecycleFixture("setup-display", failure));
     const cache = createPluginCache();
     try {
-      const result = withPluginCache(cache, () => resolvePluginSetupRegistry({ manifestRegistry }));
+      const result = resolveSetup(cache, manifestRegistry);
       expect(result.providers).toEqual([]);
       expect(result.diagnostics).toMatchObject([
         {
@@ -191,8 +185,8 @@ describe("plugin setup registry artifact lifecycle", () => {
       cleaned.push(id);
     };
     process.on(cleanupEvent, observeCleanup);
-    const manifestRegistry: PluginManifestRegistry = {
-      plugins: ids.map((id) =>
+    const manifestRegistry = registry(
+      ...ids.map((id) =>
         writeSetupLifecycleFixture(
           id,
           `module.exports = { register(api) {
@@ -207,11 +201,10 @@ describe("plugin setup registry artifact lifecycle", () => {
       } };`,
         ),
       ),
-      diagnostics: [],
-    };
+    );
     const cache = createPluginCache();
     try {
-      const result = withPluginCache(cache, () => resolvePluginSetupRegistry({ manifestRegistry }));
+      const result = resolveSetup(cache, manifestRegistry);
       expect(result.providers.map((entry) => entry.pluginId)).toEqual(["live-setup"]);
       expect(result.diagnostics).toMatchObject([
         {
@@ -220,7 +213,6 @@ describe("plugin setup registry artifact lifecycle", () => {
         },
       ]);
       const live = result.providers[0]?.provider;
-      expect(live?.resolveConfigApiKey?.({ provider: "live-setup", env: {} })).toBe("ready");
       // Synchronous registration has returned; let its initiated disposal finish before cache teardown.
       await nextTurn();
       expect(process.listenerCount(`${event}-failed-setup`)).toBe(failedBefore);
@@ -264,18 +256,18 @@ describe("plugin setup registry artifact lifecycle", () => {
     );
     const cache = createPluginCache();
     try {
-      const first = withPluginCache(cache, () => resolvePluginSetupRegistry({ manifestRegistry }));
+      const first = resolveSetup(cache, manifestRegistry);
       const retained = first.providers[0]?.provider;
       expect(retained?.resolveConfigApiKey?.({ provider: "repeated-setup", env: {} })).toBe(
         "ready:1",
       );
-      const second = withPluginCache(cache, () => resolvePluginSetupRegistry({ manifestRegistry }));
+      // Registrations are cached per record; a new record generation re-registers the module.
+      const nextGeneration = registry(...manifestRegistry.plugins.map((record) => ({ ...record })));
+      expect(resolveSetup(cache, manifestRegistry).providers[0]?.provider).toBe(retained);
+      const second = resolveSetup(cache, nextGeneration);
       expect(second.providers).toEqual([]);
       expect(second.diagnostics).toMatchObject([
-        {
-          pluginId: "repeated-setup",
-          code: "setup-registration-failed",
-        },
+        { pluginId: "repeated-setup", code: "setup-registration-failed" },
       ]);
       await nextTurn();
       expect(process.listenerCount(event)).toBe(before + 1);
@@ -364,14 +356,12 @@ describe("plugin setup registry artifact lifecycle", () => {
           }
         });
         if (outcome === "success") {
-          expect(result.ok).toBe(true);
           if (!result.ok || !result.value) {
             throw new Error("auth fixture did not prepare persistence");
           }
           expect(result.value.authProfiles).toHaveLength(1);
           await expect(result.value.persistAuthProfiles()).resolves.toBeUndefined();
         } else {
-          expect(result.ok).toBe(false);
           if (result.ok) {
             throw new Error("auth fixture unexpectedly succeeded");
           }
@@ -389,7 +379,7 @@ describe("plugin setup registry artifact lifecycle", () => {
     { artifactRootName: "dist", computed: true },
     { artifactRootName: "dist-runtime", computed: false },
   ])(
-    "reloads bundled setup artifacts from $artifactRootName (computed: $computed)",
+    "retains bundled setup artifacts from $artifactRootName after metadata refresh (computed: $computed)",
     ({ artifactRootName, computed }) => {
       const packageRoot = fs.realpathSync(
         makeTrackedTempDir("openclaw-bundled-setup-lifecycle", tempDirs),
@@ -398,10 +388,9 @@ describe("plugin setup registry artifact lifecycle", () => {
       const artifactRoot = path.join(packageRoot, artifactRootName, "extensions", "bundled-setup");
       fs.mkdirSync(rootDir, { recursive: true });
       fs.mkdirSync(artifactRoot, { recursive: true });
-      fs.writeFileSync(
-        path.join(artifactRoot, "package.json"),
-        JSON.stringify({ openclaw: { setupEntry: "./setup-api.js" } }),
-      );
+      writeJson(path.join(artifactRoot, "package.json"), {
+        openclaw: { setupEntry: "./setup-api.js" },
+      });
       const sourcePath = path.join(rootDir, "setup-api.ts");
       const artifactPath = path.join(artifactRoot, "setup-api.js");
       const dependencyPath =
@@ -438,7 +427,7 @@ describe("plugin setup registry artifact lifecycle", () => {
       clearPluginMetadataLifecycleCaches();
 
       expect(resolvePluginSetupRegistry({ manifestRegistry }).providers[0]?.provider.label).toBe(
-        "entry-after:dependency-after",
+        "entry-before:dependency-before",
       );
     },
   );

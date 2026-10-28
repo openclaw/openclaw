@@ -71,4 +71,26 @@ export function projectPluginSessionEntry(entry: InternalSessionEntry): SessionE
   };
 }
 
+// Public results own their containers; immutable prompt strings can remain shared.
+export function copyMutableSessionEntry<T extends InternalSessionEntry | null>(entry: T): T {
+  if (!entry) {
+    return entry;
+  }
+  const copied = { ...entry };
+  const pending: object[] = [copied];
+  while (pending.length) {
+    const parent = pending.pop()!;
+    for (const key of Object.keys(parent)) {
+      const value: unknown = Reflect.get(parent, key);
+      if (value === null || typeof value !== "object") {
+        continue;
+      }
+      const child = Array.isArray(value) ? [...value] : { ...value };
+      Reflect.set(parent, key, child);
+      pending.push(child);
+    }
+  }
+  return copied;
+}
+
 export { projectPublicSessionEntryPatch as projectPluginSessionEntryPatch } from "../config/sessions/session-entry-projection.js";

@@ -8,13 +8,24 @@ import {
   addFormats,
   AjvJsonSchemaValidator,
 } from "@modelcontextprotocol/client/validators/ajv";
-import { normalizeJsonSchemaForTypeBox } from "@openclaw/normalization-core/json-schema";
+import {
+  normalizeJsonSchemaForTypeBox,
+  type JsonSchemaRefinement,
+} from "@openclaw/normalization-core/json-schema";
+import type { JsonSchemaValidator as PreparedValidator } from "@openclaw/normalization-core/json-schema-validator";
 import fastUri from "fast-uri";
 import { Compile } from "typebox/compile";
+import { getRuntimeExecutionProfile } from "../../standalone-runtime-profile.mjs";
 import { toErrorObject } from "../infra/errors.js";
 import { findJsonSchemaShapeError } from "../shared/json-schema-defaults.js";
+import {
+  createJsonSchemaValidatorProvider,
+  type JsonSchemaValidatorProvider,
+} from "../shared/json-schema-validator.js";
 
 const DRAFT_2020_12_SCHEMA = "https://json-schema.org/draft/2020-12/schema";
+const annotationFormats = new Map<string, JsonSchemaRefinement>();
+type McpFormats = Readonly<InstanceType<typeof Ajv>["formats"]>;
 
 function isDraft202012Schema(schema: JsonSchemaType): boolean {
   return (schema as { $schema?: unknown }).$schema === DRAFT_2020_12_SCHEMA;
@@ -42,6 +53,9 @@ export function createMcpJsonSchemaValidator(): jsonSchemaValidator {
     uriResolver: fastUri,
   });
   addFormats(ajv);
+  if (getRuntimeExecutionProfile() === "embedded-aot") {
+    return createInterpretedMcpJsonSchemaValidator(ajv.formats);
+  }
   const defaultValidator = new AjvJsonSchemaValidator(ajv);
 
   return {
@@ -73,6 +87,100 @@ export function createMcpJsonSchemaValidator(): jsonSchemaValidator {
           valid: false,
           data: undefined,
           errorMessage: formatTypeBoxErrors([...validator.Errors(input)]),
+        };
+      };
+    },
+  };
+}
+
+function createFormatRefinement(
+  name: string,
+  definition: Exclude<McpFormats[string], undefined>,
+): JsonSchemaRefinement | undefined {
+  const error = () => `must match format "${name}"`;
+  if (definition === true) {
+    return undefined;
+  }
+  if (typeof definition === "function") {
+    return { check: (value) => typeof value !== "string" || definition(value), error };
+  }
+  if (definition instanceof RegExp) {
+    return { check: (value) => typeof value !== "string" || definition.test(value), error };
+  }
+  if (definition.async) {
+    throw new Error(`Unsupported MCP JSON Schema format definition: ${name}`);
+  }
+  if (definition.type === "number") {
+    return {
+      check: (value) => typeof value !== "number" || definition.validate(value),
+      error,
+    };
+  }
+  const validate = definition.validate;
+  if (typeof validate === "string") {
+    throw new Error(`Unsupported MCP JSON Schema format definition: ${name}`);
+  }
+  return {
+    check: (value) => {
+      if (typeof value !== "string") {
+        return true;
+      }
+      if (validate instanceof RegExp) {
+        return validate.test(value);
+      }
+      // Ajv's optional format type does not discriminate its callback union.
+      const accepted: unknown = Reflect.apply(validate, undefined, [value]);
+      return accepted === true;
+    },
+    error,
+  };
+}
+
+function createFormatRefinements(formats: McpFormats): ReadonlyMap<string, JsonSchemaRefinement> {
+  const refinements = new Map<string, JsonSchemaRefinement>();
+  for (const [name, definition] of Object.entries(formats)) {
+    if (definition === undefined) {
+      continue;
+    }
+    const refinement = createFormatRefinement(name, definition);
+    if (refinement) {
+      refinements.set(name, refinement);
+    }
+  }
+  return refinements;
+}
+
+/** Code-generation-free MCP validation with the existing draft and format policies. */
+function createInterpretedMcpJsonSchemaValidator(formats: McpFormats): jsonSchemaValidator {
+  let draft7Provider: JsonSchemaValidatorProvider | undefined;
+  return {
+    getValidator<T>(schema: JsonSchemaType): JsonSchemaValidator<T> {
+      const modern = schema.$schema === DRAFT_2020_12_SCHEMA;
+      let validator: PreparedValidator;
+      try {
+        const provider = modern
+          ? createJsonSchemaValidatorProvider({ dialect: "2020-12", formats: annotationFormats })
+          : (draft7Provider ??= createJsonSchemaValidatorProvider({
+              dialect: "draft7",
+              formats: createFormatRefinements(formats),
+            }));
+        validator = provider.getValidator(schema);
+      } catch (error) {
+        const setupError = toErrorObject(error, "schema setup failed");
+        throw new Error(
+          `Invalid MCP ${modern ? "draft-2020-12 " : ""}JSON Schema: ${setupError.message}`,
+          { cause: error },
+        );
+      }
+      return (input: unknown) => {
+        if (validator.check(input)) {
+          // SAFETY: The SDK pairs T with this runtime schema; its successful check admits input.
+          return { valid: true, data: input as T, errorMessage: undefined };
+        }
+        return {
+          valid: false,
+          data: undefined,
+          errorMessage: formatTypeBoxErrors(validator.errors(input)),
         };
       };
     },

@@ -533,12 +533,7 @@ export async function runCliBtwSideQuestion(params: {
       sessionFile: params.sessionFile,
       workspaceDir: params.workspaceDir,
       config: params.cfg,
-      prompt: buildBtwCliPrompt({
-        messages: params.messages,
-        question: params.question,
-        imageCount: params.imageCount,
-        inFlightPrompt: params.inFlightPrompt,
-      }),
+      prompt: buildBtwCliPrompt(params),
       extraSystemPrompt: buildBtwSystemPrompt(),
       executionMode: "side-question",
       provider: params.cliProvider,

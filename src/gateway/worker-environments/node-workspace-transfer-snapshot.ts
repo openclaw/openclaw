@@ -16,6 +16,8 @@ export type NodeWorkspaceTransferSnapshot = Awaited<ReturnType<typeof captureWor
   root: string;
   /** Sparse checkpoint payloads contain only these paths from the complete manifest. */
   blobPaths?: ReadonlySet<string>;
+  /** Opaque checkpoint delta; upstream objects stay on the independently cloned worker. */
+  gitPackPath?: string;
 };
 
 export async function prepareNodeWorkspaceTransferSnapshot(params: {

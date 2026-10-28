@@ -1,25 +1,31 @@
+import type { Locator } from "playwright";
 import { expect, it, vi } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { textMessage } from "./chat-flow-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Transcript focused row placement",
   startServerBeforeBrowser: true,
 });
+async function focusRow(action: Locator) {
+  await action.focus();
+  const key = await action.evaluate(
+    (element) => element.closest<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey ?? "",
+  );
+  expect(key).not.toBe("");
+  return key;
+}
 suite.define(() => {
   it("keeps a focused message action mounted while its row scrolls out of view", async () => {
     const page = await suite.browser.newPage({ viewport: { width: 1280, height: 800 } });
-    const messages = Array.from({ length: 200 }, (_, index) => ({
-      __openclaw: { seq: index + 1 },
-      content: [
-        {
-          type: "text",
-          text: `focus retention message ${index + 1}\n${"transcript detail line\n".repeat(3)}`,
-        },
-      ],
-      role: index % 2 === 0 ? "assistant" : "user",
-      timestamp: Date.now() + index,
-    }));
+    const messages = Array.from({ length: 200 }, (_, index) =>
+      textMessage(
+        index % 2 === 0 ? "assistant" : "user",
+        `focus retention message ${index + 1}\n${"transcript detail line\n".repeat(3)}`,
+        { __openclaw: { seq: index + 1 }, timestamp: Date.now() + index },
+      ),
+    );
     await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup"],
       methodResponses: {
@@ -36,39 +42,30 @@ suite.define(() => {
     await page.goto(`${suite.server.baseUrl}chat`);
     await page.getByText(/^focus retention message 200\n/).waitFor();
     const thread = page.locator(".chat-thread");
-    const action = thread.locator("button.chat-reply-btn").last();
-    await action.focus();
-    const focusedRowKey = await action.evaluate(
-      (element) => element.closest<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey ?? "",
-    );
-    expect(focusedRowKey).not.toBe("");
-
-    await thread.evaluate((element) => {
-      element.scrollTop = 0;
-      element.dispatchEvent(new Event("scroll"));
-    });
-    await expect.poll(() => thread.evaluate((element) => Math.round(element.scrollTop))).toBe(0);
-    await page.getByText(/^focus retention message 1\n/).waitFor();
-    await expect
-      .poll(() =>
-        thread.evaluate((element, key) => {
-          const row = Array.from(
-            element.querySelectorAll<HTMLElement>(".chat-virtual-row[data-virtual-row-key]"),
-          ).find((candidate) => candidate.dataset.virtualRowKey === key);
-          return Boolean(row?.contains(document.activeElement));
-        }, focusedRowKey),
-      )
-      .toBe(true);
-    expect(await thread.locator(".chat-virtual-row").count()).toBeLessThan(30);
+    const actions = thread.locator("button.chat-reply-btn");
+    const scrollTo = async (edge: "first" | "last", dispatch = false) => {
+      await thread.evaluate((element, atStart) => {
+        element.scrollTop = atStart ? 0 : element.scrollHeight;
+      }, edge === "first");
+      if (dispatch) {
+        await thread.evaluate((element) => element.dispatchEvent(new Event("scroll")));
+        await expect
+          .poll(() => thread.evaluate((element) => Math.round(element.scrollTop)))
+          .toBe(0);
+      }
+      await page
+        .getByText(
+          edge === "first" ? /^focus retention message 1\n/ : /^focus retention message 200\n/,
+        )
+        .waitFor({ state: "visible" });
+    };
 
     const checkPlacement = async (
       edge: "first" | "last",
       sparse: boolean,
       expectedRowKey: string,
     ) => {
-      // Focused outliers stay mounted, so text visibility can precede the new
-      // virtual range. Require the gap beside that outlier and the normal range
-      // covering the requested viewport, not the previous range plus its outlier.
+      // Visibility alone can pass on a stale range containing the focused outlier.
       await vi.waitFor(async () => {
         const placement = await thread.evaluate(
           (element, { edge: placementEdge, sparse: isSparse }) => {
@@ -108,8 +105,7 @@ suite.define(() => {
           },
           { edge, sparse },
         );
-        expect(placement.focused).toBe(true);
-        expect(placement.focusedRowKey).toBe(expectedRowKey);
+        expect(placement).toMatchObject({ focused: true, focusedRowKey: expectedRowKey });
         expect(Math.abs(placement.edgeDelta)).toBeLessThanOrEqual(2);
         expect(placement.count).toBeLessThan(30);
         expect(placement.gaps.filter((gap) => gap.skipped > 0)).toHaveLength(sparse ? 1 : 0);
@@ -123,38 +119,17 @@ suite.define(() => {
           }
         }
         expect(Math.abs(placement.scrollEdgeDelta)).toBeLessThanOrEqual(1);
-        for (const pixels of placement.uncovered) {
-          expect(pixels).toBeLessThanOrEqual(2);
-        }
+        expect(Math.max(...placement.uncovered)).toBeLessThanOrEqual(2);
       });
     };
-    await checkPlacement("last", true, focusedRowKey);
-    await thread.evaluate((element) => {
-      element.scrollTop = element.scrollHeight;
-    });
-    await page.getByText(/^focus retention message 200\n/).waitFor({ state: "visible" });
-    await checkPlacement("last", false, focusedRowKey);
-
-    await thread.evaluate((element) => {
-      element.scrollTop = 0;
-    });
-    await page.getByText(/^focus retention message 1\n/).waitFor({ state: "visible" });
-    const firstAction = thread.locator("button.chat-reply-btn").first();
-    await firstAction.focus();
-    const firstRowKey = await firstAction.evaluate(
-      (element) => element.closest<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey ?? "",
-    );
-    expect(firstRowKey).not.toBe("");
-    await thread.evaluate((element) => {
-      element.scrollTop = element.scrollHeight;
-    });
-    await page.getByText(/^focus retention message 200\n/).waitFor({ state: "visible" });
-    await checkPlacement("first", true, firstRowKey);
-    await thread.evaluate((element) => {
-      element.scrollTop = 0;
-    });
-    await page.getByText(/^focus retention message 1\n/).waitFor({ state: "visible" });
-    await checkPlacement("first", false, firstRowKey);
+    for (const edge of ["last", "first"] as const) {
+      await scrollTo(edge);
+      const key = await focusRow(actions[edge]());
+      await scrollTo(edge === "last" ? "first" : "last", edge === "last");
+      await checkPlacement(edge, true, key);
+      await scrollTo(edge);
+      await checkPlacement(edge, false, key);
+    }
     await page.close();
   });
 });

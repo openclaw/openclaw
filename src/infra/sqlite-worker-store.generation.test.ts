@@ -41,16 +41,18 @@ poolIt(
     expect(ordinaryThreads.size).toBe(capacity);
     const moduleUrl = new URL("./sqlite-worker-store.test-support.ts", import.meta.url);
     const directory = tempDirs.make("openclaw-retained-sqlite-generation-");
-    const openShared = async (source: ReturnType<typeof captureRuntimeWorkerSource>) => {
-      const store = await openSharedStateSqliteWorkerStore<FixtureOperations>(
-        { ...source, databasePath: databasePath() },
-        { environment: { OPENCLAW_STATE_DIR: directory } },
-      );
+    const openGeneration = async (shared = false) => {
+      const source = { ...captureRuntimeWorkerSource(moduleUrl), databasePath: databasePath() };
+      const store = shared
+        ? await openSharedStateSqliteWorkerStore<FixtureOperations>(source, {
+            environment: { OPENCLAW_STATE_DIR: directory },
+          })
+        : await openSqliteWorkerStore<FixtureOperations>({ ...source, input: undefined });
       assert(store);
       stores.add(store);
       return store;
     };
-    const ordinaryShared = await openShared(captureRuntimeWorkerSource(moduleUrl));
+    const ordinaryShared = await openGeneration(true);
     const sharedThread = (await append(ordinaryShared, "ordinary shared")).threadId;
     expect(ordinaryThreads.has(sharedThread)).toBe(false);
     const generation = async (name: string, run: () => Promise<void>) => {
@@ -64,34 +66,22 @@ poolIt(
         async () => {},
       );
     };
-    const openRetained = async () => {
-      const source = captureRuntimeWorkerSource(moduleUrl);
-      const store = await openSqliteWorkerStore<FixtureOperations>({
-        ...source,
-        databasePath: databasePath(),
-        input: undefined,
-      });
-      stores.add(store);
-      return store;
-    };
     let retained: SqliteWorkerStore<FixtureOperations> | undefined;
     const before = getTrackedWorkerCpuSources().workers.length;
     await generation("first", async () => {
-      retained = await openRetained();
+      retained = await openGeneration();
       const first = await append(retained, "first");
       expect(ordinaryThreads.has(first.threadId)).toBe(false);
       expect(getTrackedWorkerCpuSources().workers).toHaveLength(before + 1);
-      const sibling = await openRetained();
+      const sibling = await openGeneration();
       expect((await append(sibling, "same generation")).threadId).toBe(first.threadId);
-      const retainedShared = await openShared(captureRuntimeWorkerSource(moduleUrl));
+      const retainedShared = await openGeneration(true);
       const shared = await append(retainedShared, "retained shared");
       expect([...ordinaryThreads, sharedThread, first.threadId]).not.toContain(shared.threadId);
       expect(getTrackedWorkerCpuSources().workers).toHaveLength(before + 2);
       await generation("second", async () => {
-        await expect(openRetained()).rejects.toMatchObject({ code: "overloaded" });
-        await expect(openShared(captureRuntimeWorkerSource(moduleUrl))).rejects.toMatchObject({
-          code: "overloaded",
-        });
+        await expect(openGeneration()).rejects.toMatchObject({ code: "overloaded" });
+        await expect(openGeneration(true)).rejects.toMatchObject({ code: "overloaded" });
         expect(getTrackedWorkerCpuSources().workers).toHaveLength(before + 2);
       });
       await Promise.all([append(retained, "second"), append(retained, "third")]);

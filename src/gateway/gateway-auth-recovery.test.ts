@@ -1,14 +1,11 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { expect, it, onTestFailed, type TestContext } from "vitest";
 import type { ModelChoice } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { readProcessRssMb } from "../../scripts/lib/gateway-bench-probes.ts";
 import {
-  BUILD_STAMP_FILE,
-  resolveGitHead,
-  RUNTIME_POSTBUILD_STAMP_FILE,
-} from "../../scripts/lib/local-build-metadata.mts";
+  createFixtureRequest,
+  verifyBuiltGatewayHead,
+} from "../../test/helpers/gateway-built-fixture.js";
 import { acquireGatewayTestClient } from "../../test/helpers/gateway-client.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import {
@@ -20,23 +17,6 @@ import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTrackedProvider } from "./test-helpers.tracked-provider.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
-
-async function verifyBuiltGatewayHead(repoRoot: string, signal: AbortSignal) {
-  signal.throwIfAborted();
-  const head = resolveGitHead({ cwd: repoRoot });
-  expect(head).toMatch(/^[0-9a-f]{40}$/u);
-  await fs.access(path.join(repoRoot, "dist/index.js"));
-  signal.throwIfAborted();
-  for (const [file, field] of [
-    [BUILD_STAMP_FILE, "head"],
-    [RUNTIME_POSTBUILD_STAMP_FILE, "head"],
-    ["build-info.json", "commit"],
-  ] as const) {
-    const metadata = JSON.parse(await fs.readFile(path.join(repoRoot, "dist", file), "utf8"));
-    signal.throwIfAborted();
-    expect(metadata[field], file).toBe(head);
-  }
-}
 
 function gatewayConfig(gateway: OpenClawTestInstance, modelRef: string) {
   return {
@@ -51,7 +31,6 @@ function gatewayConfig(gateway: OpenClawTestInstance, modelRef: string) {
       defaults: {
         workspace: gateway.state.workspaceDir,
         skipBootstrap: true,
-        heartbeat: { every: "0m" },
         model: { primary: modelRef, fallbacks: [] },
       },
     },
@@ -253,33 +232,28 @@ it(
           signal.throwIfAborted();
         }
         const activeClient = await connect();
+        const request = createFixtureRequest(activeClient, signal);
         const gatewayPid = gateway.child?.pid;
         expect(gatewayPid).toBeTypeOf("number");
         const runTurn = async (agentId: keyof typeof profileIds, message: string) => {
           signal.throwIfAborted();
           const sessionKey = `agent:${agentId}:auth-recovery-${randomUUID()}`;
-          const accepted = await activeClient.request<{ runId: string; status: string }>(
-            "agent",
-            {
-              agentId,
-              sessionKey,
-              message,
-              deliver: false,
-              idempotencyKey: randomUUID(),
-            },
-            { signal },
-          );
-          signal.throwIfAborted();
+          const accepted = await request<{ runId: string; status: string }>("agent", {
+            agentId,
+            sessionKey,
+            message,
+            deliver: false,
+            idempotencyKey: randomUUID(),
+          });
           expect(accepted.status).toBe("accepted");
-          const terminal = await activeClient.request<{ status: string }>(
+          const terminal = await request<{ status: string }>(
             "agent.wait",
             {
               runId: accepted.runId,
               timeoutMs: 60_000,
             },
-            { timeoutMs: 65_000, signal },
+            { timeoutMs: 65_000 },
           );
-          signal.throwIfAborted();
           return { sessionKey, terminal };
         };
         const failTurn = async (agentId: keyof typeof profileIds) => {
@@ -294,7 +268,9 @@ it(
         };
         const rateStats = await failTurn("rate");
         signal.throwIfAborted();
-        expect(rateStats?.cooldownReason).toBe("rate_limit");
+        // The synthetic 429 carries no provider timing: record it without a local cooldown.
+        expect(rateStats?.lastRateLimitAt).toEqual(expect.any(Number));
+        expect(rateStats?.cooldownUntil).toBeUndefined();
         expect(requests.rate).toBe(2);
 
         phase = "auth";
@@ -303,30 +279,26 @@ it(
         expect(["auth", "auth_permanent"]).toContain(
           authStats?.cooldownReason ?? authStats?.disabledReason,
         );
-        const saved = await activeClient.request<{
+        const saved = await request<{
           provider: string;
           profileId: string;
           warning?: string;
         }>(
           "models.authSetApiKey",
           { agentId: "auth", provider: provider.providerId, apiKey: credentials.recovered },
-          { timeoutMs: 30_000, signal },
+          { timeoutMs: 30_000 },
         );
-        signal.throwIfAborted();
         expect(saved).toEqual({ provider: provider.providerId, profileId: profileIds.auth });
-        const refreshed = await activeClient.request<{ refreshed: boolean }>(
+        const refreshed = await request<{ refreshed: boolean }>(
           "models.authRefresh",
           { agentId: "auth", operation: "login" },
-          { timeoutMs: 30_000, signal },
+          { timeoutMs: 30_000 },
         );
-        signal.throwIfAborted();
         expect(refreshed.refreshed).toBe(true);
-        const catalog = await activeClient.request<{ models: ModelChoice[] }>(
-          "models.list",
-          { agentId: "auth", view: "configured" },
-          { signal },
-        );
-        signal.throwIfAborted();
+        const catalog = await request<{ models: ModelChoice[] }>("models.list", {
+          agentId: "auth",
+          view: "configured",
+        });
         expect(
           catalog.models.find(
             (model) => model.provider === provider.providerId && model.id === provider.modelId,
@@ -339,21 +311,14 @@ it(
         expect(terminal.status, gateway.logs()).toBe("ok");
         expect(requests.recovered).toBe(1);
         expect(unexpectedCredential).toBe(false);
-        const history = await activeClient.request<{ messages: unknown[] }>(
-          "chat.history",
-          { sessionKey },
-          { signal },
-        );
-        signal.throwIfAborted();
-        expect(history.messages).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              role: "assistant",
-              content: expect.arrayContaining([
-                expect.objectContaining({ type: "text", text: "AUTH_RECOVERY_OK" }),
-              ]),
-            }),
-          ]),
+        const history = await request<{ messages: unknown[] }>("chat.history", { sessionKey });
+        expect(history.messages).toContainEqual(
+          expect.objectContaining({
+            role: "assistant",
+            content: expect.arrayContaining([
+              expect.objectContaining({ type: "text", text: "AUTH_RECOVERY_OK" }),
+            ]),
+          }),
         );
         expect(gateway.child?.pid).toBe(gatewayPid);
         expect(
@@ -424,16 +389,16 @@ it(
         await gateway.state.writeConfig(cfg);
         signal.throwIfAborted();
         const client = await connect();
+        const request = createFixtureRequest(client, signal);
         const expectedIds = new Set(models.map((model) => model.id));
         let returnedRows = 0;
         for (const agentId of agentIds) {
           signal.throwIfAborted();
-          const result = await client.request<{ models: ModelChoice[] }>(
+          const result = await request<{ models: ModelChoice[] }>(
             "models.list",
             { agentId, view: "configured" },
-            { timeoutMs: 30_000, signal },
+            { timeoutMs: 30_000 },
           );
-          signal.throwIfAborted();
           const configured = result.models.filter(
             (model) => model.provider === provider.providerId,
           );

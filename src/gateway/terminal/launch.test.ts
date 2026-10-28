@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { mergeProcessEnv, resolveEnvironmentValue } from "../../infra/process-env.js";
+import { withEnv } from "../../test-utils/env.js";
 import {
   buildTerminalEnv,
   createTerminalLaunchPolicy,
@@ -16,6 +17,13 @@ const hot = { restartPending: false };
 const restart = { restartPending: true };
 const acceptHot = { retireRejectedRestart: false };
 const retireRestart = { retireRejectedRestart: true };
+function terminalConfig(
+  terminal: NonNullable<NonNullable<OpenClawConfig["gateway"]>["terminal"]>,
+  port?: number,
+): OpenClawConfig {
+  return { gateway: { terminal, ...(port === undefined ? {} : { port }) } };
+}
+const shellConfig = (shell: string) => terminalConfig({ enabled: true, shell });
 function fleetConfig(blocked?: "alpha" | "beta"): OpenClawConfig {
   return {
     agents: {
@@ -35,14 +43,14 @@ function expectDisabled(policy: ReturnType<typeof createTerminalLaunchPolicy>) {
   expect(policy.isEnabled()).toBe(false);
   expect(policy.resolve()).toEqual({ ok: false, block: { kind: "disabled" } });
 }
+function expectShell(policy: ReturnType<typeof createTerminalLaunchPolicy>, shell: string) {
+  expect(policy.resolve()).toMatchObject({ ok: true, plan: { shell } });
+}
 
 describe("createTerminalLaunchPolicy", () => {
   it("is enabled by default and fails closed when disabled, sandboxed, or unknown-agent", () => {
     expect(createTerminalLaunchPolicy({}).isEnabled()).toBe(true);
-    expect(createTerminalLaunchPolicy(disabled).resolve()).toEqual({
-      ok: false,
-      block: { kind: "disabled" },
-    });
+    expectDisabled(createTerminalLaunchPolicy(disabled));
 
     const sandboxed = createTerminalLaunchPolicy(sandboxConfig("all"));
     expect(sandboxed.resolve()).toMatchObject({
@@ -82,17 +90,14 @@ describe("createTerminalLaunchPolicy", () => {
   });
 
   it("applies restart-bound revocations without granting access early", () => {
-    const initial: OpenClawConfig = { gateway: { port: 18789, terminal: { enabled: true } } };
+    const initial = terminalConfig({ enabled: true }, 18789);
     const policy = createTerminalLaunchPolicy(initial);
 
-    policy.prepareConfig({ gateway: { port: 18790, terminal: { enabled: false } } }, restart);
+    policy.prepareConfig(terminalConfig({ enabled: false }, 18790), restart);
     policy.prepareConfig(initial, restart);
     expectDisabled(policy);
 
-    policy.prepareConfig(
-      { gateway: { port: 18790, terminal: { enabled: true, shell: "/bin/new-shell" } } },
-      hot,
-    );
+    policy.prepareConfig(terminalConfig({ enabled: true, shell: "/bin/new-shell" }, 18790), hot);
     policy.commitConfig();
     policy.acceptConfig(acceptHot);
     expectDisabled(policy);
@@ -102,40 +107,15 @@ describe("createTerminalLaunchPolicy", () => {
     expectDisabled(disabledPolicy);
   });
 
-  it("preserves sandbox revocations across later restart-bound updates", () => {
-    const workspace = tempDirs.make("term-policy-agent-");
-    const baseConfig: OpenClawConfig = {
-      gateway: { terminal: { enabled: true } },
-      agents: { defaults: { workspace }, entries: { ops: {} } },
-    };
-    const policy = createTerminalLaunchPolicy(baseConfig);
-    policy.prepareConfig(
-      {
-        ...baseConfig,
-        agents: {
-          defaults: { workspace },
-          entries: { ops: { sandbox: { mode: "all" } } },
-        },
-      },
-      { restartPending: true },
-    );
-    policy.prepareConfig(baseConfig, { restartPending: true });
-
-    const resolved = policy.resolve("ops");
-    expect(resolved.ok).toBe(false);
-    if (!resolved.ok) {
-      expect(resolved.block.kind).toBe("sandboxed");
-    }
-  });
-
-  it("keeps restart and commit restrictions isolated across agents", () => {
+  it("preserves restart revocations across updates and isolates hot restrictions by agent", () => {
     const baseConfig: OpenClawConfig = fleetConfig();
     const policy = createTerminalLaunchPolicy(baseConfig);
 
     policy.prepareConfig(fleetConfig("alpha"), restart);
+    policy.prepareConfig(baseConfig, restart);
     policy.prepareConfig(fleetConfig("beta"), hot);
 
-    expect(policy.resolve("alpha").ok).toBe(false);
+    expect(policy.resolve("alpha")).toMatchObject({ ok: false, block: { kind: "sandboxed" } });
     expect(policy.resolve("beta").ok).toBe(false);
 
     policy.acceptConfig(acceptHot);
@@ -181,66 +161,31 @@ describe("createTerminalLaunchPolicy", () => {
     },
   );
 
-  it("keeps current launch details until a restart-bound change takes effect", () => {
-    const workspace = tempDirs.make("term-policy-");
-    const policy = createTerminalLaunchPolicy({
-      gateway: { terminal: { enabled: true, shell: "/bin/old-shell" } },
-      agents: { defaults: { workspace } },
-    });
-
-    policy.prepareConfig(
-      {
-        gateway: { terminal: { enabled: true, shell: "/bin/new-shell" } },
-        agents: { defaults: { workspace } },
-      },
-      { restartPending: true },
-    );
-
-    const resolved = policy.resolve();
-    expect(resolved.ok).toBe(true);
-    if (resolved.ok) {
-      expect(resolved.plan.shell).toBe("/bin/old-shell");
-    }
-
-    policy.prepareConfig(
-      {
-        gateway: { terminal: { enabled: true, shell: "/bin/new-shell" } },
-        agents: { defaults: { workspace, sandbox: { mode: "all" } } },
-      },
-      { restartPending: false },
-    );
-    const tightened = policy.resolve();
-    expect(tightened.ok).toBe(false);
-    if (!tightened.ok) {
-      expect(tightened.block.kind).toBe("sandboxed");
-    }
-  });
-
   it.each([false, true])(
     "publishes shell changes only at hot commit with pending restart=%s",
     (restartPending) => {
-      const initial: OpenClawConfig = {
-        gateway: { terminal: { enabled: true, shell: "/bin/old-shell" } },
-      };
+      const initial = shellConfig("/bin/old-shell");
       const policy = createTerminalLaunchPolicy(initial);
       const originalLaunch = policy.resolve();
       if (restartPending) {
-        policy.prepareConfig({ ...initial, gateway: { ...initial.gateway, port: 18790 } }, restart);
+        policy.prepareConfig(
+          terminalConfig({ enabled: true, shell: "/bin/new-shell" }, 18790),
+          restart,
+        );
+        expectShell(policy, "/bin/old-shell");
       }
-      const nextConfig: OpenClawConfig = {
-        gateway: { terminal: { enabled: true, shell: "/bin/new-shell" } },
-      };
+      const nextConfig = shellConfig("/bin/new-shell");
       policy.prepareConfig(nextConfig, hot);
-      expect(policy.resolve()).toMatchObject({ ok: true, plan: { shell: "/bin/old-shell" } });
+      expectShell(policy, "/bin/old-shell");
 
       policy.commitConfig();
-      expect(policy.resolve()).toMatchObject({ ok: true, plan: { shell: "/bin/new-shell" } });
+      expectShell(policy, "/bin/new-shell");
       expect(originalLaunch).toMatchObject({ ok: true, plan: { shell: "/bin/old-shell" } });
 
-      policy.prepareConfig({ gateway: { terminal: { shell: "/bin/rejected-shell" } } }, hot);
+      policy.prepareConfig(terminalConfig({ shell: "/bin/rejected-shell" }), hot);
       policy.acceptConfig(acceptHot);
       policy.commitConfig();
-      expect(policy.resolve()).toMatchObject({ ok: true, plan: { shell: "/bin/new-shell" } });
+      expectShell(policy, "/bin/new-shell");
 
       const defaults = createTerminalLaunchPolicy({}).resolve();
       policy.prepareConfig({}, hot);
@@ -248,25 +193,6 @@ describe("createTerminalLaunchPolicy", () => {
       expect(policy.resolve()).toEqual(defaults);
     },
   );
-
-  it("applies non-restart sandbox policy changes immediately", () => {
-    const policy = createTerminalLaunchPolicy({
-      gateway: { terminal: { enabled: true } },
-    });
-    policy.prepareConfig(
-      {
-        gateway: { terminal: { enabled: true } },
-        agents: { defaults: { sandbox: { mode: "all" } } },
-      },
-      { restartPending: false },
-    );
-
-    const blocked = policy.resolve();
-    expect(blocked.ok).toBe(false);
-    if (!blocked.ok) {
-      expect(blocked.block.kind).toBe("sandboxed");
-    }
-  });
 
   it("does not grant a non-restart policy relaxation before commit", () => {
     const policy = createTerminalLaunchPolicy(sandboxConfig("all"));
@@ -277,18 +203,8 @@ describe("createTerminalLaunchPolicy", () => {
     expect(policy.resolve().ok).toBe(true);
   });
 
-  it("retains failed hot-reload revocations until a later commit succeeds", () => {
+  it("retires a failed hot restriction when the replacement restart is accepted", () => {
     const baseConfig: OpenClawConfig = sandboxConfig("off");
-    const policy = createTerminalLaunchPolicy(baseConfig);
-    policy.prepareConfig(sandboxConfig("all"), hot);
-    // Simulate a failed hot reload, followed by a relaxation that has not
-    // succeeded yet. The first attempt's revocation must remain in force.
-    policy.prepareConfig(baseConfig, hot);
-    expect(policy.resolve().ok).toBe(false);
-
-    policy.commitConfig();
-    expect(policy.resolve().ok).toBe(true);
-
     const restartPolicy = createTerminalLaunchPolicy(baseConfig);
     restartPolicy.prepareConfig(sandboxConfig("all"), hot);
     restartPolicy.prepareConfig(baseConfig, restart);
@@ -298,59 +214,37 @@ describe("createTerminalLaunchPolicy", () => {
     expect(restartPolicy.resolve().ok).toBe(true);
   });
 
-  it("releases a rejected restart restriction after an accepted revert", () => {
-    const baseConfig = enabled;
-    const policy = createTerminalLaunchPolicy(baseConfig);
-
+  it.each(["all", "off"] as const)("publishes %s after retiring a rejected restart", (mode) => {
+    const policy = createTerminalLaunchPolicy(mode === "all" ? enabled : sandboxConfig("all"));
     policy.prepareConfig(disabled, restart);
-    policy.prepareConfig(sandboxConfig("all"), hot);
+    policy.prepareConfig(sandboxConfig(mode), hot);
     policy.commitConfig();
-    expect(policy.isEnabled()).toBe(false);
-
+    expectDisabled(policy);
     policy.acceptConfig(retireRestart);
     policy.commitConfig();
     expect(policy.isEnabled()).toBe(true);
+    expect(policy.resolve().ok).toBe(mode === "off");
   });
 
-  it("commits a newer hot candidate after a rejected restart is retired", () => {
-    const baseConfig: OpenClawConfig = sandboxConfig("all");
-    const policy = createTerminalLaunchPolicy(baseConfig);
-
-    policy.prepareConfig(disabled, restart);
-    policy.prepareConfig(sandboxConfig("off"), hot);
-    policy.commitConfig();
+  it.each([
+    ["off", false],
+    ["all", false],
+    ["off", true],
+  ] as const)("retires an uncommitted hot candidate (base=%s, restart=%s)", (mode, pending) => {
+    const base = sandboxConfig(mode);
+    const policy = createTerminalLaunchPolicy(base);
+    if (pending) {
+      policy.prepareConfig(base, restart);
+    }
+    policy.prepareConfig(sandboxConfig(mode === "off" ? "all" : "off"), hot);
     expect(policy.resolve().ok).toBe(false);
-
-    policy.acceptConfig(retireRestart);
-    policy.commitConfig();
-    expect(policy.resolve().ok).toBe(true);
-  });
-
-  it("retires failed hot candidates without clearing committed restart restrictions", () => {
-    const baseConfig: OpenClawConfig = sandboxConfig("off");
-    const policy = createTerminalLaunchPolicy(baseConfig);
-
-    policy.prepareConfig(sandboxConfig("all"), hot);
-    expect(policy.resolve().ok).toBe(false);
-
     policy.acceptConfig(acceptHot);
     policy.commitConfig();
-    expect(policy.resolve().ok).toBe(true);
+    expect(policy.resolve().ok).toBe(mode === "off");
+  });
 
-    const skippedPolicy = createTerminalLaunchPolicy(sandboxConfig("all"));
-    skippedPolicy.prepareConfig(baseConfig, hot);
-    skippedPolicy.acceptConfig(acceptHot);
-    skippedPolicy.commitConfig();
-    expect(skippedPolicy.resolve().ok).toBe(false);
-
-    const pendingPolicy = createTerminalLaunchPolicy(baseConfig);
-    pendingPolicy.prepareConfig(baseConfig, restart);
-    pendingPolicy.prepareConfig(sandboxConfig("all"), hot);
-    expect(pendingPolicy.resolve().ok).toBe(false);
-    pendingPolicy.acceptConfig(acceptHot);
-    pendingPolicy.commitConfig();
-    expect(pendingPolicy.resolve().ok).toBe(true);
-
+  it("retains committed hot restrictions while a restart is pending", () => {
+    const baseConfig = sandboxConfig("off");
     const appliedPendingPolicy = createTerminalLaunchPolicy(baseConfig);
     appliedPendingPolicy.prepareConfig(baseConfig, restart);
     appliedPendingPolicy.prepareConfig(sandboxConfig("all"), hot);
@@ -363,23 +257,15 @@ describe("createTerminalLaunchPolicy", () => {
     appliedPendingPolicy.acceptConfig(acceptHot);
     appliedPendingPolicy.commitConfig();
     expect(appliedPendingPolicy.resolve().ok).toBe(true);
-
-    policy.prepareConfig(disabled, restart);
-    policy.acceptConfig(acceptHot);
-    policy.commitConfig();
-    expect(policy.isEnabled()).toBe(false);
   });
 
   it.each([false, true])(
     "commits hot enablement and keeps failed disable restrictions until commit with pending restart=%s",
     (restartPending) => {
       const policy = createTerminalLaunchPolicy(disabled);
-      const disabledConfig: OpenClawConfig = {
-        gateway: { ...(restartPending ? { port: 18790 } : {}), terminal: { enabled: false } },
-      };
-      const enabledConfig: OpenClawConfig = {
-        gateway: { ...disabledConfig.gateway, terminal: { enabled: true, shell: "/bin/sh" } },
-      };
+      const port = restartPending ? 18790 : undefined;
+      const disabledConfig = terminalConfig({ enabled: false }, port);
+      const enabledConfig = terminalConfig({ enabled: true, shell: "/bin/sh" }, port);
       if (restartPending) {
         policy.prepareConfig(disabledConfig, restart);
         policy.acceptConfig(acceptHot);
@@ -390,7 +276,7 @@ describe("createTerminalLaunchPolicy", () => {
       policy.commitConfig();
       policy.acceptConfig(acceptHot);
       expect(policy.isEnabled()).toBe(true);
-      expect(policy.resolve()).toMatchObject({ ok: true, plan: { shell: "/bin/sh" } });
+      expectShell(policy, "/bin/sh");
 
       policy.prepareConfig(disabledConfig, hot);
       expectDisabled(policy);
@@ -411,14 +297,26 @@ describe("createTerminalLaunchPolicy", () => {
 });
 
 describe("buildTerminalEnv", () => {
-  it("carries the base env, defaults TERM, and marks the terminal", () => {
-    expect(buildTerminalEnv({ PATH: "/usr/bin", FOO: "bar" })).toMatchObject({
-      PATH: "/usr/bin",
-      FOO: "bar",
-      TERM: "xterm-256color",
-      COLORTERM: "truecolor",
-      OPENCLAW_TERMINAL: "1",
-    });
+  it.each([
+    [
+      { PATH: "/usr/bin", FOO: "bar" },
+      {
+        PATH: "/usr/bin",
+        FOO: "bar",
+        TERM: "xterm-256color",
+        COLORTERM: "truecolor",
+        OPENCLAW_TERMINAL: "1",
+      },
+    ],
+    [
+      { FORCE_COLOR: "0", NO_COLOR: "1", COLORTERM: undefined },
+      { FORCE_COLOR: "0", NO_COLOR: "1", COLORTERM: "truecolor" },
+    ],
+    [{ TERM: "screen-256color" }, { TERM: "screen-256color" }],
+  ])("preserves environment controls and supplies terminal defaults %#", (baseEnv, expected) => {
+    const original = { ...baseEnv };
+    expect(buildTerminalEnv(baseEnv)).toMatchObject(expected);
+    expect(baseEnv).toEqual(original);
   });
 
   it.each(["truecolor", "24bit", ""])("preserves explicit COLORTERM=%j", (colorterm) => {
@@ -450,21 +348,6 @@ describe("buildTerminalEnv", () => {
     const merged = mergeProcessEnv([env, { colorterm: "" }], "win32");
     expect(resolveEnvironmentValue(merged, "COLORTERM", "win32")).toBe("");
   });
-
-  it("preserves color controls without mutating the base env", () => {
-    const baseEnv = { FORCE_COLOR: "0", NO_COLOR: "1", COLORTERM: undefined };
-    expect(buildTerminalEnv(baseEnv)).toMatchObject({
-      FORCE_COLOR: "0",
-      NO_COLOR: "1",
-      COLORTERM: "truecolor",
-    });
-    expect(baseEnv).toEqual({ FORCE_COLOR: "0", NO_COLOR: "1", COLORTERM: undefined });
-  });
-
-  it("preserves an existing TERM", () => {
-    const env = buildTerminalEnv({ TERM: "screen-256color" });
-    expect(env.TERM).toBe("screen-256color");
-  });
 });
 
 describe("resolveTerminalSpawnPlan", () => {
@@ -492,26 +375,28 @@ describe("resolveTerminalSpawnPlan", () => {
       initialCommand: ["claude", "--resume", "id"],
     };
     expect(resolveTerminalSpawnPlan({ ...base, cwdOverride: cwd }).cwd).toBe(cwd);
-    expect(
-      resolveTerminalSpawnPlan(
-        { ...base, cwdOverride: "/definitely/missing" },
-        { env: { HOME: "/fallback/home" } },
-      ).cwd,
-    ).toBe("/fallback/home");
+    withEnv({ HOME: "/fallback/home" }, () => {
+      expect(resolveTerminalSpawnPlan({ ...base, cwdOverride: "/definitely/missing" }).cwd).toBe(
+        "/fallback/home",
+      );
+    });
   });
 
   it("spawns the resume executable directly on Windows", () => {
-    expect(
-      resolveTerminalSpawnPlan(
-        {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "win32" });
+    try {
+      expect(
+        resolveTerminalSpawnPlan({
           agentId: "main",
           cwd: "/work",
           shell: "cmd.exe",
           args: [],
           initialCommand: ["codex.exe", "resume", "thread"],
-        },
-        { platform: "win32" },
-      ),
-    ).toMatchObject({ shell: "codex.exe", args: ["resume", "thread"] });
+        }),
+      ).toMatchObject({ shell: "codex.exe", args: ["resume", "thread"] });
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
   });
 });

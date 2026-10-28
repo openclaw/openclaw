@@ -55,7 +55,7 @@ export function parseDiagnosticsArgs(args: string): ParsedDiagnosticsArgs {
 }
 
 export function createCodexDiagnosticsConfirmation(
-  params: Omit<PendingCodexDiagnosticsConfirmation, "token" | "createdAt"> & { now: number },
+  params: Omit<PendingCodexDiagnosticsConfirmation, "createdAt"> & { now: number },
 ): string {
   prunePendingCodexDiagnosticsConfirmations(params.now);
   if (
@@ -86,7 +86,6 @@ export function createCodexDiagnosticsConfirmation(
   const { now, ...confirmation } = params;
   pendingCodexDiagnosticsConfirmations.set(token, {
     ...confirmation,
-    token,
     createdAt: now,
   });
   return token;

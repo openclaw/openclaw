@@ -244,19 +244,7 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
     finalId = result.id;
     await mediaRoot.move(temporaryName, finalId, {
       overwrite: false,
-      assertBeforeMutation: () => {
-        assertPublicationAllowed();
-        // Repeat the move owner's collision check after its awaited preparation.
-        try {
-          fsSync.lstatSync(path.join(mediaRoot.rootReal, result.id));
-        } catch (error) {
-          if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-            return;
-          }
-          throw error;
-        }
-        throw new FsSafeError("already-exists", "Media output already exists");
-      },
+      assertBeforeMutation: assertPublicationAllowed,
     });
     resource.assertCurrent();
     if (params.durable) {

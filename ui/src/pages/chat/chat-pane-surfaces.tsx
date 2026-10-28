@@ -1,11 +1,13 @@
-import { Show } from "solid-js";
-import "../../components/modal-dialog.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { Show, type Element } from "solid-js";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { BoardSessionSurface, type BoardSessionSurfaceProps } from "./board-session-surface.tsx";
 
+registerEnglishCatalog(registerChatSessionEnglish);
+
 export function ChatBoardPanel(props: {
+  controls?: Element;
   error: string | undefined;
-  elementReady: boolean;
   surface: BoardSessionSurfaceProps;
 }) {
   return (
@@ -19,6 +21,7 @@ export function ChatBoardPanel(props: {
     >
       <BoardSessionSurface
         onViewRef={props.surface.onViewRef}
+        controls={props.controls}
         active={props.surface.active}
         session={props.surface.session}
         snapshot={props.surface.snapshot}
@@ -28,45 +31,7 @@ export function ChatBoardPanel(props: {
         canGrant={props.surface.canGrant}
         callbacks={props.surface.callbacks}
         widgetFrameUrl={props.surface.widgetFrameUrl}
-        elementReady={props.elementReady}
       />
     </Show>
-  );
-}
-
-export function ChatBoardResetConfirmation(props: { onResolve: (confirmed: boolean) => void }) {
-  let cancelButton!: HTMLButtonElement;
-  return (
-    <openclaw-modal-dialog
-      prop:initialFocus={() => cancelButton}
-      label={t("chat.board.resetTitle")}
-      description={t("chat.board.resetDescription")}
-      onModal-cancel={() => props.onResolve(false)}
-    >
-      <div class="exec-approval-card board-reset-confirmation">
-        <div class="exec-approval-header">
-          <div>
-            <div class="exec-approval-title">{t("chat.board.resetTitle")}</div>
-            <div class="exec-approval-sub">{t("chat.board.resetDescription")}</div>
-          </div>
-        </div>
-        <openclaw-modal-actions class="exec-approval-actions">
-          <button class="btn primary" type="button" onClick={() => props.onResolve(true)}>
-            {t("common.confirm")}
-          </button>
-          <button
-            ref={(element) => {
-              cancelButton = element;
-            }}
-            class="btn"
-            type="button"
-            autofocus
-            onClick={() => props.onResolve(false)}
-          >
-            {t("common.cancel")}
-          </button>
-        </openclaw-modal-actions>
-      </div>
-    </openclaw-modal-dialog>
   );
 }

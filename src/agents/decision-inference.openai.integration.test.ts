@@ -2,23 +2,12 @@ import dns from "node:dns/promises";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
-import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { afterEach, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/config.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import { evaluateDecisionInRegistry, evaluateDecisionV2InRegistry } from "../decisions/runtime.js";
 import { DecisionContractError } from "../decisions/validation.js";
-import {
-  onTrustedInternalDiagnosticEvent,
-  resetDiagnosticEventsForTest,
-  type DiagnosticEventPayload,
-} from "../infra/diagnostic-events.js";
-import { markTrustedOtelDiagnosticListener } from "../infra/diagnostic-otel-listener-provenance.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
-import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
-import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
-import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
-import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import { createColdPluginHermeticEnv } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import {
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshotRevision,
@@ -26,187 +15,128 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { resolveAgentDir, resolveDefaultAgentId } from "./agent-scope.js";
+import { resolveDefaultAgentId } from "./agent-scope.js";
 import * as authProfiles from "./auth-profiles.js";
-import { acquireAgentRunPreparedModelRuntime } from "./prepared-model-runtime.js";
+import * as harness from "./decision-inference.test-support.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 import { closeProviderTransportDispatcherPool } from "./provider-transport-dispatcher-pool.js";
 
 afterEach(async () => {
-  await resetPreparedModelRuntimeSnapshotsForTest();
-  await closeProviderTransportDispatcherPool();
-  clearRuntimeConfigSnapshot();
-  clearPluginMetadataLifecycleCaches();
-  resetPluginLoaderTestStateForTest();
-  resetDiagnosticEventsForTest();
-  vi.unstubAllGlobals();
-  vi.restoreAllMocks();
+  await harness.resetDecisionTestRuntime(undefined, closeProviderTransportDispatcherPool);
   syncBuiltinESMExports();
 });
 
 it.each([
-  { route: "platform", baseUrl: "https://api.openai.com/v1" },
-  { route: "configured model", baseUrl: "https://decision.fixture.invalid/v1" },
-  { route: "mixed profiles", baseUrl: "https://api.openai.com/v1" },
-  { route: "locked subscription", baseUrl: "https://api.openai.com/v1" },
-  { route: "unresolved header", baseUrl: "https://api.openai.com/v1" },
-  { route: "private allowed", baseUrl: "" },
-  { route: "private denied", baseUrl: "" },
-  { route: "private retired", baseUrl: "" },
+  "platform",
+  "configured model",
+  "mixed profiles",
+  "locked subscription",
+  "unresolved header",
+  "private allowed",
+  "private denied",
+  "private retired",
 ])(
-  "prepares the registered OpenAI image Decision route before auth ($route)",
-  async ({ route, baseUrl: selectedBaseUrl }) => {
-    const requests: Array<{ url: string; headers: Headers; body: unknown }> = [];
+  "prepares the registered OpenAI image Decision route before auth and enforces request authority (%s)",
+  async (route) => {
     const response = {
       model: "gpt-6-luna",
       answers: [{ name: "visible", type: "predicate", probability: 0.9 }],
       usage: { input_tokens: 12, output_tokens: 0 },
     };
-    await withServer(
-      (request, reply) => {
-        const headers = new Headers();
-        for (const [name, value] of Object.entries(request.headers)) {
-          if (typeof value === "string") {
-            headers.set(name, value);
-          }
-        }
-        const received: (typeof requests)[number] = {
-          url: `http://${request.headers.host}${request.url}`,
-          headers,
-          body: undefined,
-        };
-        // Count dispatch at headers, including a request aborted before its body ends.
-        requests.push(received);
-        const chunks: Buffer[] = [];
-        request.on("data", (chunk: Buffer) => chunks.push(chunk));
-        request.on("end", () => {
-          received.body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-          reply.writeHead(200, { "content-type": "application/json" });
-          reply.end(JSON.stringify(response));
-        });
-      },
-      async (origin) => {
+    await harness.withDecisionServer(
+      () => ({ status: 200, body: response }),
+      async ({ origin, requests, mockFetch }) => {
         const privateRoute = route.startsWith("private ");
-        const baseUrl = privateRoute ? `${origin}/v1` : selectedBaseUrl;
+        const configured = route === "configured model";
+        const profiles = route === "mixed profiles" || route === "locked subscription";
+        const baseUrl = privateRoute
+          ? `${origin}/v1`
+          : configured
+            ? "https://decision.fixture.invalid/v1"
+            : "https://api.openai.com/v1";
         const state = await createOpenClawTestState({ applyEnv: false });
         const pluginRoot = fileURLToPath(new URL("../../extensions/openai", import.meta.url));
-        const workspaceDir = path.join(state.root, "workspace");
-        const config: OpenClawConfig = {
-          diagnostics: { enabled: true },
-          agents: {
-            defaults: {
-              workspace: workspaceDir,
-              decisionModel:
-                "openai/gpt-6-luna" +
-                (route === "locked subscription" ? "@openai:subscription-fixture" : ""),
+        const provider: ModelProviderConfig = {
+          baseUrl,
+          apiKey: "synthetic-openai-key",
+          models: [],
+          headers: { "X-Provider": "provider", "X-Precedence": "provider" },
+          request: { headers: { "X-Precedence": "request" } },
+        };
+        const request = provider.request!;
+        if (profiles) {
+          delete provider.apiKey;
+        }
+        if (privateRoute && route !== "private denied") {
+          request.allowPrivateNetwork = true;
+        }
+        if (route === "unresolved header") {
+          request.headers!["X-Unresolved"] = {
+            source: "env",
+            provider: "default",
+            id: "OPENAI_FIXTURE_ABSENT",
+          };
+        }
+        if (configured) {
+          provider.baseUrl = "https://provider.fixture.invalid/v1";
+          request.auth = {
+            mode: "header",
+            headerName: "X-Credential",
+            value: "synthetic-custom-auth",
+          };
+        }
+        if (configured || privateRoute) {
+          provider.models = [
+            {
+              id: "gpt-6-luna",
+              name: "GPT-6 Luna",
+              baseUrl,
+              reasoning: false,
+              input: ["text", "image"],
+              maxTokens: 128000,
+              // Configured header values are guarded as credentials; avoid response field names.
+              headers: { "X-Model": "synthetic-model-header", "X-Precedence": "model" },
+              cost: { input: 42, output: 42, cacheRead: 0, cacheWrite: 0 },
             },
-          },
-          models: {
-            providers: {
-              openai: {
-                baseUrl,
-                headers: { "X-Provider": "provider", "X-Precedence": "provider" },
-                request: {
-                  ...(privateRoute && route !== "private denied"
-                    ? { allowPrivateNetwork: true }
-                    : {}),
-                  headers: {
-                    "X-Precedence": "request",
-                    ...(route === "unresolved header"
-                      ? {
-                          "X-Unresolved": {
-                            source: "env" as const,
-                            provider: "default",
-                            id: "OPENAI_FIXTURE_ABSENT",
-                          },
-                        }
-                      : {}),
-                  },
-                  ...(route === "configured model"
-                    ? {
-                        auth: {
-                          mode: "header" as const,
-                          headerName: "X-Credential",
-                          value: "synthetic-custom-auth",
-                        },
-                      }
-                    : {}),
-                },
-                ...(route === "mixed profiles" || route === "locked subscription"
-                  ? {}
-                  : { apiKey: "synthetic-openai-key" }),
-                ...(route === "configured model" || privateRoute
-                  ? {
-                      ...(route === "configured model"
-                        ? { baseUrl: "https://provider.fixture.invalid/v1" }
-                        : {}),
-                      models: [
-                        {
-                          id: "gpt-6-luna",
-                          name: "GPT-6 Luna",
-                          baseUrl,
-                          reasoning: false,
-                          input: ["text", "image"],
-                          maxTokens: 128000,
-                          headers: { "X-Model": "model", "X-Precedence": "model" },
-                          cost: { input: 42, output: 42, cacheRead: 0, cacheWrite: 0 },
-                        },
-                      ],
-                    }
-                  : { models: [] }),
-              },
-            },
-          },
-          plugins: {
+          ];
+        }
+        const config = harness.decisionConfig(
+          state.root,
+          "openai/gpt-6-luna" +
+            (route === "locked subscription" ? "@openai:subscription-fixture" : ""),
+          {
             allow: ["openai"],
-            slots: { memory: "none" },
             entries: { openai: { enabled: true } },
           },
-        };
-        const env = {
-          ...createColdPluginHermeticEnv(state.root, {
-            bundledPluginsDir: path.dirname(pluginRoot),
-          }),
-          ...state.envVars,
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-          OPENAI_API_KEY: undefined,
-          OPENAI_BASE_URL: undefined,
-          OPENAI_FIXTURE_ABSENT: undefined,
-          CODEX_HOME: path.join(state.root, "empty-codex"),
-          HTTP_PROXY: undefined,
-          HTTPS_PROXY: undefined,
-          ALL_PROXY: undefined,
-          http_proxy: undefined,
-          https_proxy: undefined,
-          all_proxy: undefined,
-        };
-        // Only the final HTTP exchange is synthetic; registration, catalog, routing,
-        // credential selection, prepared authority and the guarded fetch remain intact.
-        // Private-route cases instead use the owned server and real socket dispatch.
+        );
+        delete config.agents!.defaults!.model;
+        config.diagnostics = { enabled: true };
+        config.models = { providers: { openai: provider } };
+        const env = harness.decisionEnv(
+          state.root,
+          {
+            ...state.envVars,
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+            OPENAI_API_KEY: undefined,
+            OPENAI_BASE_URL: undefined,
+            OPENAI_FIXTURE_ABSENT: undefined,
+            CODEX_HOME: path.join(state.root, "empty-codex"),
+            HTTP_PROXY: undefined,
+            HTTPS_PROXY: undefined,
+            ALL_PROXY: undefined,
+            http_proxy: undefined,
+            https_proxy: undefined,
+            all_proxy: undefined,
+          },
+          path.dirname(pluginRoot),
+        );
+        // Private routes retain real sockets and guarded fetch; only public HTTP is synthetic.
         if (!privateRoute) {
-          vi.stubGlobal(
-            "fetch",
-            vi.fn<typeof fetch>(async (input, init) => {
-              const url =
-                typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-              if (!url.endsWith("/decisions")) {
-                throw new Error("Unexpected OpenAI fixture request");
-              }
-              if (typeof init?.body !== "string") {
-                throw new Error("Expected a serialized Decision request");
-              }
-              requests.push({
-                url,
-                headers: new Headers(init?.headers),
-                body: JSON.parse(init.body),
-              });
-              return Response.json(response);
-            }),
-          );
+          mockFetch(baseUrl + "/decisions");
         }
         try {
           await withEnvAsync(env, async () => {
-            if (route === "mixed profiles" || route === "locked subscription") {
+            if (profiles) {
               await state.writeAuthProfiles({
                 version: 1,
                 profiles: {
@@ -226,60 +156,39 @@ it.each([
                 order: { openai: ["openai:subscription-fixture", "openai:key-fixture"] },
               });
             }
-            setRuntimeConfigSnapshot(config);
-            const registry = await loadAndActivateRootPluginRegistry({
-              config,
+            const registry = await harness.activateDecisionRegistry(config, {
               env,
-              workspaceDir,
               onlyPluginIds: ["openai"],
               preferBuiltPluginArtifacts: false,
               pluginSdkResolution: "src",
             });
-            expect(registry.diagnostics.filter((item) => item.level === "error")).toEqual([]);
             const agentId = resolveDefaultAgentId(config);
             // Unresolved config must fail through the public host, including preparation.
-            // Successful cases retain the same prepared generation across timed dispatch.
             await using prepared =
               route === "unresolved header"
                 ? undefined
-                : await acquireAgentRunPreparedModelRuntime(
-                    {
-                      config,
-                      agentId,
-                      agentDir: resolveAgentDir(config, agentId),
-                      workspaceDir,
-                      loadRuntimePlugins: true,
-                      runtimePluginSelections: [
-                        { provider: "openai", modelId: "gpt-6-luna", agentId },
-                      ],
-                    },
-                    { catalogMode: "static" },
-                  );
+                : await harness.prepareDecisionRuntime(config, "openai", "gpt-6-luna");
             expect(registry.providers.find((entry) => entry.provider.id === "openai")?.source).toBe(
               path.join(pluginRoot, "index.ts"),
             );
             if (prepared) {
-              expect(
-                prepared.snapshot.pluginRegistry?.providers.find(
-                  (entry) => entry.provider.id === "openai",
-                )?.pluginId,
-              ).toBe("openai");
-              expect(
-                prepared.snapshot.modelCatalog.entries.some(
-                  (entry) => entry.provider === "openai" && entry.id === "gpt-6-luna",
-                ),
-              ).toBe(true);
+              const { modelCatalog, pluginRegistry } = prepared.snapshot;
+              const owner = pluginRegistry?.providers.find(
+                ({ provider: candidate }) => candidate.id === "openai",
+              );
+              expect(owner?.pluginId).toBe("openai");
+              expect(modelCatalog.entries).toContainEqual(
+                expect.objectContaining({ provider: "openai", id: "gpt-6-luna" }),
+              );
             }
-            const events: Array<Extract<DiagnosticEventPayload, { type: "model.usage" }>> = [];
-            onTestFinished(
-              onTrustedInternalDiagnosticEvent(
-                markTrustedOtelDiagnosticListener((event) => {
-                  if (event.type === "model.usage") {
-                    events.push(event);
-                  }
-                }),
-              ),
-            );
+            const events = harness.trackDecisionUsage();
+            const expectNoEffects = () => {
+              expect({
+                requests,
+                events,
+                active: registry.decisionProviders[0]?.host.inspect(config).activeRequests,
+              }).toEqual({ requests: [], events: [], active: 0 });
+            };
             const credentialRead = vi.spyOn(authProfiles, "resolveApiKeyForProfile");
             const dataUri = "data:image/png;base64,AA==";
             const entered = createDeferredCore();
@@ -298,8 +207,7 @@ it.each([
                 }
                 return lookup(...args);
               });
-              // Loaded plugin SDK transports use native modules, outside Vitest's facade.
-              // Pause their real DNS boundary without replacing the provider's final guard.
+              // The loaded SDK uses native modules, outside Vitest's facade.
               syncBuiltinESMExports();
               restoreDns = () => {
                 spy.mockRestore();
@@ -307,6 +215,12 @@ it.each([
               };
             }
             const signal = new AbortController().signal;
+            const options = harness.decisionOptions({
+              agentId,
+              signal,
+              purpose: "openai-route-fixture",
+              rubricVersion: "1",
+            });
             const pending = withGuardedFetchRequestAuthority(
               undefined,
               () =>
@@ -317,14 +231,7 @@ it.each([
                       visible: { type: "boolean", instructions: "Is the object visible?" },
                     },
                   },
-                  {
-                    agentId,
-                    purpose: "openai-route-fixture",
-                    rubricVersion: "1",
-                    timeoutMs: 5000,
-                    reasoning: "auto",
-                    signal,
-                  },
+                  { ...options, reasoning: "auto" },
                   registry,
                   config,
                 ),
@@ -340,32 +247,9 @@ it.each([
               try {
                 const first = await Promise.race([
                   entered.promise.then(() => ({ phase: "dns" })),
-                  settled.then((result) => ({
-                    phase: "settled",
-                    ...("outcome" in result
-                      ? {
-                          status: result.outcome.status,
-                          reason:
-                            result.outcome.status === "unavailable"
-                              ? result.outcome.reason
-                              : undefined,
-                        }
-                      : {
-                          errorName:
-                            result.error instanceof Error ? result.error.name : "non-error",
-                        }),
-                  })),
+                  settled.then(() => ({ phase: "settled" })),
                 ]);
-                // Report only phase, contract outcome and counts; never request or auth bytes.
-                expect(
-                  first,
-                  JSON.stringify({
-                    first,
-                    dnsLookups,
-                    requestCount: requests.length,
-                    finalAdmission,
-                  }),
-                ).toEqual({ phase: "dns" });
+                expect(first).toEqual({ phase: "dns" });
                 expect(dnsLookups).toBe(1);
                 expect(requests).toEqual([]);
                 const revision = getActiveSecretsRuntimeSnapshotRevision();
@@ -373,14 +257,14 @@ it.each([
                 setRuntimeConfigSnapshot(config);
                 expect(getActiveSecretsRuntimeSnapshotRevision()).toBeGreaterThan(revision);
                 release.resolve();
-                expect(await settled).toEqual({
-                  outcome: { status: "unavailable", reason: "retiring" },
-                });
-                expect(signal.aborted).toBe(false);
-                expect(finalAdmission).toBe(false);
-                expect(requests).toEqual([]);
-                expect(events).toEqual([]);
-                expect(registry.decisionProviders[0]?.host.inspect(config).activeRequests).toBe(0);
+                expect({ settled: await settled, aborted: signal.aborted, finalAdmission }).toEqual(
+                  {
+                    settled: { outcome: harness.unavailable("retiring") },
+                    aborted: false,
+                    finalAdmission: false,
+                  },
+                );
+                expectNoEffects();
               } finally {
                 release.resolve();
                 await settled;
@@ -390,26 +274,21 @@ it.each([
             }
             if (route === "unresolved header") {
               await expect(pending).rejects.toBeInstanceOf(DecisionContractError);
-              expect(requests).toEqual([]);
               expect(credentialRead).not.toHaveBeenCalled();
-              expect(events).toEqual([]);
-              expect(registry.decisionProviders[0]?.host.inspect(config).activeRequests).toBe(0);
+              expectNoEffects();
               return;
             }
             const outcome = await pending;
-            if (route === "private denied") {
-              expect(outcome).toEqual({ status: "unavailable", reason: "transport" });
-              expect(requests).toEqual([]);
-              expect(events).toEqual([]);
-              expect(registry.decisionProviders[0]?.host.inspect(config).activeRequests).toBe(0);
-              return;
-            }
-            if (route === "locked subscription") {
-              expect(outcome).toEqual({ status: "unavailable", reason: "credentials-unavailable" });
-              expect(credentialRead).not.toHaveBeenCalled();
-              expect(requests).toEqual([]);
-              expect(events).toEqual([]);
-              expect(registry.decisionProviders[0]?.host.inspect(config).activeRequests).toBe(0);
+            if (route === "private denied" || route === "locked subscription") {
+              expect(outcome).toEqual(
+                harness.unavailable(
+                  route === "private denied" ? "transport" : "credentials-unavailable",
+                ),
+              );
+              if (route === "locked subscription") {
+                expect(credentialRead).not.toHaveBeenCalled();
+              }
+              expectNoEffects();
               return;
             }
             if (route === "mixed profiles") {
@@ -418,7 +297,7 @@ it.each([
                 expect.objectContaining({ profileId: "openai:key-fixture" }),
               );
             }
-            expect(outcome).toMatchObject({
+            expect(outcome, JSON.stringify(outcome)).toMatchObject({
               status: "ok",
               result: {
                 answers: { visible: { type: "boolean", probabilityTrue: 0.9 } },
@@ -427,22 +306,24 @@ it.each([
             });
             expect(requests).toHaveLength(1);
             expect(finalAdmission).toBe(true);
-            expect(requests[0]?.url).toBe(baseUrl + "/decisions");
-            expect(requests[0]?.headers.get("authorization")).toBe(
-              route === "configured model" ? null : "Bearer synthetic-openai-key",
-            );
-            expect(requests[0]?.headers.get("x-provider")).toBe("provider");
-            expect(requests[0]?.headers.get("x-precedence")).toBe("request");
-            if (route === "configured model") {
-              expect(requests[0]?.headers.get("x-model")).toBe("model");
-              expect(requests[0]?.headers.get("x-credential")).toBe("synthetic-custom-auth");
+            const sent = requests[0]!;
+            expect(sent.url).toBe(baseUrl + "/decisions");
+            expect(
+              ["authorization", "x-provider", "x-precedence"].map((key) => sent.headers.get(key)),
+            ).toEqual([configured ? null : "Bearer synthetic-openai-key", "provider", "request"]);
+            if (configured) {
+              expect(["x-model", "x-credential"].map((key) => sent.headers.get(key))).toEqual([
+                "synthetic-model-header",
+                "synthetic-custom-auth",
+              ]);
             }
-            expect(events).toHaveLength(1);
-            expect(events[0]).toMatchObject({
-              provider: "openai",
-              model: "gpt-6-luna",
-              usage: { input: 12, output: 0 },
-            });
+            expect(events).toMatchObject([
+              {
+                provider: "openai",
+                model: "gpt-6-luna",
+                usage: { input: 12, output: 0 },
+              },
+            ]);
             expect(events[0]).not.toHaveProperty("costUsd");
             expect(requests[0]?.body).toMatchObject({
               model: "gpt-6-luna",
@@ -458,13 +339,7 @@ it.each([
             });
             const legacy = await evaluateDecisionInRegistry(
               { state: "legacy text", questions: { visible: { type: "boolean" } } },
-              {
-                agentId,
-                purpose: "openai-route-fixture",
-                rubricVersion: "1",
-                timeoutMs: 5000,
-                signal: new AbortController().signal,
-              },
+              options,
               registry,
               config,
             );

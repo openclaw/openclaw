@@ -57,6 +57,10 @@ export function applyPrivateModeSync(
   target: string,
   mode: number,
 ): { applied: true } | { applied: false; error: unknown } {
+  // A same-mode chmod can change ctime and invalidate read-only inspection evidence.
+  if ((statSync(target).mode & 0o7777) === mode) {
+    return { applied: true };
+  }
   try {
     chmodSync(target, mode);
     return { applied: true };

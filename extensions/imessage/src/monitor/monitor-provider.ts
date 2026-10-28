@@ -29,6 +29,7 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
@@ -89,7 +90,6 @@ import { combineIMessagePayloads } from "./coalesce.js";
 import { repairIMessageConversationAnchor } from "./conversation-repair.js";
 import { createIMessageEchoCachingSend, deliverIMessageReply } from "./deliver.js";
 import { resolveIMessageDmHistoryContext, resolveIMessageDmHistoryLimit } from "./dm-history.js";
-import { createIMessageThrottledDropDiagnosticCache } from "./drop-diagnostic-cache.js";
 import { createSentMessageCache } from "./echo-cache.js";
 import {
   warnGroupAllowlistDropPerChatOnce,
@@ -105,7 +105,6 @@ import {
   buildIMessageInboundContext,
   mergeIMessageGroupAllowFromWithLegacyChatTargets,
   rememberIMessageSkippedFromMeForSelfChatDedupe,
-  resolveIMessageReactionContext,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
 import { createIMessageDurableIngress, type IMessageIngressLifecycle } from "./ingress.js";
@@ -113,6 +112,7 @@ import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 import { stageIMessageAttachments } from "./media-staging.js";
 import { createPollCommentFolder } from "./poll-comment.js";
 import { renderIMessagePollBody } from "./poll-render.js";
+import { resolveIMessageReactionContext } from "./reaction-context.js";
 import { enqueueIMessageReactionSystemEvent } from "./reaction-system-event.js";
 import {
   advanceIMessageRecoveryCursor,
@@ -283,7 +283,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
   const logTypingError = (action: "start" | "stop", target: string, error: unknown) =>
     logTypingFailure({ log: logVerbose, channel: "imessage", action, target, error });
   let staleBacklogSuppressed = 0;
-  const loggedThrottledDropDiagnostics = createIMessageThrottledDropDiagnosticCache();
+  // Bound monitor-lifetime warn-once state; evicted conversations may log again.
+  const loggedThrottledDropDiagnostics = createDedupeCache({ maxSize: 512, ttlMs: 0 });
 
   // Capture local MAX(ROWID) before probing: it caps replay and separates recovery
   // from fresh-rowid Push backlog. Remote bridges lack this boundary and use the live age fence.
@@ -576,11 +577,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       effectiveAttachmentRoots,
     } = resolveIMessageInboundBodyText(message);
 
-    const storeAllowFrom = await readChannelAllowFromStore(
-      "imessage",
-      process.env,
-      accountInfo.accountId,
-    ).catch(() => []);
     const decision = await resolveIMessageInboundDecision({
       cfg,
       accountId: accountInfo.accountId,
@@ -594,7 +590,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       allowLegacyConversationAllowFromForGroup,
       groupPolicy,
       dmPolicy,
-      storeAllowFrom,
+      readStoreAllowFrom: () =>
+        readChannelAllowFromStore("imessage", process.env, accountInfo.accountId),
       historyLimit,
       groupHistories,
       echoCache: sentMessageCache,

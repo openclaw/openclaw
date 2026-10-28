@@ -1,12 +1,5 @@
 import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk/directory-runtime";
 
-function matchesDirectoryQuery(entry: ChannelDirectoryEntry, query: string): boolean {
-  if (!query) {
-    return true;
-  }
-  return [entry.id, entry.name, entry.handle].some((value) => value?.toLowerCase().includes(query));
-}
-
 export function applyBuzzDirectoryQueryAndLimit(
   entries: ChannelDirectoryEntry[],
   params: { query?: string | null; limit?: number | null },
@@ -15,7 +8,10 @@ export function applyBuzzDirectoryQueryAndLimit(
   const limit = params.limit != null && params.limit > 0 ? Math.floor(params.limit) : undefined;
   const result: ChannelDirectoryEntry[] = [];
   for (const entry of entries) {
-    if (!matchesDirectoryQuery(entry, query)) {
+    if (
+      query &&
+      ![entry.id, entry.name, entry.handle].some((value) => value?.toLowerCase().includes(query))
+    ) {
       continue;
     }
     result.push(entry);

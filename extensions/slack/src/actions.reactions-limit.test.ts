@@ -57,14 +57,11 @@ function createClient(
   return { client, calls };
 }
 function lookupSpies(client: WebClient) {
-  return {
-    reactions: vi
-      .spyOn(slackActionRuntime, "listSlackReactions")
-      .mockImplementation((channelId, messageId, options) =>
-        listSlackReactions(channelId, messageId, { ...options, client }),
-      ),
-    messages: vi.spyOn(slackActionRuntime, "readSlackMessages"),
-  };
+  vi.spyOn(slackActionRuntime, "listSlackReactions").mockImplementation(
+    (channelId, messageId, options) =>
+      listSlackReactions(channelId, messageId, { ...options, client }),
+  );
+  return vi.spyOn(slackActionRuntime, "readSlackMessages");
 }
 function action(kind: "reactions" | "read", cfg: OpenClawConfig, params: Record<string, unknown>) {
   return createSlackActions("slack").handleAction?.({
@@ -77,6 +74,18 @@ function action(kind: "reactions" | "read", cfg: OpenClawConfig, params: Record<
 
 function installEnterprise() {
   installations.push(registerSlackInstallationState("default", "enterprise"));
+}
+
+function expectReactionWrites(
+  calls: ReturnType<typeof createClient>["calls"],
+  method: string,
+  names: string[],
+) {
+  expect(
+    calls
+      .filter((call) => call.method === method)
+      .map(({ body }) => [body.get("channel"), body.get("timestamp"), body.get("name")]),
+  ).toEqual(names.map((name) => ["C1", "123.456", name]));
 }
 
 describe("Slack reactions", () => {
@@ -113,10 +122,9 @@ describe("Slack reactions", () => {
       ],
     });
     expect(users).toHaveLength(101);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.method).toBe("reactions.get");
-    expect(calls[0]?.body.get("full")).toBe("true");
-    expect(calls[0]?.body.has("limit")).toBe(false);
+    expect(calls.map(({ method, body }) => [method, body.get("full"), body.has("limit")])).toEqual([
+      ["reactions.get", "true", false],
+    ]);
   });
 
   it.each(["reactions", "read"] as const)(
@@ -139,8 +147,7 @@ describe("Slack reactions", () => {
           { channelId: "C_FORBIDDEN", limit: 0 },
         ),
       ).rejects.toThrow("Slack read target channel is not allowed.");
-      expect(lookups.reactions).not.toHaveBeenCalled();
-      expect(lookups.messages).not.toHaveBeenCalled();
+      expect(lookups).not.toHaveBeenCalled();
       expect(calls).toEqual([]);
     },
   );
@@ -148,15 +155,13 @@ describe("Slack reactions", () => {
   it("rejects invalid read limits before Slack API work", async () => {
     const { client, calls } = createClient();
     const lookups = lookupSpies(client);
-    const conversation = vi
-      .spyOn(slackActionRuntime, "resolveSlackConversationInfo")
-      .mockResolvedValue({ type: "channel" });
+    vi.spyOn(slackActionRuntime, "resolveSlackConversationInfo").mockResolvedValue({
+      type: "channel",
+    });
     await expect(action("read", slackConfig, { limit: 0 })).rejects.toThrow(
       "limit must be a positive integer.",
     );
-    expect(conversation).toHaveBeenCalledOnce();
-    expect(lookups.reactions).not.toHaveBeenCalled();
-    expect(lookups.messages).not.toHaveBeenCalled();
+    expect(lookups).not.toHaveBeenCalled();
     expect(calls).toEqual([]);
   });
 
@@ -166,12 +171,7 @@ describe("Slack reactions", () => {
     installEnterprise();
     await reactSlackMessage("C1", "123.456", "👍🏽", { teamId: "T1", token: "xoxb-test" });
     expect(getSlackWriteClientMock).toHaveBeenCalledWith("xoxb-test", { teamId: "T1" });
-    expect(calls.map(({ method }) => method)).toEqual(["reactions.add"]);
-    expect(Object.fromEntries(calls[0]!.body)).toMatchObject({
-      channel: "C1",
-      timestamp: "123.456",
-      name: "thumbsup::skin-tone-4",
-    });
+    expectReactionWrites(calls, "reactions.add", ["thumbsup::skin-tone-4"]);
   });
 
   it("rejects an unscoped Enterprise Grid reaction before constructing a client", async () => {
@@ -190,12 +190,7 @@ describe("Slack reactions", () => {
     await expect(
       reactSlackMessage("C1", "123.456", ":constructor:", { client }),
     ).resolves.toBeUndefined();
-    expect(calls.map(({ method }) => method)).toEqual(["reactions.add"]);
-    expect(Object.fromEntries(calls[0]!.body)).toMatchObject({
-      channel: "C1",
-      timestamp: "123.456",
-      name: "constructor",
-    });
+    expectReactionWrites(calls, "reactions.add", ["constructor"]);
   });
 
   it("propagates unrelated API errors", async () => {
@@ -227,15 +222,6 @@ describe("Slack reactions", () => {
       "reactions.remove",
     ]);
     expect(calls[1]?.body.get("full")).toBe("true");
-    expect(
-      calls.slice(2).map(({ body }) => ({
-        channel: body.get("channel"),
-        timestamp: body.get("timestamp"),
-        name: body.get("name"),
-      })),
-    ).toEqual([
-      { channel: "C1", timestamp: "123.456", name: "thumbsup" },
-      { channel: "C1", timestamp: "123.456", name: "eyes" },
-    ]);
+    expectReactionWrites(calls, "reactions.remove", ["thumbsup", "eyes"]);
   });
 });

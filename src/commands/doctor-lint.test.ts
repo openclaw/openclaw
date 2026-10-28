@@ -1,4 +1,3 @@
-// Doctor lint tests cover health-check registry integration and lint warning output.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
@@ -10,6 +9,7 @@ import { CORE_HEALTH_CHECKS } from "../flows/doctor-core-checks.js";
 import { clearHealthChecksForTest, registerHealthCheck } from "../flows/health-check-registry.js";
 import type { HealthCheckContext } from "../flows/health-checks.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
+import * as diskSpace from "../infra/disk-space.js";
 import { resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
 import * as snapshotSource from "../infra/sqlite-snapshot-source.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-record-cache.js";
@@ -17,6 +17,7 @@ import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plug
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureEnv } from "../test-utils/env.js";
+import type { DoctorLintCliOptions } from "./doctor-lint-options.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import {
   createDoctorLintSemanticIndex,
@@ -64,9 +65,7 @@ vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => {
 vi.mock("../infra/node-sqlite.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/node-sqlite.js")>();
   mocks.actualOpenNodeSqliteDatabase.mockImplementation(actual.openNodeSqliteDatabase);
-  mocks.openNodeSqliteDatabase.mockImplementation((...args: unknown[]) =>
-    mocks.actualOpenNodeSqliteDatabase(...args),
-  );
+  mocks.openNodeSqliteDatabase.mockImplementation(mocks.actualOpenNodeSqliteDatabase);
   return {
     ...actual,
     openNodeSqliteDatabase: mocks.openNodeSqliteDatabase,
@@ -79,8 +78,7 @@ vi.mock("../flows/doctor-health-contributions.js", async (importOriginal) => {
   );
   return {
     ...actual,
-    resolveDoctorContributionHealthChecks: (...args: unknown[]) =>
-      mocks.resolveDoctorContributionHealthChecks(...args),
+    resolveDoctorContributionHealthChecks: mocks.resolveDoctorContributionHealthChecks,
   };
 });
 vi.mock("../gateway/call.js", async (importOriginal) => {
@@ -94,10 +92,32 @@ vi.mock("../gateway/call.js", async (importOriginal) => {
 const runtime = createTestRuntime();
 
 const CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID = "crabbox/cloud-worker-profiles";
+const MEMORY_CHECK_ID = "memory-core/managed-local-embedding-setup";
+const semanticConfig = {
+  gateway: { mode: "local" },
+  memory: { search: { provider: "local", fallback: "none" } },
+} satisfies OpenClawConfig;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let stdout: MockInstance<typeof process.stdout.write>;
 const outputText = () => stdout.mock.calls.map(([line]) => String(line)).join("");
 const outputReport = () => JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+const mockConfig = (config: OpenClawConfig = {}) =>
+  mocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(config));
+
+async function expectFailedCheck(
+  checkId: string,
+  finding: Record<string, unknown>,
+  options: DoctorLintCliOptions = {},
+) {
+  expect(await runDoctorLintCli(runtime, { json: true, onlyIds: [checkId], ...options })).toBe(1);
+  const report = outputReport();
+  expect(report).toMatchObject({
+    ok: false,
+    checksRun: options.onlyIds?.length ?? 1,
+    findings: [{ checkId, ...finding }],
+  });
+  return report;
+}
 const originalIsTTY = process.stdout.isTTY;
 const originalEnv = captureEnv([
   "HOME",
@@ -127,9 +147,7 @@ async function seedSemanticState(config: OpenClawConfig, sourceConfig = config) 
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_STATE_DIR: stateDir,
   });
-  mocks.readConfigFileSnapshot.mockImplementation((...args: unknown[]) =>
-    mocks.actualReadConfigFileSnapshot(...args),
-  );
+  mocks.readConfigFileSnapshot.mockImplementation(mocks.actualReadConfigFileSnapshot);
   return { stateDir, configPath, env, databasePath };
 }
 
@@ -146,19 +164,15 @@ describe("runDoctorLintCli", () => {
     mocks.readConfigFileSnapshot.mockReset();
     mocks.resolveDoctorContributionHealthChecks
       .mockReset()
-      .mockImplementation((...args: unknown[]) =>
-        mocks.actualResolveDoctorContributionHealthChecks(...args),
-      );
+      .mockImplementation(mocks.actualResolveDoctorContributionHealthChecks);
     mocks.buildGatewayProbeConnectionDetails.mockReset().mockResolvedValue({
       url: "ws://127.0.0.1:18789",
     });
     mocks.callGateway.mockReset().mockResolvedValue({ degradedSecretOwners: [] });
-    mocks.openNodeSqliteDatabase.mockImplementation((...args: unknown[]) =>
-      mocks.actualOpenNodeSqliteDatabase(...args),
-    );
+    mocks.openNodeSqliteDatabase.mockImplementation(mocks.actualOpenNodeSqliteDatabase);
     mocks.prepareSqliteReadOnlyLocationSync.mockReset();
-    mocks.prepareSqliteReadOnlyLocationSync.mockImplementation((...args: unknown[]) =>
-      mocks.actualPrepareSqliteReadOnlyLocationSync(...args),
+    mocks.prepareSqliteReadOnlyLocationSync.mockImplementation(
+      mocks.actualPrepareSqliteReadOnlyLocationSync,
     );
     clearHealthChecksForTest();
     stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
@@ -183,14 +197,9 @@ describe("runDoctorLintCli", () => {
     expect(gatewayCheck).toBeDefined();
     mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([gatewayCheck]);
     useDirectChecks();
-    mocks.readConfigFileSnapshot.mockResolvedValue(
-      createTestConfigSnapshot({
-        gateway: {
-          mode: "local",
-          auth: { mode: "token", token: "SYNTHETIC_GATEWAY_SECRET" },
-        },
-      }),
-    );
+    mockConfig({
+      gateway: { mode: "local", auth: { mode: "token", token: "SYNTHETIC_GATEWAY_SECRET" } },
+    });
     mocks.callGateway.mockResolvedValue({
       secretEgressProxy: {
         state: "degraded",
@@ -293,7 +302,7 @@ describe("runDoctorLintCli", () => {
         },
       ]);
       useDirectChecks();
-      mocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot({}));
+      mockConfig();
       await runDoctorLintCli(runtime, {
         json: true,
         severityMin,
@@ -310,7 +319,7 @@ describe("runDoctorLintCli", () => {
 
   it("shares one captured config across registration and checks without freezing the source", async () => {
     const config = { agents: { entries: { main: { name: "original" } } } };
-    mocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(config));
+    mockConfig(config);
     const detect = vi.fn(async (ctx: HealthCheckContext) => {
       expect(captureRuntimeConfig(ctx.cfg)).toBe(ctx.cfg);
       return [];
@@ -416,40 +425,26 @@ describe("runDoctorLintCli", () => {
 
   it("reports an actionable Crabbox profile finding before dispatch", async () => {
     const binary = "/nonexistent/path/to/crabbox";
-    mocks.readConfigFileSnapshot.mockResolvedValue(
-      createTestConfigSnapshot({
-        gateway: { mode: "local", port: 19_001 },
-        cloudWorkers: {
-          profiles: {
-            aws: {
-              provider: "crabbox",
-              install: "bundle",
-              settings: { provider: "aws", class: "standard", binary },
-            },
+    mockConfig({
+      gateway: { mode: "local", port: 19_001 },
+      cloudWorkers: {
+        profiles: {
+          aws: {
+            provider: "crabbox",
+            install: "bundle",
+            settings: { provider: "aws", class: "standard", binary },
           },
         },
-      }),
-    );
+      },
+    });
     for (let run = 0; run < 2; run++) {
-      const exitCode = await runDoctorLintCli(runtime, {
-        json: true,
-        onlyIds: [CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID],
+      await expectFailedCheck(CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID, {
+        severity: "warning",
+        path: binary,
+        target: "aws",
       });
-      expect(exitCode).toBe(1);
     }
     const payload = outputReport();
-    expect(payload).toMatchObject({
-      ok: false,
-      checksRun: 1,
-      findings: [
-        {
-          checkId: CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID,
-          severity: "warning",
-          path: binary,
-          target: "aws",
-        },
-      ],
-    });
     expect(payload.findings[0].message).toContain('profile "aws"');
     expect(payload.findings[0].fixHint).toContain("cloudWorkers.profiles.aws.settings.binary");
   });
@@ -458,9 +453,8 @@ describe("runDoctorLintCli", () => {
     "runs post-plugin readiness against an isolated state snapshot (inline inspections: %s)",
     async (includeOptionalInspections) => {
       const config = {
-        gateway: { mode: "local" },
+        ...semanticConfig,
         agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
-        memory: { search: { provider: "local", fallback: "none" } },
       } satisfies OpenClawConfig;
       const sourceConfig = { ...config, legacyPluginState: { directory: "retained-input" } };
       const { env, databasePath, configPath } = await seedSemanticState(config, sourceConfig);
@@ -519,7 +513,7 @@ describe("runDoctorLintCli", () => {
         ok: false,
         findings: [
           {
-            checkId: "memory-core/managed-local-embedding-setup",
+            checkId: MEMORY_CHECK_ID,
             severity: "error",
             requirement: "managed-llama-cpp-setup",
           },
@@ -548,12 +542,29 @@ describe("runDoctorLintCli", () => {
     },
   );
 
-  it("fails closed when a semantic index needs plugin state that cannot be prepared", async () => {
-    const config = {
+  it.each([false, true])("checks the operator disk volume in mixed lint: %s", async (mixed) => {
+    const { stateDir, databasePath } = await seedSemanticState({
       gateway: { mode: "local" },
-      memory: { search: { provider: "local", fallback: "none" } },
-    } satisfies OpenClawConfig;
-    const { databasePath: pluginDatabasePath } = await seedSemanticState(config);
+    });
+    const before = snapshotDoctorLintSqliteFamily(databasePath);
+    vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
+      targetPath,
+      checkedPath: targetPath,
+      availableBytes: targetPath === stateDir ? 50 * 1024 ** 2 : 10 * 1024 ** 3,
+      totalBytes: 20 * 1024 ** 3,
+    }));
+
+    const diskCheckId = "core/doctor/disk-space";
+    await expectFailedCheck(
+      diskCheckId,
+      { severity: "error", path: stateDir },
+      { severityMin: "error", onlyIds: mixed ? [diskCheckId, MEMORY_CHECK_ID] : [diskCheckId] },
+    );
+    expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
+  });
+
+  it("fails closed when a semantic index needs plugin state that cannot be prepared", async () => {
+    const { databasePath: pluginDatabasePath } = await seedSemanticState(semanticConfig);
     mocks.prepareSqliteReadOnlyLocationSync.mockImplementation((...args: unknown[]) => {
       if (args[0] === pluginDatabasePath) {
         throw new Error("shared state did not stabilize");
@@ -561,32 +572,22 @@ describe("runDoctorLintCli", () => {
       return mocks.actualPrepareSqliteReadOnlyLocationSync(...args);
     });
 
-    const exitCode = await runDoctorLintCli(runtime, {
-      json: true,
-      severityMin: "error",
-      onlyIds: ["memory-core/managed-local-embedding-setup"],
-    });
-
-    expect(exitCode).toBe(1);
-    expect(outputReport()).toMatchObject({
-      ok: false,
-      checksRun: 1,
-      findings: [
-        {
-          checkId: "memory-core/managed-local-embedding-setup",
-          severity: "error",
-          target: "memory-core",
-          requirement: "memory-index-inspection",
-          message: expect.stringContaining("shared state did not stabilize"),
-        },
-      ],
-    });
+    await expectFailedCheck(
+      MEMORY_CHECK_ID,
+      {
+        severity: "error",
+        target: "memory-core",
+        requirement: "memory-index-inspection",
+        message: expect.stringContaining("shared state did not stabilize"),
+      },
+      { severityMin: "error" },
+    );
     expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
     expect(mocks.prepareSqliteReadOnlyLocationSync).toHaveBeenCalledWith(pluginDatabasePath);
   });
 
   it("rejects registered checks that claim reserved core doctor ids", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot({}));
+    mockConfig();
     registerHealthCheck({
       id: "core/doctor/not-yet-owned",
       kind: "core",

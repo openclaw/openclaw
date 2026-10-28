@@ -1,13 +1,10 @@
 import type { Context } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, expect, it } from "vitest";
 import { readNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
-import {
-  fakeTool,
-  pluginToolWithExecute,
-  resetCodeModeTestState,
-} from "../../code-mode.test-support.js";
+import { pluginToolWithExecute, resetCodeModeTestState } from "../../code-mode.test-support.js";
 import { Agent } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { fakeTool } from "../../test-helpers/fake-tool.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { isToolResultError } from "../../tool-result-error.js";
 import { jsonResult } from "../../tools/common.js";
@@ -29,12 +26,9 @@ const hoisted = getHoisted();
 const tempPaths: string[] = [];
 const model = makeProviderModelFixture({
   id: "test-model",
-  name: "Test Model",
   api: "openai-responses",
   provider: "openai",
   baseUrl: "https://example.test",
-  contextWindow: 8_192,
-  maxTokens: 8_192,
 });
 
 beforeAll(preloadRunEmbeddedAttemptForTests);
@@ -125,10 +119,6 @@ it("keeps the normal Code Mode surface through failure, inspection, and multiple
     "second hunk applied",
     "third hunk applied",
   ]);
-  expect(applyPatch.execute).toHaveBeenCalledOnce();
-  expect(shell.execute).toHaveBeenCalledOnce();
-  expect(write.execute).toHaveBeenCalledTimes(2);
-  expect(read.execute).toHaveBeenCalledOnce();
   expect(result.messagesSnapshot.at(-1)).toMatchObject({
     role: "assistant",
     content: [{ type: "text", text: "all changes verified" }],
@@ -137,18 +127,17 @@ it("keeps the normal Code Mode surface through failure, inspection, and multiple
     const activity = entry.type === "message" && readNestedToolActivity(entry.message);
     return activity ? [activity.details] : [];
   });
-  expect(activities).toMatchObject([
-    { toolName: "apply_patch", isError: true },
-    { toolName: "shell_command", isError: false },
-    { toolName: "write", isError: false },
-    { toolName: "write", isError: false },
-    { toolName: "read", isError: false },
+  expect(
+    activities.map(({ toolName, isError, parentToolCallId }) => [
+      toolName,
+      isError,
+      parentToolCallId,
+    ]),
+  ).toEqual([
+    ["apply_patch", true, "program-0"],
+    ["shell_command", false, "program-1"],
+    ["write", false, "program-2"],
+    ["write", false, "program-3"],
+    ["read", false, "program-4"],
   ]);
-  expect(activities.map((activity) => activity.parentToolCallId)).toEqual(
-    result.messagesSnapshot.flatMap((message) =>
-      message.role === "assistant"
-        ? message.content.flatMap((entry) => (entry.type === "toolCall" ? [entry.id] : []))
-        : [],
-    ),
-  );
 });

@@ -1,6 +1,9 @@
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { FallbackStatus } from "../tool-stream-contract.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 const FALLBACK_TOAST_DURATION_MS = 8000;
 

@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { parseGeneratedAsyncAnswer } from "./chat-async-question-summary.tsx";
+import { parseGeneratedAsyncAnswer } from "./chat-async-question-content.ts";
 
 it("skips title encoding for ordinary messages while parsing quoted generated answers", () => {
   const asyncQuestion = {

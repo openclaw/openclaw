@@ -18,7 +18,6 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getDeliveryQueueEntryStatus } from "../src/infra/delivery-queue-sqlite.test-support.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../src/infra/outbound/delivery-queue-media-staging.js";
 import { withServer } from "../src/plugin-sdk/test-helpers/http-test-server.js";
 
@@ -53,32 +52,6 @@ function readQueueTerminal(stateDir: string, intentId: string) {
   );
 }
 
-async function withSlackPermanentRejectionLoopback(
-  check: (requests: SlackLoopbackRequest[]) => Promise<void>,
-) {
-  const requests: SlackLoopbackRequest[] = [];
-  await withServer(
-    (request, response) => {
-      void readBodyText(request).then((body) => {
-        const text = new URLSearchParams(body).get("text") ?? "";
-        const code = CLASSIFIED_CODES.find((candidate) => text.includes(candidate));
-        requests.push({
-          ...(code ? { code } : {}),
-          method: request.method,
-          text,
-          url: request.url ?? "",
-        });
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ ok: false, error: code ?? "unexpected_test_request" }));
-      });
-    },
-    async (baseUrl) => {
-      vi.stubEnv("SLACK_API_URL", `${baseUrl}/api/`);
-      await check(requests);
-    },
-  );
-}
-
 describe("Slack permanent rejections over real Web API transport", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -89,88 +62,105 @@ describe("Slack permanent rejections over real Web API transport", () => {
   });
 
   it("dead-letters both real platform rejections and never replays them after restart", async () => {
-    await withSlackPermanentRejectionLoopback(async (requests) => {
-      const { slackPlugin } = await import("../extensions/slack/api.js");
-      const cfg: OpenClawConfig = { channels: { slack: { botToken: "xoxb-loopback" } } };
-      setActivePluginRegistry(
-        createTestRegistry([{ pluginId: "slack", plugin: slackPlugin, source: "test" }]),
-      );
+    const requests: SlackLoopbackRequest[] = [];
+    await withServer(
+      (request, response) => {
+        void readBodyText(request).then((body) => {
+          const text = new URLSearchParams(body).get("text") ?? "";
+          const code = CLASSIFIED_CODES.find((candidate) => text.includes(candidate));
+          requests.push({
+            ...(code ? { code } : {}),
+            method: request.method,
+            text,
+            url: request.url ?? "",
+          });
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify({ ok: false, error: code ?? "unexpected_test_request" }));
+        });
+      },
+      async (baseUrl) => {
+        vi.stubEnv("SLACK_API_URL", `${baseUrl}/api/`);
+        const { slackPlugin } = await import("../extensions/slack/api.js");
+        const cfg: OpenClawConfig = { channels: { slack: { botToken: "xoxb-loopback" } } };
+        setActivePluginRegistry(
+          createTestRegistry([{ pluginId: "slack", plugin: slackPlugin, source: "test" }]),
+        );
 
-      await withStateDirEnv("openclaw-slack-permanent-loopback-", async ({ stateDir }) => {
-        try {
-          const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-          const queueStatus = (intentId: string) =>
-            getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, intentId, stateDir);
-          const drain = (code: string, intentId?: string) =>
-            drainPendingDeliveries({
-              drainKey: `slack:default:${code}`,
-              logLabel: `Slack loopback ${code} recovery`,
-              cfg,
-              stateDir,
-              log,
-              selectEntry: (entry) => ({
-                match: intentId ? entry.id === intentId : entry.channel === "slack",
-                bypassBackoff: true,
-              }),
-            });
-          for (const [index, code] of CLASSIFIED_CODES.entries()) {
-            const intentId = `${DELIVERY_INTENT_PREFIX}-${code}`;
-            const text = `real transport permanent rejection: ${code}`;
-            const staged = await sendDurableMessageBatch({
-              cfg,
-              channel: "slack",
-              to: "channel:C123",
-              accountId: "default",
-              durability: "required",
-              deliveryIntentId: intentId,
-              completionRetention: {
-                idPrefix: "slack-loopback-",
-                maxAgeMs: 60_000,
-                maxEntries: 10,
-              },
-              maxRetries: 10,
-              payloads: [{ text }],
-              deps: {
-                slack: async () => {
-                  throw new PlatformMessageNotDispatchedError(
-                    "staged before transport for recovery proof",
-                    { cause: new Error("loopback transport not released yet") },
-                  );
+        await withStateDirEnv("openclaw-slack-permanent-loopback-", async ({ stateDir }) => {
+          try {
+            const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+            const queueStatus = (intentId: string) => readQueueTerminal(stateDir, intentId)?.status;
+            const drain = (code: string, intentId?: string) =>
+              drainPendingDeliveries({
+                drainKey: `slack:default:${code}`,
+                logLabel: `Slack loopback ${code} recovery`,
+                cfg,
+                stateDir,
+                log,
+                selectEntry: (entry) => ({
+                  match: intentId ? entry.id === intentId : entry.channel === "slack",
+                  bypassBackoff: true,
+                }),
+              });
+            for (const [index, code] of CLASSIFIED_CODES.entries()) {
+              const intentId = `${DELIVERY_INTENT_PREFIX}-${code}`;
+              const text = `real transport permanent rejection: ${code}`;
+              const staged = await sendDurableMessageBatch({
+                cfg,
+                channel: "slack",
+                to: "channel:C123",
+                accountId: "default",
+                durability: "required",
+                deliveryIntentId: intentId,
+                completionRetention: {
+                  idPrefix: "slack-loopback-",
+                  maxAgeMs: 60_000,
+                  maxEntries: 10,
                 },
-              },
-            });
-            expect(staged.status).toBe("failed");
-            expect(requests).toHaveLength(index);
-            expect(queueStatus(intentId)).toBe("pending");
+                maxRetries: 10,
+                payloads: [{ text }],
+                deps: {
+                  slack: async () => {
+                    throw new PlatformMessageNotDispatchedError(
+                      "staged before transport for recovery proof",
+                      { cause: new Error("loopback transport not released yet") },
+                    );
+                  },
+                },
+              });
+              expect(staged.status).toBe("failed");
+              expect(requests).toHaveLength(index);
+              expect(queueStatus(intentId)).toBe("pending");
 
-            log.warn.mockClear();
-            await drain(code, intentId);
+              log.warn.mockClear();
+              await drain(code, intentId);
 
-            expect(requests).toHaveLength(index + 1);
-            expect(requests[index]).toMatchObject({
-              code,
-              method: "POST",
-              text,
-              url: "/api/chat.postMessage",
-            });
-            expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(code));
-            expect(readQueueTerminal(stateDir, intentId)).toEqual({
-              retryCount: 1,
-              status: "failed",
-            });
+              expect(requests).toHaveLength(index + 1);
+              expect(requests[index]).toMatchObject({
+                code,
+                method: "POST",
+                text,
+                url: "/api/chat.postMessage",
+              });
+              expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(code));
+              expect(readQueueTerminal(stateDir, intentId)).toEqual({
+                retryCount: 1,
+                status: "failed",
+              });
+            }
+
+            closeDatabases();
+            for (const code of CLASSIFIED_CODES) {
+              expect(queueStatus(`${DELIVERY_INTENT_PREFIX}-${code}`)).toBe("failed");
+            }
+
+            await drain("post-restart");
+            expect(requests).toHaveLength(CLASSIFIED_CODES.length);
+          } finally {
+            closeDatabases();
           }
-
-          closeDatabases();
-          for (const code of CLASSIFIED_CODES) {
-            expect(queueStatus(`${DELIVERY_INTENT_PREFIX}-${code}`)).toBe("failed");
-          }
-
-          await drain("post-restart");
-          expect(requests).toHaveLength(CLASSIFIED_CODES.length);
-        } finally {
-          closeDatabases();
-        }
-      });
-    });
+        });
+      },
+    );
   });
 });

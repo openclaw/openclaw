@@ -90,6 +90,15 @@ export async function requireMcpAppInteraction(view: McpAppViewLease): Promise<v
   }
 }
 
+export async function supportsMcpAppInteraction(view: McpAppViewLease): Promise<boolean> {
+  try {
+    await requireMcpAppInteraction(view);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function resolveMcpAppAllowedToolNames(active: McpAppActiveView): Promise<string[]> {
   if (active.view.readOnly === true || active.view.allowedAppToolNames === undefined) {
     return [];
@@ -237,7 +246,7 @@ export async function prepareModelCreatedAppToolCall(
     { loadSessionMcpConfig },
     { buildBundleMcpToolsFromCatalog },
     { getPluginToolMeta },
-    { isMcpToolAllowed, normalizeMcpToolFilter },
+    { createMcpToolFilter, mcpCatalogToolFilterScope, normalizeMcpToolFilter },
     { requiresMcpCodexToolApproval, resolveProjectedMcpCodexToolApprovalMode },
     { getSessionRowProjection },
     { resolveSessionResourceToolPolicy },
@@ -329,15 +338,19 @@ export async function prepareModelCreatedAppToolCall(
       (entry) => entry.serverName === view.serverName && entry.toolName === request.toolName,
     );
     if (
+      !currentCatalog ||
       !currentTool ||
       !isAppCallableTool(view, currentTool) ||
       currentTool.deniedBySession ||
-      JSON.stringify({ server: currentCatalog?.servers[view.serverName], tool: currentTool }) !==
+      JSON.stringify({ server: currentCatalog.servers[view.serverName], tool: currentTool }) !==
         expectedToolPolicy ||
       live.entry.toolOverrides?.mcpServers?.[view.serverName] === false ||
       live.entry.toolOverrides?.mcpToolsDeny?.[view.serverName]?.includes(request.toolName) ||
       (rawServer &&
-        !isMcpToolAllowed(normalizeMcpToolFilter(rawServer.toolFilter), request.toolName))
+        !createMcpToolFilter(
+          normalizeMcpToolFilter(rawServer.toolFilter),
+          mcpCatalogToolFilterScope(currentCatalog, view.serverName),
+        )(request.toolName))
     ) {
       throw new Error("MCP App tool is denied by current policy");
     }

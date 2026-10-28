@@ -185,11 +185,6 @@ openclaw-select-picker {
   outline: none;
 }
 
-/* Filtered flat options stay mounted so a keystroke does not invalidate siblings. */
-.picker-select__option[hidden] {
-  display: none;
-}
-
 .picker-select__empty {
   padding: 8px;
   color: var(--muted);
@@ -368,4 +363,23 @@ openclaw-select-picker {
   .picker-select--sheet:dir(rtl) .picker-select__menu {
     animation: none;
   }
+}
+
+/* Intrinsic-width probes stay outside the list's scroll region and consume no height. */
+.picker-select__sizer {
+  flex: 0 0 auto;
+  width: max-content;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+}
+
+.picker-select__window {
+  position: relative;
+}
+
+.picker-select__option--windowed {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
 }

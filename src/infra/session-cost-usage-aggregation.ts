@@ -15,24 +15,24 @@ export async function refreshCostUsageCacheForAgent(params: {
   databasePath?: string;
   maxFiles?: number;
   onRemaining?: (files: UsageCostPendingFile[]) => void;
-  sessionsDir?: string;
   storePath?: string;
   sessionFiles?: string[];
   startMs?: number;
   rebuildRows?: SessionCostUsageRollupRow[];
   sessionActor?: SessionActorStorageBinding;
+  waitForRefresh?: boolean;
 }): Promise<"refreshed" | "busy"> {
   const prepared = prepareUsageCostWorker(params);
   const agentId = normalizeAgentId(params.agentId);
   try {
-    const result = await runUsageCostWorker(prepared, {
+    const operation = {
       kind: "refresh",
       maxFiles: params.maxFiles,
-      sessionsDir: params.sessionsDir,
       sessionFiles: params.sessionFiles,
       startMs: params.startMs,
       rebuildRows: params.rebuildRows,
-    });
+    } satisfies Parameters<typeof runUsageCostWorker>[1];
+    const result = await runUsageCostWorker(prepared, operation, params.waitForRefresh);
     if (result.kind === "busy") {
       return "busy";
     }

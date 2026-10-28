@@ -4,6 +4,7 @@ import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
+import { revocableAuthority } from "./filesystem-clone.test-support.js";
 import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 
 const { readDirectoryAcl } = vi.hoisted(() => ({
@@ -76,9 +77,9 @@ describe.skipIf(process.platform === "win32")("worktree filesystem backend", () 
     async (reason) => {
       const root = tempDirs.make("openclaw-filesystem-backend-");
       const controller = new AbortController();
-      let authorized = true;
+      const authority = revocableAuthority();
       vi.spyOn(nativeWorktreeFilesystem, "probe").mockImplementation(async () => {
-        authorized = false;
+        authority.revoke();
         if (reason === "abort") {
           controller.abort(new Error("allocation canceled"));
         }
@@ -87,11 +88,7 @@ describe.skipIf(process.platform === "win32")("worktree filesystem backend", () 
       await expect(
         detectWorktreeFilesystemBackend(root, {
           signal: controller.signal,
-          commitGuard() {
-            if (!authorized) {
-              throw new Error("allocation lease lost");
-            }
-          },
+          commitGuard: authority.commitGuard,
         }),
       ).rejects.toThrow(reason === "abort" ? "allocation canceled" : "allocation lease lost");
     },

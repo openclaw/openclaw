@@ -34,6 +34,7 @@ export type SessionSharingEntry = Pick<
 function selectSessionSharingEntry(entry: InternalSessionEntry) {
   return {
     sessionId: entry.sessionId,
+    clientCapabilities: entry.clientCapabilities,
     previousSessionId: entry.previousSessionId,
     updatedAt: entry.updatedAt,
     createdAt: entry.createdAt,
@@ -48,6 +49,21 @@ function selectSessionSharingEntry(entry: InternalSessionEntry) {
     lifecycleRevision: entry.lifecycleRevision,
     lifecycleRunId: entry.lifecycleRunId,
     activeWriterRunId: entry.activeWriterRunId,
+    sandboxMode: entry.sandboxMode,
+    execHost: entry.execHost,
+    execCwd: entry.execCwd,
+    providerOverride: entry.providerOverride,
+    modelOverride: entry.modelOverride,
+    modelOverrideSource: entry.modelOverrideSource,
+    modelOverrideRouteResolution: entry.modelOverrideRouteResolution,
+    modelOverrideFallbackOriginProvider: entry.modelOverrideFallbackOriginProvider,
+    modelOverrideFallbackOriginModel: entry.modelOverrideFallbackOriginModel,
+    subagentRole: entry.subagentRole,
+    subagentControlScope: entry.subagentControlScope,
+    completionOwnerSessionKey: entry.completionOwnerSessionKey,
+    inheritedToolPolicyVersion: entry.inheritedToolPolicyVersion,
+    inheritedToolAllow: entry.inheritedToolAllow,
+    inheritedToolDeny: entry.inheritedToolDeny,
     ...(entry.subagentRecovery
       ? {
           subagentRecovery: {
@@ -241,6 +257,7 @@ export type PendingSessionEntryPublication = {
   sharingUnchanged: Set<string>;
   /** Planned metadata under the writer lock; matching fields survive COMMIT or rollback. */
   entryPostimages?: ReadonlyMap<string, SessionEntry>;
+  fullEntryPostimages?: ReadonlyMap<string, SessionEntry>;
   /** An undefined value records a participant command with no projection change. */
   participantProjections?: ReadonlyMap<
     string,

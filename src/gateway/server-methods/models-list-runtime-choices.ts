@@ -15,7 +15,6 @@ import {
 } from "../../agents/model-catalog-view.js";
 import { resolveLogicalModelCatalogEntryState } from "../../agents/model-catalog-visibility.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import { openAIModelCatalogRoutePolicy } from "../../agents/openai-model-routes.js";
 import { resolveCompatibleAgentRuntimeForProvider } from "../../agents/session-runtime-compat.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -90,7 +89,6 @@ export function prepareModelPickerRuntimeChoices(params: {
           runtimeEntry,
           resolveLogicalModelCatalogEntryState({
             evaluation,
-            routePolicy: openAIModelCatalogRoutePolicy,
           }).routeProjection,
         ).runtimeEntry;
         const {

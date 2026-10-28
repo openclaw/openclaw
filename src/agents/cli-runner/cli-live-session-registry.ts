@@ -132,6 +132,18 @@ async function closeRecord(
   await (record.cleanupPromise ?? record.handle.waitForExit());
 }
 
+/** Retire warm processes and join resources already waiting for their exit. */
+export async function disposeAllCliLiveSessions(): Promise<void> {
+  const results = await Promise.allSettled([
+    ...retiredSessionCleanup.values(),
+    ...Array.from(liveSessions.values()).map((record) => closeRecord(record, "abort")),
+  ]);
+  const failure = results.find((result) => result.status === "rejected");
+  if (failure) {
+    throw failure.reason;
+  }
+}
+
 function retainCleanup(context: PreparedCliRunContext, record: CliLiveSessionRecord): void {
   const owner = context.preparedBackend;
   record.owner = owner;
@@ -269,6 +281,11 @@ export function createCliLiveSessionCapability(params: {
       promptToolNamesHash: context.promptToolNamesHash,
       mcpResumeHash: context.preparedBackend.mcpResumeHash ?? context.preparedBackend.mcpConfigHash,
       credentialFingerprint: context.preparedBackend.secretInput?.fingerprint,
+      // A warm child keeps the login it started with. Reuse it only while the native owner
+      // this run was prepared under is the one it was started under.
+      nativeLoginOwnerHash: context.cliHistoryWriter?.bindsNativeLogin
+        ? sha256Hex(context.cliHistoryWriter.authFingerprint)
+        : undefined,
       skillsFingerprint,
       env: Object.keys(params.env)
         .toSorted()

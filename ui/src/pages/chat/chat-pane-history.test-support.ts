@@ -1,12 +1,11 @@
 import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
 } from "../../lib/sessions/session-capability.test-support.ts";
+import { createInitializationContext } from "./chat-application-context.test-support.ts";
 import {
-  createInitializationContext,
   createRenderTestChatPane,
   createTestChatPane as createBaseTestChatPane,
   nativeHistoryMessage,
@@ -28,8 +27,7 @@ export function createRefreshChatPane(client?: GatewayBrowserClient) {
   const pane = createRenderTestChatPane();
   const state = pane.initialize(context);
   if (client) {
-    state.client = client;
-    state.connected = true;
+    Object.assign(state, { client, connected: true });
   }
   return { pane, state, context };
 }
@@ -43,10 +41,11 @@ export type TestChatPane = Omit<BaseTestChatPane, "loadOlderMessages"> & {
   visuallyPresented: boolean;
 };
 
-export function createTestChatPane(params: {
-  client: GatewayBrowserClient;
-  sessions?: SessionCapability;
-}) {
+export function createTestChatPane(
+  params: NonNullable<Parameters<typeof createBaseTestChatPane>[0]> & {
+    client: GatewayBrowserClient;
+  },
+) {
   const sessions =
     params.sessions ?? createTestSessionCapability(createGatewayHarness(params.client).gateway);
   if (!params.sessions) {
@@ -61,9 +60,7 @@ export function createTestChatPane(params: {
 }
 
 export function nativeHistorySeq(message: unknown): number | undefined {
-  const metadata = (message as Record<string, unknown>)["__openclaw"] as
-    | Record<string, unknown>
-    | undefined;
+  const metadata = (message as { __openclaw?: { seq?: unknown } })["__openclaw"];
   return typeof metadata?.seq === "number" ? metadata.seq : undefined;
 }
 
@@ -85,8 +82,7 @@ export function appendChatThread(
 }
 
 function createPaginatedChatPane(request: ReturnType<typeof vi.fn>, firstSeq: number) {
-  const client = { request } as unknown as GatewayBrowserClient;
-  const result = createTestChatPane({ client });
+  const result = createTestChatPane({ client: { request } as unknown as GatewayBrowserClient });
   result.state.chatMessages = [firstSeq, firstSeq + 1].map((seq) => nativeHistoryMessage(seq));
   result.state.chatHistoryPagination = {
     hasMore: true,
@@ -123,6 +119,5 @@ export function stagedPagesRequest(overrides: Record<number, () => unknown> = {}
   });
 }
 
-export function createStagedPrefetchPane(request: ReturnType<typeof vi.fn>) {
-  return createPaginatedChatPane(request, 7);
-}
+export const createStagedPrefetchPane = (request: ReturnType<typeof vi.fn>) =>
+  createPaginatedChatPane(request, 7);

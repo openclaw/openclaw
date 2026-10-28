@@ -6,6 +6,7 @@ import * as doctorMaintenance from "../../commands/doctor-maintenance.js";
 import { createDoctorMaintenanceFixture } from "../../commands/doctor-maintenance.test-support.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { recordDeferredPluginMigrations } from "../../infra/deferred-plugin-migrations.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as packageRoot from "../../infra/openclaw-root.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
@@ -29,6 +30,9 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { removePreparedWorkerOwnershipColumns } from "../../state/openclaw-state-schema-v17.test-support.js";
+import { linkUserChannelIdentity } from "../../state/user-channel-identities.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -197,6 +201,91 @@ function firstRefusal() {
 }
 
 describe("unproved Doctor authority callers", () => {
+  it.each(["configured-owner", "profile", "profile-revoked"] as const)(
+    "releases its real maintenance owner before resumed %s policy reads",
+    async (source) => {
+      await state.writeConfig({
+        plugins: { enabled: false },
+        commands: { ownerAllowFrom: source === "configured-owner" ? ["owner"] : [] },
+        gateway: {
+          mode: "local",
+          roles: {
+            default: "member",
+            definitions: {
+              admin: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
+              member: { scopes: ["operator.read"], agents: [], sessions: { others: "none" } },
+            },
+          },
+        },
+      });
+      const control = state.path("control");
+      await fs.mkdir(control);
+      vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+      const profile = ensureProfileForEmail("owner@example.test");
+      setUserProfileRole(profile.id, "admin");
+      const identity = { channelId: "telegram", senderId: "owner", accountId: "default" };
+      linkUserChannelIdentity(profile.id, identity);
+      const requester = {
+        channel: identity.channelId,
+        senderId: identity.senderId,
+        accountId: identity.accountId,
+        authorizationSource: source === "configured-owner" ? source : `profile:${profile.id}`,
+      };
+      const authority = await requesterAuthority.createManagedUpdateRequesterAuthority(requester);
+      expect(authority.isCurrent()).toBe(true);
+      const run = createUpdateRun({ trigger: "chat", origin: { requester } });
+      await closeOpenClawStateDatabaseAsync();
+      const resultPath = state.statePath("scoped-result.json");
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", resultPath);
+      await state.writeJson("handoff.json", { completionOwner: "parent" });
+      if (source === "profile-revoked") {
+        const begin = doctorMaintenance.beginDoctorMaintenance;
+        vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockImplementation(async (params) => {
+          const owned = await begin(params);
+          const release = owned!.releaseState;
+          vi.spyOn(owned!, "releaseState").mockImplementation(async () => {
+            await release();
+            setUserProfileRole(profile.id, "member");
+          });
+          return owned;
+        });
+      }
+      const resumed = executorOwner.withUpdateCommandExecutor(run.runId, async (owner) => {
+        const executorFence = await owner.enter(state.root);
+        await resumePostCoreUpdate({
+          root: state.root,
+          channel: "stable",
+          opts: {
+            json: true,
+            yes: true,
+            run: {
+              runId: run.runId,
+              env: state.env,
+              executorFence,
+              requesterAuthority: authority,
+            },
+          },
+          timeoutMs: 5_000,
+        });
+      });
+      if (source === "profile-revoked") {
+        await expect(resumed).rejects.toBeInstanceOf(
+          requesterAuthority.UpdateRequesterRevokedError,
+        );
+        expect(mocks.plugins).not.toHaveBeenCalled();
+        expect(authority.isCurrent()).toBe(false);
+        expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toMatchObject({
+          status: "failed",
+          error: "requester-revoked",
+        });
+      } else {
+        await resumed;
+        expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toMatchObject({ status: "ok" });
+        expect(mocks.plugins).toHaveBeenCalledOnce();
+        expect(authority.isCurrent()).toBe(true);
+      }
+    },
+  );
   it.each([false, true])(
     "rechecks legacy requester authority after executor settlement (revoked=%s)",
     async (revoked) => {
@@ -307,6 +396,7 @@ describe("unproved Doctor authority callers", () => {
       databasePath,
       payload: {
         pid: process.pid,
+        processNamespace: readGatewayLockProcessNamespace(),
         createdAt: new Date().toISOString(),
         configPath: state.configPath,
         role: "gateway",

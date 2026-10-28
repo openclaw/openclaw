@@ -5,6 +5,7 @@ import {
   canonicalPathFromExistingAncestor,
   isPathInside,
 } from "openclaw/plugin-sdk/file-access-runtime";
+import { decodeUtf8Input, Utf8InputError } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type LegacySessionIndexEntry = {
@@ -18,12 +19,16 @@ type LegacySessionIndexEntry = {
 export async function readLegacySessionIndex(
   storePath: string,
 ): Promise<
-  { entries: Array<{ sessionKey: string; entry: LegacySessionIndexEntry }> } | { failure: string }
+  | { entries: Array<{ sessionKey: string; entry: LegacySessionIndexEntry }> }
+  | { failure: string | Utf8InputError }
 > {
   let contents: string;
   try {
-    contents = await fs.readFile(storePath, "utf8");
+    contents = decodeUtf8Input(await fs.readFile(storePath), `Legacy session index ${storePath}`);
   } catch (error) {
+    if (error instanceof Utf8InputError) {
+      return { failure: error };
+    }
     const code = extractErrorCode(error);
     return code === "ENOENT"
       ? { entries: [] }

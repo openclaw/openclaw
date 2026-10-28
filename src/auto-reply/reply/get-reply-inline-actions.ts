@@ -14,13 +14,13 @@ import {
   expandBundleCommandPromptTemplate,
   expandExplicitSkillReferences,
   hasSkillReferenceCandidate,
-  listReservedChatSlashCommandNames,
   mergeExplicitSkillSelections as mergeSelections,
   resolveSkillCommandInvocation,
   skillCommandsToExplicitSelections as toSelections,
 } from "../../skills/discovery/chat-command-invocation.js";
 import type { ExplicitSkillSelection } from "../../skills/types.js";
 import { notifyPreparedAgentRunStart } from "../agent-run-start.js";
+import { listReservedChatSlashCommandNames } from "../commands-registry.data.js";
 import {
   copyReplyPayloadMetadata,
   markCommandReplyForDelivery,
@@ -36,6 +36,7 @@ import {
   shouldSkipMessageByAbortCutoff,
 } from "./abort-cutoff.js";
 import { getAbortMemory, isAbortRequestText } from "./abort-primitives.js";
+import { isBangCommandInput } from "./bash-command-input.js";
 import { takeCommandSessionMetadataChangesFromTargets } from "./command-session-metadata.js";
 import { matchSlashCommandToken, resolveSlashCommandName } from "./commands-slash-parse.js";
 import type { CommandDispatchParams } from "./commands-types.js";
@@ -130,8 +131,6 @@ export async function handleInlineActions(
     skillFilter?: string[];
   },
 ): Promise<InlineActionResult> {
-  // Native directive results also carry turn-local fast mode; commands resolve their own status.
-  const commandParams = { ...params, resolvedFastMode: undefined };
   const {
     ctx,
     sessionCtx,
@@ -489,7 +488,8 @@ export async function handleInlineActions(
   if (handleInlineStatus) {
     const { buildStatusReply } = await commandsRuntimeLoader.load();
     const inlineStatusReply = await buildStatusReply({
-      ...commandParams,
+      ...params,
+      resolvedFastMode: undefined,
       sessionEntry: targetSessionEntry,
       parentSessionKey: targetSessionEntry?.parentSessionKey ?? ctx.ParentSessionKey,
       ...(await resolveModelLevels()),
@@ -508,7 +508,9 @@ export async function handleInlineActions(
     opts?.operatorAuthority?.assertCurrent();
     commandInput.assertOwnerCurrent?.();
     const result = await handleCommands({
-      ...commandParams,
+      ...params,
+      // Native directive results carry turn-local fast mode; commands resolve their own status.
+      resolvedFastMode: undefined,
       // Command handlers mutate the continuation context and retain the dispatch context.
       ctx: sessionCtx,
       rootCtx: ctx,
@@ -563,7 +565,8 @@ export async function handleInlineActions(
     (inlineCommand !== undefined ||
       directiveAck !== undefined ||
       inlineStatusRequested ||
-      command.commandBodyNormalized.trim().startsWith("/"));
+      command.commandBodyNormalized.trimStart().startsWith("/") ||
+      isBangCommandInput(command.commandBodyNormalized));
   if (shouldRunCommandHandlers) {
     const strippedBody = stripStructuralPrefixes(cleanedBody);
     const remainingBodyAfterInlineStatus = (

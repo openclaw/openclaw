@@ -1,9 +1,11 @@
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import {
   prepareClientCredentialMigration,
   recoverClientCredentialStore,
 } from "../infra/client-credential-migration.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { formatSchemaMigrationFailure } from "../infra/schema-migration-diagnostics.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { revokeSqliteDatabaseAdmissions } from "../infra/sqlite-database-admission.js";
 import { repairDoctorSqliteIndexCorruption } from "../infra/sqlite-index-recovery.js";
@@ -91,6 +93,7 @@ export function repairStateSchema(
   env: NodeJS.ProcessEnv,
   scope: "automatic" | "doctor" | "readability" | "indexes" | "version",
   integrityCheck: "quick" | "full" = "quick",
+  legacyCronDefaultStoreKey?: string,
 ): {
   changes: string[];
   warnings: string[];
@@ -100,7 +103,7 @@ export function repairStateSchema(
   const db = openNodeSqliteDatabase(pathname, { enableForeignKeyConstraints: false });
   try {
     return runUpdateSqliteMigration(db, pathname, () =>
-      repairOpenedStateSchema(db, pathname, env, scope, integrityCheck),
+      repairOpenedStateSchema(db, pathname, env, scope, integrityCheck, legacyCronDefaultStoreKey),
     );
   } finally {
     if (db.isOpen) {
@@ -116,6 +119,7 @@ function repairOpenedStateSchema(
   env: NodeJS.ProcessEnv,
   scope: "automatic" | "doctor" | "readability" | "indexes" | "version",
   integrityCheck: "quick" | "full",
+  legacyCronDefaultStoreKey?: string,
 ): { changes: string[]; warnings: string[] } {
   const rebuiltIndexNames = new Set<string>();
   let indexChanges: string[] = [];
@@ -141,9 +145,17 @@ function repairOpenedStateSchema(
     ensureOpenClawStatePermissions(pathname, env);
     if (scope === "automatic") {
       return {
-        changes: ensureOpenClawStateRuntimeSchema(db, pathname, env, {
-          kind: "existing",
-        }),
+        changes: ensureOpenClawStateRuntimeSchema(
+          db,
+          pathname,
+          env,
+          {
+            kind: "existing",
+          },
+          undefined,
+          false,
+          legacyCronDefaultStoreKey,
+        ),
         warnings: [],
       };
     }
@@ -169,6 +181,8 @@ function repairOpenedStateSchema(
             return [];
           }
           const applied = migrateBoundedStateSchema(db, previousVersion, {
+            env,
+            legacyCronDefaultStoreKey,
             versionMigrationOnly: true,
           });
           if (!applied) {
@@ -337,7 +351,10 @@ function repairOpenedStateSchema(
         }
         if (previousVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
           openClawStateMigrationAssertions.get(previousVersion)?.(db, { pathname });
-          const boundedChanges = migrateBoundedStateSchema(db, previousVersion);
+          const boundedChanges = migrateBoundedStateSchema(db, previousVersion, {
+            env,
+            legacyCronDefaultStoreKey,
+          });
           if (boundedChanges) {
             applied.push(...boundedChanges);
             markCurrentStateSchemaVersion(db);
@@ -393,7 +410,7 @@ function repairOpenedStateSchema(
           }
           ensureAdditiveStateColumns(db, "repair");
           for (const migration of versionedStateMigrations) {
-            if (migration.migrate(db, previousVersion)) {
+            if (migration.migrate(db, previousVersion, { env, legacyCronDefaultStoreKey })) {
               applied.push(migration.applied);
             }
           }
@@ -473,16 +490,26 @@ function repairOpenedStateSchema(
     }
     // Reaching this catch inside doctor means repair itself refused or failed,
     // so the runtime asserts' "run openclaw doctor --fix" advice is circular here.
+    const warning = formatSchemaMigrationFailure(
+      "Failed migrating shared state database schema",
+      pathname,
+      err,
+    );
     const reason =
       scope === "automatic"
-        ? String(err)
-        : String(err).replace(
-            /has a legacy ([a-z ]+) schema; run openclaw doctor --fix to migrate it\./u,
+        ? warning
+        : warning.replace(
+            /has a legacy ([a-z ]+) schema; run openclaw doctor --fix to migrate it\.?/u,
             "has a legacy $1 schema; automatic repair refused the unrecognized schema shape.",
           );
+    // Keep the existing fixed public classification separate from local cause details.
+    const diagnostic =
+      extractErrorCode(err) === "CLIENT_CREDENTIAL_SOCKET_INVALID"
+        ? "Client credential socket material is invalid.\n"
+        : "";
     return {
       changes: indexChanges,
-      warnings: [`Failed migrating shared state database schema at ${pathname}: ${reason}`],
+      warnings: [`${diagnostic}${reason}`],
     };
   } finally {
     if (!ownershipRefused) {

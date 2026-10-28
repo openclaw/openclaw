@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
+import { assertionSucceeds } from "../../shared/assertion.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import type { ExecApprovalDurableLookup } from "../exec-approval-manager.types.js";
@@ -23,12 +24,6 @@ import { prepareApprovalSessionAccess } from "./approval-record-lookup.js";
 import type { ApprovalRequestAuthority } from "./approval-request-authority.js";
 import type { GatewayClient } from "./types.js";
 
-type PreparedVisibleApproval = {
-  readCurrent: () => OperatorApprovalRecord | null;
-  guard: OperatorApprovalStoreGuard;
-  [Symbol.dispose]: () => void;
-};
-
 export async function loadVisibleApproval(params: {
   id: string;
   authority: ApprovalRequestAuthority;
@@ -40,7 +35,11 @@ export async function loadVisibleApproval(params: {
   pluginApprovalManager: ExecApprovalManager<PluginApprovalRequestPayload>;
   systemAgentApprovalManager?: ExecApprovalManager<SystemAgentApprovalRequestPayload>;
   databaseOptions?: OpenClawStateDatabaseOptions;
-}): Promise<PreparedVisibleApproval | null> {
+}): Promise<{
+  readCurrent: () => OperatorApprovalRecord | null;
+  guard: OperatorApprovalStoreGuard;
+  [Symbol.dispose]: () => void;
+} | null> {
   // Reconciliation can settle a live waiter, so authorization must precede
   // every durable read and no unauthorized lookup may reach the bridge.
   const authorized = params.allowApprovalRuntime
@@ -129,14 +128,7 @@ export async function loadVisibleApproval(params: {
       },
     },
   };
-  const isLookupCurrent = () => {
-    try {
-      lookupAuthority.assertCurrent();
-      return true;
-    } catch {
-      return false;
-    }
-  };
+  const isLookupCurrent = () => assertionSucceeds(() => lookupAuthority.assertCurrent());
   const reconcile = async (
     manager:
       | typeof params.execApprovalManager

@@ -20,14 +20,7 @@ import {
 } from "../model-visibility-policy.js";
 import { hasResolvedThinkingCatalogEntry } from "../thinking-runtime.js";
 
-function resolveDeferredSelection(params: {
-  defaultProvider: string;
-  defaultModel: string;
-  sessionEntry: SessionEntry | undefined;
-  hasExplicitRunOverride: boolean;
-  pluginsEnabled: boolean;
-  metadataSnapshot: PluginMetadataSnapshot | undefined;
-}) {
+function resolveDeferredSelection(params: Parameters<typeof prepareCommandModelCatalog>[0]) {
   const entry = params.sessionEntry;
   if (
     !params.pluginsEnabled ||
@@ -46,13 +39,15 @@ function resolveDeferredSelection(params: {
   if (!provider || !model || provider.includes("/") || model.includes("/")) {
     return undefined;
   }
-  // Canonical repair can replace the route that justified deferral.
+  // Canonical repair can replace the route that justified deferral. A deferred run has no
+  // catalog to prove the stored route, so any repair candidate loads the full catalog instead.
   if (
     !isModelSelectionLocked(entry) &&
     repairProviderWrappedModelOverride({
       entry: { ...entry },
       defaultProvider: params.defaultProvider,
       defaultModel: params.defaultModel,
+      isKnownRoute: () => false,
     }).updated
   ) {
     return undefined;

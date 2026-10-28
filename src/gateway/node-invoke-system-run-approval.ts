@@ -6,13 +6,15 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { ExecApprovalDecision, SystemRunApprovalPlan } from "../infra/exec-approvals.js";
+import {
+  buildSystemRunApprovalBinding,
+  missingSystemRunApprovalBinding,
+  matchSystemRunApprovalBinding,
+  toSystemRunApprovalMismatchError,
+} from "../infra/system-run-approval-binding.js";
 import { resolveSystemRunApprovalRuntimeContext } from "../infra/system-run-approval-context.js";
 import { resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import type { ExecApprovalRecord } from "./exec-approval-manager.js";
-import {
-  evaluateSystemRunApprovalMatch,
-  toSystemRunApprovalMismatchError,
-} from "./node-invoke-system-run-approval-match.js";
 
 type ApprovalLookup = {
   getSnapshot: (recordId: string) => Promise<ExecApprovalRecord | null>;
@@ -365,16 +367,35 @@ export async function sanitizeSystemRunParamsForForwarding(opts: {
     }
   }
 
-  const approvalMatch = evaluateSystemRunApprovalMatch({
+  const approvalRequest = snapshot.request;
+  // Evaluates whether a node system.run request matches the stored approval binding.
+  if (approvalRequest.host !== "node") {
+    return toSystemRunApprovalMismatchError({
+      runId,
+      match: {
+        ok: false,
+        code: "APPROVAL_REQUEST_MISMATCH",
+        message: "approval id does not match request",
+      },
+    });
+  }
+  const actualBinding = buildSystemRunApprovalBinding({
     argv: runtimeContext.argv,
-    request: snapshot.request,
-    binding: {
-      cwd: runtimeContext.cwd,
-      agentId: runtimeContext.agentId,
-      sessionKey: runtimeContext.sessionKey,
-      env: p.env,
-    },
+    cwd: runtimeContext.cwd,
+    agentId: runtimeContext.agentId,
+    sessionKey: runtimeContext.sessionKey,
+    env: p.env,
   });
+  const expectedBinding = approvalRequest.systemRunBinding;
+  const approvalMatch = expectedBinding
+    ? matchSystemRunApprovalBinding({
+        expected: expectedBinding,
+        actual: actualBinding.binding,
+        actualEnvKeys: actualBinding.envKeys,
+      })
+    : missingSystemRunApprovalBinding({
+        actualEnvKeys: actualBinding.envKeys,
+      });
   if (!approvalMatch.ok) {
     return toSystemRunApprovalMismatchError({ runId, match: approvalMatch });
   }

@@ -1,9 +1,9 @@
 import fs from "node:fs";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { ServerResponse } from "node:http";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
-import type { OpenClawPluginApi, PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -13,7 +13,6 @@ import {
   resolveDiffsPluginSecurity,
   resolveDiffsPluginViewerBaseUrl,
 } from "./config.js";
-import { DIFFS_AGENT_GUIDANCE } from "./prompt-guidance.js";
 import { DiffArtifactStore } from "./store.js";
 import { createDiffsTool } from "./tool.js";
 import {
@@ -23,6 +22,14 @@ import {
 } from "./types.js";
 import { VIEWER_ASSET_PREFIX, VIEWER_RUNTIME_PATH, getServedViewerAsset } from "./viewer-assets.js";
 
+const DIFFS_AGENT_GUIDANCE = [
+  "When you need to show edits as a real diff, prefer the `diffs` tool instead of writing a manual summary.",
+  "It accepts either `before` + `after` text or a unified `patch`.",
+  "Check `details.changed`: identical before/after input returns `false` without creating an artifact; rendered results return `true`.",
+  "`mode=view` returns `details.viewerUrl` for interactive viewing; `mode=file` returns `details.filePath`; `mode=both` returns both.",
+  "To send the rendered file, use an available file-sending tool to send `details.filePath` as an attachment.",
+  "Include `path` when you know the filename, and omit presentation overrides unless needed.",
+].join("\n");
 const DIFFS_LANGUAGE_PACK_PLUGIN_ID = "diffs-language-pack";
 const DIFF_ARTIFACT_NAMESPACE = "diff-artifacts";
 const DIFF_ARTIFACT_MAX_ENTRIES = 2_048;
@@ -113,7 +120,38 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
       }
 
       if (parsed.pathname.startsWith(VIEWER_ASSET_PREFIX)) {
-        return await serveAsset(req, res, parsed.pathname, api.logger);
+        const pathname = parsed.pathname;
+        const logger = api.logger;
+        if (req.method !== "GET" && req.method !== "HEAD") {
+          respondText(res, 405, "Method not allowed");
+          return true;
+        }
+
+        try {
+          const asset = await getServedViewerAsset(pathname);
+          if (!asset) {
+            respondText(res, 404, "Asset not found");
+            return true;
+          }
+
+          res.statusCode = 200;
+          setSharedHeaders(
+            res,
+            asset.contentType,
+            pathname === VIEWER_RUNTIME_PATH ? IMMUTABLE_ASSET_CACHE_CONTROL : undefined,
+          );
+          res.setHeader("content-length", String(Buffer.byteLength(asset.body)));
+          if (req.method === "HEAD") {
+            res.end();
+          } else {
+            res.end(asset.body);
+          }
+          return true;
+        } catch (error) {
+          logger?.warn(`Failed to serve diffs asset ${pathname}: ${String(error)}`);
+          respondText(res, 500, "Failed to load asset");
+          return true;
+        }
       }
 
       if (!parsed.pathname.startsWith(VIEW_PREFIX)) {
@@ -124,7 +162,14 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
       const pluginConfig = resolveCurrentPluginConfig();
       const allowRemoteViewer = resolveDiffsPluginSecurity(pluginConfig).allowRemoteViewer;
       const trustedProxies = currentConfig.gateway?.trustedProxies;
-      const proxyHintsPresent = hasProxyForwardingHints(req);
+      const headers = req.headers ?? {};
+      const proxyHintsPresent = Boolean(
+        headers["x-forwarded-for"] ||
+        headers["x-real-ip"] ||
+        headers.forwarded ||
+        headers["x-forwarded-host"] ||
+        headers["x-forwarded-proto"],
+      );
       const clientIp =
         proxyHintsPresent || (trustedProxies?.length ?? 0) > 0
           ? // Reuse gateway proxy trust rules and fail closed when a trusted proxy hop
@@ -135,7 +180,12 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
               currentConfig.gateway?.allowRealIpFallback === true,
             )
           : req.socket?.remoteAddress;
-      const remoteKey = normalizeRemoteClientKey(clientIp ?? req.socket?.remoteAddress);
+      const normalized = normalizeLowercaseStringOrEmpty(clientIp ?? req.socket?.remoteAddress);
+      const remoteKey = !normalized
+        ? "unknown"
+        : normalized.startsWith("::ffff:")
+          ? normalized.slice("::ffff:".length)
+          : normalized;
       const localRequest =
         !proxyHintsPresent && typeof clientIp === "string" && isLoopbackHost(remoteKey);
       if (!localRequest && !allowRemoteViewer) {
@@ -215,44 +265,6 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
   }));
 }
 
-async function serveAsset(
-  req: IncomingMessage,
-  res: ServerResponse,
-  pathname: string,
-  logger?: PluginLogger,
-): Promise<boolean> {
-  if (req.method !== "GET" && req.method !== "HEAD") {
-    respondText(res, 405, "Method not allowed");
-    return true;
-  }
-
-  try {
-    const asset = await getServedViewerAsset(pathname);
-    if (!asset) {
-      respondText(res, 404, "Asset not found");
-      return true;
-    }
-
-    res.statusCode = 200;
-    setSharedHeaders(
-      res,
-      asset.contentType,
-      pathname === VIEWER_RUNTIME_PATH ? IMMUTABLE_ASSET_CACHE_CONTROL : undefined,
-    );
-    res.setHeader("content-length", String(Buffer.byteLength(asset.body)));
-    if (req.method === "HEAD") {
-      res.end();
-    } else {
-      res.end(asset.body);
-    }
-    return true;
-  } catch (error) {
-    logger?.warn(`Failed to serve diffs asset ${pathname}: ${String(error)}`);
-    respondText(res, 500, "Failed to load asset");
-    return true;
-  }
-}
-
 function respondText(res: ServerResponse, statusCode: number, body: string): void {
   res.statusCode = statusCode;
   setSharedHeaders(res, "text/plain; charset=utf-8");
@@ -273,25 +285,6 @@ function setSharedHeaders(
   res.setHeader("referrer-policy", "no-referrer");
 }
 
-function normalizeRemoteClientKey(remoteAddress: string | undefined): string {
-  const normalized = normalizeLowercaseStringOrEmpty(remoteAddress);
-  if (!normalized) {
-    return "unknown";
-  }
-  return normalized.startsWith("::ffff:") ? normalized.slice("::ffff:".length) : normalized;
-}
-
-function hasProxyForwardingHints(req: IncomingMessage): boolean {
-  const headers = req.headers ?? {};
-  return Boolean(
-    headers["x-forwarded-for"] ||
-    headers["x-real-ip"] ||
-    headers.forwarded ||
-    headers["x-forwarded-host"] ||
-    headers["x-forwarded-proto"],
-  );
-}
-
 function resolveDiffsLanguagePackAvailability(api: OpenClawPluginApi): boolean {
   const currentConfig = api.runtime.config.current() as OpenClawConfig;
   const plugins = currentConfig.plugins;
@@ -307,10 +300,7 @@ function resolveDiffsLanguagePackAvailability(api: OpenClawPluginApi): boolean {
   if (plugins?.entries?.[DIFFS_LANGUAGE_PACK_PLUGIN_ID]?.enabled === false) {
     return false;
   }
-  return hasSiblingLanguagePackRuntime(api.rootDir);
-}
-
-function hasSiblingLanguagePackRuntime(rootDir: string | undefined): boolean {
+  const rootDir = api.rootDir;
   if (!rootDir) {
     return false;
   }

@@ -1,163 +1,105 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { captureSessionControllerSourceSettlement } from "../../../sessions/session-controller.mailbox.js";
-import { createDeferredCore } from "../../../shared/deferred.js";
-import { createQueueTestRun } from "../queue.test-helpers.js";
-import { enqueueFollowupRun } from "./enqueue.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { captureSessionControllerSourceSettlement as settleSource } from "../../../sessions/session-controller.mailbox.js";
 import {
-  admitFollowupRunLifecycle,
-  completeFollowupRunLifecycle,
-  markFollowupRunEnqueued,
+  admitFollowupRunLifecycle as admit,
+  completeFollowupRunLifecycle as complete,
+  markFollowupRunEnqueued as markEnqueued,
 } from "./lifecycle.js";
+import { queueFixture } from "./lifecycle.test-support.js";
 import { clearFollowupQueue } from "./state.js";
+import type { FollowupRun } from "./types.js";
 
-afterEach(() => vi.useRealTimers());
-
-describe("followup lifecycle heartbeat", () => {
-  it("keeps the public deferral callback free of internal observation arguments", async () => {
-    const lifecycle = { onAdopted: vi.fn(), onDeferred: vi.fn() };
-    const run = {
-      ...createQueueTestRun({ prompt: "deferred callback" }),
-      turnAdoptionLifecycle: lifecycle,
-    };
-    try {
-      expect(markFollowupRunEnqueued(run)).toBe(true);
-      expect(lifecycle.onDeferred).toHaveBeenCalledExactlyOnceWith();
-    } finally {
-      completeFollowupRunLifecycle(run);
-      await captureSessionControllerSourceSettlement(run.controllerInput!);
-    }
-  });
-
-  it("retains message-ID-deduped source custody until abandonment actually settles", async () => {
-    const key = "agent:main:dedupe-abandonment";
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const onSettled = vi.fn();
-    const run = createQueueTestRun({ prompt: "queued", messageId: "source-1" });
-    run.run.agentId = "main";
-    run.run.sessionKey = key;
-    run.turnAdoptionLifecycle = {
-      onAdopted: () => {},
-      onAbandoned: async () => {
-        entered.resolve();
-        await release.promise;
-      },
-      onSettled,
-    };
-    enqueueFollowupRun(key, run, { mode: "followup" }, "message-id");
-    const input = run.controllerInput!;
-    try {
-      clearFollowupQueue(key, input.mailbox);
-      await entered.promise;
-      expect(onSettled).not.toHaveBeenCalled();
-      release.resolve();
-      await captureSessionControllerSourceSettlement(input);
-      expect(onSettled).toHaveBeenCalledOnce();
-    } finally {
-      release.resolve();
-      await captureSessionControllerSourceSettlement(input);
-    }
-  });
-  it("settles source cleanup when deferral publication throws", async () => {
-    const release = createDeferredCore();
-    const failure = new Error("deferral publication failed");
-    const onSettled = vi.fn(() => release.promise);
-    const run = createQueueTestRun({ prompt: "failed publication" });
-    run.turnAdoptionLifecycle = {
-      onAdopted: () => {},
-      onDeferred: () => {
-        throw failure;
-      },
-      onSettled,
-    };
-    let settled = false;
-    try {
-      expect(() =>
-        enqueueFollowupRun("agent:main:failed-publication", run, { mode: "followup" }),
-      ).toThrow(failure);
-      const completion = captureSessionControllerSourceSettlement(
-        expectDefined(run.controllerInput, "failed publication source"),
-      );
-      void completion.then(() => {
-        settled = true;
-      });
-      expect(onSettled).toHaveBeenCalledOnce();
-      expect(settled).toBe(false);
-      release.resolve();
-      await completion;
-      expect(settled).toBe(true);
-    } finally {
-      release.resolve();
-      if (run.controllerInput) {
-        await captureSessionControllerSourceSettlement(run.controllerInput);
-      }
-    }
-  });
-  it("joins already-started admission before settling source custody", async () => {
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const lifecycle = {
-      onAdopted: async () => {
-        entered.resolve();
-        await release.promise;
-      },
-      onAbandoned: vi.fn(),
-      onSettled: vi.fn(),
-    };
-    const run = {
-      ...createQueueTestRun({ prompt: "custody race" }),
-      turnAdoptionLifecycle: lifecycle,
-    };
-    const admission = admitFollowupRunLifecycle(run);
-    try {
-      await entered.promise;
-      completeFollowupRunLifecycle(run);
-      expect(lifecycle.onSettled).not.toHaveBeenCalled();
-      release.resolve();
-      await admission;
-      await captureSessionControllerSourceSettlement(run.controllerInput!);
-      expect(lifecycle.onSettled).toHaveBeenCalledOnce();
-      expect(lifecycle.onAbandoned).not.toHaveBeenCalled();
-    } finally {
-      release.resolve();
-      await admission;
-    }
-  });
-
-  it.each(["admitted", "completed", "aborted"] as const)(
-    "does not start renewal for an already %s lifecycle",
-    async (state) => {
-      vi.useFakeTimers();
-      const abort = new AbortController();
-      const lifecycle = {
-        admission: "exclusive" as const,
-        abortSignal: abort.signal,
-        onAdopted: vi.fn(),
-        onDeferred: vi.fn(),
-        onDeferredHeartbeat: vi.fn(),
-        deferredHeartbeatIntervalMs: 100,
-        onAbandoned: vi.fn(),
-      };
-      const run = {
-        ...createQueueTestRun({ prompt: "heartbeat" }),
-        turnAdoptionLifecycle: lifecycle,
-      };
-      if (state === "admitted") {
-        await admitFollowupRunLifecycle(run);
-      } else if (state === "completed") {
-        completeFollowupRunLifecycle(run);
-      } else {
-        abort.abort();
-      }
-      try {
-        markFollowupRunEnqueued(run);
-        await vi.advanceTimersByTimeAsync(500);
-        expect(lifecycle.onDeferredHeartbeat).not.toHaveBeenCalled();
-        expect(vi.getTimerCount()).toBe(0);
-      } finally {
-        completeFollowupRunLifecycle(run);
-      }
-    },
-  );
+let run: FollowupRun;
+const queue = queueFixture("followup");
+beforeEach(() => {
+  run = queue.source("lifecycle");
 });
+afterEach(async () => {
+  queue.release();
+  try {
+    complete(run);
+    await settleSource(run.controllerInput!);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("keeps the public deferral callback free of internal observation arguments", async () => {
+  const lifecycle = { onAdopted: vi.fn(), onDeferred: vi.fn() };
+  run.turnAdoptionLifecycle = lifecycle;
+  expect(markEnqueued(run)).toBe(true);
+  expect(lifecycle.onDeferred).toHaveBeenCalledExactlyOnceWith();
+});
+
+it.each(["abandonment", "publication failure", "adoption"] as const)(
+  "retains source custody during pending %s",
+  async (phase) => {
+    const release = queue.gate();
+    const failure = new Error("deferral publication failed");
+    const onAbandoned = vi.fn();
+    const onSettled = vi.fn(phase === "publication failure" ? release.wait : undefined);
+    run.turnAdoptionLifecycle = {
+      onAdopted: phase === "adoption" ? release.wait : () => {},
+      onAbandoned:
+        phase === "abandonment" ? release.wait : phase === "adoption" ? onAbandoned : undefined,
+      onSettled,
+    };
+    let admission: Promise<void> | undefined;
+    if (phase === "adoption") {
+      admission = admit(run);
+      await release.entered;
+      complete(run);
+    } else if (phase === "publication failure") {
+      run.turnAdoptionLifecycle.onDeferred = () => {
+        throw failure;
+      };
+      expect(() => queue.enqueue(run)).toThrow(failure);
+    } else {
+      run.messageId = "source-1";
+      queue.enqueue(run);
+      clearFollowupQueue(queue.key, run.controllerInput!.mailbox);
+      await release.entered;
+    }
+    expect(onSettled).toHaveBeenCalledTimes(phase === "publication failure" ? 1 : 0);
+    const settled = vi.fn();
+    const completion = settleSource(expectDefined(run.controllerInput, "pending source"));
+    void completion.then(settled);
+    expect(settled).not.toHaveBeenCalled();
+    release.resolve();
+    await admission;
+    await completion;
+    expect(settled).toHaveBeenCalledOnce();
+    expect(onSettled).toHaveBeenCalledOnce();
+    if (phase === "adoption") {
+      expect(onAbandoned).not.toHaveBeenCalled();
+    }
+  },
+);
+
+it.each(["admitted", "completed", "aborted"] as const)(
+  "does not start renewal for an already %s lifecycle",
+  async (state) => {
+    vi.useFakeTimers();
+    const abort = new AbortController();
+    const lifecycle = {
+      admission: "exclusive" as const,
+      abortSignal: abort.signal,
+      onAdopted: vi.fn(),
+      onDeferredHeartbeat: vi.fn(),
+      deferredHeartbeatIntervalMs: 100,
+    };
+    run.turnAdoptionLifecycle = lifecycle;
+    if (state === "admitted") {
+      await admit(run);
+    } else if (state === "completed") {
+      complete(run);
+    } else {
+      abort.abort();
+    }
+    markEnqueued(run);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(lifecycle.onDeferredHeartbeat).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  },
+);

@@ -21,7 +21,7 @@ it("records delivered delivery without a duplicate relay", async () => {
         delivered: true,
       })),
     },
-    async ({ cron, enqueueSystemEvent, requestHeartbeat }) => {
+    async ({ cron, enqueueSystemEvent }) => {
       const job = await cron.add({
         name: "announce-delivered",
         enabled: true,
@@ -33,7 +33,6 @@ it("records delivered delivery without a duplicate relay", async () => {
       });
       expect(await cron.run(job.id, "force")).toEqual({ ok: true, ran: true });
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(requestHeartbeat).not.toHaveBeenCalled();
       expect(cron.getJob(job.id)?.state.lastDeliveryStatus).toBe("delivered");
     },
   );

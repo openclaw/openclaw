@@ -16,19 +16,15 @@ import type { PreparedModelRuntimeCatalogFacts } from "./prepared-model-runtime.
 import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.types.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
-type ConfiguredCatalogAgentFacts = {
-  input: { config: OpenClawConfig; env?: NodeJS.ProcessEnv };
-  configuredModelRefs: readonly ModelCatalogRef[];
-};
-
-type ConfiguredCatalogWorkspaceFacts = {
-  pluginMetadataSnapshot: PluginMetadataSnapshot;
-  inlineProviderModels: readonly InlineModelEntry[];
-};
-
 export function prepareConfiguredRuntimeFacts(params: {
-  agentFacts: ConfiguredCatalogAgentFacts;
-  workspaceFacts: ConfiguredCatalogWorkspaceFacts;
+  agentFacts: {
+    input: { config: OpenClawConfig; env?: NodeJS.ProcessEnv };
+    configuredModelRefs: readonly ModelCatalogRef[];
+  };
+  workspaceFacts: {
+    pluginMetadataSnapshot: PluginMetadataSnapshot;
+    inlineProviderModels: readonly InlineModelEntry[];
+  };
   templateModelRegistry: ModelRegistry;
   configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
 }): PreparedModelRuntimeCatalogFacts {

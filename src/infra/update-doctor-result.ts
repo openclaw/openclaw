@@ -27,6 +27,10 @@ import type {
 } from "./update-doctor-config.js";
 import { UpdateDoctorLintFindingSchema } from "./update-doctor-lint-schema.js";
 import { runWithUpdateDoctorMigrationCapture } from "./update-doctor-migration-attribution.js";
+import {
+  createUpdateDoctorHistoricalScanCapture,
+  UpdateDoctorHistoricalScansSchema,
+} from "./update-doctor-scan-receipts.js";
 import { normalizeUpdateFailureFacts, type UpdateFailureFact } from "./update-failure-facts.js";
 import { UpdateFailureFactSchema } from "./update-run-schema.js";
 
@@ -96,6 +100,7 @@ const doctorResultEvidence = {
       unchanged: z.boolean(),
       fromGenerations: z.record(z.string(), z.string().nullable()).optional(),
       generations: z.record(z.string(), z.string().nullable()),
+      historicalScans: UpdateDoctorHistoricalScansSchema.optional().catch(undefined),
     })
     .optional()
     .catch(undefined),
@@ -181,6 +186,8 @@ export type DoctorConfigCapture = {
   deferredInspectionCheckIds?: string[];
 };
 export type UpdateDoctorWriteAuthority = {
+  /** Parent Doctor phase deadline for nested managed-service inspection. */
+  serviceInspectionDeadlineAtMs?: number;
   inputHash: string;
   assertCurrent: () => void;
   commandAuthority?: import("./update-managed-command-custody.js").ManagedCommandProcessAuthority;
@@ -211,16 +218,21 @@ export function createUpdateDoctorDatabaseWriteCapture(
   }
   let expectedGenerations: UpdateDatabaseGenerations | undefined = { ...input };
   let fromGenerations: UpdateDatabaseGenerations | undefined;
+  let physical = false;
+  let admitted = false;
   let unchanged = true;
   let receipt: UpdateDatabaseWriteReceipt | undefined;
+  const openedSqlitePaths = new Set<string>();
+  const historicalScans = createUpdateDoctorHistoricalScanCapture(options);
   const read = async () => {
     if (!expectedGenerations) {
       return undefined;
     }
-    let generations: UpdateDatabaseGenerations;
+    let observation: import("./update-database-generations.js").UpdateDatabaseGenerationPair;
     try {
-      const { readUpdateDatabaseGenerationsIsolated } = await import("./update-candidate-state.js");
-      generations = await readUpdateDatabaseGenerationsIsolated(
+      const { readUpdateDatabaseGenerationPairIsolated } =
+        await import("./update-candidate-state.js");
+      observation = await readUpdateDatabaseGenerationPairIsolated(
         Object.keys(expectedGenerations),
         options,
       );
@@ -237,7 +249,18 @@ export function createUpdateDoctorDatabaseWriteCapture(
       return undefined;
     }
     options.assertCurrent?.();
-    return generations;
+    return observation;
+  };
+  const acceptEmptyReaderTransitions = (
+    observation: import("./update-database-generations.js").UpdateDatabaseGenerationPair,
+  ) => {
+    // Share migration admission's no-write equivalence, from this same observation.
+    for (const [pathname, generation] of Object.entries(observation.committed)) {
+      const alternate = observation.emptyReaderAlternates[pathname];
+      if (alternate !== undefined && expectedGenerations?.[pathname] === alternate) {
+        expectedGenerations[pathname] = generation;
+      }
+    }
   };
   return {
     get receipt() {
@@ -246,12 +269,17 @@ export function createUpdateDoctorDatabaseWriteCapture(
     run<T>(operation: () => T): T {
       return runWithUpdateDoctorMigrationCapture(
         {
+          openedSqlitePaths,
           expected: (pathname) => expectedGenerations?.[pathname],
           assertCurrent: () => options.assertCurrent?.(),
           accept(pathname, before, after) {
             options.assertCurrent?.();
             const expected = expectedGenerations;
-            if (!expected || !Object.hasOwn(expected, pathname) || expected[pathname] !== before) {
+            if (
+              !expected ||
+              !Object.hasOwn(expected, pathname) ||
+              (!openedSqlitePaths.has(pathname) && expected[pathname] !== before)
+            ) {
               unchanged = false;
               return;
             }
@@ -264,29 +292,61 @@ export function createUpdateDoctorDatabaseWriteCapture(
             );
           },
         },
-        operation,
+        () => historicalScans.run(operation),
       );
     },
     async admit() {
       receipt = undefined;
-      const generations = await read();
-      if (generations && expectedGenerations) {
-        fromGenerations ??= generations;
+      historicalScans.observe(Object.keys(expectedGenerations ?? {}));
+      const observation = await read();
+      if (observation && expectedGenerations) {
+        // Unversioned 9.33-line input is admitted only by an exact whole-inventory
+        // match. From here on, every migration and settlement uses committed proof.
+        if (
+          !admitted &&
+          !isDeepStrictEqual(observation.committed, expectedGenerations) &&
+          isDeepStrictEqual(observation.physical, expectedGenerations)
+        ) {
+          physical = true;
+          expectedGenerations = observation.committed;
+        }
+        admitted = true;
+        const generations = observation.committed;
+        historicalScans.admit(generations);
+        const incoming = physical ? observation.physical : { ...expectedGenerations };
+        acceptEmptyReaderTransitions(observation);
+        const matches = isDeepStrictEqual(generations, expectedGenerations);
+        fromGenerations ??= matches ? incoming : generations;
         // Earlier receipts or another process's writes must never become our baseline.
-        unchanged &&= Object.entries(expectedGenerations).every(
-          ([pathname, generation]) => generations[pathname] === generation,
-        );
+        unchanged &&= matches;
       }
     },
     async settle() {
-      const generations = await read();
+      let generations: UpdateDatabaseGenerations | undefined;
+      let observation: Awaited<ReturnType<typeof read>>;
+      let cleanScans: ReturnType<typeof historicalScans.settle>;
+      try {
+        observation = await read();
+        generations = observation?.committed;
+      } finally {
+        cleanScans = historicalScans.settle(generations);
+      }
       if (generations && expectedGenerations) {
-        // Only native migration publications advance the expected generation.
-        // Unattributed writes, including independent SQLite writers, remain unknown.
-        unchanged &&= Object.entries(expectedGenerations).every(
-          ([pathname, generation]) => generations[pathname] === generation,
-        );
-        receipt = { unchanged, fromGenerations, generations };
+        // Like the native close receipt (#177831), this can absorb raw outside writes
+        // during the update window only for databases this Doctor itself opened.
+        for (const [pathname, generation] of Object.entries(generations)) {
+          if (openedSqlitePaths.has(pathname)) {
+            expectedGenerations[pathname] = generation;
+          }
+        }
+        acceptEmptyReaderTransitions(observation!);
+        unchanged &&= isDeepStrictEqual(generations, expectedGenerations);
+        receipt = {
+          unchanged,
+          fromGenerations,
+          generations: physical ? observation!.physical : generations,
+          ...(cleanScans.length ? { historicalScans: cleanScans } : {}),
+        };
       }
     },
   };

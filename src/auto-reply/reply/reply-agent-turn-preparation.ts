@@ -2,12 +2,15 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { TypingMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
+import { logVerbose } from "../../globals.js";
+import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import type { ReplyOperation, ReplyTurnKind } from "../../sessions/session-controller.js";
@@ -18,6 +21,7 @@ import {
   releaseSessionControllerClaim,
   type SessionControllerMailboxClaim,
 } from "../../sessions/session-controller.mailbox.js";
+import { readPendingUserTurnTranscriptAdmission } from "../../sessions/user-turn-transcript-admission.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import { prepareCommandOwnerAuthority } from "../command-auth.js";
@@ -30,10 +34,8 @@ import { normalizeVerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
 import { buildPreflightCompactionFailureText } from "./agent-runner-failure-reply.js";
-import {
-  resolveQueuedReplyExecutionConfig,
-  resolveQueuedReplyRuntimeConfig,
-} from "./agent-runner-utils.js";
+import { runMemoryFlushIfNeeded, runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
+import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
 import {
   shouldNotifyUserAboutCompaction,
   type CompactionNoticePhase,
@@ -48,8 +50,8 @@ import {
   resolveFollowupAbortSignal,
   type FollowupRun,
 } from "./queue/types.js";
+import { prepareReplySourceAdmission } from "./reply-source-admission.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
-import { prepareReplyTurnContext } from "./reply-turn-preflight.js";
 import type { createReplyTurnRotationEvidence } from "./reply-turn-rotation.js";
 import type { ReplyRestartRecoveryClaimController } from "./restart-recovery-claim.types.js";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
@@ -82,9 +84,11 @@ export type AdmittedFollowupTurn = {
   sessionStore?: Record<string, SessionEntry>;
   sendPolicy: "allow" | "deny";
   preflightCompactionApplied: boolean;
+  memoryFlushAttempted?: boolean;
   preflightFailurePayload?: ReplyPayload;
   preflightError?: Error;
   restartRecovery?: ReplyRestartRecoveryClaimController;
+  releaseSourceAdmission?: () => Promise<void>;
 };
 
 function isSameSessionGeneration(
@@ -143,8 +147,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
   const assertOperatorCurrent = () => params.queued.operatorAuthority?.assertCurrent();
   assertOperatorCurrent();
   const readAdmissionConfig = () =>
-    params.queued.readAdmissionConfig?.() ??
-    resolveQueuedReplyRuntimeConfig(params.queued.run.config);
+    params.queued.readAdmissionConfig?.() ?? selectLiveRuntimeConfig(params.queued.run.config);
   let config = captureRuntimeConfig(params.queued.run.config);
   const existingClaim = params.queued.controllerInput?.claim;
   const claimQueuedFirst = !params.providedReplyOperation && !params.claimSource;
@@ -174,7 +177,6 @@ export async function prepareReplyAgentTurn<TConfigured>(
     const resolveRunSessionFile = (source: FollowupRun["run"]) =>
       normalizeOptionalString(replySessionKey) ?? source.sessionFile;
     const kind = params.kind ?? "queued_followup";
-    const isHeartbeat = kind !== "queued_followup" && params.defaults.opts?.isHeartbeat === true;
     const sourceSignal = resolveFollowupAbortSignal(params.queued);
     const admission = params.providedReplyOperation
       ? {
@@ -215,10 +217,20 @@ export async function prepareReplyAgentTurn<TConfigured>(
                 : undefined,
               hasSessionModelOverride: selected.hasSessionModelOverride,
               modelOverrideSource: selected.modelOverrideSource,
+              // Scheduled fallback policy is derived from the selection; its authority stays bound.
+              ...(run.scheduledAutomation
+                ? {
+                    scheduledAutomation: {
+                      ...run.scheduledAutomation,
+                      modelFallbackPolicy: selected.scheduledAutomation?.modelFallbackPolicy,
+                    },
+                  }
+                : {}),
               authProfileId: selected.authProfileId,
               authProfileIdSource: selected.authProfileIdSource,
               thinkLevel: selected.thinkLevel,
               thinkingCatalog: selected.thinkingCatalog,
+              cyberAccessProgram: selected.cyberAccessProgram,
             };
           },
           resetTriggered: params.resetTriggered === true,
@@ -259,9 +271,14 @@ export async function prepareReplyAgentTurn<TConfigured>(
     }
     const selectionEntry = admission.sessionEntry ?? initialEntry;
     const admittedSelectionEntry = selectionEntry ? { ...selectionEntry } : undefined;
+    // An edit before enqueue can miss the queue refresh; admission owns the saved preference.
+    if (kind === "queued_followup" && admission.sessionEntry) {
+      run.cyberAccessProgram = admittedSelectionEntry?.cyberAccessProgram;
+    }
     let queuedFollowupAdmitted = false;
     let admissionFailed = false;
     let callerOwnsOperation = false;
+    let releaseSourceAdmission: (() => Promise<void>) | undefined;
     try {
       callerOwnsOperation = params.onOperationOwned?.(operation) === true;
       params.queued.run.onOperationAdmitted?.(operation);
@@ -269,8 +286,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
         return { kind: "skipped", reason: "aborted", operation } as const;
       }
 
-      // Queue drains retain the latest live runner closure per key. Keep local dispatcher
-      // callbacks in that closure so retried non-routable items use the newest transport owner.
+      // The queued source retains its runner, including its own dispatcher callbacks.
       if (kind === "queued_followup") {
         queuedFollowupAdmitted = true;
         await params.defaults.opts?.onQueuedFollowupAdmitted?.();
@@ -396,9 +412,10 @@ export async function prepareReplyAgentTurn<TConfigured>(
             source.originatingChatType ?? source.run.chatType ?? entry?.chatType,
           ),
         });
-      const currentInboundContext = isHeartbeat
-        ? queued.currentInboundContext
-        : refreshActiveGoalContext(queued.currentInboundContext, activeEntry);
+      const currentInboundContext = refreshActiveGoalContext(
+        queued.currentInboundContext,
+        activeEntry,
+      );
       // Preallocate the one lifecycle identity passed as opts.runId; canonical
       // execution owns registration and cleanup under this same id.
       const turn: AdmittedFollowupTurn = {
@@ -442,9 +459,10 @@ export async function prepareReplyAgentTurn<TConfigured>(
             },
           };
         }
-        const refreshedInboundContext = isHeartbeat
-          ? params.queued.currentInboundContext
-          : refreshActiveGoalContext(params.queued.currentInboundContext, entry);
+        const refreshedInboundContext = refreshActiveGoalContext(
+          params.queued.currentInboundContext,
+          entry,
+        );
         turn.sendPolicy = resolveTurnSendPolicy(entry, turn.queued);
         turn.queued = { ...turn.queued, currentInboundContext: refreshedInboundContext };
         return generationRotated;
@@ -478,11 +496,23 @@ export async function prepareReplyAgentTurn<TConfigured>(
               await params.onCompactionNotice?.(phase, text, turn);
             }
           : undefined;
+      releaseSourceAdmission = await prepareReplySourceAdmission({
+        operation,
+        followupRun: turn.queued,
+        recorder: turn.queued.userTurnTranscriptRecorder,
+        runId: turn.runId,
+      });
+      turn.releaseSourceAdmission = releaseSourceAdmission;
       const preflightEntry = session.current();
       try {
         await params.signalRunStart?.();
-        activeEntry = await prepareReplyTurnContext({
-          replyOperation: operation,
+        const resolvedVerboseLevel =
+          normalizeVerboseLevel(
+            turn.queued.run.verboseLevelOverride ??
+              activeEntry?.verboseLevel ??
+              turn.queued.run.verboseLevel,
+          ) ?? "off";
+        const preparation = {
           cfg: config,
           followupRun: turn.queued,
           promptForEstimate: turn.queued.prompt,
@@ -491,19 +521,71 @@ export async function prepareReplyAgentTurn<TConfigured>(
           sessionStore,
           sessionKey: replySessionKey,
           storePath: params.defaults.storePath,
-          isHeartbeat,
           opts: { ...params.defaults.opts, runId: turn.runId },
-          resolvedVerboseLevel:
-            normalizeVerboseLevel(
-              turn.queued.run.verboseLevelOverride ??
-                activeEntry?.verboseLevel ??
-                turn.queued.run.verboseLevel,
-            ) ?? "off",
+          resolvedVerboseLevel,
           runtimePolicySessionKey: turn.queued.run.runtimePolicySessionKey,
-          publishCheckpoint: (entry) => session.publish(entry),
-          trace: params.trace,
           onCompactionNotice: notifyPreflightCompaction,
-        });
+        };
+        const preflightAdmission = readPendingUserTurnTranscriptAdmission(
+          preparation.followupRun.userTurnTranscriptRecorder,
+        );
+        const trace = params.trace;
+        const tracePhase = <T>(phase: string, runPhase: () => Promise<T>) =>
+          trace ? trace(phase, runPhase) : runPhase();
+        try {
+          activeEntry = await tracePhase("reply.preflight_compaction", () =>
+            runSessionCompactionIfNeeded({
+              ...preparation,
+              replyOperation: operation,
+              pendingUserEntryId: preflightAdmission?.entryId,
+              abortSignal: operation.abortSignal,
+              // Compaction decides whether work is needed, then replans from the
+              // checkpoint result. A queued source must not bypass this memory write.
+              beforeCompaction: async (entry) => {
+                const flushed = await tracePhase("reply.memory_flush", () =>
+                  runMemoryFlushIfNeeded({
+                    ...preparation,
+                    preflightAdmission,
+                    replyOperation: operation,
+                    abortSignal: operation.abortSignal,
+                    sessionEntry: entry,
+                  }),
+                );
+                turn.memoryFlushAttempted ||= flushed.outcome !== "skipped";
+                session.publish(flushed.sessionEntry);
+                operation.abortSignal.throwIfAborted();
+                if (flushed.outcome === "exhausted") {
+                  await preparation.onCompactionNotice?.("memory_flush_degraded");
+                }
+                return flushed.sessionEntry;
+              },
+              onCompactionStart: () => operation.setPhase("preflight_compacting"),
+              onSessionIdChanged: (sessionId) => operation.updateSessionId(sessionId),
+            }),
+          );
+        } catch (error) {
+          const recorder = preparation.followupRun.userTurnTranscriptRecorder;
+          if (recorder && buildPreflightCompactionFailureText(formatErrorMessage(error)) !== null) {
+            try {
+              // Keep approved input after failed maintenance without claiming a recovery turn.
+              await recorder.persistApproved({
+                expectedSessionId: operation.sessionId,
+                beforeFreshMessageCommit: () => {
+                  operation.abortSignal.throwIfAborted();
+                  preparation.followupRun.operatorAuthority?.assertCurrent();
+                  if (operation.lifecycleGeneration) {
+                    assertAgentRunLifecycleGenerationCurrent(operation.lifecycleGeneration);
+                  }
+                },
+              });
+            } catch (persistError) {
+              logVerbose(
+                `user turn not kept after failed preflight: ${formatErrorMessage(persistError)}`,
+              );
+            }
+          }
+          throw error;
+        }
         if (activeEntry) {
           session.publish(activeEntry);
           activeEntry = session.current() ?? activeEntry;
@@ -574,6 +656,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
       }
       // Only a returned turn transfers presentation cleanup to the runner.
       queuedFollowupAdmitted = false;
+      releaseSourceAdmission = undefined;
       return { kind: "admitted", configured, turn } as const;
     } catch (error) {
       admissionFailed = true;
@@ -583,11 +666,18 @@ export async function prepareReplyAgentTurn<TConfigured>(
       }
       throw failure;
     } finally {
-      if (queuedFollowupAdmitted) {
-        await settleQueuedFollowupPresentation(params.defaults.opts?.onQueuedFollowupSettled);
-      }
-      if (admissionFailed && !callerOwnsOperation) {
-        operation.complete();
+      try {
+        if (queuedFollowupAdmitted) {
+          await settleQueuedFollowupPresentation(params.defaults.opts?.onQueuedFollowupSettled);
+        }
+      } finally {
+        try {
+          await releaseSourceAdmission?.();
+        } finally {
+          if (admissionFailed && !callerOwnsOperation) {
+            operation.complete();
+          }
+        }
       }
     }
   } catch (error) {

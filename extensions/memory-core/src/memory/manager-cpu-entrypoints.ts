@@ -1,24 +1,9 @@
-import path from "node:path";
-
-function memoryWorkerEntrypoint(sourceWorkerName: string, distWorkerName: string) {
-  return {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName,
-    distWorkerPath: `extensions/memory-core/${distWorkerName}.js`,
-    package: {
-      name: "@openclaw/memory-core",
-      distWorkerPath: path.posix.join("src/memory", `${sourceWorkerName}.js`),
-    },
-  } as const;
-}
+import { createPluginRuntimeProcessEntrypoint } from "openclaw/plugin-sdk/process-runtime";
 
 export const memoryCpuProcessEntrypoints = {
-  search: memoryWorkerEntrypoint("manager-search.worker", "memory-search.worker"),
-  index: memoryWorkerEntrypoint("manager-index.worker", "memory-index.worker"),
-  publication: memoryWorkerEntrypoint("manager-publication.worker", "memory-publication.worker"),
-  standingIntents: memoryWorkerEntrypoint("../standing-intents.worker", "standing-intents.worker"),
-  entryOrigins: memoryWorkerEntrypoint(
-    "../memory-entry-origins.worker",
-    "memory-entry-origins.worker",
-  ),
+  search: createPluginRuntimeProcessEntrypoint("memorySearch", import.meta.url),
+  index: createPluginRuntimeProcessEntrypoint("memoryIndex", import.meta.url),
+  publication: createPluginRuntimeProcessEntrypoint("memoryPublication", import.meta.url),
+  standingIntents: createPluginRuntimeProcessEntrypoint("memoryStandingIntents", import.meta.url),
+  entryOrigins: createPluginRuntimeProcessEntrypoint("memoryEntryOrigins", import.meta.url),
 } as const;

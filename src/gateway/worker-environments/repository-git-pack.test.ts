@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import * as worktreeGit from "../../agents/worktrees/git.js";
 import { requireGit, runGit } from "../../agents/worktrees/git.js";
+import { appendGitConfig, gitMaintenanceEnvironment } from "../../infra/git-maintenance-env.js";
 import {
   AUTHORIZATION,
   TOKEN,
@@ -40,7 +42,29 @@ describe("private repository preparation", () => {
     })) {
       vi.stubEnv(name, value);
     }
+    // A new base entry must not collide with the authenticated fetch's header.
+    const originalEnvironment = worktreeGit.gitEnvironment;
+    const environment = vi
+      .spyOn(worktreeGit, "gitEnvironment")
+      .mockImplementation((...args) =>
+        appendGitConfig(originalEnvironment(...args), [["test.additional", "present"]]),
+      );
     const pack = await f.preparePack();
+    environment.mockRestore();
+    const policy = gitMaintenanceEnvironment();
+    const policyKeys = Object.entries(policy)
+      .filter(([key]) => key.startsWith("GIT_CONFIG_KEY_"))
+      .map(([, value]) => value);
+    expect(f.fetches[0]?.configCount).toBe(policyKeys.length + 4);
+    expect(f.fetches[0]?.configKeys).toEqual(
+      expect.arrayContaining([
+        ...policyKeys,
+        "core.hooksPath",
+        "core.fsmonitor",
+        "test.additional",
+        `http.${URL}.extraHeader`,
+      ]),
+    );
     vi.unstubAllEnvs();
     expect(f.requests.length).toBeGreaterThan(0);
     expect(f.requests.every((authorization) => authorization === AUTHORIZATION)).toBe(true);

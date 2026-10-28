@@ -19,29 +19,25 @@ export type A2aMessageRecord = {
   metadata?: Record<string, unknown>;
 };
 
-type A2aTaskStatus =
-  | { state: "TASK_STATE_SUBMITTED" | "TASK_STATE_WORKING"; timestamp: string }
-  | {
-      state:
-        | "TASK_STATE_COMPLETED"
-        | "TASK_STATE_FAILED"
-        | "TASK_STATE_CANCELED"
-        | "TASK_STATE_REJECTED";
-      timestamp: string;
-      message?: A2aMessageRecord;
-    };
-
-type A2aTaskArtifact = {
-  artifactId: string;
-  name?: string;
-  parts: A2aMessagePart[];
-};
-
 export type A2aTaskRecord = {
   id: string;
   contextId: string;
-  status: A2aTaskStatus;
-  artifacts: A2aTaskArtifact[];
+  status:
+    | { state: "TASK_STATE_SUBMITTED" | "TASK_STATE_WORKING"; timestamp: string }
+    | {
+        state:
+          | "TASK_STATE_COMPLETED"
+          | "TASK_STATE_FAILED"
+          | "TASK_STATE_CANCELED"
+          | "TASK_STATE_REJECTED";
+        timestamp: string;
+        message?: A2aMessageRecord;
+      };
+  artifacts: {
+    artifactId: string;
+    name?: string;
+    parts: A2aMessagePart[];
+  }[];
   history: A2aMessageRecord[];
 };
 

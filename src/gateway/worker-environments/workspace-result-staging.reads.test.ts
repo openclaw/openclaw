@@ -1,13 +1,18 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import * as os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import * as commandRuntime from "../../process/exec.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
+import { raceNodeWorkerOperation } from "./node-worker-abort.js";
+import { workspaceFile } from "./workspace-manifest-fixtures.test-support.js";
+import { loadStagedWorkspaceManifest } from "./workspace-manifest-worker.js";
 import {
   serializeWorkerWorkspaceManifest,
   type WorkerWorkspaceManifestEntry,
@@ -23,9 +28,15 @@ import {
   workerWorkspaceResultStaging,
 } from "./workspace-result-staging.js";
 
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, availableParallelism: vi.fn(actual.availableParallelism) };
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.mocked(os.availableParallelism).mockReset();
   await drainGlobalSingletonLifecycleState();
   vi.unstubAllEnvs();
 });
@@ -41,6 +52,20 @@ type FixtureOptions = {
 function flipByte(bytes: Buffer, index: number, mask = 0xff) {
   bytes[index] = bytes[index]! ^ mask;
   return bytes;
+}
+
+function holdCommitReads() {
+  const held = { entered: createDeferredCore(), release: createDeferredCore(), reads: 0 };
+  const run = commandRuntime.runCommandBuffered;
+  vi.spyOn(commandRuntime, "runCommandBuffered").mockImplementation(async (argv, options) => {
+    if (argv.includes("cat-file") && argv.includes("commit")) {
+      held.reads++;
+      held.entered.resolve();
+      await raceNodeWorkerOperation(held.release.promise, options?.signal);
+    }
+    return run(argv, options);
+  });
+  return held;
 }
 
 function corruptBatch(
@@ -124,13 +149,7 @@ async function stagedFixture(
     const target = path.join(input, entryPath);
     await fs.writeFile(target, content, { mode: entryPath === "executable.sh" ? 0o755 : 0o644 });
     const mode = (await fs.stat(target)).mode & 0o111 ? 0o755 : 0o644;
-    entries.push({
-      path: entryPath,
-      type: "file",
-      mode,
-      size: content.byteLength,
-      sha256: createHash("sha256").update(content).digest("hex"),
-    });
+    entries.push({ ...workspaceFile(entryPath, content), mode });
   }
   if (process.platform !== "win32") {
     await fs.symlink(binaryPath, path.join(input, "current-link"));
@@ -162,6 +181,139 @@ async function stagedFixture(
   };
 }
 
+it("joins only matching pending staged reads and forgets settled results", async () => {
+  const fixture = await stagedFixture(0);
+  const peer = path.join(tempDirs.make("workspace-staged-peer-"), "repository");
+  await fs.cp(fixture.repository, peer, { recursive: true });
+  const secondRef = workerWorkspaceResultRef("second-read");
+  await git(fixture.repository, ["update-ref", secondRef, fixture.commit]);
+  const held = holdCommitReads();
+  const read = (
+    root = fixture.repository,
+    ref = fixture.stagedResultRef,
+    signal?: AbortSignal,
+    buildCacheInputs?: string[],
+  ) => loadStagedWorkspaceManifest(root, ref, signal, buildCacheInputs);
+  const controller = new AbortController();
+  const operations = [read()];
+  try {
+    await held.entered.promise;
+    operations.push(read(fixture.repository, fixture.stagedResultRef, undefined, []));
+    operations.push(read());
+    operations.push(read(peer));
+    operations.push(read(fixture.repository, secondRef));
+    operations.push(read(fixture.repository, fixture.stagedResultRef, controller.signal));
+    operations.push(read());
+    operations.push(read(fixture.repository, fixture.stagedResultRef, controller.signal));
+    const config = path.join(tempDirs.make("workspace-staged-config-"), "config");
+    await fs.writeFile(config, "[core]\n\tlogAllRefUpdates = false\n");
+    const previousConfig = process.env.GIT_CONFIG_GLOBAL;
+    vi.stubEnv("GIT_CONFIG_GLOBAL", config);
+    operations.push(read());
+    vi.stubEnv("GIT_CONFIG_GLOBAL", previousConfig);
+    operations.push(read());
+    held.release.resolve();
+    const snapshots = await Promise.all(operations);
+    expect(held.reads).toBe(6);
+    for (const snapshot of snapshots) {
+      expect(snapshot.changedEntries.map((entry) => entry.path)).toContain("executable.sh");
+    }
+    await read();
+    expect(held.reads).toBe(7);
+  } finally {
+    held.release.resolve();
+    await Promise.allSettled(operations);
+  }
+});
+
+it.each([2, 4])("isolates ref mutations and old settlement with %i CPUs", async (cores) => {
+  vi.mocked(os.availableParallelism).mockReturnValue(cores);
+  const fixture = await stagedFixture(0);
+  const oldEntered = createDeferredCore();
+  const newEntered = createDeferredCore();
+  const releaseOld = createDeferredCore();
+  const releaseNew = createDeferredCore();
+  const runBuffered = commandRuntime.runCommandBuffered;
+  let reads = 0;
+  vi.spyOn(commandRuntime, "runCommandBuffered").mockImplementation(async (argv, options) => {
+    const result = await runBuffered(argv, options);
+    if (argv.includes("cat-file") && argv.includes("commit")) {
+      reads++;
+      if (reads > 1) {
+        newEntered.resolve();
+        await releaseNew.promise;
+      }
+    } else if (argv.includes("ls-tree")) {
+      oldEntered.resolve();
+      await releaseOld.promise;
+    }
+    return result;
+  });
+  const read = () => loadStagedWorkspaceManifest(fixture.repository, fixture.stagedResultRef);
+  const first = read();
+  const operations: Promise<unknown>[] = [first];
+  try {
+    await oldEntered.promise;
+    await updateWorkspaceResultRefs(fixture.repository, [{ ref: fixture.stagedResultRef }]);
+    const second = read();
+    operations.push(second);
+    releaseOld.resolve();
+    expect((await first).changedEntries.length).toBeGreaterThan(0);
+    await newEntered.promise;
+    const third = read();
+    operations.push(third);
+    const outcomes = Promise.allSettled([second, third]);
+    releaseNew.resolve();
+    expect(await outcomes).toEqual([
+      { status: "rejected", reason: expect.any(Error) },
+      { status: "rejected", reason: expect.any(Error) },
+    ]);
+    expect(reads).toBe(2);
+  } finally {
+    releaseOld.resolve();
+    releaseNew.resolve();
+    await Promise.allSettled(operations);
+  }
+});
+
+it("isolates cancellation and releases failed staged reads for retry", async () => {
+  const fixture = await stagedFixture(0);
+  const held = holdCommitReads();
+  const controller = new AbortController();
+  const cancelled = loadStagedWorkspaceManifest(
+    fixture.repository,
+    fixture.stagedResultRef,
+    controller.signal,
+  );
+  const cancelledOutcome = Promise.allSettled([cancelled]);
+  const operations: Promise<unknown>[] = [cancelledOutcome];
+  try {
+    await held.entered.promise;
+    const independent = loadStagedWorkspaceManifest(fixture.repository, fixture.stagedResultRef);
+    operations.push(independent);
+    controller.abort(new Error("staged read owner cancelled"));
+    expect(await cancelledOutcome).toEqual([
+      {
+        status: "rejected",
+        reason: expect.objectContaining({ message: "staged read owner cancelled" }),
+      },
+    ]);
+    held.release.resolve();
+    expect((await independent).changedEntries.length).toBeGreaterThan(0);
+    expect(held.reads).toBe(2);
+    const missing = workerWorkspaceResultRef("not-created-yet");
+    await expect(loadStagedWorkspaceManifest(fixture.repository, missing)).rejects.toThrow();
+    await git(fixture.repository, ["update-ref", missing, fixture.commit]);
+    expect(
+      (await loadStagedWorkspaceManifest(fixture.repository, missing)).changedEntries.length,
+    ).toBeGreaterThan(0);
+    expect(held.reads).toBe(4);
+  } finally {
+    held.release.resolve();
+    await Promise.allSettled(operations);
+  }
+});
+
 it.each<[number, number, FixtureOptions]>([
   [64, 4, { linked: true }],
   [300, 6, {}],
@@ -171,9 +323,6 @@ it.each<[number, number, FixtureOptions]>([
   "materializes %i files with at most %i Git reads (%j)",
   async (fileCount, maxReads, fixtureOptions) => {
     const fixture = await stagedFixture(fileCount, fixtureOptions);
-    expect(fixture.commit).toBe(
-      await git(fixture.repository, ["rev-parse", `${fixture.stagedResultRef}^{commit}`]),
-    );
     const gitReads: string[][] = [];
     const runBuffered = commandRuntime.runCommandBuffered;
     vi.spyOn(commandRuntime, "runCommandBuffered").mockImplementation(async (argv, options) => {
@@ -182,11 +331,12 @@ it.each<[number, number, FixtureOptions]>([
       }
       return await runBuffered(argv, options);
     });
-    const writes = vi.spyOn(fs, "writeFile");
-    const links = vi.spyOn(fs, "symlink");
     let stagingRoot = "";
     await fixture.read(async (snapshot) => {
       stagingRoot = snapshot.stagingRoot;
+      expect((await fs.readdir(stagingRoot)).toSorted()).toEqual(
+        snapshot.changedEntries.map((entry) => entry.path).toSorted(),
+      );
       for (const entry of snapshot.changedEntries) {
         const target = path.join(stagingRoot, entry.path);
         if (entry.type === "symlink") {
@@ -199,18 +349,6 @@ it.each<[number, number, FixtureOptions]>([
           }
         }
       }
-      const materialized = [
-        ...writes.mock.calls.map(([target]) => {
-          assert(typeof target === "string");
-          return target;
-        }),
-        ...links.mock.calls.map(([, target]) => String(target)),
-      ];
-      expect(
-        materialized.filter((target) => target.startsWith(stagingRoot + path.sep)).toSorted(),
-      ).toEqual(
-        snapshot.changedEntries.map((entry) => path.join(stagingRoot, entry.path)).toSorted(),
-      );
     });
     await expect(fs.stat(stagingRoot)).rejects.toMatchObject({ code: "ENOENT" });
     expect(gitReads.length, JSON.stringify(gitReads)).toBeLessThanOrEqual(maxReads);

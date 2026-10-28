@@ -18,6 +18,15 @@ import {
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionHeader = JSON.stringify({ type: "session", version: 1, id: "sess-stream-error" });
+async function createSession(id: string, contents: string) {
+  const tempDir = tempDirs.make("openclaw-session-cost-stream-");
+  const sessionsDir = path.join(tempDir, "agents", "main", "sessions");
+  await fs.mkdir(sessionsDir, { recursive: true });
+  const sessionFile = path.join(sessionsDir, `${id}.jsonl`);
+  await fs.writeFile(sessionFile, contents, "utf-8");
+  return { tempDir, sessionsDir, sessionFile };
+}
 
 describe("session cost usage stream errors", () => {
   afterEach(() => {
@@ -25,14 +34,10 @@ describe("session cost usage stream errors", () => {
   });
 
   it("does not crash when the transcript stream emits an error mid-read", async () => {
-    const tempDir = tempDirs.make("openclaw-session-cost-stream-");
-    const sessionsDir = path.join(tempDir, "agents", "main", "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const sessionFile = path.join(sessionsDir, "sess-stream-error.jsonl");
-    await fs.writeFile(
-      sessionFile,
+    const { sessionFile } = await createSession(
+      "sess-stream-error",
       [
-        JSON.stringify({ type: "session", version: 1, id: "sess-stream-error" }),
+        sessionHeader,
         JSON.stringify({
           type: "message",
           timestamp: new Date().toISOString(),
@@ -40,28 +45,21 @@ describe("session cost usage stream errors", () => {
         }),
         "",
       ].join("\n"),
-      "utf-8",
     );
 
     vi.spyOn(nodeFs, "createReadStream").mockImplementationOnce(() => {
       const stream = new PassThrough();
-      stream.write(`${JSON.stringify({ type: "session", version: 1, id: "sess-stream-error" })}\n`);
+      stream.write(`${sessionHeader}\n`);
       process.nextTick(() => {
         stream.destroy(new Error("stream read failed"));
       });
       return stream as unknown as nodeFs.ReadStream;
     });
 
-    const logs = await loadSessionLogs({ agentId: "main", sessionFile });
-
-    expect(logs).toEqual([]);
+    expect(await loadSessionLogs({ agentId: "main", sessionFile })).toEqual([]);
   });
 
   it("keeps readable usage and complete checkpoints after background and report stream errors", async () => {
-    const tempDir = tempDirs.make("openclaw-session-cost-cache-stream-");
-    const sessionsDir = path.join(tempDir, "agents", "main", "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const sessionFile = path.join(sessionsDir, "sess-cache-stream-error.jsonl");
     const usageEntry = (timestamp: string, input: number) =>
       JSON.stringify({
         type: "message",
@@ -71,7 +69,10 @@ describe("session cost usage stream errors", () => {
           usage: { input, output: 0, totalTokens: input, cost: { total: input / 1000 } },
         },
       });
-    await fs.writeFile(sessionFile, `${usageEntry("2026-07-06T12:00:00.000Z", 10)}\n`, "utf-8");
+    const { tempDir, sessionsDir, sessionFile } = await createSession(
+      "sess-cache-stream-error",
+      `${usageEntry("2026-07-06T12:00:00.000Z", 10)}\n`,
+    );
 
     await fs.writeFile(
       path.join(sessionsDir, "sess-readable.jsonl"),
@@ -107,16 +108,14 @@ if (!isMainThread) {
     await withEnvAsync(
       { OPENCLAW_STATE_DIR: tempDir, ...sqliteWorkerPreloadEnv(preload) },
       async () => {
-        const config = {};
-        const range = {
-          startMs: Date.UTC(2026, 6, 6),
-          endMs: Date.UTC(2026, 6, 7),
-        };
-        await loadCostUsageSummary({
-          config,
-          ...range,
+        // A sub-quarter end needs transcript replay; aligned ranges read committed quarters only.
+        const query = {
+          config: {},
           agentId: "main",
-        });
+          startMs: Date.UTC(2026, 6, 6),
+          endMs: Date.UTC(2026, 6, 6, 12, 5),
+        };
+        await loadCostUsageSummary(query);
         const rollupsBefore = readSessionCostUsageRollupRows();
 
         await fs.appendFile(sessionFile, appendedEntry, "utf-8");
@@ -126,8 +125,8 @@ if (!isMainThread) {
         try {
           await work.track(async () =>
             requestCostUsageCacheRefresh({
-              config,
-              agentId: "main",
+              config: query.config,
+              agentId: query.agentId,
               storePath: path.join(sessionsDir, "sessions.json"),
             }),
           );
@@ -137,30 +136,24 @@ if (!isMainThread) {
         }
         const readSummary = () =>
           loadCostUsageSummaryFromCache({
-            config,
-            ...range,
-            agentId: "main",
+            ...query,
             requestRefresh: false,
           });
         const afterRefresh = await readSummary();
         expect(await fs.readFile(failed, "utf8")).toBe("stream read failed");
         expect(readSessionCostUsageRollupRows()).toEqual(rollupsBefore);
-        expect(afterRefresh.totals.totalTokens).toBe(17);
-        expect(afterRefresh.cacheStatus).toMatchObject({
-          status: "partial",
-          cachedFiles: 2,
-          pendingFiles: 1,
+        expect(afterRefresh).toMatchObject({
+          totals: { totalTokens: 17 },
+          cacheStatus: { status: "partial", cachedFiles: 2, pendingFiles: 1 },
         });
 
         await fs.unlink(failed);
         await fs.writeFile(armed, "armed");
         const afterReplay = await readSummary();
         expect(await fs.readFile(failed, "utf8")).toBe("stream read failed");
-        expect(afterReplay.totals.totalTokens).toBe(7);
-        expect(afterReplay.cacheStatus).toMatchObject({
-          status: "partial",
-          cachedFiles: 1,
-          pendingFiles: 1,
+        expect(afterReplay).toMatchObject({
+          totals: { totalTokens: 7 },
+          cacheStatus: { status: "partial", cachedFiles: 1, pendingFiles: 1 },
         });
         expect(readSessionCostUsageRollupRows()).toEqual(rollupsBefore);
         const recovered = await readSummary();

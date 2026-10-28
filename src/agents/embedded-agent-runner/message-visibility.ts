@@ -15,12 +15,6 @@ import {
 } from "../../shared/chat-message-content.js";
 import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../delivery-evidence-values.js";
 
-type PayloadVisibilityOptions = {
-  includeErrorPayloads?: boolean;
-  includeReasoningPayloads?: boolean;
-  requireTerminalContent?: boolean;
-};
-
 export function collectMediaUrlsFromRecord(
   record: Record<string, unknown>,
   output: Set<string>,
@@ -58,7 +52,11 @@ function hasVisibleAttachmentReference(value: unknown): boolean {
 
 export function hasVisibleAgentPayload(
   result: { payloads?: unknown },
-  options: PayloadVisibilityOptions = {},
+  options: {
+    includeErrorPayloads?: boolean;
+    includeReasoningPayloads?: boolean;
+    requireTerminalContent?: boolean;
+  } = {},
 ): boolean {
   return (
     Array.isArray(result.payloads) &&

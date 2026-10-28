@@ -23,7 +23,6 @@ scenario:
   codeRefs:
     - src/agents/tools/video-generate-tool.ts
     - src/video-generation/runtime.ts
-    - src/video-generation/capability-overlays.ts
     - src/media/store.ts
     - src/agents/tools/video-generate-tool.storage.test.ts
   execution:

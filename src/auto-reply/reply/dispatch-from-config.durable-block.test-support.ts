@@ -23,6 +23,7 @@ import {
 } from "./dispatch-from-config.test-support.js";
 import { createBlockReplyDeliveryHandler, type DirectBlockDelivery } from "./reply-delivery.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
+import { createQuietTypingSignaler } from "./reply.test-helpers.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 export function registerDurableBlockRoutingTests(): void {
@@ -186,18 +187,7 @@ export function registerDurableBlockRoutingTests(): void {
           onBlockReply: requireBlockReplyHandler(opts?.onBlockReply),
           normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
           applyReplyToMode: (payload) => payload,
-          typingSignals: {
-            mode: "never",
-            shouldStartImmediately: false,
-            shouldStartOnMessageStart: false,
-            shouldStartOnText: false,
-            shouldStartOnReasoning: false,
-            signalRunStart: async () => {},
-            signalMessageStart: async () => {},
-            signalTextDelta: async () => {},
-            signalReasoningDelta: async () => {},
-            signalToolStart: async () => {},
-          },
+          typingSignals: createQuietTypingSignaler(),
           blockStreamingEnabled: false,
           blockReplyPipeline: null,
           directBlockDeliveries,

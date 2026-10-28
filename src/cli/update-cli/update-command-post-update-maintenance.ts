@@ -18,6 +18,7 @@ import {
   markControlPlaneUpdateRestartSentinelFailureBestEffort,
   prepareUpdateServiceResult,
   UpdateCommandPendingRecoveryFailure,
+  UpdateCommandFailure,
 } from "./update-command-result.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
@@ -26,7 +27,7 @@ import {
   maybeStopManagedServiceBeforeMutableUpdate,
   tryInstallShellCompletion,
 } from "./update-command-service.js";
-import { createPostUpdateFailureResult } from "./update-command-terminal-publication.js";
+import { createPostUpdateExceptionResult } from "./update-command-terminal-publication.js";
 
 export async function preparePostUpdateService(
   params: FinishUpdateParams,
@@ -45,7 +46,7 @@ export async function preparePostUpdateService(
             mode: params.result.mode,
             status: params.result.status,
             runId: run.runId,
-            ledger: { env: run.env },
+            ledger: run,
             root: params.result.root ?? params.root,
             timeoutMs: params.updateStepTimeoutMs,
             assertCurrent,
@@ -92,7 +93,7 @@ export async function preparePostUpdateService(
         cause,
       });
     }
-    const failure = createPostUpdateFailureResult(params, cause);
+    const failure = createPostUpdateExceptionResult(params, cause);
     params.result = failure.result;
     params.failure = { cause, detail: failure.message };
   }
@@ -102,7 +103,7 @@ export async function preparePostUpdateService(
     recordUpdateRunStep(
       params.opts.run.runId,
       { step: "restart", status: "skipped", endedAtMs: Date.now(), detail: "skipped by operator" },
-      { env: params.opts.run.env },
+      params.opts.run,
     );
   }
   return shouldRestart;
@@ -157,6 +158,7 @@ export async function completePostUpdateMaintenance(
   assertCurrent: () => void,
   context: {
     root: string;
+    activationVerified: boolean;
     sentinel: Omit<
       Parameters<typeof markControlPlaneUpdateRestartSentinelFailureBestEffort>[0],
       "reason"
@@ -179,6 +181,13 @@ export async function completePostUpdateMaintenance(
     return undefined;
   }
   defaultRuntime.error(retirement.error);
+  if (context.activationVerified) {
+    throw new UpdateCommandFailure(
+      { ...result, status: "error", reason: "wrapper-retirement-failed" },
+      1,
+      retirement.error,
+    );
+  }
   await markControlPlaneUpdateRestartSentinelFailureBestEffort({
     ...context.sentinel,
     reason: "wrapper-retirement-failed",

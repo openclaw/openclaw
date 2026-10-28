@@ -404,12 +404,11 @@ export function resolveQaLabRunPlan(params: {
 
 export function createIdleQaRunnerSnapshot(
   profiles: readonly QaLabRunProfileOption[],
-  plan: QaLabResolvedRunPlan | null = null,
 ): QaLabRunnerSnapshot {
   return {
     status: "idle",
     selection: createDefaultQaRunSelection(profiles),
-    plan,
+    plan: null,
     artifacts: null,
     error: null,
   };

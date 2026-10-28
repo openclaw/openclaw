@@ -12,11 +12,12 @@ import {
   collectArchivedSources,
   existingSessionSourcePaths,
 } from "./deferred-plugin-session-artifacts.js";
-import {
-  readDeferredPluginSessionImportReceipt,
-  resolveVerifiedSessionSource,
-  type SessionImportSource,
-} from "./deferred-plugin-session-sources.js";
+import type {
+  DeferredPluginSessionImport,
+  SessionImportSource,
+} from "./deferred-plugin-session-import-schema.js";
+import { readDeferredPluginSessionImportReceipt } from "./deferred-plugin-session-source-read.js";
+import { resolveVerifiedSessionSource } from "./deferred-plugin-session-sources.js";
 import {
   databaseIdentity,
   preservesRecordedIndexValue,
@@ -33,7 +34,6 @@ import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
 import {
   parseSessionImportReceipt,
   supersedeDeferredPluginSessionImport,
-  type DeferredPluginSessionImport,
 } from "./state-migrations.deferred-session-import.js";
 import type { LegacyMigrationReceipt } from "./state-migrations.receipts.js";
 

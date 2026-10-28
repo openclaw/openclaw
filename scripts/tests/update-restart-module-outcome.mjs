@@ -223,6 +223,12 @@ async function fixture({
     },
     resolveUpdateResultNextAction: () => "Retain recovery material until health is verified.",
     completeUpdateCommandRun: (value) => value,
+    // This VM has no durable recovery ledger. Recovery-artifact deletion has
+    // real owner/filesystem coverage in update-automatic-cleanup.test.ts; these
+    // cases prove the separate package transaction's retirement authorization.
+    automaticallyCleanUpdateRecovery: async () => undefined,
+    // Every case here fails after the swap, so none retires its own capture.
+    failedBeforeActivation: () => false,
     prepareResult: async (value) => () => printed.push(value),
     printResult: (value) => printed.push(value),
     writeControlPlaneUpdateRestartSentinel: async () => {},
@@ -280,6 +286,7 @@ async function fixture({
     "../../plugins/clawhub-error-codes",
     "../../plugins/install-types",
     "../../logging/diagnostic-support-redaction",
+    "../../logging/diagnostic-support-key-check",
     "../../logging/redact",
     "../../logging/redact-linear-matchers",
     "../../logging/redact-pem",
@@ -300,14 +307,15 @@ async function fixture({
     "../../utils/absolute-deadline",
     "update-command-post-update-maintenance",
     "../../infra/update-candidate-predecessor-stop",
-    "update-command-legacy-service-stop",
     // Recovery and reporting stay real; only their I/O uses finite fixture facts.
     "update-command-failure-recovery",
     "update-command-service-recovery",
     "update-command-plugins-internals",
     "../../process/exec-result",
     "../../shared/null-writer",
+    "../../shared/state-lease-loss",
     "../../shared/update-outcome",
+    "../../state/openclaw-state-lease-error",
     "../../infra/update-run-report",
     "../../infra/update-run-record",
     "../../infra/update-run-limits",
@@ -323,6 +331,7 @@ async function fixture({
     "../../shared/regexp",
     "../../infra/acquire-with-wait",
     "../../infra/update-doctor-result",
+    "../../infra/update-doctor-scan-receipts",
     "../../infra/update-doctor-config-schema",
     "../../infra/update-doctor-lint-schema",
     "../../infra/update-run-schema",

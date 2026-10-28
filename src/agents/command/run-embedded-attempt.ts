@@ -21,9 +21,7 @@ import {
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
   markAutoFallbackPrimaryProbe,
-  resolveEffectiveModelFallbacks,
 } from "../agent-scope.js";
-import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import { buildRunEntryTerminal } from "../embedded-agent-runner/run-entry-terminal.js";
 import {
   runEmbeddedAgentEntry,
@@ -38,6 +36,7 @@ import {
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../media-generation-activity.js";
 import { findModelInCatalog, prepareModelRunCapabilities } from "../model-catalog-lookup.js";
+import { resolveEffectiveModelFallbacks } from "../model-selection-config.js";
 import {
   resolveConfiguredThinkingDefault,
   resolveThinkingSelection,
@@ -240,6 +239,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
             cfg,
             agentId: sessionAgentId,
             sessionKey,
+            selectedModel: { provider, model },
             hasSessionModelOverride:
               hasExplicitRunOverride || Boolean(storedProviderOverride || storedModelOverride),
             modelOverrideSource: hasExplicitRunOverride ? "user" : storedModelOverrideSource,
@@ -278,6 +278,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
           requestedRouteResolution: params.modelSelection.requestedRouteResolution,
           agentDir,
           fallbacksOverride: effectiveFallbacksOverride,
+          cyberAccessProgram: sessionEntryForAttempt?.cyberAccessProgram,
           userLockedAuthProfileId:
             resolveSessionAuthProfileOverrideSource(sessionEntryForAttempt) === "user"
               ? sessionEntryForAttempt?.authProfileOverride
@@ -462,7 +463,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
                 [candidateThinkingCatalog, params.prepared.configuredThinkingCatalog],
                 [providerOverride, modelOverride, candidateRuntime],
               ),
-              configuredAuthProfileId,
+              configuredAuthProfileId: runOptions.authProfileId ?? configuredAuthProfileId,
               modelFallbacksOverride: runOptions.modelFallbacksOverride,
               originalProvider: provider,
               cfg,
@@ -476,9 +477,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
               cwd,
               body,
               transcriptBody,
-              preserveCliSessionBinding:
-                isHeartbeatLifecycleRunKind(logicalTurnOpts.bootstrapContextRunKind) ||
-                params.preserveUserFacingSessionModelState,
+              preserveCliSessionBinding: params.preserveUserFacingSessionModelState,
               resolvedThinkLevel: candidateThinkLevel,
               thinkingExplicit: candidateConfiguredThinkLevel !== undefined,
               fastMode,

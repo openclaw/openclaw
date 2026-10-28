@@ -9,22 +9,9 @@ function promotionSection(date: string, sizeChars: number): string {
 }
 
 function projectGroupedSection(date: string): string {
-  return [
-    "",
-    `## Promoted From Short-Term Memory (${date})`,
-    "",
-    "### Global",
-    "",
-    "<!-- openclaw-memory-promotion:memory/short-term.md#global -->",
-    `- ${"g".repeat(120)} [score=0.900 signals=4 recalls=4 avg=0.900 source=memory/short-term.md:1-2]`,
-    "",
-    "### Project: alpha",
-    "",
-    "<!-- openclaw-memory-promotion:memory/short-term.md#alpha -->",
-    `- ${"a".repeat(120)} [score=0.900 signals=4 recalls=4 avg=0.900 source=memory/short-term.md:3-4]`,
-    "",
-    "",
-  ].join("\n");
+  const entry = (heading: string, key: string, letter: string, lines: string) =>
+    `### ${heading}\n\n<!-- openclaw-memory-promotion:memory/short-term.md#${key} -->\n- ${letter.repeat(120)} [score=0.900 signals=4 recalls=4 avg=0.900 source=memory/short-term.md:${lines}]`;
+  return `\n## Promoted From Short-Term Memory (${date})\n\n${entry("Global", "global", "g", "1-2")}\n\n${entry("Project: alpha", "alpha", "a", "3-4")}\n\n`;
 }
 
 function compact(existingMemory: string, newSection: string, budgetChars: number) {
@@ -74,20 +61,13 @@ describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression fo
   });
 
   it.each([
-    {
-      title: "preserves a user-authored `### Global` heading written under a promotion section",
-      userSection: "### Global\n\nMy own global rule, not a promoted entry.\n\n",
-      heading: "### Global",
-      content: "My own global rule, not a promoted entry.",
-    },
-    {
-      title: "preserves a tab-delimited user heading written under a promotion section",
-      userSection: "###\tCorrection\nThe prod DB is db-2.corp.example, NOT db-1.\n\n",
-      heading: "###\tCorrection",
-      content: "The prod DB is db-2.corp.example, NOT db-1.",
-    },
-  ])("$title", ({ userSection, heading, content }) => {
-    const result = compactAroundUserText(userSection);
+    ["### Global", "\nMy own global rule, not a promoted entry."],
+    ["###\tCorrection", "The prod DB is db-2.corp.example, NOT db-1."],
+    ["   ### Correction (added by me)", "The prod DB is db-2.corp.example, NOT db-1."],
+    ["###", "Notes I keep under a bare heading."],
+    ["My Durable Notes\n===", "Keep this user-authored paragraph.", "\n"],
+  ])("preserves user heading %j under a promotion section", (heading, content, prefix = "") => {
+    const result = compactAroundUserText(`${prefix}${heading}\n${content}\n\n`);
     expect(result.droppedDates).toContain("2026-04-10");
     expect(result.compacted).toContain(heading);
     expect(result.compacted).toContain(content);
@@ -105,16 +85,6 @@ describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression fo
     ).toBeLessThanOrEqual(budget);
   });
 
-  it("preserves a user `###` section with three leading spaces under a promotion section", () => {
-    const heading = "   ### Correction (added by me)";
-    const result = compactAroundUserText(
-      `${heading}\nThe prod DB is db-2.corp.example, NOT db-1.\n\n`,
-    );
-    expect(result.droppedDates).toContain("2026-04-10");
-    expect(result.compacted).toContain(heading);
-    expect(result.compacted).toContain("The prod DB is db-2.corp.example, NOT db-1.");
-  });
-
   it("drops a multi-project promotion section whole, including its `###` project subheadings", () => {
     const existing = `${projectGroupedSection("2026-04-10")}\n${projectGroupedSection("2026-04-20")}`;
     const newSection = `\n${projectGroupedSection("2026-04-29")}`;
@@ -123,21 +93,6 @@ describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression fo
     expect(result.compacted).not.toContain("### Project: alpha");
     expect(result.compacted).not.toContain("### Global");
     expect(result.compacted).not.toContain("openclaw-memory-promotion");
-  });
-
-  it("preserves an empty user heading line written under a promotion section", () => {
-    const result = compactAroundUserText("###\nNotes I keep under a bare heading.\n\n");
-    expect(result.droppedDates).toContain("2026-04-10");
-    expect(result.compacted).toContain("Notes I keep under a bare heading.");
-  });
-
-  it("preserves a user Setext heading under a promotion section", () => {
-    const result = compactAroundUserText(
-      "\nMy Durable Notes\n===\nKeep this user-authored paragraph.\n\n",
-    );
-    expect(result.droppedDates).toContain("2026-04-10");
-    expect(result.compacted).toContain("My Durable Notes\n===");
-    expect(result.compacted).toContain("Keep this user-authored paragraph.");
   });
 
   it("drops only a clean generated section beside a marker-free lookalike", () => {

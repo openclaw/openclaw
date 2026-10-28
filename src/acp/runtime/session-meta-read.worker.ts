@@ -33,7 +33,7 @@ import type {
 export function prepareAcpSessionMetadataRead(
   command: Extract<AcpSessionReadCommand, { type: "acpSessions.metadata" }>,
 ) {
-  const keys = [...new Set(command.entries.flatMap((entry) => entry.keys))].slice(0, 500);
+  const keys = [...new Set(command.entries.flatMap((entry) => entry.keys))];
   let firstCohort: AcpSessionRow[] | undefined;
   let failed: { error: unknown } | undefined;
   return {
@@ -48,7 +48,7 @@ export function prepareAcpSessionMetadataRead(
               join.on("marker.state_key", "=", CONTENT_VERSION_KEY),
             )
             .leftJoin("acp_sessions", (join) =>
-              join.on("acp_sessions.session_key", "in", sqliteStringSet(keys)),
+              join.on("acp_sessions.session_key", "in", sqliteStringSet(keys.slice(0, 500))),
             )
             .selectAll("acp_sessions")
             .select([
@@ -95,7 +95,7 @@ export function prepareAcpSessionMetadataRead(
       if (failed) {
         throw failed.error;
       }
-      return readAcpSessionCommand(db, command, firstCohort);
+      return readAcpSessionMetadata(db, command, keys, firstCohort);
     },
   };
 }
@@ -150,7 +150,6 @@ function selectAcpResumeSessions(
 export function readAcpSessionCommand(
   db: EngineConnection,
   command: AcpSessionReadCommand,
-  firstCohort?: readonly AcpSessionRow[],
 ): AcpSessionReadResult {
   if (command.type === "acpSessions.list") {
     return { type: command.type, rows: selectAcpSessionRows(db) };
@@ -159,19 +158,29 @@ export function readAcpSessionCommand(
     return { type: command.type, rows: selectAcpResumeSessions(db, command) };
   }
   const cohortKeys = [...new Set(command.entries.flatMap((entry) => entry.keys))];
-  const rows = new Map(
-    [...selectAcpSessionRowsByKeys(db, cohortKeys, firstCohort)].map((row) => [
-      row.session_key,
-      row,
-    ]),
-  );
+  return readAcpSessionMetadata(db, command, cohortKeys);
+}
+
+function readAcpSessionMetadata(
+  db: EngineConnection,
+  command: Extract<AcpSessionReadCommand, { type: "acpSessions.metadata" }>,
+  cohortKeys: readonly string[],
+  firstCohort?: readonly AcpSessionRow[],
+): Extract<AcpSessionReadResult, { type: "acpSessions.metadata" }> {
+  const rows = new Map<string, AcpSessionRow>();
+  for (const row of selectAcpSessionRowsByKeys(db, cohortKeys, firstCohort)) {
+    rows.set(row.session_key, row);
+  }
   return {
     type: command.type,
-    rows: command.entries.map(
-      ({ keys, entry }) =>
-        keys
-          .map((key) => rows.get(key))
-          .find((row) => row && acpSessionRowMatchesEntry(row, entry)) ?? null,
-    ),
+    rows: command.entries.map(({ keys, entry }) => {
+      for (const key of keys) {
+        const row = rows.get(key);
+        if (row && acpSessionRowMatchesEntry(row, entry)) {
+          return row;
+        }
+      }
+      return null;
+    }),
   };
 }

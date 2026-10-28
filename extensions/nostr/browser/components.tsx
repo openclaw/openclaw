@@ -30,7 +30,10 @@ export function SettingsStatus(props: { kind: "ok" | "muted" | "danger"; label: 
     <span
       class={[
         "settings-status",
-        props.kind === "muted" ? undefined : `settings-status--${props.kind}`,
+        {
+          "settings-status--ok": props.kind === "ok",
+          "settings-status--danger": props.kind === "danger",
+        },
       ]}
     >
       <span class="settings-status__dot" />

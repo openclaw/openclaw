@@ -58,6 +58,13 @@ function discover(env: NodeJS.ProcessEnv, pathname?: string) {
     registeredAgentDatabases: [],
   });
 }
+const reconstruct = (env: NodeJS.ProcessEnv, pathname: string) => {
+  openStateDb({ env }).db.exec("DROP TABLE agent_deletion_journal");
+  writeState(
+    (database) => reconstructAgentDeletionJournal(database, [{ agentId: "main", path: pathname }]),
+    { env },
+  );
+};
 
 it.each([
   { entry: "runtime", existingAgent: false },
@@ -140,11 +147,7 @@ it("ignores a reconstructed reindex-lock hold while still reporting a missing re
     env.OPENCLAW_STATE_DIR,
     "agents/openclaw/agent/openclaw-agent.sqlite",
   );
-  openStateDb({ env }).db.exec("DROP TABLE agent_deletion_journal");
-  writeState(
-    (database) => reconstructAgentDeletionJournal(database, [{ agentId: "main", path: lockPath }]),
-    { env },
-  );
+  reconstruct(env, lockPath);
 
   const { targets, unverifiedTargets, warnings, registryRemovals } = discoverTargets({
     env,
@@ -187,12 +190,7 @@ it.each(["reconstructed", "deleted-during-integrity", "lost-during-integrity"])(
     const options = { agentId: "main", path: pathname, env, register: true };
 
     if (history === "reconstructed") {
-      openStateDb({ env }).db.exec("DROP TABLE agent_deletion_journal");
-      writeState(
-        (database) =>
-          reconstructAgentDeletionJournal(database, [{ agentId: "main", path: pathname }]),
-        { env },
-      );
+      reconstruct(env, pathname);
     }
     if (history === "deleted-during-integrity" || history === "lost-during-integrity") {
       const operation = schemaSteps(db, options);

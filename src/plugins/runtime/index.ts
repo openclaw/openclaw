@@ -57,6 +57,8 @@ function createRuntimeGateway(): PluginRuntime["gateway"] {
       (await loadGatewayPluginRuntime()).readTrustedPluginSessionFacts(params),
     withSessionFacts: async (select, run) =>
       (await loadGatewayPluginRuntime()).withTrustedPluginSessionFacts(select, run),
+    appendAgentMessage: async (params) =>
+      (await loadGatewayPluginRuntime()).appendTrustedPluginAgentMessage(params),
     subscribeSessionChanges: subscribeRuntimeSessionChanges,
     withUserProfileIdentity: async (params, run) => {
       const captured = {

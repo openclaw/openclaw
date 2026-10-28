@@ -33,8 +33,9 @@ Prepare the complete history manifest and substantive version-matched release
 notes before freezing the product-complete commit and its target context as the
 **Code SHA/ref**. Package source preflight requires a matching release section;
 an empty placeholder is not preparation. If the notes are final, this commit
-can also be the **Release SHA**. The candidate C owns qualification Q=C; select
-independently trusted admission/publication tooling P, then run:
+can also be the **Release SHA**. The candidate C owns test qualification Q=C;
+select independently trusted P for admission, aggregate validation, and
+publication, then run:
 
 ```bash
 PUBLISHER_SHA="<recorded-full-trusted-main-ancestor-sha>"

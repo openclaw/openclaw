@@ -9,6 +9,8 @@ import {
 } from "../../infra/sqlite-database-admission.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
+import { preparePriorWorkspaceRewriteInTransaction } from "./session-accessor.sqlite-prior-workspace.js";
+import { selectActiveTranscriptIdentityRows } from "./session-accessor.sqlite-projection-read.js";
 import {
   readEventTimestamp,
   readTranscriptEventId,
@@ -31,6 +33,7 @@ import {
   SYNC_REBUILD_MAX_ROWS,
   type SessionTranscriptIndexProjection,
 } from "./session-transcript-index.js";
+import { hasTranscriptMessage } from "./session-transcript-projection-append.js";
 import { scheduleTranscriptProjectionReconcile } from "./session-transcript-reconcile.js";
 import {
   projectTranscriptRetainedDataSql,
@@ -223,13 +226,7 @@ function prepareIncrementalTranscriptSuffixMutation(
   const anchor = anchorId
     ? executeSqliteQueryTakeFirstSync(
         database.db,
-        db
-          .selectFrom("transcript_event_identities as identity")
-          .innerJoin("session_transcript_active_events as active", (join) =>
-            join
-              .onRef("active.session_id", "=", "identity.session_id")
-              .onRef("active.event_seq", "=", "identity.seq"),
-          )
+        selectActiveTranscriptIdentityRows(database)
           .select(["active.active_position", "identity.event_id"])
           .where("identity.session_id", "=", resolved.sessionId)
           .where("identity.event_id", "=", anchorId),
@@ -267,13 +264,7 @@ function prepareIncrementalTranscriptSuffixMutation(
   const retainedActiveCount = anchor.active_position + 1;
   const activeSuffixRows = executeSqliteQuerySync(
     database.db,
-    db
-      .selectFrom("transcript_event_identities as identity")
-      .innerJoin("session_transcript_active_events as active", (join) =>
-        join
-          .onRef("active.session_id", "=", "identity.session_id")
-          .onRef("active.event_seq", "=", "identity.seq"),
-      )
+    selectActiveTranscriptIdentityRows(database)
       .select(["active.message_position", "identity.event_id"])
       .where("identity.session_id", "=", resolved.sessionId)
       .where("active.active_position", ">=", retainedActiveCount)
@@ -401,6 +392,7 @@ export function replaceSqliteTranscriptSuffixInTransaction(
   if (plan.expectedRows.length === 0 && plan.next.length === 0) {
     return;
   }
+  const priorWorkspace = preparePriorWorkspaceRewriteInTransaction(database, resolved);
 
   const projectionIsHealthy =
     plan.incremental?.projectionWasHealthy ??
@@ -548,7 +540,19 @@ export function replaceSqliteTranscriptSuffixInTransaction(
 
   // Destructive suffix rewrites may reuse removed sequence positions. Rotate the raw and visible
   // cursor generation in the same transaction so a resumed reader cannot silently skip replacements.
-  rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
+  const generation = rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
+  priorWorkspace?.commit(generation, {
+    previous: plan.expectedRows.map((row) => ({
+      id: readTranscriptEventId(JSON.parse(row.eventJson)) ?? null,
+      seq: row.seq,
+    })),
+    next: insertEvents.map((event, index) => ({
+      id: readTranscriptEventId(event) ?? null,
+      seq: plan.startSeq + index,
+      message: hasTranscriptMessage(event),
+    })),
+    unchangedBeforeSeq: plan.startSeq,
+  });
   if (projectionIsHealthy) {
     replaceSessionTranscriptIndexSuffixInTransaction(database.db, resolved.sessionId, {
       unchangedBeforeSeq: plan.startSeq,
@@ -566,5 +570,7 @@ export function replaceSqliteTranscriptSuffixInTransaction(
     projection.onProjectionReconcileNeeded?.();
     scheduleTranscriptProjectionReconcile(database, resolved.sessionId, true, projection);
   }
-  touchTranscriptMutationInTransaction(database, resolved.sessionId);
+  touchTranscriptMutationInTransaction(database, resolved.sessionId, {
+    projectionReady: projectionIsHealthy,
+  });
 }

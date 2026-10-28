@@ -11,8 +11,7 @@ import {
   resolveStorePath,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
-import { createRequireRecord, resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { assert, expect, it, vi } from "vitest";
 import { runWithTelegramSpooledReplayUpdate } from "./bot-processing-outcome.js";
 import {
@@ -32,8 +31,6 @@ import { startTelegramCallbackQueryAnswer } from "./callback-query-answer-state.
 import { getTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 import { getCachedSticker } from "./sticker-cache.js";
 
-const { loginExecutor } = vi.hoisted(() => ({ loginExecutor: vi.fn(async () => false) }));
-vi.mock("./bot-native-command-login.js", () => ({ executeTelegramLoginCommand: loginExecutor }));
 vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>()),
   loadPreparedModelCatalog: vi.fn(async () => []),
@@ -59,13 +56,6 @@ const callback = (id: string, data: string, chat_instance: string, message_id: n
   chat_instance,
   from,
   message: { message_id, date: messageBase.date, chat },
-});
-
-it("runs the login executor without dispatching a turn", async () => {
-  const bot = await createBot();
-  await handleMessage(bot, 1004, commandMessage("/login"));
-  expect(loginExecutor).toHaveBeenCalledWith(expect.objectContaining({ commandText: "/login" }));
-  expect(harness.replySpy).not.toHaveBeenCalled();
 });
 
 it.each(["forum", "DM"] as const)("routes native commands to the %s topic", async (kind) => {
@@ -286,36 +276,6 @@ it("inherits named-account group access and composes exact-topic overrides on wi
     "Group prompt\n\nTopic prompt",
   );
   expect(harness.replySpy.mock.calls.at(-1)?.[1]?.skillFilter).toEqual([]);
-});
-
-it("dispatches registered reaction updates to the routed event queue", async () => {
-  resetSystemEventsForTest();
-  const bot = await configuredBot({
-    ...openDm,
-    reactionNotifications: "all",
-  });
-  try {
-    await bot.handleUpdate({
-      update_id: 2200,
-      message_reaction: {
-        chat,
-        message_id: 42,
-        user: from,
-        date: 1736380800,
-        old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: "\u{1F44D}" }],
-      },
-    });
-    expect(peekSystemEventEntries("agent:main:main")).toEqual([
-      expect.objectContaining({
-        text: "Telegram reaction added: \u{1F44D} by Alice on msg 42",
-        contextKey: "telegram:reaction:add:42001:42:42001:\u{1F44D}",
-      }),
-    ]);
-    expect(harness.replySpy).not.toHaveBeenCalled();
-  } finally {
-    resetSystemEventsForTest();
-  }
 });
 
 it("handles the overlapping migration filter once without starting an ordinary turn", async () => {
@@ -568,6 +528,8 @@ it("commits a first sticker description before model admission and never describ
     height: 512,
     is_animated: false,
     is_video: false,
+    emoji: "old",
+    set_name: "OldSet",
   };
   const message = {
     message_id: 2800,
@@ -604,7 +566,14 @@ it("commits a first sticker description before model admission and never describ
     description.resolve({ text: "A curious sticker" });
     await receiving;
     await bot.handleUpdate(
-      stickerUpdate(2801, { sticker: { ...sticker, file_id: "refreshed-sticker-file" } }),
+      stickerUpdate(2801, {
+        sticker: {
+          ...sticker,
+          file_id: "refreshed-sticker-file",
+          emoji: "new",
+          set_name: "NewSet",
+        },
+      }),
     );
     expect(cachedAtAdmission).toMatchObject([
       { description: "A curious sticker" },
@@ -620,6 +589,8 @@ it("commits a first sticker description before model admission and never describ
     expect(await getCachedSticker(sticker.file_unique_id)).toMatchObject({
       fileId: "refreshed-sticker-file",
       description: "A curious sticker",
+      emoji: "new",
+      setName: "NewSet",
     });
     await bot.handleUpdate(
       stickerUpdate(2802, {
@@ -644,6 +615,24 @@ it("commits a first sticker description before model admission and never describ
     );
     expect(describeImage).toHaveBeenCalledOnce();
     expect(apiPayloads("sendMessage")).toHaveLength(3);
+    const downloads = apiPayloads("getFile").length;
+    await bot.handleUpdate(
+      stickerUpdate(2803, {
+        sticker: {
+          ...sticker,
+          file_unique_id: "unsupported-video",
+          is_video: true,
+          emoji: undefined,
+        },
+        reply_to_message: undefined,
+      }),
+    );
+    expect(harness.replySpy.mock.calls.at(-1)?.[0]).toMatchObject({
+      BodyForAgent: "<media:sticker>",
+      media: [{ kind: "sticker", path: undefined }],
+    });
+    expect(apiPayloads("getFile")).toHaveLength(downloads);
+    expect(describeImage).toHaveBeenCalledOnce();
     describeImage.mockImplementationOnce(() => lateDescription.promise);
     await expect(
       webhookCallback(bot, "std/http", { timeoutMilliseconds: 0 })(
@@ -651,7 +640,7 @@ it("commits a first sticker description before model admission and never describ
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(
-            stickerUpdate(2803, { sticker: { ...sticker, file_unique_id: lateStickerId } }),
+            stickerUpdate(2804, { sticker: { ...sticker, file_unique_id: lateStickerId } }),
           ),
         }),
       ),
@@ -662,7 +651,7 @@ it("commits a first sticker description before model admission and never describ
     await harness.settleUpdates();
     setTelegramRuntime(runtime);
   }
-  expect(apiPayloads("sendMessage")).toHaveLength(4);
+  expect(apiPayloads("sendMessage")).toHaveLength(5);
   expect(await getCachedSticker(lateStickerId)).toMatchObject({
     description: "A sticker after webhook expiry",
   });

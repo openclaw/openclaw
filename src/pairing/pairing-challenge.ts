@@ -20,33 +20,6 @@ type PairingChallengeParams = {
   onReplyError?: (err: unknown) => void;
 };
 
-async function runPairingRequestedHook(params: {
-  channel: string;
-  accountId?: string;
-  senderId: string;
-  code: string;
-  meta?: PairingMeta;
-}): Promise<void> {
-  const hookRunner = getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("channel_pairing_requested")) {
-    return;
-  }
-  await hookRunner.runChannelPairingRequested(
-    {
-      channel: params.channel,
-      accountId: params.accountId,
-      senderId: params.senderId,
-      code: params.code,
-      metadata: params.meta,
-    },
-    {
-      channelId: params.channel,
-      accountId: params.accountId,
-      senderId: params.senderId,
-    },
-  );
-}
-
 /**
  * Shared pairing challenge issuance for DM pairing policy pathways.
  * Ensures every channel follows the same create-if-missing + reply flow.
@@ -63,14 +36,28 @@ export async function issuePairingChallenge(
   }
   params.onCreated?.({ code });
   const accountId = params.accountId ? normalizeAccountId(params.accountId) : undefined;
+  async function runPairingRequestedHook(): Promise<void> {
+    const hookRunner = getGlobalHookRunner();
+    if (!hookRunner?.hasHooks("channel_pairing_requested")) {
+      return;
+    }
+    await hookRunner.runChannelPairingRequested(
+      {
+        channel: params.channel,
+        accountId,
+        senderId: params.senderId,
+        code,
+        metadata: params.meta,
+      },
+      {
+        channelId: params.channel,
+        accountId,
+        senderId: params.senderId,
+      },
+    );
+  }
   // Notification/audit hooks must not delay the pairing-code reply.
-  void runPairingRequestedHook({
-    channel: params.channel,
-    accountId,
-    senderId: params.senderId,
-    code,
-    meta: params.meta,
-  }).catch(() => undefined);
+  void runPairingRequestedHook().catch(() => undefined);
   const replyText =
     params.buildReplyText?.({ code, senderIdLine: params.senderIdLine }) ??
     buildPairingReply({

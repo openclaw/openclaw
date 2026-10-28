@@ -2,6 +2,7 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { z } from "zod";
+import { decodeNodeInvokeParams as decodeRequest } from "../node-host/invoke-payload.js";
 import { parseWorkerLaunchPlan } from "./launch-descriptor.js";
 import {
   WorkerGatewayNamespace,
@@ -123,17 +124,6 @@ function parseRequest<T>(schema: z.ZodType<T>, value: unknown, operation: string
     );
   }
   return parsed.data;
-}
-
-function decodeRequest(raw?: string | null): unknown {
-  if (!raw) {
-    throw new Error("INVALID_REQUEST: paramsJSON required");
-  }
-  try {
-    return JSON.parse(raw) as unknown;
-  } catch {
-    throw new Error("INVALID_REQUEST: paramsJSON malformed JSON");
-  }
 }
 
 export function parseNodeWorkerLaunchInput(raw?: string | null): NodeWorkerLaunchInput {

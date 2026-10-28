@@ -98,8 +98,9 @@ export async function captureUpdateDatabases(params: {
         // Database recovery outlives runtime retirement and stays outside the Git source fence.
         const artifactRoot = path.join(execution.root, ".artifacts");
         await fs.mkdir(artifactRoot, { recursive: true });
+        const physicalArtifactRoot = await fs.realpath(artifactRoot);
         params.assertCurrent();
-        backupRoot = path.join(artifactRoot, path.basename(backupRoot));
+        backupRoot = path.join(physicalArtifactRoot, path.basename(backupRoot));
       }
       const captured = await createUpdateDatabaseBackup({
         backupRoot,
@@ -166,7 +167,7 @@ export async function captureUpdateDatabases(params: {
     durationMs: Date.now() - startedAt,
     exitCode: 0,
     diagnostics: [
-      `Databases snapshotted at ${backup.directory}. ${restorable ? "Verified successful activation removes these snapshots; otherwise retain them with the update's recovery artifacts." : "These snapshots require manual recovery and remain available after successful activation."}`,
+      `Databases snapshotted at ${backup.directory}. ${restorable ? "Verified successful activation removes these snapshots only if automatic restoration remains available; otherwise retain them with the update's recovery artifacts." : "These snapshots require manual recovery and remain available after successful activation."}`,
       ...backup.databases.map(
         (entry) =>
           `${entry.path} -> ${entry.snapshotPath}; schema ${entry.userVersion}; ${entry.sizeBytes} bytes; SHA-256 ${entry.sha256}`,

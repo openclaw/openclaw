@@ -6,7 +6,7 @@ ui/src/components/link-reader-hovercard-owner.ts	1
 ui/src/components/link-reader-markdown.tsx	3
 ui/src/components/link-reader-panel-owner.ts	1
 ui/src/components/link-reader-prefetch-owner.ts	1
-ui/src/components/lobster-image.ts	3
+ui/src/components/lobster-image.ts	2
 ui/src/components/markdown-blocks-owner.ts	7
 ui/src/components/markdown-code-blocks.ts	3
 ui/src/components/markdown-mermaid.tsx	3

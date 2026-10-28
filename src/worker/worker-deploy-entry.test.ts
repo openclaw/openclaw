@@ -21,8 +21,9 @@ vi.mock("./worker-process.js", () => ({ runWorkerProcess: runtime.runWorkerProce
 
 const originalArgv = process.argv;
 const originalExitCode = process.exitCode;
-const originalConnected = Object.getOwnPropertyDescriptor(process, "connected");
-const originalDisconnect = Object.getOwnPropertyDescriptor(process, "disconnect");
+const originalTransport = ["connected", "disconnect"].map(
+  (key) => [key, Object.getOwnPropertyDescriptor(process, key)] as const,
+);
 const disconnect = vi.fn();
 let destroyStdin: MockInstance<typeof process.stdin.destroy>;
 
@@ -43,57 +44,54 @@ beforeEach(() => {
 afterEach(() => {
   process.argv = originalArgv;
   process.exitCode = originalExitCode;
-  if (originalConnected) {
-    Object.defineProperty(process, "connected", originalConnected);
-  } else {
-    Reflect.deleteProperty(process, "connected");
-  }
-  if (originalDisconnect) {
-    Object.defineProperty(process, "disconnect", originalDisconnect);
-  } else {
-    Reflect.deleteProperty(process, "disconnect");
+  for (const [key, descriptor] of originalTransport) {
+    if (descriptor) {
+      Object.defineProperty(process, key, descriptor);
+    } else {
+      Reflect.deleteProperty(process, key);
+    }
   }
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
 
+function holdEntry(mock: typeof runtime.runWorkerProcess, arg: string) {
+  const entered = createDeferred();
+  const release = createDeferred();
+  mock.mockImplementation(() => {
+    entered.resolve();
+    return release.promise;
+  });
+  process.argv = [process.execPath, "worker.mjs", arg];
+  return { entered: entered.promise, release, entry: import("./worker-deploy-entry.js") };
+}
+
+const prewarm = ["--internal-worker-prewarm"] as const;
 it.each([
-  {
-    stage: "runtime validation",
-    args: ["--internal-worker-prewarm"],
-    message: "Worker runtime startup failed",
-  },
-  {
-    stage: "runtime prewarm",
-    args: ["--internal-worker-prewarm"],
-    message: "Worker turn runtime load failed",
-  },
-  {
-    stage: "argument validation",
-    args: ["--unsupported=fixture-worker-entry-secret"],
-    message: "worker deploy entry received unsupported arguments",
-  },
-  {
-    stage: "worker execution",
-    args: ["--internal-worker-ipc", "--internal-worker-session"],
-    message: "worker live event rejected: invalid-event",
-  },
-])(
-  "reports $stage failure without rejecting the executable entry",
-  async ({ stage, args, message }) => {
+  ["runtime validation", prewarm, "Worker runtime startup failed", runtime.assertSupportedRuntime],
+  ["runtime prewarm", prewarm, "Worker turn runtime load failed", runtime.loadWorkerTurnRuntime],
+  [
+    "argument validation",
+    ["--unsupported=fixture-worker-entry-secret"],
+    "worker deploy entry received unsupported arguments",
+    undefined,
+  ],
+  [
+    "worker execution",
+    ["--internal-worker-ipc", "--internal-worker-session"],
+    "worker live event rejected: invalid-event",
+    runtime.runWorkerProcess,
+  ],
+] as const)(
+  "reports %s failure without rejecting the executable entry",
+  async (stage, args, message, fail) => {
     process.argv = [process.execPath, "worker.mjs", ...args];
     const secret = "fixture-worker-entry-secret";
     const failure = new Error(`${message} (password=${secret})`, {
       cause: new Error("private execution detail"),
     });
     failure.stack = `${failure.name}: ${failure.message}\n    at worker-bundle-internal-source`;
-    if (stage === "runtime validation") {
-      runtime.assertSupportedRuntime.mockRejectedValue(failure);
-    } else if (stage === "runtime prewarm") {
-      runtime.loadWorkerTurnRuntime.mockRejectedValue(failure);
-    } else if (stage === "worker execution") {
-      runtime.runWorkerProcess.mockRejectedValue(failure);
-    }
+    fail?.mockRejectedValue(failure);
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
 
     await expect(import("./worker-deploy-entry.js")).resolves.toBeDefined();
@@ -116,17 +114,10 @@ it.each([
 );
 
 it("prewarms the turn runtime before flushing its compile cache", async () => {
-  const loading = createDeferred();
-  const loaded = createDeferred();
-  runtime.loadWorkerTurnRuntime.mockImplementation(() => {
-    loading.resolve();
-    return loaded.promise;
-  });
-  process.argv = [process.execPath, "worker.mjs", "--internal-worker-prewarm"];
-  const entry = import("./worker-deploy-entry.js");
-  await loading.promise;
+  const { entered, release, entry } = holdEntry(runtime.loadWorkerTurnRuntime, prewarm[0]);
+  await entered;
   expect(runtime.flushCompileCache).not.toHaveBeenCalled();
-  loaded.resolve();
+  release.resolve();
   await entry;
 
   expect(runtime.loadWorkerTurnRuntime).toHaveBeenCalledOnce();
@@ -137,18 +128,11 @@ it("prewarms the turn runtime before flushing its compile cache", async () => {
 });
 
 it("keeps the transport until worker execution has settled", async () => {
-  const started = createDeferred();
-  const settled = createDeferred();
-  runtime.runWorkerProcess.mockImplementation(async () => {
-    started.resolve();
-    await settled.promise;
-  });
-  process.argv = [process.execPath, "worker.mjs", "--internal-worker-ipc"];
-  const entry = import("./worker-deploy-entry.js");
-  await started.promise;
+  const { entered, release, entry } = holdEntry(runtime.runWorkerProcess, "--internal-worker-ipc");
+  await entered;
   expect(disconnect).not.toHaveBeenCalled();
   expect(destroyStdin).not.toHaveBeenCalled();
-  settled.resolve();
+  release.resolve();
   await entry;
   expect(disconnect).toHaveBeenCalledOnce();
   expect(destroyStdin).toHaveBeenCalledOnce();

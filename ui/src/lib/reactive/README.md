@@ -19,14 +19,23 @@ owner notification, including mutations of the same object. Value comparators
 are reserved for immutable values. Do not put mutable snapshots behind
 `Object.is` or copy them into a second writable store.
 
-Pass a new scope object to `replaceSource()` when a connection, agent, session,
+Per-consumer adapters expose `replaceSource()` and `dispose()`. Pass a new scope
+object to `replaceSource()` when a connection, agent, session,
 or query changes. Replacement releases the previous subscription before
 acquiring the new one; stale deliveries cannot update the projection. Do not
 mutate scope objects in place. Creating an adapter under a Solid owner binds its
-disposal to that owner. All adapters also expose idempotent `dispose()` for
+disposal to that owner. These adapters also expose idempotent `dispose()` for
 explicit application, pane, or test lifetimes. Disposal releases observation and
 retains the last read/published reference; it does not deep-freeze owner objects
 or dispose the authoritative owner.
+
+Fixed shared adapters expose `read()`, `revision()`, and `subscribe()`. Each
+contract shares one projection per owner and scope across independently mounted
+consumers. They connect lazily on the first tracked read or subscription, release
+the native subscription when the last observer leaves, and read the current owner
+when observation resumes. Consumers cannot replace or dispose a projection shared
+with other views. A scoped child projection can subscribe to the shared adapter
+so invalidating its scope releases observation even if its read is no longer used.
 
 Event consumers subscribe directly to their owners, preserving each channel's
 delivery order, replay behavior, and completion contract.
@@ -46,12 +55,13 @@ rebindable subscription; use `projectOwner` for those lifetimes.
 
 ## Adapter families
 
-| Module                   | Owners                                                            |
-| ------------------------ | ----------------------------------------------------------------- |
-| `application.ts`         | Gateway snapshots, config, agent selection, overlays              |
-| `application-native.ts`  | Native device settings                                            |
-| `domain-capabilities.ts` | Agents, agent identity, roster activity, channels, runtime config |
-| `events-browser.ts`      | Lobster visits                                                    |
+| Module                              | Owners                                                                            |
+| ----------------------------------- | --------------------------------------------------------------------------------- |
+| `application.ts`                    | Gateway snapshots, config, agent selection, overlays                              |
+| `application-native.ts`             | Native device settings                                                            |
+| `domain-capabilities.ts`            | Per-consumer agents, channels, runtime config, session lists                      |
+| `shared-application-projections.ts` | Shared agents, identity, runtime config, profiles, theme, sessions, pull requests |
+| `events-browser.ts`                 | Lobster visits                                                                    |
 
 `projectTheme()` exposes preference and applied-palette projections separately.
 Preferences change immediately; `appliedPalette` advances only after the theme

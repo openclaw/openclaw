@@ -7,20 +7,20 @@ import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { assert, describe, expect, it } from "vitest";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../../../packages/ai/src/utils/system-prompt-cache-boundary.js";
 import { resolveProviderRequestCapabilities } from "../../../agents/provider-attribution.js";
+import { makeProviderModelFixture } from "../../../agents/test-helpers/provider-model-fixture.js";
 import { createOpenRouterSystemCacheWrapper, createOpenRouterWrapper } from "./proxy.js";
 
-const openRouterModel: Model<"openai-completions"> = {
-  api: "openai-completions",
-  provider: "openrouter",
-  id: "anthropic/claude-sonnet-4.6",
-  name: "Claude",
-  baseUrl: "",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 200000,
-  maxTokens: 8192,
-};
+const openRouterModel: Model<"openai-completions"> = makeProviderModelFixture<"openai-completions">(
+  {
+    api: "openai-completions",
+    provider: "openrouter",
+    id: "anthropic/claude-sonnet-4.6",
+    name: "Claude",
+    baseUrl: "",
+    contextWindow: 200000,
+    maxTokens: 8192,
+  },
+);
 const transportHost = createAiTransportHost({ resolveProviderRequestCapabilities });
 
 function runSystemCacheWrapper(model: Partial<Model<"openai-completions">>) {
@@ -50,7 +50,7 @@ function captureHeaders(
   extraParams?: Record<string, unknown>,
   model: Partial<Model<"openai-completions">> = {},
 ) {
-  const calls: Array<{ headers?: Record<string, string> }> = [];
+  const calls: Array<{ headers?: Model["headers"] }> = [];
   const baseStreamFn: StreamFn = (_model, _context, options) => {
     calls.push({ headers: options?.headers });
     return createAssistantMessageEventStream();
@@ -231,18 +231,15 @@ describe("proxy stream wrappers", () => {
   );
 
   it("preserves native Anthropic Messages payloads", () => {
-    const model: Model<"anthropic-messages"> = {
+    const model: Model<"anthropic-messages"> = makeProviderModelFixture<"anthropic-messages">({
       api: "anthropic-messages",
       provider: "openrouter",
       id: "anthropic/claude-sonnet-4-6",
       name: "Claude",
       baseUrl: "https://openrouter.ai/api",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200000,
       maxTokens: 8192,
-    };
+    });
     const original = {
       system: [{ type: "text", text: "system", cache_control: { type: "ephemeral" } }],
       messages: [{ role: "user", content: [{ type: "text", text: "question" }] }],

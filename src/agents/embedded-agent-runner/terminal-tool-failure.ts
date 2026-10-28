@@ -3,7 +3,7 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "../code-mode-control-tools.js";
 import type { ToolErrorSummary } from "../tool-error-summary.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
-import type { EmbeddedRunTerminalToolFailure } from "./types.js";
+import type { EmbeddedRunTerminalToolFailure } from "./result.types.js";
 
 // Only persist the catalog-miss form emitted by the Code Mode bridge. Tool
 // error text otherwise can contain command output, private paths, or values

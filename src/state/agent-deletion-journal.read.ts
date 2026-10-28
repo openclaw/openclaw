@@ -31,6 +31,7 @@ import type {
   RetainedAgentDeletion,
 } from "./agent-deletion-journal.types.js";
 import {
+  isAgentDatabaseRegistryChangedError,
   isOpenClawAgentDatabaseRegistryChange,
   prepareOpenClawAgentDatabaseRegistrySnapshotRead,
 } from "./openclaw-agent-db-registry-listing.js";
@@ -44,6 +45,21 @@ import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.
 import type { DB } from "./openclaw-state-db.generated.js";
 import { resolveDatabasePath, resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { prepareOpenClawStateReadSource } from "./openclaw-state-worker-context.js";
+
+class AgentDatabaseDeletionSnapshotChangedError extends Error {
+  constructor() {
+    super("Agent database deletion snapshot changed during consumption.");
+    this.name = "AgentDatabaseDeletionSnapshotChangedError";
+  }
+}
+
+/** These owners require a fresh read, never replay of an already-entered consumer. */
+export function isAgentDatabaseDeletionSnapshotChangedError(error: unknown): boolean {
+  return (
+    error instanceof AgentDatabaseDeletionSnapshotChangedError ||
+    isAgentDatabaseRegistryChangedError(error)
+  );
+}
 
 export async function readAgentDeletionRecoveryHoldsInWorker(
   options: OpenClawStateDatabaseOptions = {},
@@ -324,7 +340,7 @@ export function prepareAgentDatabaseDeletionSnapshotRead(
           return await consume(snapshot, () => {
             assertCurrent();
             if (changed) {
-              throw new Error("Agent database deletion snapshot changed during consumption.");
+              throw new AgentDatabaseDeletionSnapshotChangedError();
             }
             assertRegistryCurrent?.();
           });

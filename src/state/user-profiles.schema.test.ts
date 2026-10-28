@@ -12,6 +12,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
   withStateMigrationBackupForTest,
@@ -39,7 +40,8 @@ import { ensureUserProfileRoleSchema, ensureUserProfilesSchema } from "./user-pr
 import { ensureProfileForEmail } from "./user-profiles.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     cleanup();
   });
@@ -251,7 +253,11 @@ describe("user profile role schema", () => {
 });
 
 it("upgrades deferred channel links without granting legacy recovery custody", async () => {
-  const options = stateOptions();
+  const env = {
+    ...process.env,
+    OPENCLAW_STATE_DIR: tempDirs.make("openclaw-user-profile-upgrade-"),
+  };
+  const options = { env, path: resolveOpenClawStateSqlitePath(env) };
   const profile = ensureProfileForEmail("upgrade@example.test", options);
   const identity = { channelId: "discord", accountId: "team", senderId: "100" };
   linkUserChannelIdentity(profile.id, identity, options);

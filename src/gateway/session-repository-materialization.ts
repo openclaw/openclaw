@@ -9,6 +9,9 @@ import {
 } from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
+import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   readProjectCheckoutRemoteHead,
   ProjectCloneError,
@@ -29,6 +32,7 @@ import { prepareSessionWorktree } from "./session-worktree-preparation.js";
 import { prepareRepositoryGitHubIdentity } from "./worker-environments/repository-github-identity.js";
 import { withSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
 import { applyStagedWorkerWorkspace } from "./worker-environments/workspace-reconcile-apply.js";
+import { restoreWorkerWorkspaceHistory } from "./worker-environments/workspace-result-history.js";
 
 /** Explicit Gateway moves and failed-placement recovery restore only accepted source results. */
 export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
@@ -260,42 +264,52 @@ async function materializeCapturedRepositoryWorkspace(
       );
     }
     if (repository.checkpointRef) {
-      await withSessionRepositoryCheckpoint(
-        { workspaceId, includePublication: true },
-        async (snapshot) => {
-          assertCurrent();
-          const applied = await applyStagedWorkerWorkspace({
-            ...snapshot,
-            acceptance: { kind: "reconcile" },
-            root,
-            // The checkout is unbound until verification. Failed preparation rolls it
-            // back; a crash leaves the immutable checkpoint available for a fresh retry.
-            journal: {
-              load: async () => undefined,
-              begin: async () => assertCurrent(),
-              commit: async () => assertCurrent(),
-              abort: async () => {},
-            },
-          });
-          if (applied.conflictPaths.length || applied.manifestRef !== repository.manifestHash) {
-            throw new Error(
-              "Repository changes could not be fully restored; retry the Gateway move",
-            );
-          }
-          await applied.verifyLocalStable();
-          await alignPublication();
-          for (const restore of await prepareRepositoryPublicationRestore({
-            ...snapshot,
-            ...(published?.pushed_head_commit
-              ? { indexBase: { root, commit: published.pushed_head_commit, assertCurrent } }
-              : {}),
-          })) {
-            await command(restore.argv, { cwd: root, input: restore.input });
-          }
-          await applied.verifyLocalStable();
-          assertCurrent();
-        },
-      );
+      await withSessionRepositoryCheckpoint({ workspaceId }, async (snapshot) => {
+        assertCurrent();
+        const applied = await applyStagedWorkerWorkspace({
+          ...snapshot,
+          acceptance: { kind: "reconcile" },
+          root,
+          // The checkout is unbound until verification. Failed preparation rolls it
+          // back; a crash leaves the immutable checkpoint available for a fresh retry.
+          journal: {
+            load: async () => undefined,
+            begin: async () => assertCurrent(),
+            commit: async () => assertCurrent(),
+            abort: async () => {},
+          },
+        });
+        if (applied.conflictPaths.length || applied.manifestRef !== repository.manifestHash) {
+          throw new Error("Repository changes could not be fully restored; retry the Gateway move");
+        }
+        await applied.verifyLocalStable();
+        await alignPublication();
+        const historyNote = await restoreWorkerWorkspaceHistory({
+          ...snapshot,
+          root,
+          assertCurrent,
+        });
+        if (historyNote) {
+          createSubsystemLogger("gateway/worker-workspace").info(historyNote);
+        }
+        for (const restore of await prepareRepositoryPublicationRestore({
+          ...snapshot,
+          indexBase: { root, commit: await git(["rev-parse", "HEAD"]), assertCurrent },
+        })) {
+          await command(
+            [
+              process.execPath,
+              ...resolveRuntimeWorkerArgv(
+                resolveRuntimeProcessEntrypointUrl("repositoryPublicationRestore"),
+              ),
+              restore.action,
+            ],
+            { cwd: root, input: restore.input },
+          );
+        }
+        await applied.verifyLocalStable();
+        assertCurrent();
+      });
     } else {
       await alignPublication();
     }

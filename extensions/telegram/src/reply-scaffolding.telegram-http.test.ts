@@ -1,9 +1,5 @@
 import { buildHistoryContext } from "openclaw/plugin-sdk/reply-history";
-import {
-  createReplyDispatcher,
-  dispatchInboundMessage,
-  type ReplyPayload,
-} from "openclaw/plugin-sdk/reply-runtime";
+import { createReplyDispatcher, dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it } from "vitest";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { splitTelegramReasoningText } from "./reasoning-lane-coordinator.js";
@@ -17,10 +13,16 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
     fixture.requests
       .filter(({ method }) => method === "sendMessage" || method === "editMessageText")
       .map(({ fields }) => (typeof fields.text === "string" ? fields.text : ""));
+  const history = (currentMessage = "private inbound paragraph", lineBreak = "\n") =>
+    buildHistoryContext({
+      historyText: "[Telegram] Alice: private history",
+      currentMessage,
+      lineBreak,
+    });
 
   async function prepareAndDispatch(
-    payload: ReplyPayload,
-    conversationContext?: string,
+    finalText: string,
+    conversationContext = history(),
     reasoningSnapshots: readonly string[] = [],
   ) {
     const errors: unknown[] = [];
@@ -41,118 +43,92 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
         })
       : undefined;
     try {
-      if (conversationContext || preview) {
-        const messageId = `reply-scaffolding-${++messageSequence}`;
-        await dispatchInboundMessage({
-          cfg,
-          ctx: {
-            Body: conversationContext,
-            BodyForAgent: conversationContext,
-            ChatType: "direct",
-            From: "123",
-            MessageSid: messageId,
-            Provider: "telegram",
-            SessionKey: `agent:test:${messageId}`,
-            Surface: "telegram",
-            To: "456",
-          },
-          dispatcher,
-          outboundHooks: "disabled",
-          replyOptions: preview
-            ? {
-                onReasoningStream: async ({ text }) => {
-                  const { reasoningText } = splitTelegramReasoningText(text, true);
-                  if (reasoningText) {
-                    preview.update(reasoningText);
-                    await preview.flush();
-                  }
-                },
-              }
-            : undefined,
-          replyResolver: async (_ctx, options) => {
-            for (const text of reasoningSnapshots) {
-              await options?.onReasoningStream?.({ text, isReasoningSnapshot: true });
+      const messageId = `reply-scaffolding-${++messageSequence}`;
+      await dispatchInboundMessage({
+        cfg,
+        ctx: {
+          Body: conversationContext,
+          BodyForAgent: conversationContext,
+          ChatType: "direct",
+          From: "123",
+          MessageSid: messageId,
+          Provider: "telegram",
+          SessionKey: `agent:test:${messageId}`,
+          Surface: "telegram",
+          To: "456",
+        },
+        dispatcher,
+        outboundHooks: "disabled",
+        replyOptions: preview
+          ? {
+              onReasoningStream: async ({ text }) => {
+                const { reasoningText } = splitTelegramReasoningText(text, true);
+                if (reasoningText) {
+                  preview.update(reasoningText);
+                  await preview.flush();
+                }
+              },
             }
-            return payload;
-          },
-        });
-      } else {
-        dispatcher.sendFinalReply(payload);
-        dispatcher.markComplete();
-        await dispatcher.waitForIdle();
-      }
+          : undefined,
+        replyResolver: async (_ctx, options) => {
+          for (const text of reasoningSnapshots) {
+            await options?.onReasoningStream?.({ text, isReasoningSnapshot: true });
+          }
+          return { text: finalText };
+        },
+      });
       expect(errors).toEqual([]);
     } finally {
       await preview?.discard();
     }
   }
 
-  it.each([false, true])(
-    "cleans reasoning previews before Telegram HTTP (visible=%s)",
-    async (visible) => {
-      const opening = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
-      const internal = `${opening}\nprivate runtime metadata\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>`;
-      const snapshots = [opening.slice(0, 20), `${opening}\nprivate runtime metadata`, internal];
-      if (visible) {
-        snapshots.push(
-          `${internal}\n\nChecking files.`,
-          `${internal}\n\nReading config.\n\nChecking files.`,
-        );
-      }
-      await prepareAndDispatch({ text: "Visible answer." }, "Show status.", snapshots);
-      expect(delivered()).toEqual(
-        visible
-          ? [
-              "🧠 <i>Checking files.</i>",
-              "🧠 <i>Reading config.</i>\n\n<i>Checking files.</i>",
-              "Visible answer.",
-            ]
-          : ["Visible answer."],
-      );
-    },
-  );
+  it("cleans partial and complete internal context before Telegram reasoning previews", async () => {
+    const opening = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
+    const internal = `${opening}\nprivate runtime metadata\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>`;
+    await prepareAndDispatch("Visible answer.", "Show status.", [
+      opening.slice(0, 20),
+      `${opening}\nprivate runtime metadata`,
+      internal,
+      `${internal}\n\nChecking files.`,
+      `${internal}\n\nReading config.\n\nChecking files.`,
+    ]);
+    expect(delivered()).toEqual([
+      "🧠 <i>Checking files.</i>",
+      "🧠 <i>Reading config.</i>\n\n<i>Checking files.</i>",
+      "Visible answer.",
+    ]);
+  });
 
-  it("removes the full copied prompt before XML and metadata cleanup changes it", async () => {
-    const conversationContext = buildHistoryContext({
-      historyText: "[Telegram] Alice: private history paragraph",
-      currentMessage: `Conversation info: ⟦openclaw:ctx⟧
+  const xmlContext = history(`Conversation info: ⟦openclaw:ctx⟧
 \`\`\`json
 {"private":"sender metadata"}
 \`\`\`
 <function_calls><invoke name="exec">private XML</invoke></function_calls>
 
-private second inbound paragraph`,
-    });
-
-    await prepareAndDispatch(
-      { text: `${conversationContext}\n\n${conversationContext}\n\nVisible answer.` },
-      conversationContext,
-    );
-
+private second inbound paragraph`);
+  it.each([
+    ["XML and metadata cleanup", xmlContext, (prompt: string) => `${prompt}\n\n${prompt}`],
+    [
+      "line-ending normalization",
+      history("private first paragraph\n\nprivate second paragraph", "\r\n"),
+      (prompt: string) => prompt.replace(/\r\n/g, "\n"),
+    ],
+  ] as const)("removes a copied prompt before %s", async (_name, context, copy) => {
+    await prepareAndDispatch(`${copy(context)}\n\nVisible answer.`, context);
     expect(delivered()).toEqual(["Visible answer."]);
   });
 
   it("preserves literal fenced scaffolding examples that do not copy the private prompt", async () => {
-    const conversationContext = buildHistoryContext({
-      historyText: "[Telegram] Alice: earlier message",
-      currentMessage: "[Telegram] Alice: current message",
-    });
-    const literal = `The prompt format is:
-
-\`\`\`text
-[Chat messages since your last reply - for context]
-Example: this is public placeholder history.
-
-[Current message - respond to this]
-Example: this is a public placeholder message.
-\`\`\``;
-
-    await prepareAndDispatch({ text: literal }, conversationContext);
-
+    const historyMarker = "[Chat messages since your last reply - for context]";
+    const currentMarker = "[Current message - respond to this]";
+    const placeholder = "Example: this is a public placeholder message.";
+    const literal = `\`\`\`text\n${historyMarker}\nPublic history.\n\n${currentMarker}\n${placeholder}\n\`\`\``;
+    await prepareAndDispatch(literal, history("[Telegram] Alice: current message"));
     expect(delivered()).toHaveLength(1);
-    expect(delivered()[0]).toContain("[Chat messages since your last reply - for context]");
-    expect(delivered()[0]).toContain("[Current message - respond to this]");
-    expect(delivered()[0]).toContain("Example: this is a public placeholder message.");
+    for (const text of [historyMarker, currentMarker, placeholder]) {
+      expect(delivered()[0]).toContain(text);
+    }
   });
 
   it("never delivers the internal runtime-context envelope in Telegram HTTP text", async () => {
@@ -167,22 +143,7 @@ Conversation info: (openclaw:ctx)
 
 Visible answer.`;
 
-    await prepareAndDispatch({ text: leaked });
-
-    expect(delivered()).toEqual(["Visible answer."]);
-  });
-
-  it("removes a copied prompt when the source and model normalize line endings differently", async () => {
-    const conversationContext = buildHistoryContext({
-      historyText: "[Telegram] Alice: private history",
-      currentMessage: "private first paragraph\n\nprivate second paragraph",
-      lineBreak: "\r\n",
-    });
-
-    await prepareAndDispatch(
-      { text: `${conversationContext.replace(/\r\n/g, "\n")}\n\nVisible answer.` },
-      conversationContext,
-    );
+    await prepareAndDispatch(leaked);
 
     expect(delivered()).toEqual(["Visible answer."]);
   });
@@ -199,11 +160,8 @@ Visible answer.`;
       visible: ["Visible answer."],
     },
   ])("never delivers a private prompt hidden in $name", async ({ wrap, visible }) => {
-    const conversationContext = buildHistoryContext({
-      historyText: "[Telegram] Alice: private history",
-      currentMessage: "private inbound paragraph",
-    });
-    await prepareAndDispatch({ text: wrap(conversationContext) }, conversationContext);
+    const conversationContext = history();
+    await prepareAndDispatch(wrap(conversationContext), conversationContext);
     expect(delivered()).toHaveLength(1);
     for (const text of visible) {
       expect(delivered()[0]).toContain(text);

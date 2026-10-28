@@ -1,7 +1,9 @@
 import { createServer, request as requestHttp, type IncomingMessage } from "node:http";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import { HttpStream } from "@microsoft/teams.apps/dist/http/http-stream.js";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { createTeamsReplyStreamController } from "./reply-stream-controller.js";
 
 type TeamsLoopbackRequest = {
@@ -15,15 +17,14 @@ type TeamsLoopbackRequest = {
 const acknowledgedPrefix = "a".repeat(4_000);
 const completeReply = `${acknowledgedPrefix}${"b".repeat(200)}`;
 const replacementReply = "provider-final replacement";
+const presentation = {
+  blocks: [{ type: "buttons" as const, buttons: [{ label: "Deploy", value: "deploy" }] }],
+};
 const requests: TeamsLoopbackRequest[] = [];
 type ConnectorReply = { id?: string; error?: { message?: string } };
 
 async function readJson<T>(message: IncomingMessage): Promise<T> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of message) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as T;
+  return JSON.parse((await consumeBuffer(message)).toString("utf8")) as T;
 }
 
 const provider = createServer((request, response) => {
@@ -36,6 +37,7 @@ const provider = createServer((request, response) => {
           priorScenarioRequests > 0) ||
         (scenario === "presentation-close-failure" && activity.type === "message") ||
         (scenario === "cancel-close" && activity.type === "message") ||
+        (scenario.startsWith("cancel-card-") && activity.type === "message") ||
         (scenario === "presentation-timeout" && priorScenarioRequests === 2) ||
         (activity.text?.length ?? 0) > 4_000;
       const status = rejected ? 403 : 201;
@@ -65,21 +67,11 @@ const provider = createServer((request, response) => {
 let providerUrl = "";
 
 beforeAll(async () => {
-  await new Promise<void>((resolve, reject) => {
-    provider.once("error", reject);
-    provider.listen(0, "127.0.0.1", resolve);
-  });
-  const address = provider.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Teams test provider did not expose a loopback address");
-  }
-  providerUrl = `http://127.0.0.1:${address.port}`;
+  providerUrl = `http://127.0.0.1:${await listenOnLoopback(provider)}`;
 });
 
 afterAll(async () => {
-  await new Promise<void>((resolve, reject) => {
-    provider.close((error) => (error ? reject(error) : resolve()));
-  });
+  await provider[Symbol.asyncDispose]();
 });
 
 function createLoopbackController(
@@ -179,34 +171,77 @@ async function acknowledgedController(scenario: string, text = acknowledgedPrefi
   return harness;
 }
 
+function receipt(scenario: string, content = acknowledgedPrefix) {
+  return { visibleReplySent: true, content, messageId: `stream-${scenario}` };
+}
+
+function requestStatuses(scenario: string) {
+  return scenarioRequests(scenario).map((request) => request.status);
+}
+
+function rejectedChunks(scenario: string) {
+  return scenarioRequests(scenario).filter(
+    ({ type, status }) => type === "typing" && status === 403,
+  );
+}
+
 describe("Microsoft Teams SDK acknowledged stream fallback", () => {
+  it.each([
+    { mode: "partial", canceled: false, media: false },
+    { mode: "progress", canceled: false, media: false },
+    { mode: "partial", canceled: true, media: false },
+    { mode: "progress", canceled: true, media: false },
+    { mode: "partial", canceled: false, media: true },
+    { mode: "partial", canceled: true, media: true },
+  ] as const)(
+    "settles $mode cards before releasing them (canceled=$canceled, media=$media)",
+    async ({ mode, canceled, media }) => {
+      const scenario = `${canceled ? "cancel-" : ""}card-${mode}${media ? "-media" : ""}`;
+      const { controller, firstAcknowledgement, stream } = createLoopbackController(scenario, {
+        streaming: { mode },
+      });
+      const text = "Choose an environment";
+      const mediaUrl = "https://example.test/report.png";
+      if (mode === "partial") {
+        controller.onPartialReply({ text });
+        await firstAcknowledgement;
+      }
+      expect(
+        controller.preparePayload({ text, presentation, ...(media ? { mediaUrl } : {}) }),
+      ).toEqual(media ? { text: undefined, mediaUrl } : undefined);
+      if (mode === "progress") {
+        await firstAcknowledgement;
+      }
+
+      await expect(controller.finalize()).resolves.toEqual({
+        ...receipt(scenario, text),
+        ...(canceled ? {} : { postNativePayloads: [{ text: undefined, presentation }] }),
+      });
+      expect(stream.canceled).toBe(canceled);
+      expect(scenarioRequests(scenario).map((request) => [request.type, request.status])).toEqual([
+        ["typing", 201],
+        ["typing", 201],
+        ["message", canceled ? 403 : 201],
+      ]);
+    },
+  );
+
   it("redelivers only text not acknowledged by the real Teams SDK and HTTP provider", async () => {
     const { acknowledgements, controller, firstFlushFailure } =
       await acknowledgedController("size-limit");
 
     controller.onPartialReply({ text: completeReply });
     await firstFlushFailure;
-    expect(
-      scenarioRequests("size-limit").filter(
-        (request) => request.type === "typing" && request.status === 403,
-      ),
-    ).toHaveLength(1);
+    expect(rejectedChunks("size-limit")).toHaveLength(1);
     expect(acknowledgements).toEqual([{ id: "stream-size-limit", text: acknowledgedPrefix }]);
     expect(controller.preparePayload({ text: completeReply })).toBeUndefined();
 
     await expect(controller.finalize()).resolves.toEqual({
-      visibleReplySent: true,
-      content: acknowledgedPrefix,
-      messageId: "stream-size-limit",
+      ...receipt("size-limit"),
       fallbackPayload: { text: "b".repeat(200) },
     });
-    // Finalization queues its own metadata activity; this is a second
-    // provider operation, not a retry of the rejected streaming chunk.
-    expect(
-      scenarioRequests("size-limit").filter(
-        (request) => request.type === "typing" && request.status === 403,
-      ),
-    ).toHaveLength(2);
+    // Finalization queues metadata as another provider operation, not a chunk retry.
+    expect(rejectedChunks("size-limit")).toHaveLength(2);
   });
 
   it.each(["cancel", "cancel-close"] as const)("honors HTTP Stop during %s", async (scenario) => {
@@ -222,11 +257,7 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
         text: scenario === "cancel" ? completeReply : acknowledgedPrefix,
       }),
     ).toBeUndefined();
-    await expect(controller.finalize()).resolves.toEqual({
-      visibleReplySent: true,
-      content: acknowledgedPrefix,
-      messageId: `stream-${scenario}`,
-    });
+    await expect(controller.finalize()).resolves.toEqual(receipt(scenario));
     expect(stream.canceled).toBe(true);
     if (scenario === "cancel-close") {
       expect(controller.wasCanceled()).toBe(true);
@@ -248,20 +279,16 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
       const canceled = scenario === "cancel-replacement";
       const mediaUrl = `https://example.test/${canceled ? "must-not-send" : "replacement"}.png`;
       controller.onPartialReply({ text: replacementReply });
-      expect(controller.preparePayload({ text: replacementReply, mediaUrl })).toBeUndefined();
+      expect(
+        controller.preparePayload({ text: replacementReply, mediaUrl, presentation }),
+      ).toBeUndefined();
       await expect(controller.finalize()).resolves.toEqual(
         canceled
-          ? {
-              visibleReplySent: true,
-              content: acknowledgedPrefix,
-              messageId: `stream-${scenario}`,
-            }
+          ? receipt(scenario)
           : {
-              visibleReplySent: true,
-              content: replacementReply,
+              ...receipt(scenario, replacementReply),
               logicalContent: replacementReply,
-              messageId: `stream-${scenario}`,
-              postNativePayloads: [{ text: undefined, mediaUrl }],
+              postNativePayloads: [{ text: undefined, mediaUrl, presentation }],
             },
       );
       if (canceled) {
@@ -297,9 +324,7 @@ describe("Teams native final text preparation", () => {
         },
       ]),
     );
-    expect(scenarioRequests("presentation-timeout").map((request) => request.status)).toEqual([
-      201, 201, 403, 201,
-    ]);
+    expect(requestStatuses("presentation-timeout")).toEqual([201, 201, 403, 201]);
   });
 
   it.each(["presentation-close-failure", "presentation-cancel"] as const)(
@@ -310,16 +335,14 @@ describe("Teams native final text preparation", () => {
         ? "# Deployment status"
         : "# Deployment status\n\n@[Alex](11111111-2222-3333-4444-555555555555)";
       const { controller } = await acknowledgedController(scenario, text);
-      controller.preparePayload({ text });
+      controller.preparePayload({ text, presentation });
       await expect(controller.finalize()).resolves.toEqual({
-        visibleReplySent: true,
-        messageId: `stream-${scenario}`,
-        content: canceled ? text : "**Deployment status**\n\n<at>Alex</at>",
-        ...(canceled ? {} : { logicalContent: text }),
+        ...receipt(scenario, canceled ? text : "**Deployment status**\n\n<at>Alex</at>"),
+        ...(canceled
+          ? {}
+          : { logicalContent: text, fallbackPayload: { text: undefined, presentation } }),
       });
-      expect(scenarioRequests(scenario).map((request) => request.status)).toEqual(
-        canceled ? [201, 403] : [201, 201, 403],
-      );
+      expect(requestStatuses(scenario)).toEqual(canceled ? [201, 403] : [201, 201, 403]);
     },
   );
 });

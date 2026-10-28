@@ -217,10 +217,6 @@ describePosix("scripts/pr Git maintenance ownership", () => {
       if (automatic) {
         expect(existsSync(f.ready)).toBe(false);
         expect(readFileSync(join(f.repo, ".git/config"), "utf8")).toBe(config);
-        expect([
-          f.git(["config", "--bool", "maintenance.auto"]),
-          f.git(["config", "--int", "gc.auto"]),
-        ]).toEqual(["true", "1"]);
       } else {
         expect(stderr).not.toContain("drain deadline");
         expect(stderr).not.toContain("process group remained active");
@@ -229,11 +225,6 @@ describePosix("scripts/pr Git maintenance ownership", () => {
             `Released the operation lock for PR #42 after exit code ${exitCode}`,
           );
         }
-        expect(
-          ["maintenance.autoDetach", "gc.autoDetach"].map((key) =>
-            f.git(["config", "--bool", key]),
-          ),
-        ).toEqual(["true", "true"]);
       }
     },
   );

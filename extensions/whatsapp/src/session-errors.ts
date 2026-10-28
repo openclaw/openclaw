@@ -32,11 +32,7 @@ function safeStringify(value: unknown, limit = 800): string {
   }
 }
 
-function extractBoomDetails(err: unknown): {
-  statusCode?: number;
-  error?: string;
-  message?: string;
-} | null {
+function extractBoomDetails(err: unknown) {
   if (!err || typeof err !== "object") {
     return null;
   }

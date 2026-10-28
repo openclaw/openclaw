@@ -56,10 +56,7 @@ const getActiveMcpLoopbackRuntimeMock = vi.hoisted(() =>
 const closeMcpLoopbackServerMock = vi.hoisted(() => vi.fn(async () => {}));
 const outputRootHelpMock = vi.hoisted(() => vi.fn());
 const outputPrecomputedRootHelpTextMock = vi.hoisted(() => vi.fn(() => false));
-const outputPrecomputedBrowserHelpTextMock = vi.hoisted(() => vi.fn(() => false));
-const outputPrecomputedSecretsHelpTextMock = vi.hoisted(() => vi.fn(() => false));
-const outputPrecomputedNodesHelpTextMock = vi.hoisted(() => vi.fn(() => false));
-const outputPrecomputedSubcommandHelpTextMock = vi.hoisted(() => vi.fn(() => false));
+const outputPrecomputedCommandHelpTextMock = vi.hoisted(() => vi.fn(() => false));
 const loadRootHelpRenderOptionsForConfigSensitivePluginsMock = vi.hoisted(() =>
   vi.fn<() => Promise<RootHelpRenderOptions | null>>(async () => null),
 );
@@ -116,9 +113,9 @@ const runTuiCliActionMock = vi.hoisted(() =>
   vi.fn<(target: string | undefined, opts: unknown) => Promise<void>>(async () => {}),
 );
 const probeGatewayConfiguredModelMock = vi.hoisted(() =>
-  vi.fn<typeof import("../commands/onboard-helpers.js").probeGatewayConfiguredModel>(async () => ({
-    kind: "configured",
-  })),
+  vi.fn<typeof import("../commands/onboard-helpers.js").probeGatewayConfiguredModel>(
+    async () => "configured",
+  ),
 );
 const readActiveGatewayLockPortMock = vi.hoisted(() =>
   vi.fn(async (): Promise<number | undefined> => undefined),
@@ -322,12 +319,10 @@ vi.mock("../gateway/mcp-http.js", () => ({ closeMcpLoopbackServer: closeMcpLoopb
 
 vi.mock("./program/root-help.js", () => ({ outputRootHelp: outputRootHelpMock }));
 
-vi.mock("./root-help-metadata.js", () => ({
-  outputPrecomputedBrowserHelpText: outputPrecomputedBrowserHelpTextMock,
-  outputPrecomputedNodesHelpText: outputPrecomputedNodesHelpTextMock,
+vi.mock("./root-help-metadata.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./root-help-metadata.js")>()),
+  outputPrecomputedCommandHelpText: outputPrecomputedCommandHelpTextMock,
   outputPrecomputedRootHelpText: outputPrecomputedRootHelpTextMock,
-  outputPrecomputedSecretsHelpText: outputPrecomputedSecretsHelpTextMock,
-  outputPrecomputedSubcommandHelpText: outputPrecomputedSubcommandHelpTextMock,
 }));
 
 vi.mock("./root-help-live-config.js", () => ({
@@ -492,7 +487,7 @@ export {
   closeMcpLoopbackServerMock,
   outputRootHelpMock,
   outputPrecomputedRootHelpTextMock,
-  outputPrecomputedNodesHelpTextMock,
+  outputPrecomputedCommandHelpTextMock,
   loadRootHelpRenderOptionsForConfigSensitivePluginsMock,
   tryOutputSetupOnboardConfigureHelpMock,
   buildProgramMock,
@@ -567,7 +562,7 @@ export function installRunMainTestHooks(): void {
     );
     readConfigFileSnapshotMock.mockResolvedValue(validConfig({ gateway: { mode: "local" } }));
     readLocalOnboardingStateMock.mockReset().mockResolvedValue(undefined);
-    probeGatewayConfiguredModelMock.mockResolvedValue({ kind: "configured" });
+    probeGatewayConfiguredModelMock.mockResolvedValue("configured");
     readActiveGatewayLockPortMock.mockReset().mockResolvedValue(undefined);
     inspectGatewayTlsCertificateMock
       .mockReset()
@@ -579,11 +574,8 @@ export function installRunMainTestHooks(): void {
     hasMemoryRuntimeMock.mockReturnValue(false);
     listRegisteredAgentHarnessesMock.mockReturnValue([]);
     hasProviderTransportDispatcherPoolMock.mockReturnValue(false);
-    outputPrecomputedBrowserHelpTextMock.mockReturnValue(false);
-    outputPrecomputedNodesHelpTextMock.mockReturnValue(false);
+    outputPrecomputedCommandHelpTextMock.mockReset().mockReturnValue(false);
     outputPrecomputedRootHelpTextMock.mockReturnValue(false);
-    outputPrecomputedSecretsHelpTextMock.mockReturnValue(false);
-    outputPrecomputedSubcommandHelpTextMock.mockReturnValue(false);
     loadRootHelpRenderOptionsForConfigSensitivePluginsMock.mockResolvedValue(null);
     tryOutputSetupOnboardConfigureHelpMock.mockResolvedValue(true);
     hasEnvHttpProxyAgentConfiguredMock.mockReturnValue(false);

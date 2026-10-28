@@ -30,6 +30,15 @@ async function resolvePortableGitPathPrepend(): Promise<string[]> {
 
 export type GlobalInstallManager = "npm" | "pnpm" | "bun";
 
+/** Keeps package-manager invocations unattended: a Corepack shim must not prompt. */
+export function applyNonInteractivePackageManagerEnv(
+  env: Record<string, string | undefined>,
+): void {
+  if (!env.COREPACK_ENABLE_DOWNLOAD_PROMPT?.trim()) {
+    env.COREPACK_ENABLE_DOWNLOAD_PROMPT = "0";
+  }
+}
+
 /** Prepares the selected package manager for unattended global installs. */
 export async function createGlobalInstallEnv(
   env?: NodeJS.ProcessEnv,
@@ -46,16 +55,14 @@ export async function createGlobalInstallEnv(
   const pnpmHome = options.manager === "pnpm" ? resolvePnpmHome(options.globalRoot) : null;
   if (pnpmHome) {
     merged.PNPM_HOME = pnpmHome;
-    applyPathPrepend(merged, [path.join(pnpmHome, "bin")]);
+    applyPathPrepend(merged, [path.join(pnpmHome, "bin"), pnpmHome]);
   }
   if (process.platform === "win32") {
     merged.NPM_CONFIG_UPDATE_NOTIFIER = "false";
     merged.NPM_CONFIG_FUND = "false";
     merged.NPM_CONFIG_AUDIT = "false";
   }
-  if (!merged.COREPACK_ENABLE_DOWNLOAD_PROMPT?.trim()) {
-    merged.COREPACK_ENABLE_DOWNLOAD_PROMPT = "0";
-  }
+  applyNonInteractivePackageManagerEnv(merged);
   // Npm freshness policy probes npm itself; Bun installs neither need nor may spawn it.
   if (options.manager !== "bun") {
     applyNpmFreshnessBypassEnv(merged);

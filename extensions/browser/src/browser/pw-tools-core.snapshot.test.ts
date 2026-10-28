@@ -275,6 +275,12 @@ describe("pw-tools-core aria snapshot storage", () => {
     expect(locator.count).toHaveBeenCalledOnce();
     expect(ariaSnapshot).not.toHaveBeenCalled();
     expect(page.evaluate).not.toHaveBeenCalled();
+    expect(publishRefs).toHaveBeenCalledExactlyOnceWith({
+      page,
+      ...target,
+      refs: {},
+      mode: "role",
+    });
   });
 
   it("times out a stalled selector probe without publishing late refs", async () => {

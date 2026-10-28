@@ -2,10 +2,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { completeAgentDeletionJournalInDatabase } from "../../state/agent-deletion-journal.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import {
+  beginAgentDeletionJournal,
+  readAgentDeletionJournal,
+} from "../../test-utils/agent-deletion-journal.js";
+import { loadCandidateAuthProfileStoreAsync } from "./candidate-stores.js";
 import { AUTH_STORE_VERSION, MINIMAX_CLI_PROFILE_ID } from "./constants.js";
 import {
   candidate,
@@ -66,6 +74,61 @@ function resolveManaged(agentDir: string, credential: OAuthCredential) {
 }
 
 describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", () => {
+  it.each(["empty", "matching"] as const)(
+    "preserves refresh safety with a retained completed-deletion store (%s)",
+    async (peerGeneration) => {
+      const agentId = "deleted-peer";
+      const agentDir = await fx.agentDirectory(agentId);
+      const original = expired();
+      const historical =
+        peerGeneration === "matching" ? original : { version: AUTH_STORE_VERSION, profiles: {} };
+      // Seed history before shared inheritance can suppress the local copy.
+      saveAuthProfileStore(historical, agentDir);
+      saveAuthProfileStore(original, fx.mainDir);
+      expect(loadPersistedAuthProfileStore(agentDir)).toEqual(historical);
+      await closeOpenClawAgentDatabaseByPathAsync(
+        resolveAuthProfileDatabasePath(agentDir),
+        agentId,
+      );
+      const deletion = beginAgentDeletionJournal({
+        agentId,
+        agentDir,
+        operationId: "retained-deletion",
+        deleteFiles: false,
+        workspaceDir: path.join(fx.root, "workspace-deleted-peer"),
+        sessionsDir: path.join(fx.root, "agents", agentId, "sessions"),
+      });
+      expect(
+        runOpenClawStateWriteTransaction((database) =>
+          completeAgentDeletionJournalInDatabase(database, agentId, deletion.operationId),
+        ),
+      ).toBe(true);
+      const completed = readAgentDeletionJournal(agentId);
+      expect(completed?.cleanupCompleted).toBe(true);
+      fx.refresh.mockResolvedValue(oauth("surviving"));
+
+      const resolving = fx.resolve(fx.mainDir);
+      if (peerGeneration === "matching") {
+        await expect(resolving).rejects.toThrow(
+          "Failed to fence every historical OAuth refresh peer",
+        );
+        expect(fx.refresh).not.toHaveBeenCalled();
+        expect(read(fx.mainDir)).toEqual(original.profiles[profileId]);
+      } else {
+        await expect(resolving).resolves.toMatchObject({ apiKey: "surviving-access" });
+        expect(fx.refresh).toHaveBeenCalledOnce();
+        expect(read(fx.mainDir)).toMatchObject({
+          access: "surviving-access",
+          refresh: "surviving-refresh",
+        });
+      }
+      expect(await loadCandidateAuthProfileStoreAsync(candidate(agentId, agentDir))).toEqual(
+        historical,
+      );
+      expect(readAgentDeletionJournal(agentId)).toEqual(completed);
+    },
+  );
+
   it("gives one copied refresh generation one durable main-store owner", async () => {
     const { createSqliteReadOnlyWorkerScope } =
       await import("../../infra/sqlite-readonly-worker.js");

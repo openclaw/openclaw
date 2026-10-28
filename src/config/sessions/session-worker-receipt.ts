@@ -1,6 +1,7 @@
 import {
   hasSqliteWorkerOutcomeUnknown,
   SqliteWorkerError,
+  wrapSqliteWorkerError,
 } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
@@ -14,9 +15,7 @@ export function throwSessionWorkerOutcomeUnknown(message: string, cause: unknown
   if (hasSqliteWorkerOutcomeUnknown(cause)) {
     throw cause;
   }
-  const error = new SqliteWorkerError(message, "outcome-unknown");
-  error.cause = cause;
-  throw error;
+  throw wrapSqliteWorkerError(message, "outcome-unknown", cause);
 }
 
 /** An acknowledged native receipt survives failed result delivery; FIFO stays held until settlement. */
@@ -33,14 +32,19 @@ export async function settleSessionWorkerReceipt<T>(
   );
   const admitted = getAdmission();
   if (admitted) {
-    await admitted.retained.settled;
+    const settlement = await admitted.retained.settled;
     if (admitted.admission.settlement?.kind === "completed") {
       const receipt = readReceipt(admitted.admission.committed?.facts);
       if (receipt !== undefined) {
         return receipt;
       }
     } else if (unsettledMessage) {
-      throw new SqliteWorkerError(unsettledMessage, "outcome-unknown");
+      throw wrapSqliteWorkerError(
+        unsettledMessage,
+        "outcome-unknown",
+        !outcome.ok ? outcome.error : undefined,
+        settlement.kind !== "completed" ? settlement.error : undefined,
+      );
     }
   }
   if (!outcome.ok) {

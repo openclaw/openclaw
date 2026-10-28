@@ -1,32 +1,24 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import {
-  baseDeliveryParams,
   createDeps,
   createQuickReply,
   createImageMessage,
   LINE_TEST_CFG,
   type LineAutoReplyDeps,
 } from "./auto-reply-delivery.test-helpers.js";
+import { deliver } from "./delivery.test-support.js";
 import { processLineMessage as processOrderedLineMessage } from "./markdown-to-line.js";
 import { prepareLineReplyPayload } from "./rich-messages.js";
 import { createLocationMessage as createRealLocationMessage } from "./send.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
+import type { LineChannelData } from "./types.js";
 
 const replyOptions = { cfg: LINE_TEST_CFG, accountId: "acc" };
 const replyArgs = (messages: unknown[]) => ["token", messages, replyOptions] as const;
 
-type DeliveryParams = Parameters<typeof deliverLineAutoReply>[0];
-function deliver(
-  payload: DeliveryParams["payload"],
-  lineData: DeliveryParams["lineData"] = {},
-  overrides: Partial<DeliveryParams> = {},
-) {
-  return deliverLineAutoReply({ ...baseDeliveryParams, payload, lineData, ...overrides });
-}
-function deliverMedia(url: string, lineData: DeliveryParams["lineData"] = {}, text?: string) {
+function deliverMedia(url: string, lineData: LineChannelData = {}, text?: string) {
   return deliver(
     { mediaUrls: [url], channelData: { line: lineData }, ...(text ? { text } : {}) },
     lineData,

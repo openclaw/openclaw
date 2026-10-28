@@ -1,6 +1,7 @@
-import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
+import { createEmptyCostUsageTotals } from "../../../src/infra/session-cost-usage-totals.js";
+import { usageMessages } from "../pages/usage/view.test-support.ts";
+import { readControlUiE2eDownload } from "../test-helpers/control-ui-e2e-download.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
@@ -14,18 +15,12 @@ suite.define(() => {
       async ({ page }) => {
         const date = "2026-10-14";
         const totals = {
+          ...createEmptyCostUsageTotals(),
           input: 100,
           output: 20,
-          cacheRead: 0,
-          cacheWrite: 0,
           totalTokens: 120,
-          totalCost: 0,
-          inputCost: 0,
-          outputCost: 0,
-          cacheReadCost: 0,
-          cacheWriteCost: 0,
-          missingCostEntries: 0,
         };
+        const messages = usageMessages();
         await page.clock.setFixedTime(new Date(`${date}T12:00:00Z`));
         const gateway = await installMockGateway(page, {
           methodResponses: {
@@ -36,14 +31,7 @@ suite.define(() => {
               sessions: [{ key: "agent:main:export-proof", label: "Export proof", usage: totals }],
               totals,
               aggregates: {
-                messages: {
-                  total: 2,
-                  user: 1,
-                  assistant: 1,
-                  toolCalls: 0,
-                  toolResults: 0,
-                  errors: 0,
-                },
+                messages,
                 tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
                 byModel: [],
                 byProvider: [],
@@ -65,13 +53,11 @@ suite.define(() => {
         await page.getByRole("menuitem", { name: "Sessions CSV", exact: true }).click();
         await gateway.waitForRequest("sessions.usage", { after: deferredAfter });
         await page.locator('.usage-export-menu [aria-busy="true"]').waitFor();
-        await page.screenshot({ path: path.join(suite.artifactDir, "export-in-flight.png") });
 
         await gateway.setOnline(false);
         await exportButton.waitFor();
-        await page.screenshot({ path: path.join(suite.artifactDir, "export-interrupted.png") });
+
         await page.getByText(/^Export: /).waitFor();
-        await page.screenshot({ path: path.join(suite.artifactDir, "export-error.png") });
 
         await gateway.setOnline(true);
         await waitForControlUiGatewayReady(page);
@@ -87,14 +73,11 @@ suite.define(() => {
         await page.getByRole("menuitem", { name: "Sessions CSV", exact: true }).click();
         const exported = await download;
         expect(exported.suggestedFilename()).toBe(`openclaw-usage-sessions-${date}.csv`);
-        const file = await exported.path();
-        if (!file) {
-          throw new Error("The retried export did not produce a local download");
-        }
-        expect(await readFile(file, "utf8")).toContain("agent:main:export-proof");
+        expect((await readControlUiE2eDownload(exported)).toString("utf8")).toContain(
+          "agent:main:export-proof",
+        );
         await gateway.resolveDeferred("sessions.usage", undefined, { match: refreshMatch });
         await exportButton.waitFor();
-        await page.screenshot({ path: path.join(suite.artifactDir, "export-retried.png") });
       },
     );
   });

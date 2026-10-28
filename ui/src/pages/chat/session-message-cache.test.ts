@@ -1,10 +1,15 @@
 // @vitest-environment node
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { i18n } from "../../i18n/index.ts";
+import { cacheChatBoardSnapshotAfterHydration } from "./chat-board-snapshot.ts";
+import { projectDetailsSubagents } from "./chat-details-snapshot.ts";
 import {
   appendChatMessageToCache,
   cacheChatSessionSnapshot,
   clearChatMessagesFromCache,
+  captureChatDetailsSnapshot,
   createChatWidgetLayout,
+  observeChatCache,
   readChatMessagesFromCache,
   readChatSessionSnapshot,
   type ChatMessageCache,
@@ -15,13 +20,25 @@ function createCacheContext(
   assistantAgentId = "ops",
   agentsList = { defaultId: "ops", mainKey: "home" },
 ) {
-  const host = { assistantAgentId, agentsList };
   const cache: ChatMessageCache = new Map();
+  const host = {
+    assistantAgentId,
+    agentsList,
+    chatMessagesBySession: cache,
+    sessionKey: "home",
+    currentSessionId: "session-1",
+    connected: true,
+    connectionEpoch: 0,
+    settings: { gatewayUrl: "wss://cache.example" },
+    client: { recoveryScope: "account-a", recoveryScopeReady: true },
+  };
   const target = (sessionKey = "home", agentId?: string) => ({ sessionKey, agentId });
   const read = (sessionKey = "home") => readChatSessionSnapshot(cache, host, target(sessionKey));
   const write = (snapshot: ChatSessionSnapshot, sessionKey = "home") =>
     cacheChatSessionSnapshot(cache, host, target(sessionKey), snapshot);
   return {
+    cache,
+    host,
     read,
     write,
     messages: (sessionKey: string, agentId?: string) =>
@@ -36,7 +53,7 @@ function createCacheContext(
     append: (sessionKey: string, message: unknown, event?: object) =>
       appendChatMessageToCache(cache, host, target(sessionKey), message, event),
     clear: (sessionKey = "home") => clearChatMessagesFromCache(cache, host, target(sessionKey)),
-    layout: () => createChatWidgetLayout(cache, host, target()),
+    layout: () => createChatWidgetLayout()(cache, host, target()),
   };
 }
 
@@ -47,6 +64,317 @@ const widgetSnapshot = (
 ): ChatSessionSnapshot => ({ messages, pagination: { hasMore: false }, sessionId, ...extras });
 
 describe("session message cache", () => {
+  it("persists changed session display facts once without repeating unchanged writes", () => {
+    const { cache, write, read } = createCacheContext();
+    const persisted = vi.fn();
+    observeChatCache(cache, { write: persisted, delete: vi.fn() });
+    const sessionState = { archived: true, unarchiveAllowed: true, parentSession: null };
+    const snapshot = widgetSnapshot(["saved conversation"], "session-1", { sessionState });
+    write(snapshot);
+    write({ ...snapshot, sessionState: { ...sessionState } });
+    expect(persisted).toHaveBeenCalledTimes(1);
+    write({ ...snapshot, sessionState: { ...sessionState, archived: false } });
+    expect(persisted).toHaveBeenCalledTimes(2);
+    expect(read()?.sessionState?.archived).toBe(false);
+  });
+  it.each([
+    { messageReactions: { reply: [{ emoji: "👍", count: 1, identities: [{ id: "peer" }] }] } },
+    { composer: { id: "saved", provider: "example", name: "Saved", permissionMode: "full" } },
+    {
+      headerViewers: { users: [{ id: "peer", name: "Peer" }], totalCount: 5, ownerViewing: false },
+      headerSharing: "public",
+      sessionState: { archived: true, unarchiveAllowed: false },
+    },
+    {
+      details: {
+        locale: "en",
+        subagents: { total: 0, rows: [], counts: [] },
+        automations: { rows: [], more: false },
+        outputs: 1,
+      },
+    },
+  ] satisfies Partial<ChatSessionSnapshot>[])("retains %j across the same incarnation", (facts) => {
+    const { read, write } = createCacheContext();
+    write(widgetSnapshot(["cached"], "session-1", facts));
+    write(widgetSnapshot(["live"], "session-1"));
+    expect(read()).toMatchObject(facts);
+    write(widgetSnapshot(["reset"], "session-2"));
+    for (const field of Object.keys(facts)) {
+      expect(read()).not.toHaveProperty(field);
+    }
+  });
+
+  it("merges current-locale Details receipts without overwriting row footprints", () => {
+    const { host, read, write, layout } = createCacheContext();
+    write(
+      widgetSnapshot([], "session-1", {
+        details: { locale: "other-locale", automations: { rows: [], more: false } },
+      }),
+    );
+    const receipt = captureChatDetailsSnapshot(host)!;
+    expect(receipt.details).toBeUndefined();
+    receipt.write({ subagents: { total: 0, rows: [], counts: [] } });
+    const widgetHeights = { 'row:v1:768:appearance:revision:"reply"': 200 };
+    layout().writeRows(widgetHeights);
+    receipt.write({ outputs: 2 });
+    expect(read()?.details).toEqual({
+      locale: i18n.getLocale(),
+      subagents: { total: 0, rows: [], counts: [] },
+      outputs: 2,
+    });
+    expect(read()?.widgetHeights).toEqual(widgetHeights);
+  });
+
+  it.each<[string, (host: ReturnType<typeof createCacheContext>["host"]) => void]>([
+    ["connection epoch", (host) => Object.assign(host, { connectionEpoch: 1 })],
+    [
+      "account scope on the same client",
+      (host) => Object.assign(host.client, { recoveryScope: "other" }),
+    ],
+    ["connection client", (host) => Object.assign(host, { client: { ...host.client } })],
+    ["disconnect", (host) => Object.assign(host, { connected: false })],
+    ["session incarnation", (host) => Object.assign(host, { currentSessionId: "replacement" })],
+    ["selected session", (host) => Object.assign(host, { sessionKey: "other" })],
+  ])("rejects a late Details receipt after %s changes", (_, change) => {
+    const { host, read, write } = createCacheContext();
+    write(widgetSnapshot());
+    const receipt = captureChatDetailsSnapshot(host)!;
+    change(host);
+    write(widgetSnapshot());
+    receipt.write({ outputs: 99 });
+    expect(read()?.details).toBeUndefined();
+  });
+
+  it("bounds Subagents to display fields, prioritizing working rows and counting every row", () => {
+    const rows = Array.from({ length: 6 }, (_, index) => ({
+      key: String(index),
+      label: "Worker",
+      status: index === 5 ? ("running" as const) : ("done" as const),
+      transcript: "not display data",
+    }));
+    expect(projectDetailsSubagents(rows)).toEqual({
+      total: 6,
+      rows: [5, 0, 1, 2].map((index) => ({
+        key: String(index),
+        label: "Worker",
+        status: index === 5 ? "running" : "done",
+      })),
+      counts: [
+        { status: "running", count: 1 },
+        { status: "done", count: 5 },
+      ],
+    });
+  });
+
+  it("publishes a footprint batch once and rejects a retired session's deferred batch", () => {
+    const cache: ChatMessageCache = new Map();
+    const host = { assistantAgentId: "main" };
+    const target = { sessionKey: "agent:main:batch" };
+    cacheChatSessionSnapshot(cache, host, target, widgetSnapshot([], "one"));
+    const layout = createChatWidgetLayout()(cache, host, target);
+    expect(layout.readRows()).toBeUndefined();
+    const write = vi.fn();
+    observeChatCache(cache, { write, delete: vi.fn() });
+    const heights = {
+      'row:v1:768:appearance:first:"one"': 100,
+      'row:v1:768:appearance:second:"two"': 200,
+    };
+    layout.writeRows(heights);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(readChatSessionSnapshot(cache, host, target)?.widgetHeights).toEqual(heights);
+    // Newly measured rows belong to the next reload, not this admission.
+    expect(layout.readRows()).toBeUndefined();
+    const reloaded = createChatWidgetLayout()(cache, host, target);
+    expect(reloaded.readRows()).toEqual(heights);
+    layout.writeRows(heights);
+    expect(write).toHaveBeenCalledTimes(1);
+    cacheChatSessionSnapshot(cache, host, target, widgetSnapshot([], "two"));
+    write.mockClear();
+    layout.writeRows(heights);
+    expect(write).not.toHaveBeenCalled();
+    expect(readChatSessionSnapshot(cache, host, target)?.widgetHeights).toBeUndefined();
+    expect(reloaded.readRows()).toBeUndefined();
+  });
+  it("retires admitted row heights when the same session key moves to another account", () => {
+    const cache: ChatMessageCache = new Map();
+    const host = {
+      assistantAgentId: "main",
+      settings: { gatewayUrl: "wss://cache.example" },
+      client: { recoveryScope: "account-a", recoveryScopeReady: true },
+    };
+    const target = { sessionKey: "agent:main:batch" };
+    const row = 'row:v1:768:appearance:first:"one"';
+    cacheChatSessionSnapshot(
+      cache,
+      host,
+      target,
+      widgetSnapshot([], "one", { widgetHeights: { [row]: 100 }, headerSharing: "public" }),
+    );
+    const layout = createChatWidgetLayout()(cache, host, target);
+    expect(layout.readRows()).toEqual({ [row]: 100 });
+    host.client.recoveryScope = "account-b";
+    expect(readChatSessionSnapshot(cache, host, target)).toBeNull();
+    cacheChatSessionSnapshot(
+      cache,
+      host,
+      target,
+      widgetSnapshot([], "one", { widgetHeights: { [row]: 200 } }),
+    );
+    expect(readChatSessionSnapshot(cache, host, target)?.headerSharing).toBeUndefined();
+    expect(layout.readRows()).toBeUndefined();
+    expect(layout.read(row)).toBeUndefined();
+    expect(createChatWidgetLayout()(cache, host, target).readRows()).toEqual({ [row]: 200 });
+  });
+  it("keeps the settled row reservation through an initial short widget report", () => {
+    const context = createCacheContext();
+    const row = 'row:v1:768:gutter:revision-1:"widget-row"';
+    context.write(
+      widgetSnapshot([], "session-1", {
+        widgetHeights: { [row]: 700, "canvas:widget": 600 },
+      }),
+    );
+    const layout = context.layout();
+    // The existing bridge can report its body before load and late widget content.
+    layout.write("canvas:widget", 200, "widget-row");
+    layout.write(row, 300);
+    expect(layout.read(row)).toBe(700);
+    expect(context.layout().read(row)).toBe(700);
+  });
+  it("retains a matching settled footprint for the following reload without another resize", () => {
+    const context = createCacheContext();
+    const row = 'row:v1:768:gutter:revision-1:"widget-row"';
+    context.write(
+      widgetSnapshot([], "session-1", { widgetHeights: { [row]: 700, "canvas:widget": 600 } }),
+    );
+    const layout = context.layout();
+    expect(layout.write("canvas:widget", 600, "widget-row", true)).toBe(600);
+    expect(layout.read(row)).toBeUndefined();
+    expect(context.layout().read(row)).toBe(700);
+  });
+  it("reserves an unchanged row while keeping widths, revisions and widget resizes independent", () => {
+    const context = createCacheContext();
+    const row = 'row:v1:768:gutter:revision-1:"notice"';
+    context.write(widgetSnapshot([], "session-1", { widgetHeights: { [row]: 300 } }));
+    const layout = context.layout();
+    layout.write(row, 100);
+    layout.write('row:v1:400:gutter:revision-1:"notice"', 200);
+    layout.write('row:v1:768:gutter:revision-2:"notice"', 39);
+    layout.write("canvas:widget", 300);
+    layout.write("canvas:widget", 100);
+    const restored = context.layout();
+    expect([
+      restored.read(row),
+      restored.read('row:v1:400:gutter:revision-1:"notice"'),
+      restored.read('row:v1:768:gutter:revision-2:"notice"'),
+      restored.read("canvas:widget"),
+    ]).toEqual([300, 200, 39, 100]);
+  });
+  it("retires only the containing row's footprints when its widget shrinks or a disclosure changes", () => {
+    const context = createCacheContext();
+    const row = 'row:v1:768:gutter:revision-1:"widget-row"';
+    const narrow = 'row:v1:400:gutter:revision-1:"widget-row"';
+    const neighbor = 'row:v1:768:gutter:revision-1:"neighbor"';
+    context.write(
+      widgetSnapshot([], "session-1", {
+        widgetHeights: { [row]: 700, [narrow]: 700, [neighbor]: 700 },
+      }),
+    );
+    const layout = context.layout();
+    layout.write("canvas:widget", 600);
+    layout.write("canvas:widget", 200, "widget-row", true);
+    expect([layout.read(row), layout.read(narrow), layout.read(neighbor)]).toEqual([
+      undefined,
+      undefined,
+      700,
+    ]);
+    layout.write(row, 300);
+    layout.write(row, 200);
+    expect(context.layout().read(row)).toBe(200);
+    layout.invalidateRow("neighbor");
+    expect(layout.read(neighbor)).toBeUndefined();
+  });
+  it("retains an admitted sibling's frame through eviction and uses its settled size on remount", () => {
+    const context = createCacheContext();
+    const row = 'row:v1:768:gutter:revision-1:"widget-row"';
+    context.write(
+      widgetSnapshot([], "session-1", {
+        widgetHeights: { [row]: 1000, "canvas:first": 200, "canvas:pending": 600 },
+      }),
+    );
+    const layout = context.layout();
+    expect(layout.read(row)).toBe(1000);
+    for (let i = 0; i < 100; i++) {
+      layout.write(`canvas:other-${i}`, 48);
+    }
+    expect(layout.read("canvas:pending")).toBe(600);
+    layout.write("canvas:first", 100, "widget-row", true);
+    expect(layout.read(row)).toBeUndefined();
+    expect(layout.write("canvas:pending", 200, "widget-row")).toBe(600);
+    layout.write("canvas:pending", 200, "widget-row", true);
+    expect(layout.write("canvas:pending", 100, "widget-row")).toBe(200);
+  });
+  it.each([false, true])(
+    "retires a settled row even when its frame entry was evicted (early=%s)",
+    (early) => {
+      const context = createCacheContext();
+      const row = 'row:v1:768:gutter:revision-1:"widget-row"';
+      context.write(widgetSnapshot([], "session-1", { widgetHeights: { [row]: 700 } }));
+      const layout = context.layout();
+      if (early) {
+        layout.write("canvas:widget", 200, "widget-row");
+      }
+      expect(layout.read(row)).toBe(700);
+      layout.write("canvas:widget", 200, "widget-row", true);
+      expect(layout.read(row)).toBeUndefined();
+      layout.write(row, 300);
+      expect(context.layout().read(row)).toBe(300);
+    },
+  );
+  it("releases a failed widget's reservation and frame height without retiring a neighboring row", () => {
+    const context = createCacheContext();
+    const row = 'row:v1:768:gutter:revision-1:"widget-row"';
+    const neighbor = 'row:v1:768:gutter:revision-1:"neighbor"';
+    context.write(
+      widgetSnapshot([], "session-1", {
+        widgetHeights: { [row]: 700, [neighbor]: 300, "canvas:widget": 600 },
+      }),
+    );
+    const layout = context.layout();
+    layout.write("canvas:widget", null, "widget-row", true);
+    expect([layout.read(row), layout.read("canvas:widget"), layout.read(neighbor)]).toEqual([
+      undefined,
+      undefined,
+      300,
+    ]);
+    layout.write(row, 80);
+    expect(context.layout().read(row)).toBe(80);
+  });
+
+  it("retains a scoped board through transcript replacement and clears it authoritatively", () => {
+    const cache: ChatMessageCache = new Map();
+    const host = {
+      chatMessagesBySession: cache,
+      assistantAgentId: "ops",
+      settings: { gatewayUrl: "wss://cache.example" },
+      client: { recoveryScope: "account-a" },
+    };
+    const target = { sessionKey: "dashboard" };
+    const board = { sessionKey: "agent:ops:dashboard", revision: 1, tabs: [], widgets: [] };
+    cacheChatBoardSnapshotAfterHydration(host, target, board, 100, () => true);
+    expect(readChatSessionSnapshot(cache, host, target)?.board).toEqual({
+      snapshot: board,
+      receivedAtMs: 100,
+    });
+    cacheChatSessionSnapshot(cache, host, target, widgetSnapshot(["new transcript"], "session-2"));
+    expect(readChatSessionSnapshot(cache, host, target)?.board?.snapshot).toEqual(board);
+    const foreign = { ...host, client: { recoveryScope: "account-b" } };
+    expect(readChatSessionSnapshot(cache, foreign, target)).toBeNull();
+    cacheChatBoardSnapshotAfterHydration(host, target, null, 100, () => true);
+    expect(readChatSessionSnapshot(cache, host, target)?.board).toBeNull();
+    cacheChatSessionSnapshot(cache, host, target, widgetSnapshot(["refreshed"], "session-2"));
+    expect(readChatSessionSnapshot(cache, host, target)?.board).toBeNull();
+  });
+
   it.each([
     {
       name: "Matrix room and thread IDs",

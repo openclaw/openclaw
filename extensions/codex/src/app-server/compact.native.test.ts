@@ -8,6 +8,8 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { expect, it, vi } from "vitest";
 import { createCodexAppServerAgentHarness } from "../../harness.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
@@ -207,6 +209,12 @@ it(
         runId: "native-compaction-setup",
         prompt: "Reply with only COMPACT_READY. Do not use tools.",
       });
+      params.sessionTarget = {
+        agentId: "main",
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        storePath: resolveStorePath(undefined, { agentId: "main" }),
+      };
       params.agentDir = path.join(tempDir, "agent");
       params.modelId = MODEL;
       params.model = { ...params.model, id: MODEL, name: MODEL };
@@ -285,6 +293,32 @@ it(
       };
       const compacted = await harness.compact(compactParams);
       expect(compacted).toMatchObject({ ok: true, compacted: true });
+      const tokensAfter = compacted?.result?.tokensAfter;
+      expect(tokensAfter).toBeGreaterThan(0);
+      const target = params.sessionTarget;
+      assert(target?.sessionId && target.sessionKey && target.storePath);
+      const activities = (
+        await readSessionTranscriptEvents({
+          agentId: target.agentId,
+          sessionId: target.sessionId,
+          sessionKey: target.sessionKey,
+          storePath: target.storePath,
+        })
+      ).flatMap((event) =>
+        isJsonObject(event) &&
+        isJsonObject(event.message) &&
+        event.message.customType === "openclaw.context-compaction"
+          ? [event.message]
+          : [],
+      );
+      expect(activities).toHaveLength(1);
+      expect(activities[0]).toMatchObject({
+        provider: params.provider,
+        model: MODEL,
+        usage: {
+          contextUsage: { state: "available", promptTokens: tokensAfter, totalTokens: tokensAfter },
+        },
+      });
       expect(transport.requests.map((request) => request.requestKind)).toEqual([
         "turn",
         "compaction",

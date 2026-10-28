@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type {
   QaBusEditMessageInput,
@@ -256,6 +256,22 @@ export async function sendQaTransportNativeCommand(
     text: `/${command}`,
     nativeCommand: { name: command.split(/\s+/u, 1)[0] ?? command },
   });
+}
+
+export function createQaPollingErrorState(isStopped: () => boolean) {
+  let failure: Error | undefined;
+  return {
+    capture: (error: unknown) => {
+      if (!isStopped()) {
+        failure = toStringifiedError(error);
+      }
+    },
+    assertHealthy() {
+      if (failure) {
+        throw failure;
+      }
+    },
+  };
 }
 
 export function createQaTransportStateMethods(params: {

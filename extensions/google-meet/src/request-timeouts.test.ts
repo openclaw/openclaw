@@ -35,7 +35,7 @@ const requests = [
 ] as const;
 
 describe("Google API request timeouts", () => {
-  it.each(requests)("aborts a stalled $name request after 30 seconds", async ({ run }) => {
+  it.each(requests)("aborts a stalled $name request after 30 seconds", async ({ name, run }) => {
     vi.useFakeTimers();
     const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
       return new Promise<Response>((_resolve, reject) => {
@@ -56,10 +56,19 @@ describe("Google API request timeouts", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const request = run();
-    const rejection = expect(request).rejects.toMatchObject({
-      name: "TimeoutError",
-      message: "request timed out",
-    });
+    const timeout = { name: "TimeoutError", message: "request timed out" };
+    const rejection = expect(request).rejects.toMatchObject(
+      name === "OAuth token"
+        ? {
+            cause: timeout,
+            oauthRefreshOutcome: {
+              phase: "token-response",
+              outcome: "unchanged",
+              recovery: { kind: "later", evidence: "documented-reusable-grant" },
+            },
+          }
+        : timeout,
+    );
     await vi.advanceTimersByTimeAsync(0);
     const signal = fetchMock.mock.calls[0]?.[1]?.signal;
     expect(signal?.aborted).toBe(false);

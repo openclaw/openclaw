@@ -1,4 +1,9 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import {
+  spawnSync,
+  type SpawnOptions,
+  type SpawnSyncOptions,
+  type SpawnSyncOptionsWithStringEncoding,
+} from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -17,13 +22,17 @@ export const UPLOAD_ARTIFACT_V7 =
   "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9";
 export const DOWNLOAD_ARTIFACT_V8 =
   "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333";
-export const MANTIS_GITHUB_APP_CLIENT_ID = "Iv23liPJCozR0uHm6P7G";
 const SETUP_ANDROID_TOOLCHAIN_ACTION = ".github/actions/setup-android-toolchain/action.yml";
 export const MATURITY_SCORECARD_WORKFLOW = ".github/workflows/maturity-scorecard.yml";
 export const AMBIGUOUS_MAIN_PUSH_DIAGNOSTIC =
   "::error title=ambiguous main push::github.event.before is zero; refusing to infer a diff base for a created or recreated main branch.";
 export const testNodeExecPath = resolveTestNodeExecPath();
 export const TSX_IMPORT = import.meta.resolve("tsx");
+const defaultContext = {
+  eventName: "pull_request" as const,
+  repository: "openclaw/openclaw",
+  runAttempt: 1,
+};
 
 export function expectIncludes(actual: unknown, values: readonly unknown[], message?: string) {
   for (const value of values) {
@@ -42,15 +51,14 @@ export function evaluateWorkflow(
   context: Partial<Parameters<typeof evaluateWorkflowExpression>[1]> = {},
 ) {
   return evaluateWorkflowExpression(expression, {
-    eventName: "pull_request",
-    repository: "openclaw/openclaw",
-    runAttempt: 1,
+    ...defaultContext,
     ...context,
   });
 }
 
 export type WorkflowStep = {
   "continue-on-error"?: boolean;
+  "timeout-minutes"?: number | string;
   env?: Record<string, unknown>;
   id?: string;
   if?: string;
@@ -74,17 +82,19 @@ export function requiredWorkflowStep(steps: readonly { name?: string }[], name: 
   );
 }
 
-export function evaluateWorkflowExpression(
-  expression: unknown,
-  context: {
-    action?: string;
-    actor?: string;
+type Strings<K extends string> = Partial<Record<K, string>>;
+type Flags<K extends string> = Partial<Record<K, boolean>>;
+type WorkflowContext = Strings<"action" | "actor" | "authorAssociation" | "maintainerCommands"> &
+  Strings<"dispatchId" | "headRepository" | "headSha" | "ref" | "sha"> &
+  Strings<"preflightResult" | "failureReportResult" | "releaseScope"> &
+  Strings<"releaseRunnerGroup" | "releasePublishRunId" | "releasePriorityRun" | "runnerGroup"> &
+  Strings<"runnerTemp" | "ciOnPush" | "targetContextRef" | "targetRef"> &
+  Strings<"testRuntimePolicy" | "workflow" | "workflowSha" | "workflowToken"> &
+  Strings<"windowsCiReplay" | "workspace"> &
+  Flags<"cancelled" | "draft" | "failed" | "frozenTarget" | "hostedRunnerProfileContract"> &
+  Flags<"releaseGate" | "runCheck" | "runWindowsCi" | "includeAndroid"> &
+  Flags<"skipDefenderExclusions" | "useGithubHostedRunners"> & {
     githubEvent?: Record<string, unknown>;
-    maintainerCommands?: string;
-    authorAssociation?: string;
-    cancelled?: boolean;
-    dispatchId?: string;
-    draft?: boolean;
     eventName:
       | "pull_request"
       | "pull_request_target"
@@ -97,14 +107,9 @@ export function evaluateWorkflowExpression(
       | "workflow_run"
       | "repository_dispatch"
       | "schedule";
-    failed?: boolean;
     env?: Record<string, string>;
     secrets?: Record<string, string>;
-    frozenTarget?: boolean;
     fileHashes?: Record<string, string>;
-    headRepository?: string;
-    headSha?: string;
-    hostedRunnerProfileContract?: boolean;
     matrix?: Record<string, unknown>;
     preflightOutputs?: Record<string, string>;
     additionalNeeds?: Record<
@@ -115,51 +120,27 @@ export function evaluateWorkflowExpression(
       }
     >;
     jobResults?: Record<string, string>;
-    preflightResult?: string;
     failureReportOutputs?: Record<string, string>;
-    failureReportResult?: string;
     pullRequestNumber?: number;
-    ref?: string;
     resolveTargetOutputs?: Record<string, string>;
-    releaseGate?: boolean;
-    releaseRunnerGroup?: string;
-    releasePublishRunId?: string;
-    runnerGroup?: string;
-    releasePriorityRun?: string;
-    releaseScope?: string;
     validationTier?: "full" | "main";
     repository: string;
-    runCheck?: boolean;
-    runWindowsCi?: boolean;
     runnerBackend?: "" | "blacksmith" | "github" | "hybrid" | "runson";
     requestedRunnerBackend?: "default" | "hybrid" | "runson";
     ciShape?: "default" | "main";
-    ciOnPush?: string;
-    includeAndroid?: boolean;
     inputs?: Record<string, unknown>;
-    runnerTemp?: string;
     runnerEnvironment?: "" | "github-hosted" | "self-hosted";
     runnerProfile?: "blacksmith" | "github" | "hybrid";
     runAttempt: number;
     runId?: number;
     runNumber?: number;
-    sha?: string;
-    skipDefenderExclusions?: boolean;
     steps?: Record<
       string,
       { outputs: Record<string, string>; outcome?: "success" | "failure" | "cancelled" | "skipped" }
     >;
-    targetContextRef?: string;
-    targetRef?: string;
-    testRuntimePolicy?: string;
-    useGithubHostedRunners?: boolean;
-    workflow?: string;
-    workflowSha?: string;
-    workflowToken?: string;
-    windowsCiReplay?: string;
-    workspace?: string;
-  },
-) {
+  };
+
+export function evaluateWorkflowExpression(expression: unknown, context: WorkflowContext) {
   if (typeof expression !== "string") {
     throw new TypeError("workflow expression must be a string");
   }
@@ -261,6 +242,10 @@ export function evaluateWorkflowExpression(
       ...context.steps,
     },
     needs: {
+      "build-artifacts": {
+        result: context.jobResults?.["build-artifacts"] ?? "success",
+        outputs: {},
+      },
       ...Object.fromEntries(
         Object.entries(context.additionalNeeds ?? {}).map(([name, need]) => [
           name,
@@ -315,9 +300,8 @@ export function evaluateWorkflowRunner(
 ) {
   return typeof selector === "string" && selector.startsWith("${{")
     ? evaluateWorkflowExpression(selector, {
+        ...defaultContext,
         eventName: "workflow_dispatch",
-        repository: "openclaw/openclaw",
-        runAttempt: 1,
         ...context,
       })
     : selector;
@@ -333,15 +317,56 @@ export function evaluateWorkflowCondition(
   );
 }
 
-export function quoteShell(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
+export const quoteShell = (value: string): string => `'${value.replaceAll("'", `'"'"'`)}'`;
+
+const WORKFLOW_COMMAND_TIMEOUT_MS = 30_000;
+
+export function runWorkflowCommand(
+  command: string,
+  args: string[],
+  options: Omit<SpawnSyncOptions, "encoding" | "killSignal"> = {},
+) {
+  const timeout = options.timeout ?? WORKFLOW_COMMAND_TIMEOUT_MS;
+  // Node shares detached handling between spawn and spawnSync; its types expose it on spawn only.
+  const childOptions = {
+    ...options,
+    encoding: "utf8",
+    timeout,
+    detached: process.platform !== "win32",
+    // Synchronous fixture children must terminate even if they ignore SIGTERM.
+    killSignal: "SIGKILL",
+  } satisfies SpawnSyncOptionsWithStringEncoding & Pick<SpawnOptions, "detached">;
+  const result = spawnSync(command, args, childOptions);
+  const error: NodeJS.ErrnoException | undefined = result.error;
+  if (error) {
+    if (process.platform !== "win32" && result.pid > 0) {
+      try {
+        // Killing a timed-out shell alone leaves its stalled descendants running.
+        process.kill(-result.pid, "SIGKILL");
+      } catch {
+        // The group is already gone when the command had no surviving children.
+      }
+    }
+    const reason = error.code === "ETIMEDOUT" ? `timed out after ${timeout} ms` : error.message;
+    throw new Error(
+      `Workflow fixture command ${reason}: ${[command, ...args].map(quoteShell).join(" ")}\n${result.stdout ?? ""}${result.stderr ?? ""}`,
+      { cause: error },
+    );
+  }
+  return result;
 }
 
 let linuxWorkflowBash: string | undefined;
 
 export function runWorkflowShellScript(
   script: string,
-  options: { cwd?: string; env?: NodeJS.ProcessEnv; linuxWorkflow?: boolean; tempDir?: string },
+  options: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    linuxWorkflow?: boolean;
+    tempDir?: string;
+    timeout?: number;
+  },
 ) {
   const { linuxWorkflow, tempDir, ...spawnOptions } = options;
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-workflow-shell-"));
@@ -378,9 +403,8 @@ export function runWorkflowShellScript(
       linuxWorkflow && process.platform === "darwin"
         ? (linuxWorkflowBash ??= resolveWorkflowBash())
         : "bash";
-    return spawnSync(bash, [scriptPath], {
+    return runWorkflowCommand(bash, [scriptPath], {
       ...spawnOptions,
-      encoding: "utf8",
       // Child caches and temporary artifacts share the fixture's cleanup owner.
       // Inheriting a huge host tsx cache makes startup depend on unrelated runs.
       env: {
@@ -395,21 +419,12 @@ export function runWorkflowShellScript(
   }
 }
 
-export function readAndroidToolchainAction() {
-  return readWorkflow(SETUP_ANDROID_TOOLCHAIN_ACTION);
-}
-
-export function readBuildArtifactsTestboxWorkflow() {
-  return readWorkflow(".github/workflows/ci-build-artifacts-testbox.yml");
-}
-
-export function readMaturityScorecardWorkflow() {
-  return readWorkflow(MATURITY_SCORECARD_WORKFLOW);
-}
-
-export function readReleaseChecksWorkflow() {
-  return readWorkflow(".github/workflows/openclaw-release-checks.yml");
-}
+export const readAndroidToolchainAction = () => readWorkflow(SETUP_ANDROID_TOOLCHAIN_ACTION);
+export const readBuildArtifactsTestboxWorkflow = () =>
+  readWorkflow(".github/workflows/ci-build-artifacts-testbox.yml");
+export const readMaturityScorecardWorkflow = () => readWorkflow(MATURITY_SCORECARD_WORKFLOW);
+export const readReleaseChecksWorkflow = () =>
+  readWorkflow(".github/workflows/openclaw-release-checks.yml");
 
 const parsedWorkflows = new Map<string, { source: string; workflow: ReturnType<typeof parse> }>();
 export function readWorkflow(filePath: string) {
@@ -425,14 +440,23 @@ export function readWorkflow(filePath: string) {
 }
 
 export function readTrackedText(relativePath: string): string {
-  if (existsSync(relativePath)) {
-    return readFileSync(relativePath, "utf8");
+  return existsSync(relativePath)
+    ? readFileSync(relativePath, "utf8")
+    : execGit(process.cwd(), ["show", `:${relativePath}`]);
+}
+
+function execGit(cwd: string, args: string[]): string {
+  const result = runWorkflowCommand("git", args, { cwd });
+  if (result.status !== 0) {
+    throw new Error(
+      `Workflow fixture command failed (${result.status ?? result.signal}): git ${args.map(quoteShell).join(" ")}\n${result.stdout}${result.stderr}`,
+    );
   }
-  return execFileSync("git", ["show", `:${relativePath}`], { encoding: "utf8" });
+  return result.stdout;
 }
 
 export function runGit(cwd: string, args: string[]): string {
-  return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+  return execGit(cwd, args).trim();
 }
 
 export function writeExecutable(filePath: string, lines: string[]): void {
@@ -453,4 +477,42 @@ export function readWorkflowOutputs(outputPath: string): Record<string, string> 
         }),
       )
     : {};
+}
+
+/** Execute the UI phases with Actions' output/env handoff and stop-on-failure behavior. */
+export function runControlUiE2eWorkflow(options: { cwd: string; env: NodeJS.ProcessEnv }) {
+  const steps = readCiWorkflow().jobs["checks-ui-e2e"].steps as WorkflowStep[];
+  const first = steps.findIndex((step) => step.name === "Decode Control UI E2E selection");
+  const last = steps.findIndex((step) => step.name === "Test Control UI end-to-end");
+  expect(first).toBeGreaterThanOrEqual(0);
+  expect(last).toBeGreaterThan(first);
+  const envFile = path.join(options.cwd, "github-env");
+  const outputFile = path.join(options.cwd, "github-output");
+  const env = { ...options.env, GITHUB_ENV: envFile, GITHUB_OUTPUT: outputFile };
+  writeFileSync(envFile, "");
+  const context = {
+    ...defaultContext,
+    matrix: { task: "control-ui" },
+    steps: {} as Record<string, { outputs: Record<string, string> }>,
+  };
+  let result: ReturnType<typeof runWorkflowShellScript> | undefined;
+  let stdout = "";
+  let stderr = "";
+  for (const step of steps.slice(first, last + 1)) {
+    if (step.if && !evaluateWorkflowCondition(step.if, context)) {
+      continue;
+    }
+    writeFileSync(outputFile, "");
+    result = runWorkflowShellScript(`set -e\n${step.run}`, { cwd: options.cwd, env });
+    stdout += result.stdout;
+    stderr += result.stderr;
+    if (result.status !== 0) {
+      break;
+    }
+    Object.assign(env, readWorkflowOutputs(envFile));
+    if (step.id) {
+      context.steps[step.id] = { outputs: readWorkflowOutputs(outputFile) };
+    }
+  }
+  return { ...expectDefined(result, "Control UI E2E workflow result"), stdout, stderr };
 }

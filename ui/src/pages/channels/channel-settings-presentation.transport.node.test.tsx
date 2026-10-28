@@ -13,6 +13,7 @@ import { bindBrowserHttpFailures } from "../../app/browser-http.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import {
@@ -76,23 +77,19 @@ async function transportFixture(scopes: string[], firstStatus: number, signal: A
       clients.push(client);
       return client;
     };
-    const snapshot: ApplicationGatewaySnapshot = {
+    const snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
       client: createClient(),
       phase: "connected",
-      offlineStable: false,
-      canvasPluginSurfaceUrl: null,
       hello: {
         type: "hello-ok",
         protocol: 3,
         auth: { role: "operator", scopes, deviceToken: "fixture-device-token" },
       },
-      assistantAgentId: null,
       sessionKey: "main",
-      lastError: null,
-      lastErrorCode: null,
-    };
+    });
     const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
     const retained = createDeferred<ControlUiChannelSettingsContext>();
+    const channels = {};
     const application = {
       gateway: {
         snapshot,
@@ -102,7 +99,7 @@ async function transportFixture(scopes: string[], firstStatus: number, signal: A
           return () => listeners.delete(listener);
         },
       },
-      channels: {},
+      acquireChannels: () => channels,
       runtimeConfig: {},
       plugins: {
         async loadSettingsView(_placement: unknown, mountSignal: AbortSignal) {

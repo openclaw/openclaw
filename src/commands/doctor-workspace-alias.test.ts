@@ -56,7 +56,7 @@ function buildAliasCfg(aliasPath: string, other?: string): OpenClawConfig {
 }
 
 function runWorkspaceRepair(cfg: OpenClawConfig, prompter: DoctorPrompter) {
-  return createWorkspaceAliasMigrationRepair(prompter, vi.fn())!(cfg);
+  return createWorkspaceAliasMigrationRepair(prompter)!(cfg);
 }
 
 function link(target: string, alias: string) {
@@ -195,7 +195,7 @@ it.each(["target", "agent", "diagnostic"])("leaves state untouched for %s", asyn
   const prompter = buildPrompter(async () => true, owner !== "diagnostic");
   const cfg = buildAliasCfg(alias, owner === "agent" ? original : undefined);
   if (owner === "diagnostic") {
-    expect(createWorkspaceAliasMigrationRepair(prompter, vi.fn())).toBeUndefined();
+    expect(createWorkspaceAliasMigrationRepair(prompter)).toBeUndefined();
   } else {
     await expect(runWorkspaceRepair(cfg, prompter)).rejects.toThrow();
   }

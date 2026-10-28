@@ -3,7 +3,7 @@ import type {
   CliBackendParseJsonlLifecycleEvent,
 } from "openclaw/plugin-sdk/cli-backend";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { findCodeRegions, type CodeRegion } from "openclaw/plugin-sdk/text-chunking";
+import { findCodeRegions, isInsideCode, type CodeRegion } from "openclaw/plugin-sdk/text-chunking";
 
 const CLAUDE_RAW_TOOL_OUTPUT_ERROR =
   "Claude CLI returned malformed tool output (invalid request format): raw tool protocol appeared as assistant text. OpenClaw refused to persist or deliver it.";
@@ -56,26 +56,6 @@ function isStandaloneOpeningTagLine(text: string, index: number, tagLength: numb
   return /^[ \t]*\r?$/u.test(trailingText);
 }
 
-function isInsideCodeRegion(index: number, regions: CodeRegion[]): boolean {
-  let low = 0;
-  let high = regions.length - 1;
-  while (low <= high) {
-    const middle = Math.floor((low + high) / 2);
-    const region = regions[middle];
-    if (!region) {
-      return false;
-    }
-    if (index < region.start) {
-      high = middle - 1;
-    } else if (index >= region.end) {
-      low = middle + 1;
-    } else {
-      return true;
-    }
-  }
-  return false;
-}
-
 function hasObservedTruncatedLeakPrefix(text: string, index: number, toolName: string): boolean {
   const previousNonEmptyLine = text
     .slice(0, index)
@@ -100,7 +80,7 @@ function findNextStandaloneTag(
   for (let match = scanner.exec(text); match; match = scanner.exec(text)) {
     if (
       isStandaloneOpeningTagLine(text, match.index, match[0].length) &&
-      !isInsideCodeRegion(match.index, regions)
+      !isInsideCode(match.index, regions)
     ) {
       return match.index;
     }
@@ -122,7 +102,7 @@ export function hasClaudeRawToolInvocation(text: string): boolean {
     if (
       (!/^[A-Z]/u.test(toolName) && !toolName.startsWith("mcp__")) ||
       !isStandaloneOpeningTagLine(text, index, match[0].length) ||
-      isInsideCodeRegion(index, codeRegions)
+      isInsideCode(index, codeRegions)
     ) {
       continue;
     }
@@ -157,7 +137,7 @@ export function hasClaudeRawToolInvocation(text: string): boolean {
       if (
         readTagNameAttribute(parameterMatch[0], "parameter") &&
         isStandaloneLineTag(text, candidateIndex) &&
-        !isInsideCodeRegion(candidateIndex, codeRegions)
+        !isInsideCode(candidateIndex, codeRegions)
       ) {
         parameterIndex = candidateIndex;
         break;

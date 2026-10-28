@@ -1,10 +1,11 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { renderAndroidVersionProperties } from "../../scripts/lib/android-version.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { commit, git, write } from "./mobile-release-git.test-support.js";
 
 const script = path.join(process.cwd(), "scripts/mobile-release.mjs");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -41,18 +42,6 @@ function expectResult(result: ReturnType<typeof spawnSync>, status: number, erro
   }
 }
 
-function git(root: string, ...args: string[]): string {
-  return execFileSync("git", args, {
-    cwd: root,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
-}
-function write(root: string, relative: string, contents: string): void {
-  const target = path.join(root, relative);
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, contents);
-}
 function writeFiles(root: string, files: Record<string, string>) {
   for (const [file, text] of Object.entries(files)) {
     write(root, file, text);
@@ -118,6 +107,11 @@ const plan = JSON.parse(fs.readFileSync(process.env.OPENCLAW_IOS_RELEASE_PLAN, "
 const buildNumber = process.argv[process.argv.indexOf("--build-number") + 1];
 const notes = renderMobileReleaseNotes({ rootDir: sourceRoot, platform: "ios", version: plan.appStoreVersion, build: buildNumber, audience: "ios" });
 fs.appendFileSync(process.env.FIXTURE_UPLOAD_AUDIT, JSON.stringify({ sha, stageOnly, notes, buildNumber, destination: process.argv.includes("--destination") ? process.argv[process.argv.indexOf("--destination") + 1] : "app-store", stampedSha: process.env.GIT_COMMIT, status: git("status", "--porcelain", "--untracked-files=all"), remoteMain: git("ls-remote", "origin", "refs/heads/main").split(/\\s+/)[0], metadata: fs.readFileSync("apps/ios/CHANGELOG.md", "utf8") }) + "\\n");
+if (!stageOnly) {
+  fs.mkdirSync("apps/ios/build", { recursive: true });
+  fs.writeFileSync("apps/ios/build/screenshot-diagnostics.json", JSON.stringify({ schemaVersion: 1, diagnostics: [{ phase: "build", durationSeconds: 1.25, outcome: "succeeded" }] }));
+  fs.writeFileSync("apps/ios/build/private-diagnostics.json", "Synthetic private build environment");
+}
 if (process.env.FIXTURE_UPLOAD_FAIL === "1") {
   fs.mkdirSync("apps/ios/fastlane/screenshots/en-US", { recursive: true });
   fs.writeFileSync("apps/ios/fastlane/screenshots/en-US/iPhone-01-control-connected.png", "Synthetic fixture screenshot");
@@ -227,8 +221,8 @@ load "apps/android/fastlane/Fastfile"
 def validate_android_release_preflight!(metadata); end
 def capture_android_screenshots!; end
 def screenshots; $lanes.fetch(:screenshots).call; end
-def build_release_artifacts!
-  raise "Archive failed" unless system("node", "--import", "tsx", "apps/android/scripts/build-release-artifacts.ts", "--dry-run")
+def build_release_artifacts!(artifact: "all")
+  raise "Archive failed" unless system("node", "--import", "tsx", "apps/android/scripts/build-release-artifacts.ts", "--artifact", artifact, "--dry-run")
   FileUtils.mkdir_p("apps/android/build/release-artifacts")
   %w(play wear).each do |audience|
     file = "apps/android/build/release-artifacts/openclaw-2026.9.20-#{audience}-release.aab"
@@ -246,10 +240,8 @@ $lanes.fetch(:release_upload).call(destination: ARGV.fetch(0).delete_prefix("des
 `,
     });
   }
-  git(root, "add", ".");
-  git(root, "commit", "-m", "Initial source");
+  const base = commit(root, "Initial source");
   git(root, "push", "origin", "main");
-  const base = git(root, "rev-parse", "HEAD");
   const env = {
     ...process.env,
     FIXTURE_UPLOAD_AUDIT: uploadAudit,
@@ -302,9 +294,7 @@ $lanes.fetch(:release_upload).call(destination: ARGV.fetch(0).delete_prefix("des
 function advanceMain(f: ReturnType<typeof fixture>): string {
   git(f.root, "checkout", "-b", "advance-main", f.base);
   write(f.root, "README.md", "Application source advanced after planning.\n");
-  git(f.root, "add", ".");
-  git(f.root, "commit", "-m", "Advance main");
-  const sha = git(f.root, "rev-parse", "HEAD");
+  const sha = commit(f.root, "Advance main");
   git(f.root, "push", "origin", "HEAD:main");
   git(f.root, "checkout", "main");
   return sha;
@@ -378,13 +368,10 @@ describe("mobile release CLI", () => {
         destination,
         sourceSha: f.base,
       });
-      for (const line of [
-        "Android versionName: 2026.9.20",
-        "Android versionCode: 2026090250",
-        "Android Wear versionCode: 2026090251",
-      ]) {
-        expect(result.stdout).toContain(line);
-      }
+      expect(result.stdout.match(/^Release artifact: .+$/gm)).toEqual([
+        "Release artifact: wear aab",
+        "Release artifact: play aab",
+      ]);
       expect(f.audit()[0]).toMatchObject({
         version: "2026.9.20",
         versionCode: 2026090250,
@@ -414,6 +401,7 @@ describe("mobile release CLI", () => {
       );
       expectResult(rebuilt, 0);
       expect(rebuilt.stdout).toContain("Android versionCode: 2026090250");
+      expect(rebuilt.stdout).toContain("Release artifact: third-party apk");
       expect(git(f.root, "status", "--porcelain")).toBe("");
     },
   );
@@ -461,6 +449,13 @@ describe("mobile release CLI", () => {
       expect(
         ["source", "release-notes.json", "release.bundle"].map((file) => exists(f.recovery, file)),
       ).toEqual([false, true, false]);
+      expect(fs.readdirSync(path.join(f.recovery, "screenshot-diagnostics"))).toEqual([
+        "screenshot-diagnostics.json",
+      ]);
+      expect(json(f.recovery, "screenshot-diagnostics/screenshot-diagnostics.json")).toEqual({
+        schemaVersion: 1,
+        diagnostics: [{ phase: "build", durationSeconds: 1.25, outcome: "succeeded" }],
+      });
       expect(git(f.remote, "for-each-ref", "--format=%(refname)", "refs/heads")).toBe(
         "refs/heads/main",
       );
@@ -488,8 +483,13 @@ describe("mobile release CLI", () => {
     const diagnostics = path.join(f.recovery, "screenshot-diagnostics");
     expect(fs.readdirSync(diagnostics).toSorted()).toEqual([
       "capture-attempts.json",
+      "screenshot-diagnostics.json",
       "screenshots",
     ]);
+    expect(json(diagnostics, "screenshot-diagnostics.json")).toEqual({
+      schemaVersion: 1,
+      diagnostics: [{ phase: "build", durationSeconds: 1.25, outcome: "succeeded" }],
+    });
     expect(json(diagnostics, "capture-attempts.json")).toEqual({
       schemaVersion: 1,
       attempts: [
@@ -526,9 +526,7 @@ describe("mobile release CLI", () => {
         "scripts/ios-release-upload.sh",
         'echo "Corrected staging tooling"\nexec node scripts/fixture-upload.mjs "$@"\n',
       );
-      git(f.root, "add", ".");
-      git(f.root, "commit", "-m", "Fix staging tooling after upload");
-      const toolingSha = git(f.root, "rev-parse", "HEAD");
+      const toolingSha = commit(f.root, "Fix staging tooling after upload");
       const source = path.join(f.recovery, "source");
       if (destination === "testflight") {
         // Downloaded recovery artifacts have no source checkout.

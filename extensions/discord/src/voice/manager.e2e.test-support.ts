@@ -1,11 +1,6 @@
-import type {
-  RealtimeVoiceAudioSink,
-  RealtimeVoiceBridgeEvent,
-  RealtimeVoiceBridgeCreateRequest,
-  RealtimeVoiceResponseOutcome,
-} from "openclaw/plugin-sdk/realtime-voice";
+import type { createRealtimeVoiceBridgeSession } from "openclaw/plugin-sdk/realtime-voice";
 import { vi, type Mock } from "vitest";
-import { ChannelType, type APIVoiceState } from "../internal/discord.js";
+import { ChannelType } from "../internal/discord.js";
 import { DiscordGatewayVoiceStateCache } from "../internal/gateway-voice-state-cache.js";
 import type { voiceTestMocks } from "./voice-test-mocks.test-support.js";
 
@@ -13,25 +8,17 @@ export type MockCallSource = {
   mock: { calls: ArrayLike<ReadonlyArray<unknown>> };
 };
 
-export type TestRealtimeBridgeParams = {
-  agentId?: string;
-  audioSink: RealtimeVoiceAudioSink;
-  autoRespondToAudio?: boolean;
+export type TestRealtimeBridgeParams = Omit<
+  Parameters<typeof createRealtimeVoiceBridgeSession>[0],
+  "provider" | "onToolCall" | "onReady" | "tools" | "cfg"
+> & {
   cfg?: unknown;
-  instructions?: string;
-  interruptResponseOnInputAudio?: boolean;
-  providerConfig: RealtimeVoiceBridgeCreateRequest["providerConfig"];
-  onEvent?: (event: RealtimeVoiceBridgeEvent) => void;
-  onClose?: RealtimeVoiceBridgeCreateRequest["onClose"];
   onReady?: () => void;
-  onResponseDone?: (outcome: RealtimeVoiceResponseOutcome) => void;
   onToolCall?: (
     event: { args: unknown; callId: string; itemId: string; name: string },
     session: unknown,
   ) => Promise<void> | void;
-  onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
   tools?: Array<{ name: string }>;
-  runAgentConsult?: RealtimeVoiceBridgeCreateRequest["runAgentConsult"];
 };
 
 export function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -50,12 +37,7 @@ export function mockCall(source: MockCallSource, index: number, label: string) {
 }
 
 export function lastMockCall(source: MockCallSource, label: string) {
-  const calls = Array.from(source.mock.calls);
-  const call = calls[calls.length - 1];
-  if (!call) {
-    throw new Error(`expected mock call: ${label}`);
-  }
-  return call;
+  return mockCall(source, source.mock.calls.length - 1, label);
 }
 
 export function createRealtimeBridgeTestHelpers(
@@ -63,7 +45,7 @@ export function createRealtimeBridgeTestHelpers(
 ) {
   const bridgeParamsAt = (index: number): TestRealtimeBridgeParams =>
     requireRecord(
-      mockCall(createBridge as unknown as MockCallSource, index, "realtime bridge")[0],
+      mockCall(createBridge, index, "realtime bridge")[0],
       "realtime bridge params",
     ) as TestRealtimeBridgeParams;
   const realtimeBridgeAt = (index: number) => {
@@ -90,6 +72,12 @@ export function createRealtimeBridgeTestHelpers(
 }
 
 export function createDiscordVoiceTestHelpers(updateVoiceStateMock: ReturnType<typeof vi.fn>) {
+  const voicePlugin = () => ({
+    getGatewayAdapterCreator: vi.fn(() =>
+      vi.fn(() => ({ sendPayload: vi.fn(() => true), destroy: vi.fn() })),
+    ),
+    getGateway: vi.fn(() => ({ updateVoiceState: updateVoiceStateMock })),
+  });
   const createVoiceChannelInfo = (channelId: string, guildId = "g1", guildName = "Guild One") => ({
     id: channelId,
     guildId,
@@ -109,18 +97,11 @@ export function createDiscordVoiceTestHelpers(updateVoiceStateMock: ReturnType<t
       getPlugin: vi.fn((id?: string): unknown =>
         id === "gateway"
           ? {
-              listVoiceChannelStates: (guildId: string, channelId: string) =>
-                voiceStateCache.listVoiceChannelStates(guildId, channelId),
-              takeVoiceStateTransition: (state: APIVoiceState) =>
-                voiceStateCache.takeTransition(state),
+              listVoiceChannelStates: voiceStateCache.listVoiceChannelStates.bind(voiceStateCache),
+              takeVoiceStateTransition: voiceStateCache.takeTransition.bind(voiceStateCache),
             }
           : id === "voice"
-            ? {
-                getGatewayAdapterCreator: vi.fn(() =>
-                  vi.fn(() => ({ sendPayload: vi.fn(() => true), destroy: vi.fn() })),
-                ),
-                getGateway: vi.fn(() => ({ updateVoiceState: updateVoiceStateMock })),
-              }
+            ? voicePlugin()
             : undefined,
       ),
       fetchMember: vi.fn() as Mock,
@@ -151,12 +132,7 @@ export function createDiscordVoiceTestHelpers(updateVoiceStateMock: ReturnType<t
       if (id === "gateway") {
         return { listVoiceChannelStates: vi.fn(listVoiceChannelStates) };
       }
-      return {
-        getGatewayAdapterCreator: vi.fn(() =>
-          vi.fn(() => ({ sendPayload: vi.fn(() => true), destroy: vi.fn() })),
-        ),
-        getGateway: vi.fn(() => ({ updateVoiceState: updateVoiceStateMock })),
-      };
+      return voicePlugin();
     });
   };
 

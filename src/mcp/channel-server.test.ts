@@ -1,9 +1,25 @@
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
+import { createDeferredCore } from "../shared/deferred.js";
 import { OpenClawChannelBridge } from "./channel-bridge.js";
-import { createChannelMcpRuntime } from "./channel-server-runtime.js";
+import { serveOpenClawChannelMcp } from "./channel-server.js";
 import type { SessionMessagePayload } from "./channel-shared.js";
+
+const transportState = vi.hoisted((): { next?: InMemoryTransport } => ({}));
+// mock-isolation: Channel fixtures read empty config without starting a config owner.
+vi.mock("../config/config.js", () => ({
+  captureRuntimeConfigAsyncReader: () => async () => ({}),
+}));
+
+vi.mock("@modelcontextprotocol/server/stdio", () => ({
+  StdioServerTransport: vi.fn(function () {
+    if (!transportState.next) {
+      throw new Error("MCP test transport was not prepared");
+    }
+    return transportState.next;
+  }),
+}));
 
 const route = { channel: "telegram", to: "-100123", accountId: "acct-1" };
 const inlineImage = {
@@ -60,23 +76,32 @@ function notifications<T>(client: Client, method: string, params: z.ZodType<T>) 
 }
 
 async function connectMcpWithoutGateway(claudeChannelMode: "on" | "off" = "off") {
-  const serverHarness = await createChannelMcpRuntime({
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  transportState.next = serverTransport;
+  const started = createDeferredCore<OpenClawChannelBridge>();
+  const startSpy = vi
+    .spyOn(OpenClawChannelBridge.prototype, "start")
+    .mockImplementation(async function (this: OpenClawChannelBridge) {
+      started.resolve(this);
+    });
+  const serving = serveOpenClawChannelMcp({
     claudeChannelMode,
-    config: {},
     verbose: false,
   });
+  void serving.catch(started.reject);
+  const bridge = await started.promise;
+  startSpy.mockRestore();
   const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  await serverHarness.server.connect(serverTransport);
   await client.connect(clientTransport);
   const mcp = {
     client,
-    bridge: serverHarness.bridge,
-    receive: receiveMessage.bind(null, serverHarness.bridge),
+    bridge,
+    receive: receiveMessage.bind(null, bridge),
     call: call.bind(null, client),
     close: async () => {
       await client.close();
-      await serverHarness.close();
+      await serverTransport.close();
+      await serving;
     },
   };
   resources.push(mcp);

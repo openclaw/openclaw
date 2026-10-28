@@ -1,6 +1,7 @@
 import { hostname as readHostName } from "node:os";
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   CodexAppServerManagedApprovalPolicy,
   CodexAppServerRuntimeOptions,
@@ -96,16 +97,12 @@ function clampSessionPermissionTuple(params: {
   mode: SessionPermissionMode;
   requested: CodexSessionPermissionTuple;
   requirementsToml?: string;
-  hostName?: string;
   canUseAutoReview: boolean;
 }): CodexSessionPermissionTuple {
   if (!params.requirementsToml) {
     return params.requested;
   }
-  const allowed = parseCodexRequirementsPolicy(
-    params.requirementsToml,
-    params.hostName ?? readHostName(),
-  );
+  const allowed = parseCodexRequirementsPolicy(params.requirementsToml, readHostName());
   if (requirementsAllowTuple(params.requested, allowed)) {
     return params.requested;
   }
@@ -161,7 +158,6 @@ export function applyCodexSessionPermissionPolicy(params: {
   pluginConfig: CodexPluginConfig;
   canUseAutoReview: boolean;
   requirementsToml?: string;
-  hostName?: string;
   policyLocked?: boolean;
   execMode?: OpenClawExecMode;
 }): CodexAppServerRuntimeOptions {
@@ -184,7 +180,6 @@ export function applyCodexSessionPermissionPolicy(params: {
           mode: params.permissionMode,
           requested,
           requirementsToml: params.requirementsToml,
-          hostName: params.hostName,
           canUseAutoReview: params.canUseAutoReview,
         })
       : requested;
@@ -248,6 +243,6 @@ export function resolveCodexSessionPermissionCwd(params: {
     return params.requestedCwd ?? params.fallbackCwd;
   }
   const sessionRoot = params.sessionRoot?.trim() || params.defaultRoot;
-  const requestedCwd = params.requestedCwd?.trim();
+  const requestedCwd = readNonBlankString(params.requestedCwd);
   return requestedCwd && isPathInside(sessionRoot, requestedCwd) ? requestedCwd : sessionRoot;
 }

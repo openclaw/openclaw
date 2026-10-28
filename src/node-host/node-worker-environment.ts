@@ -77,7 +77,7 @@ export function snapshotNodeWorkerEnv(
   const hostCacheFenced =
     source.NODE_DISABLE_COMPILE_CACHE !== undefined &&
     source.OPENCLAW_SERVICE_KIND === NODE_SERVICE_KIND &&
-    source.OPENCLAW_LAUNCHD_LABEL === resolveNodeLaunchAgentLabel();
+    source.OPENCLAW_LAUNCHD_LABEL === resolveNodeLaunchAgentLabel(source.OPENCLAW_PROFILE);
   const workerCacheDisabled = source.NODE_DISABLE_COMPILE_CACHE !== undefined && !hostCacheFenced;
   if (!workerCacheDisabled) {
     const requestedCache = hostCacheFenced ? undefined : source.NODE_COMPILE_CACHE?.trim();

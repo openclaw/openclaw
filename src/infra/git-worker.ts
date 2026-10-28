@@ -12,6 +12,11 @@ import type {
 } from "../agents/worktrees/git-worktree-operations.js";
 import { runGitBytes, runGitBuffered } from "../agents/worktrees/git.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+  readCommandProcessFailure,
+} from "../process/exec-result.js";
 import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DiffReadTiming } from "./diff-read-timing.js";
@@ -28,10 +33,16 @@ import type {
 import { GIT_WORKER_HOST_BATCH_LIMIT } from "./git-worker-contract.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
-import { WorkerTaskError, WorkerTaskPool, type WorkerTaskResponse } from "./worker-task-pool.js";
+import {
+  WorkerTaskError,
+  createOwnedWorkerTaskPool,
+  type WorkerTaskResponse,
+} from "./worker-task-pool.js";
 import { ownedWorkerBytes } from "./worker-transfer-bytes.js";
 
-type GitPool = WorkerTaskPool<GitWorkerCommand, GitWorkerReply<GitWorkerResult>>;
+type GitPool = ReturnType<
+  typeof createOwnedWorkerTaskPool<GitWorkerCommand, GitWorkerReply<GitWorkerResult>>
+>;
 const POOL_OWNERS = [
   "reads",
   "summary",
@@ -74,9 +85,15 @@ const SPAWN_OPERATIONS = {
   "workspace.inventory.existing": "workspace.inventory",
   "workspace.inventory.paths": "workspace.inventory",
   "workspace.inventory.staged-directories": "workspace.inventory",
+  "workspace.manifest.local": "workspace.manifest",
   "workspace.manifest.capture": "workspace.manifest",
+  "workspace.manifest.base-refresh": "workspace.manifest",
+  "workspace.manifest.equal": "workspace.manifest",
   "workspace.manifest.snapshot": "workspace.manifest",
+  "workspace.manifest.document": "workspace.manifest",
+  "workspace.manifest.reference": "workspace.manifest",
   "workspace.manifest.parse": "workspace.manifest",
+  "workspace.manifest.paths": "workspace.manifest",
   "workspace.manifest.serialize": "workspace.manifest",
   "workspace.manifest.overlay": "workspace.manifest",
   "workspace.manifest.pair": "workspace.manifest",
@@ -142,25 +159,29 @@ function poolFor(
   // Each worktree lane stays serial; host allocation and shared-ref guards still own writes.
   // Metadata likewise stays responsive while diffs or snapshots await slow Git work.
   // Summary polls and their revision scans share one worker outside the full-content queue.
-  return (state[owner] ??= new WorkerTaskPool({
-    workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.gitOperations),
-    workerClass:
-      owner === "summary"
-        ? "singleton"
-        : owner === "reads" || owner === "content"
-          ? "reader"
-          : owner === "workspace"
-            ? "compute"
-            : "writer",
-    // Summary's singleton keeps the reader heap bound; overlay retains three manifests.
-    workerOptions:
-      owner === "summary" || owner === "workspace"
-        ? { resourceLimits: { maxOldGenerationSizeMb: owner === "summary" ? 512 : 1024 } }
-        : undefined,
-    // Discovery refreshes and PR polls can leave readers idle for just over a minute.
-    idleTimeoutMs: owner === "reads" ? 120_000 : undefined,
-    sharedCompute: owner === "workspace",
-  }));
+  return (state[owner] ??= createOwnedWorkerTaskPool(
+    {
+      workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.gitOperations),
+      workerClass:
+        owner === "summary"
+          ? "singleton"
+          : owner === "reads" || owner === "content"
+            ? "reader"
+            : owner === "workspace"
+              ? "compute"
+              : "writer",
+      // Summary's singleton keeps the reader heap bound; overlay retains three manifests.
+      workerOptions:
+        owner === "summary" || owner === "workspace"
+          ? { resourceLimits: { maxOldGenerationSizeMb: owner === "summary" ? 512 : 1024 } }
+          : undefined,
+      // Discovery refreshes and PR polls can leave readers idle for just over a minute.
+      idleTimeoutMs: owner === "reads" ? 120_000 : undefined,
+      sharedCompute: owner === "workspace",
+    },
+    // Other owners retain checkout observations whose lifetime includes idle expiry.
+    owner === "content" || owner === "workspace" ? { retainOneIdleWorker: true } : undefined,
+  ));
 }
 
 export type GitWorkerOperationOptions = {
@@ -304,22 +325,16 @@ async function executeOperation(
   const hostWork = new Set<Promise<WorkerTaskResponse>>();
   const temporaryDirectories = new Set<string>();
   const hostErrors = new Map<number, unknown>();
+  let cleanupFailure: Error | undefined;
   let errorSequence = 0;
   const request = async (value: unknown, signal: AbortSignal): Promise<WorkerTaskResponse> => {
     try {
       signal.throwIfAborted();
-      if (!isRecord(value) || typeof value.type !== "string" || !isRecord(value.input)) {
-        throw new Error("Invalid Git worker host request");
-      }
       // SAFETY: Only the registered typed operation worker can send requests on this live channel.
       const effect = value as GitWorkerHostRequest;
       let result: unknown;
       const transferList: Transferable[] = [];
       if (effect.type === "git.text" || effect.type === "git.buffer") {
-        const run =
-          effect.type === "git.text"
-            ? (options.git?.text ?? runGitBytes)
-            : (options.git?.buffered ?? runGitBuffered);
         // The parent owns the operation identity; worker batches cannot relabel their launches.
         const queuedAt = measure ? performance.now() : 0;
         const execute = async () => {
@@ -330,16 +345,43 @@ async function executeOperation(
             summedGitQueueWaitMs += startedAt - queuedAt;
           }
           try {
-            const output = await withGitProcessOperation(SPAWN_OPERATIONS[command.type], () =>
-              run(effect.input.cwd, effect.input.args, {
-                ...effect.input.options,
-                operation: SPAWN_OPERATIONS[command.type],
-                baseEnv,
-                signal,
-                beforeRun: options.assertCurrent,
-                killProcessTree: true,
-                lowerPriority: contentGit,
-              }),
+            const output = await withGitProcessOperation(
+              SPAWN_OPERATIONS[command.type],
+              async () => {
+                const runOptions = {
+                  ...effect.input.options,
+                  operation: SPAWN_OPERATIONS[command.type],
+                  baseEnv,
+                  signal,
+                  beforeRun: options.assertCurrent,
+                  killProcessTree: true,
+                  lowerPriority: contentGit,
+                };
+                if (effect.type === "git.text") {
+                  const textOutput = await (options.git?.text ?? runGitBytes)(
+                    effect.input.cwd,
+                    effect.input.args,
+                    runOptions,
+                  );
+                  if (textOutput.cleanup === "uncertain") {
+                    throw new CommandProcessCleanupError();
+                  }
+                  return textOutput;
+                }
+                const bufferedOutput = await (options.git?.buffered ?? runGitBuffered)(
+                  effect.input.cwd,
+                  effect.input.args,
+                  runOptions,
+                );
+                if (
+                  bufferedOutput.error &&
+                  (hasCommandProcessCleanupError(bufferedOutput.error) ||
+                    readCommandProcessFailure(bufferedOutput.error)?.cleanup === "uncertain")
+                ) {
+                  throw bufferedOutput.error;
+                }
+                return bufferedOutput;
+              },
             );
             if (timing) {
               termination = output.termination;
@@ -419,6 +461,13 @@ async function executeOperation(
         timeoutMs: WORKER_PHASE_TIMEOUT_MS,
       };
     } catch (error) {
+      // Cancellation can discard this reply, even after hostWork forgets the settled batch.
+      if (hasCommandProcessCleanupError(error)) {
+        cleanupFailure ??=
+          error instanceof Error ? error : new CommandProcessCleanupError({ cause: error });
+      } else if (readCommandProcessFailure(error)?.cleanup === "uncertain") {
+        cleanupFailure ??= new CommandProcessCleanupError({ cause: error });
+      }
       const origin = ++errorSequence;
       hostErrors.set(origin, error);
       return {
@@ -489,12 +538,17 @@ async function executeOperation(
     let cleanupSucceeded = false;
     try {
       // A cancellation may terminate the worker before its host callback completes.
-      await Promise.allSettled(hostWork);
-      await Promise.all(
-        [...temporaryDirectories].map((directory) =>
-          fs.rm(directory, { recursive: true, force: true }),
-        ),
-      );
+      await Promise.allSettled(hostWork).then(() => {
+        if (cleanupFailure) {
+          // Unconfirmed native work may still use these artifacts; leave them for recovery.
+          throw cleanupFailure;
+        }
+        return Promise.all(
+          [...temporaryDirectories].map((directory) =>
+            fs.rm(directory, { recursive: true, force: true }),
+          ),
+        );
+      });
       cleanupSucceeded = true;
     } finally {
       timing?.finish(cleanupSucceeded ? outcome : "threw");

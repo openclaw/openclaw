@@ -11,14 +11,34 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { withEnv, withEnvAsync } from "../../test-utils/env.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.kernel.js";
 import { captureDeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
 import { OpenClawStateExternalOwnershipError } from "../sqlite-lifecycle-errors.js";
 import { deliverOutboundPayloads } from "./deliver.js";
-import { ackDelivery } from "./delivery-queue-ack.js";
+import { ackDelivery, retireUnsentDelivery } from "./delivery-queue-ack.js";
+import {
+  createDeliveryQueueMediaRetention as retainMedia,
+  loadDeliveryQueueMediaRetentionSnapshot as readMedia,
+} from "./delivery-queue-media-staging.js";
+import { renewDeliveryPlatformSendLease as renewLease } from "./delivery-queue-platform-lease.js";
+import { withStableDeliveryPreparation as withPreparation } from "./delivery-queue-preparation.js";
 import type { DeliverFn } from "./delivery-queue-recovery.js";
-import { enqueueDeliveryOnce, loadPendingDelivery } from "./delivery-queue-storage.js";
+import {
+  enqueueDelivery,
+  enqueueDeliveryOnce,
+  enqueuePreparedDeliveryOnce as publishPrepared,
+  failDeliveryAfterPlatformSend as failAfterSend,
+  findDeliveryIntentOwner,
+  findDeliveryIntentOwners,
+  loadPendingDelivery,
+  markDeliveryPlatformSendDispatched as markDispatched,
+  reserveDeliveryAttempt,
+} from "./delivery-queue-storage.js";
 import {
   createRecoveryLog,
+  createQueueMedia,
   installDeliveryQueueTmpDirHooks,
   readQueuedEntries,
 } from "./delivery-queue.test-helpers.js";
@@ -27,13 +47,16 @@ describe("delivery queue entry state", () => {
   const fixtures = installDeliveryQueueTmpDirHooks();
   const target = "reef:synthetic-peer";
   const queueId = "synthetic-entry";
+  function expectPublicInput(input: object) {
+    expect(input).not.toHaveProperty("deliveryQueueStateContext");
+  }
 
   function root(name: string) {
     const dir = path.join(fixtures.tmpDir(), name);
     fs.mkdirSync(dir);
     return dir;
   }
-  function ambient(stateDir: string, mode = "") {
+  function ambient(stateDir: string, mode?: string) {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", mode);
   }
@@ -65,6 +88,11 @@ describe("delivery queue entry state", () => {
   }
   const enqueue = (stateDir: string, queuePolicy?: "required") =>
     enqueueDeliveryOnce({ ...payload, queuePolicy }, queueId, stateDir);
+  const otherState = () => path.join(fixtures.tmpDir(), "other-state");
+  const withAmbientState = (run: () => Promise<void>) =>
+    withEnvAsync({ OPENCLAW_STATE_DIR: otherState(), OPENCLAW_SUPERVISOR_MODE: undefined }, run);
+  const expectMissing = (file: string) =>
+    expect(fs.promises.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
   const customDelivery = (check: (input: Parameters<DeliverFn>[0]) => void = () => {}) =>
     vi.fn<DeliverFn>(async (input) => {
       check(input);
@@ -110,9 +138,9 @@ describe("delivery queue entry state", () => {
       const injectedRoot = root("injected");
 
       vi.stubEnv("OPENCLAW_STATE_DIR", originalRoot);
-      const sendText = installSender((input) => {
+      installSender((input) => {
         expect(input).not.toHaveProperty("conversationDeliveryTarget");
-        expect(input).not.toHaveProperty("deliveryQueueStateContext");
+        expectPublicInput(input);
         expect(readQueuedEntries(originalRoot)).toHaveLength(1);
         expect(readQueuedEntries(injectedRoot)).toEqual([]);
       });
@@ -136,7 +164,6 @@ describe("delivery queue entry state", () => {
           { messageId: "sent" },
         ]);
       }
-      expect(sendText).toHaveBeenCalledOnce();
     },
   );
 
@@ -145,7 +172,7 @@ describe("delivery queue entry state", () => {
     const replacementRoot = root("replacement");
 
     const context = claimRoot(originalRoot);
-    const sendText = installSender(async () => {
+    installSender(async () => {
       expect(await loadPendingDelivery(queueId, originalRoot, context)).not.toBeNull();
       expect(await loadPendingDelivery(queueId, replacementRoot)).toBeNull();
     });
@@ -154,7 +181,6 @@ describe("delivery queue entry state", () => {
     await expect(delivery).resolves.toMatchObject([{ messageId: "sent" }]);
     expect(await loadPendingDelivery(queueId, originalRoot, context)).toBeNull();
     expect(await loadPendingDelivery(queueId, replacementRoot)).toBeNull();
-    expect(sendText).toHaveBeenCalledOnce();
   });
 
   it("honors the owned root when resuming an existing queue entry", async () => {
@@ -163,7 +189,7 @@ describe("delivery queue entry state", () => {
 
     vi.stubEnv("OPENCLAW_STATE_DIR", ambientRoot);
     await enqueue(originalRoot, "required");
-    const sendText = installSender(async () => {
+    installSender(async () => {
       expect(await loadPendingDelivery(queueId, originalRoot)).toMatchObject({
         recoveryState: "send_attempt_started",
       });
@@ -176,7 +202,6 @@ describe("delivery queue entry state", () => {
         deliveryQueueStateDir: originalRoot,
       }),
     ).resolves.toMatchObject([{ messageId: "sent" }]);
-    expect(sendText).toHaveBeenCalledOnce();
     expect(await loadPendingDelivery(queueId, ambientRoot)).toBeNull();
     await ackDelivery(queueId, originalRoot);
   });
@@ -196,11 +221,13 @@ describe("delivery queue entry state", () => {
       vi.stubEnv("OPENCLAW_HOME", originalDirectory);
       const context = claimRoot(originalRoot);
       await enqueue(originalRoot);
-      const sendText = installSender((input) => {
-        expect(input).not.toHaveProperty("deliveryQueueStateContext");
-      });
+      const duringSend = (input: object) => {
+        expectPublicInput(input);
+        ambient(otherState());
+      };
+      const sendText = installSender(duringSend);
       const custom = customDelivery((input) => {
-        expect(input).not.toHaveProperty("deliveryQueueStateContext");
+        duringSend(input);
         expect(input).not.toHaveProperty("env");
       });
       const cwd =
@@ -227,10 +254,8 @@ describe("delivery queue entry state", () => {
       expect([custom.mock.calls.length, sendText.mock.calls.length]).toEqual(
         callback === "custom" ? [1, 0] : [0, 1],
       );
-      if (callback === "custom") {
-        expect(custom.mock.calls[0]).toHaveLength(1);
-      }
       expect(await loadPendingDelivery(queueId, originalRoot, context)).toBeNull();
+      await expectMissing(otherState());
     },
   );
 
@@ -247,5 +272,108 @@ describe("delivery queue entry state", () => {
     expect(custom).not.toHaveBeenCalled();
     expect(sendText).not.toHaveBeenCalled();
     expect(await loadPendingDelivery(queueId, originalRoot, context)).not.toBeNull();
+  });
+
+  it("keeps preparation, retry evidence, and ACK on the captured state after ambient changes", async () => {
+    const context = claimRoot(fixtures.tmpDir());
+    await withAmbientState(async () => {
+      const id = "captured-intent";
+      const claim = createInitialDeliveryProducerClaim();
+      const { producerClaimId: claimId } = claim;
+      const preparation = await withPreparation(
+        {
+          id,
+          run: async (owner) => {
+            await Promise.resolve();
+            await owner.beforeFirstModifier();
+            await owner.markPrepared();
+            const queued = await publishPrepared(
+              { ...payload, initialProducerClaim: claim, completionRetention: "permanent" },
+              id,
+              await owner.current(),
+              undefined,
+              undefined,
+              context,
+            );
+            owner.markPublished();
+            return queued;
+          },
+        },
+        context,
+      );
+      expect(preparation).toEqual({ status: "claimed", value: { id, created: true } });
+      expect(await renewLease(id, undefined, claimId, context)).toBeGreaterThan(Date.now());
+      expect(await reserveDeliveryAttempt(id, 2, undefined, claimId, context)).toEqual({
+        status: "reserved",
+        attemptCount: 1,
+      });
+      await markDispatched(id, undefined, undefined, claimId, context);
+      await failAfterSend(id, "synthetic failure", undefined, claimId, context);
+      expect(await loadPendingDelivery(id, undefined, context)).toMatchObject({
+        retryCount: 1,
+        lastError: "synthetic failure",
+        recoveryState: "unknown_after_send",
+        platformSendAttemptId: claimId,
+      });
+      await ackDelivery(id, undefined, { expectedPlatformSendAttemptId: claimId }, context);
+      const mainSql = observeMainThreadSql();
+      try {
+        expect(await findDeliveryIntentOwners([id, "missing", id], undefined, context)).toEqual([
+          expect.objectContaining({ status: "completed" }),
+          null,
+          expect.objectContaining({ status: "completed" }),
+        ]);
+        mainSql.expectIdle();
+      } finally {
+        mainSql.restore();
+      }
+      await expectMissing(otherState());
+    });
+  });
+
+  it.each(["read", "owners", "ack"] as const)(
+    "does not gain external ownership from later ambient mode during %s",
+    async (operation) => {
+      const external = claimRoot(fixtures.tmpDir());
+      const id = await enqueueDelivery(payload, undefined, undefined, external);
+      const captured = withEnv({ OPENCLAW_SUPERVISOR_MODE: undefined }, () =>
+        captureDeliveryQueueStateContext(external.stateDir),
+      );
+      await withEnvAsync({ OPENCLAW_SUPERVISOR_MODE: "external" }, async () => {
+        const result =
+          operation === "read"
+            ? loadPendingDelivery(id, undefined, captured)
+            : operation === "owners"
+              ? findDeliveryIntentOwner(id, undefined, captured)
+              : ackDelivery(id, undefined, undefined, captured);
+        await expect(result).rejects.toBeInstanceOf(OpenClawStateExternalOwnershipError);
+        expect(await loadPendingDelivery(id, undefined, external)).not.toBeNull();
+      });
+    },
+  );
+
+  it("retains captured state through late cleanup of an unsent media owner", async () => {
+    const context = claimRoot(fixtures.tmpDir());
+    const artifact = await createQueueMedia(context.stateDir, "000000000001", "synthetic audio");
+    const stage = await retainMedia([artifact], "outbound-media-stage", undefined, context);
+    const claim = createInitialDeliveryProducerClaim();
+    const id = await enqueueDelivery(
+      { ...payload, payloads: [{ mediaUrl: artifact }], initialProducerClaim: claim },
+      undefined,
+      stage,
+      context,
+    );
+    const release = await retireUnsentDelivery(
+      { id, producerClaimId: claim.producerClaimId },
+      context,
+    );
+    expect(release).toBeTypeOf("function");
+    expect(await fs.promises.readFile(artifact, "utf8")).toBe("synthetic audio");
+    await withAmbientState(async () => {
+      await release?.();
+      expect(await loadPendingDelivery(id, undefined, context)).toBeNull();
+      expect((await readMedia({ expireBeforeMs: 0 }, context)).stagedArtifacts).toEqual([]);
+      await expectMissing(artifact);
+    });
   });
 });

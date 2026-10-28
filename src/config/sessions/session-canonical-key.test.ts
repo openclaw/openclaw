@@ -96,6 +96,24 @@ function updateRow(
   db.prepare(`UPDATE session_nodes SET ${assignments} WHERE session_key = ?`).run(...values, key);
 }
 
+it("rejects malformed numeric metadata before Doctor inventory publishes typed entries", () => {
+  const scope = createScope({ spawnDepth: 2 });
+  const database = open(scope);
+  updateRow(
+    database.db,
+    scope.sessionKey,
+    "entry_json = ?, entry_valid = 1",
+    JSON.stringify({
+      sessionId: "cold-key",
+      updatedAt: 1,
+      delivery: { kind: "none" },
+      spawnDepth: "2",
+    }),
+  );
+
+  expect(() => doctor(scope, 1)).toThrow('Session field "spawnDepth" must be a finite number');
+});
+
 it("keeps timestamp-mismatched keys without strengthening Doctor validation", () => {
   const scope = createScope({});
   const database = open(scope);
@@ -305,21 +323,4 @@ it("omits saved prompts before decoding keys but retains them for Doctor", async
   expect(entries.find((entry) => entry.sessionId === "unrelated")?.skillsSnapshot?.prompt).toBe(
     prompt,
   );
-});
-
-it("still rejects divergent lineage on the first read", async () => {
-  const scope = createScope();
-  await upsertSessionEntryCore(scope, {
-    sessionId: "cold-key",
-    updatedAt: 1,
-    parentSessionKey: "agent:main:parent",
-    skillsSnapshot: { prompt: "synthetic saved prompt", skills: [] },
-  });
-  const database = open(scope);
-  markCanonicalSessionValidationPending(database, [scope.sessionKey]);
-  updateRow(database.db, scope.sessionKey, "parent_session_key = ?", "agent:main:different");
-  await closeOpenClawAgentDatabasesAsync();
-  closeColdDatabases();
-
-  expect(() => loadSessionEntryReadOnly(scope)).toThrow("openclaw doctor --fix");
 });

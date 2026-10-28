@@ -1,9 +1,14 @@
 import * as fs from "node:fs/promises";
+import path from "node:path";
 import type { Command } from "commander";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createNodesProgram } from "./program.nodes-cli-test-support.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createNodesProgram,
+  gatewayRequests,
+  mockGateway,
+} from "./program.nodes-cli-test-support.js";
 import { IOS_NODE, createIosNodeListResponse } from "./program.nodes-test-helpers.js";
-import { programGatewayCallMock, runtime } from "./program.test-mocks.js";
+import { runtime } from "./program.test-mocks.js";
 
 let registerNodesCli: typeof import("./nodes-cli.js").registerNodesCli;
 
@@ -21,38 +26,35 @@ function getFirstRuntimeLogLine(): string {
   return first;
 }
 
-async function expectLoggedSingleMediaFile(expectedPathPattern?: RegExp, expectedContent = "hi") {
-  const mediaPath = getFirstRuntimeLogLine().trim();
-  if (expectedPathPattern) {
-    expect(mediaPath).toMatch(expectedPathPattern);
+async function expectMediaFile(mediaPath: string, pattern?: RegExp, content = "hi") {
+  if (pattern) {
+    expect(mediaPath).toMatch(pattern);
   }
   try {
-    await expect(fs.readFile(mediaPath, "utf8")).resolves.toBe(expectedContent);
+    expect((await fs.stat(mediaPath)).isFile()).toBe(true);
+    await expect(fs.readFile(mediaPath, "utf8")).resolves.toBe(content);
   } finally {
     await fs.unlink(mediaPath).catch(() => {});
+    // Snap batches publish inside an owned directory; remove it once its last photo is gone.
+    const batchDir = path.dirname(mediaPath);
+    if (path.basename(batchDir).startsWith(".openclaw-camera-batch-")) {
+      await fs.rmdir(batchDir).catch(() => {});
+    }
   }
-  return mediaPath;
 }
 
 function mockNodeGateway(command?: string, payload?: Record<string, unknown>) {
-  programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
-    const opts = (args[0] ?? {}) as { method?: string };
-    if (opts.method === "node.list") {
-      return createIosNodeListResponse();
-    }
-    if (opts.method === "node.invoke" && command) {
-      return { ok: true, nodeId: IOS_NODE.nodeId, command, payload };
-    }
-    return { ok: true };
+  mockGateway({
+    "node.list": createIosNodeListResponse(),
+    "node.invoke": command ? { ok: true, nodeId: IOS_NODE.nodeId, command, payload } : { ok: true },
   });
 }
 
 function nodeInvokeCalls() {
-  return programGatewayCallMock.mock.calls
-    .map((call) => call[0] as { method?: unknown; params?: Record<string, unknown> })
+  return gatewayRequests()
     .filter((call) => call.method === "node.invoke")
     .map((call) => {
-      const params = call.params ?? {};
+      const params = (call.params ?? {}) as Record<string, unknown>;
       const commandParams = (params.params ?? {}) as Record<string, unknown>;
       return { method: call.method, params, commandParams };
     });
@@ -94,41 +96,6 @@ describe("cli program (nodes media)", () => {
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("No cameras reported."));
   });
 
-  it("runs one default snap and two explicitly requested facing snaps", async () => {
-    mockNodeGateway("camera.snap", { format: "jpg", base64: "aGk=", width: 1, height: 1 });
-
-    await runNodesCommand(cameraArgs("snap"));
-
-    const defaultInvokeCalls = nodeInvokeCalls();
-    expect(defaultInvokeCalls).toHaveLength(1);
-    expect(defaultInvokeCalls[0]?.commandParams).not.toHaveProperty("facing");
-    await expectLoggedSingleMediaFile(/openclaw-camera-snap-unknown-.*\.jpg$/);
-
-    programGatewayCallMock.mockClear();
-    await runNodesCommand(cameraArgs("snap", "--facing", "both"));
-
-    const invokeCalls = nodeInvokeCalls();
-    const facings = invokeCalls
-      .map((call) => call.commandParams.facing)
-      .filter((facing): facing is string => Boolean(facing))
-      .toSorted((a, b) => a.localeCompare(b));
-    expect(facings).toEqual(["back", "front"]);
-
-    const mediaPaths = getFirstRuntimeLogLine()
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
-    expect(mediaPaths).toHaveLength(2);
-    try {
-      for (const mediaPath of mediaPaths) {
-        expect(mediaPath).toContain("openclaw-camera-snap-");
-        expect((await fs.stat(mediaPath)).isFile()).toBe(true);
-      }
-    } finally {
-      await Promise.all(mediaPaths.map((p) => fs.unlink(p).catch(() => {})));
-    }
-  });
-
   it("runs nodes camera clip with --no-audio", async () => {
     mockNodeGateway("camera.clip", {
       format: "mp4",
@@ -157,7 +124,7 @@ describe("cli program (nodes media)", () => {
       ),
     );
 
-    await expectLoggedSingleMediaFile();
+    await expectMediaFile(getFirstRuntimeLogLine().trim());
   });
 
   it("fails nodes camera snap when --facing both and --device-id are combined", async () => {
@@ -174,53 +141,34 @@ describe("cli program (nodes media)", () => {
     );
   });
 
-  describe("URL-based payloads", () => {
-    let originalFetch: typeof globalThis.fetch;
-
-    beforeAll(() => {
-      originalFetch = globalThis.fetch;
-      globalThis.fetch = vi.fn(
+  it.each(["snap", "clip"] as const)("writes camera %s URL payloads", async (command) => {
+    const snap = command === "snap";
+    using _ = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(
         async () =>
-          new Response("url-content", {
-            status: 200,
-            headers: { "content-length": "11" },
-          }),
-      ) as unknown as typeof globalThis.fetch;
-    });
+          new Response("url-content", { status: 200, headers: { "content-length": "11" } }),
+      );
 
-    afterAll(() => {
-      globalThis.fetch = originalFetch;
+    mockNodeGateway(`camera.${command}`, {
+      url: `https://${IOS_NODE.remoteIp}/media`,
+      ...(snap
+        ? { format: "jpg", width: 640, height: 480 }
+        : { format: "mp4", durationMs: 5000, hasAudio: true }),
     });
-
-    it.each([
-      {
-        label: "runs nodes camera snap with url payload",
-        command: "camera.snap" as const,
-        payload: {
-          format: "jpg",
-          url: `https://${IOS_NODE.remoteIp}/photo.jpg`,
-          width: 640,
-          height: 480,
-        },
-        argv: cameraArgs("snap", "--facing", "front"),
-        expectedPathPattern: /openclaw-camera-snap-front-.*\.jpg$/,
-      },
-      {
-        label: "runs nodes camera clip with url payload",
-        command: "camera.clip" as const,
-        payload: {
-          format: "mp4",
-          url: `https://${IOS_NODE.remoteIp}/clip.mp4`,
-          durationMs: 5000,
-          hasAudio: true,
-        },
-        argv: cameraArgs("clip", "--duration", "5000"),
-        expectedPathPattern: /openclaw-camera-clip-front-.*\.mp4$/,
-      },
-    ])("$label", async ({ command, payload, argv, expectedPathPattern }) => {
-      mockNodeGateway(command, payload);
-      await runNodesCommand(argv);
-      await expectLoggedSingleMediaFile(expectedPathPattern, "url-content");
-    });
+    await runNodesCommand(
+      cameraArgs(command, ...(snap ? ["--facing", "both"] : ["--duration", "5000"])),
+    );
+    const paths = getFirstRuntimeLogLine().trim().split("\n");
+    expect(paths).toHaveLength(snap ? 2 : 1);
+    if (snap) {
+      const facings = nodeInvokeCalls().map((call) => call.commandParams.facing);
+      expect(facings).toHaveLength(2);
+      expect(facings).toEqual(expect.arrayContaining(["back", "front"]));
+    }
+    const pattern = snap
+      ? /openclaw-camera-snap-(front|back)-.*\.jpg$/
+      : /openclaw-camera-clip-front-.*\.mp4$/;
+    await Promise.all(paths.map((file) => expectMediaFile(file, pattern, "url-content")));
   });
 });

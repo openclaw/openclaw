@@ -52,7 +52,6 @@ describe("channel env vars dynamic package metadata", () => {
     expect(pluginRegistryMocks.resolvePluginMetadataSnapshot).toHaveBeenCalledTimes(2);
     expect(pluginRegistryMocks.resolvePluginMetadataSnapshot).toHaveBeenCalledWith({
       config: undefined,
-      workspaceDir: undefined,
       env: process.env,
     });
   });

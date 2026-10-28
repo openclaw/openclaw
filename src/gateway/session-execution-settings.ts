@@ -1,23 +1,12 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { normalizeExecTarget } from "../infra/exec-approvals.js";
 
 /** Projects validated execution preferences; admission and commit guards remain with the patch owner. */
 export function applySessionExecutionSettings(
   next: SessionEntry,
   patch: SessionsPatchParams,
 ): string | undefined {
-  if (patch.execHost === null) {
-    delete next.execHost;
-  } else if (patch.execHost !== undefined) {
-    const normalized = normalizeExecTarget(patch.execHost);
-    if (!normalized) {
-      return 'invalid execHost (use "auto"|"sandbox"|"gateway"|"node")';
-    }
-    next.execHost = normalized;
-  }
-
   if (patch.execNode === null) {
     delete next.execNode;
     delete next.execCwd;

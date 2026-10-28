@@ -20,6 +20,7 @@ import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js"
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { withUpdateCommandExecutor as withExecutor } from "./update-command-executor.js";
 import { useExecutorFixture } from "./update-command-executor.test-support.js";
@@ -67,13 +68,10 @@ it.each([
   const previous = '{"retained":"original diagnostic"}\n';
   await fs.writeFile(artifact, previous, { mode: 0o600 });
   const priorStat = await fs.stat(artifact);
-  await fs.writeFile(
-    metadata,
-    JSON.stringify({
-      version: 1,
-      meta: { runId: run.runId, handoffId: owner, root, triageContextPath: artifact },
-    }),
-  );
+  await writeFixtureJson(metadata, {
+    version: 1,
+    meta: { runId: run.runId, handoffId: owner, root, triageContextPath: artifact },
+  });
   const databasePath = path.join(temporary, "managed-update-handoffs.sqlite");
   const existingIdentity = createManagedHandoffLeaseDatabase(databasePath)(true, () =>
     captureManagedUpdateLeaseDatabaseIdentity(databasePath),
@@ -135,8 +133,7 @@ it.each([
     const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(captureReport);
     const human = vi.spyOn(defaultRuntime, "log").mockImplementation(captureReport);
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
-    // These spies call through to the real filesystem, including atomic temp creation.
-    const opened = vi.spyOn(fs, "open");
+    // Observe publication through the real filesystem.
     const renamed = vi.spyOn(fs, "rename");
     const result = resultFixture(undefined, {
       status: "error",
@@ -191,9 +188,6 @@ it.each([
     ).catch((error: unknown) => error);
     const after = await fs.readFile(artifact, "utf8");
     const afterStat = await fs.stat(artifact);
-    const artifactOpens = opened.mock.calls.filter(
-      ([file, flags]) => path.dirname(String(file)) === diagnosticDir && flags === "wx",
-    ).length;
     const artifactRenames = renamed.mock.calls.filter(
       ([, destination]) => String(destination) === artifact,
     ).length;
@@ -232,7 +226,6 @@ it.each([
         ? { helper: { pid: process.pid }, executor: { pid: process.pid } }
         : { owner: trial.revoked ? "replacement-owner" : owner },
     });
-    expect(artifactOpens).toBe(unsettled ? 0 : 1);
     expect(artifactRenames).toBe(unsettled ? 0 : 1);
     if (unsettled) {
       expect(after).toBe(previous);

@@ -82,24 +82,32 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it.each(writers)("retains the alias while a %s enqueue owns admission", async (writer) => {
-  await withContinuation(async (context) => {
-    const admission = pauseAdmission();
-    const enqueueing = enqueue(context, writer);
-    try {
-      await admission.entered;
+it.each(writers)(
+  "retains the alias through %s admission until its own delivery settles",
+  async (writer) => {
+    await withContinuation(async (context) => {
+      const admission = pauseAdmission();
+      const enqueueing = enqueue(context, writer);
+      try {
+        await admission.entered;
+        await removeIdle(exact.sessionKey, undefined, context);
+        expect(loadSessionEntry(exact)?.sessionId).toBe("run-123");
+      } finally {
+        admission.resume();
+        await enqueueing;
+      }
+      expect(await queue.loadPendingSessionDeliveries(context)).toMatchObject([
+        { id: await enqueueing, sessionKey: exact.sessionKey },
+      ]);
+      expect(loadSessionEntry(base)?.sessionId).toBe("run-123");
       await removeIdle(exact.sessionKey, undefined, context);
       expect(loadSessionEntry(exact)?.sessionId).toBe("run-123");
-    } finally {
-      admission.resume();
-      await enqueueing;
-    }
-    expect(await queue.loadPendingSessionDeliveries(context)).toMatchObject([
-      { id: await enqueueing, sessionKey: exact.sessionKey },
-    ]);
-    expect(loadSessionEntry(base)?.sessionId).toBe("run-123");
-  });
-});
+      await removeIdle(exact.sessionKey, await enqueueing, context);
+      expect(loadSessionEntry(exact)).toBeUndefined();
+      expect(loadSessionEntry(base)?.sessionId).toBe("run-123");
+    });
+  },
+);
 
 it.each(writers)("refuses a %s enqueue that loses to continuation cleanup", async (writer) => {
   await withContinuation(async (context) => {
@@ -132,17 +140,6 @@ it.each(writers)("refuses a %s enqueue that loses to continuation cleanup", asyn
     expect(loadSessionEntry(exact)).toBeUndefined();
     expect(loadSessionEntry(base)?.sessionId).toBe("run-123");
     expect(await readPending(context)).toEqual([]);
-  });
-});
-
-it("removes an eligible alias after its own settled delivery, preserving the base", async () => {
-  await withContinuation(async (context) => {
-    const id = await queue.enqueueSessionDelivery(payload, context);
-    await removeIdle(exact.sessionKey, undefined, context);
-    expect(loadSessionEntry(exact)?.sessionId).toBe("run-123");
-    await removeIdle(exact.sessionKey, id, context);
-    expect(loadSessionEntry(exact)).toBeUndefined();
-    expect(loadSessionEntry(base)?.sessionId).toBe("run-123");
   });
 });
 

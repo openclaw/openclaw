@@ -7,11 +7,6 @@ import {
   normalizeOptionalString,
   readNonBlankString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  OTEL_EXPORTER_OTLP_CERTIFICATE_ENV,
-  OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE_ENV,
-  OTEL_EXPORTER_OTLP_CLIENT_KEY_ENV,
-} from "./service-constants.js";
 import type {
   OtelHttpAgentFactory,
   OtelHttpAgentOptions,
@@ -19,6 +14,9 @@ import type {
 } from "./service-types.js";
 
 const SIGNAL_QUALIFIED_OTLP_PATH_PATTERN = /\/v1\/(traces|metrics|logs)$/iu;
+const OTEL_EXPORTER_OTLP_CERTIFICATE_ENV = "OTEL_EXPORTER_OTLP_CERTIFICATE";
+const OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE_ENV = "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE";
+const OTEL_EXPORTER_OTLP_CLIENT_KEY_ENV = "OTEL_EXPORTER_OTLP_CLIENT_KEY";
 
 function appendOrReplaceSignalPath(value: string, path: string): string {
   const base = value.replace(/\/+$/u, "");

@@ -44,15 +44,22 @@ function suspend() {
   return release.promise;
 }
 
-it("serializes independent native intervals while permitting their own nested operation", async () => {
+it("serializes intervals while expiring and recovering nested operations", async () => {
   const events: string[] = [];
   const first = lock(async (assertCurrent) => {
     await suspend();
     assertCurrent();
-    await lock(async (assertNested) => {
-      assertNested();
+    let assertNested = () => undefined as void;
+    await lock(async (assertOwned) => {
+      assertNested = assertOwned;
+      assertOwned();
       events.push("nested");
     });
+    expect(assertNested).toThrow("ownership has closed");
+    const failure = new Error("first native attempt failed");
+    await expect(lock(() => Promise.reject(failure))).rejects.toBe(failure);
+    assertCurrent();
+    await lock(async (assertRecovered) => assertRecovered());
     events.push("first");
   });
   await entered.promise;
@@ -81,28 +88,6 @@ it("joins an admitted detached effect and preserves failure", async () => {
   expect(await settled).toMatchObject({ errors: [failure] });
   expect(assertRetired).toThrow("ownership has closed");
   await lock(async (assertCurrent) => assertCurrent());
-});
-
-it("does not let a completed nested operation retain its parent's assertion", async () => {
-  await lock(async (assertCurrent) => {
-    let assertNested = () => undefined as void;
-    await lock(async (assertOwned) => {
-      assertNested = assertOwned;
-      assertOwned();
-    });
-    assertCurrent();
-    expect(assertNested).toThrow("ownership has closed");
-  });
-});
-
-// Callers reconcile settled child failures; the lock owns only exclusion and drainage.
-it("allows a caller to reconcile a nested failure before completing its interval", async () => {
-  const failure = new Error("first native attempt failed");
-  await lock(async (assertCurrent) => {
-    await expect(lock(() => Promise.reject(failure))).rejects.toBe(failure);
-    assertCurrent();
-    await lock(async (assertNested) => assertNested());
-  });
 });
 
 it("serializes the same systemd unit across alternate definition homes", async () => {

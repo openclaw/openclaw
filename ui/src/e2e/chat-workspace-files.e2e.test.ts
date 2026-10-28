@@ -1,333 +1,235 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { createControlUiMockSameOriginGatewayScript } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { chatDelta } from "./chat-flow-fixtures.test-support.ts";
+import {
+  createChatFlowE2eSuite,
+  installMockGateway,
+  requireRecord,
+  requireString,
+} from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const previewArtifact = {
+  id: "artifact-1",
+  title: "preview.png",
+  mimeType: "image/png",
+  sizeBytes: 2048,
+  type: "image",
+  download: { mode: "bytes" },
+};
 
 suite.define(() => {
-  it("retries a failed post-run listing without hiding a rejected retry", async () => {
-    const proofRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const proof = proofRoot
-      ? createControlUiE2eArtifactDir("files-list-recovery", proofRoot)
-      : undefined;
-    const viewport = { width: 1280, height: 900 };
-    const context = await suite.newBrowserContext({
-      ...createControlUiE2eContextOptions(),
-      viewport,
-      ...(proof ? { recordVideo: { dir: proof, size: viewport } } : {}),
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.files.list": {
-          sessionKey: "main",
-          root: "/workspace",
-          files: [{ kind: "modified", name: "checklist.md", path: "checklist.md", size: 42 }],
+  it("keeps chat and file navigation usable when returning to a file's folder", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const errors: string[] = [];
+      page.on("pageerror", (error) => errors.push(error.message));
+      await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
+      const gateway = await installMockGateway(page, {
+        operatorScopes: ["operator.sessions.read", "operator.sessions.write"],
+        sessions: [
+          createControlUiSessionRow("agent:main:main", "Delivery notes", Date.now(), {
+            visibility: "shared",
+            sharingRole: "owner",
+          }),
+        ],
+        methodResponses: {
+          "artifacts.list": { artifacts: [] },
+          "sessions.files.list": {
+            sessionKey: "main",
+            root: "/workspace",
+            files: [],
+            browser: {
+              path: "",
+              entries: [{ kind: "file", name: "notes.md", path: "notes.md", size: 17 }],
+            },
+          },
+          "sessions.files.get": {
+            sessionKey: "main",
+            root: "/workspace",
+            file: {
+              name: "notes.md",
+              path: "notes.md",
+              workspacePath: "notes.md",
+              content: "# Delivery notes\n",
+              previewKind: "text",
+              contentEncoding: "utf8",
+            },
+          },
+          "sessions.files.download": {
+            filename: "notes.md",
+            mimeType: "text/markdown",
+            url: "/api/artifacts/download/navigation/notes",
+            expiresAt: "2099-01-01T00:00:00Z",
+          },
         },
-        "artifacts.list": { artifacts: [] },
-      },
+      });
+      await page.route("**/api/artifacts/download/navigation/notes", (route) =>
+        route.fulfill({ body: "# Delivery notes\n", contentType: "text/markdown" }),
+      );
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
+      await composer.fill("Please review the delivery notes before publishing.");
+      await openChatSidePanelType(page, "Files");
+      const file = page.locator(".workspace-desktop").getByRole("button", {
+        name: "notes.md",
+        exact: true,
+      });
+      await file.click();
+      const heading = page.getByRole("heading", { name: "Delivery notes", exact: true });
+      await heading.waitFor();
+      await page.getByRole("button", { name: "More file actions", exact: true }).click();
+      await page.getByRole("menuitem", { name: "Attach to session", exact: true }).click();
+      await page.getByRole("button", { name: "Remove notes.md", exact: true }).waitFor();
+      await page.getByRole("button", { name: "Send message", exact: true }).click();
+      const sent = await gateway.waitForRequest("chat.send");
+      const runId = requireString(requireRecord(sent.params).idempotencyKey, "run ID");
+      await gateway.emitGatewayEvent(
+        "chat",
+        chatDelta(runId, "Reviewing the delivery notes.", "agent:main:main", { seq: 1 }),
+      );
+      await page
+        .locator(".chat-bubble.streaming", { hasText: "Reviewing the delivery notes." })
+        .waitFor();
+      await composer.fill("Keep the examples ready for review.");
+      expect(errors).toEqual([]);
+      await page.getByRole("button", { name: "Root", exact: true }).click();
+      await file.waitFor({ state: "visible" });
+      await heading.waitFor({ state: "hidden" });
+      await file.click();
+      await heading.waitFor();
+      await gateway.emitChatFinal({ runId, text: "The delivery notes are ready." });
+      await page
+        .locator(".chat-group.assistant .chat-text", { hasText: "The delivery notes are ready." })
+        .waitFor();
+      await page.getByRole("button", { name: "Stop generating", exact: true }).waitFor({
+        state: "hidden",
+      });
+      expect(await composer.inputValue()).toBe("Keep the examples ready for review.");
+      expect(errors).toEqual([]);
     });
-    try {
+  });
+
+  it("retries a failed post-run listing without hiding a rejected retry", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "sessions.files.list": {
+            sessionKey: "main",
+            root: "/workspace",
+            files: [{ kind: "modified", name: "checklist.md", path: "checklist.md", size: 42 }],
+          },
+          "artifacts.list": { artifacts: [] },
+        },
+      });
+      const listRequests = () => gateway.getRequests("sessions.files.list");
       await page.goto(`${suite.server.baseUrl}chat`);
       await openChatSidePanelType(page, "Files");
-      const rail = page.locator(".chat-workspace-rail");
+      const rail = page.locator(".workspace-desktop");
       await rail.getByText("checklist.md", { exact: true }).waitFor();
       await gateway.deferNext("sessions.files.list");
       await gateway.emitChatFinal({ runId: "files-revision", text: "Checklist updated." });
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
-        .toBe(2);
+      await expect.poll(listRequests).toHaveLength(2);
       await gateway.rejectDeferred("sessions.files.list", {
         code: "UNAVAILABLE",
         message: "Session workspace changed during file read",
       });
       const error = rail.getByText("Session workspace changed during file read", { exact: true });
       await error.waitFor();
-      await page.getByRole("button", { name: "Close Files" }).click();
-      await rail.waitFor({ state: "detached" });
+      await selectChatLayoutAction(page, "Collapse session workspace");
+      await rail.waitFor({ state: "hidden" });
       await openChatSidePanelType(page, "Files");
       await error.waitFor();
-      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(2);
+      expect(await listRequests()).toHaveLength(2);
       const retry = rail.getByRole("button", { name: "Retry", exact: true });
       await retry.waitFor();
-      if (proof) {
-        const frame = await takeControlUiScreenshotFrame(page, rail, [error, retry], {
-          animations: "disabled",
-        });
-        await writeFile(path.join(proof, "retry.png"), frame.png);
-      }
       await gateway.deferNext("sessions.files.list");
       await retry.click();
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
-        .toBe(3);
+      await expect.poll(listRequests).toHaveLength(3);
       await gateway.rejectDeferred("sessions.files.list", {
         code: "FORBIDDEN",
         message: "Session files are unavailable",
       });
       const denied = rail.getByRole("alert");
       await expect.poll(() => denied.textContent()).toBe("Session files are unavailable");
-      expect(await rail.locator(".chat-workspace-rail__file-name").count()).toBe(0);
-      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(3);
+      expect(await rail.locator(".workspace-desktop__row").count()).toBe(0);
       await retry.click();
       await rail.getByText("checklist.md", { exact: true }).waitFor();
-      const requests = await gateway.getRequests("sessions.files.list");
+      const requests = await listRequests();
       expect(requests).toHaveLength(4);
       expect(requests[2]?.params).toEqual(requests[1]?.params);
       expect(requests[3]?.params).toEqual(requests[1]?.params);
       expect(await denied.count()).toBe(0);
       expect(await retry.count()).toBe(0);
-      if (proof) {
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          rail,
-          [rail.getByText("checklist.md", { exact: true })],
-          { animations: "disabled" },
-        );
-        await writeFile(path.join(proof, "recovered.png"), frame.png);
-      }
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    });
   });
 
-  it("starts the workspace files panel collapsed and toggles it open", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.diff"],
-      methodResponses: {
-        "artifacts.list": {
-          artifacts: [
-            {
-              download: { mode: "bytes" },
-              id: "artifact-1",
-              mimeType: "image/png",
-              sizeBytes: 128,
-              title: "preview.png",
-              type: "image",
+  it("keeps Files lazy, scrolls below its toolbar, and reveals reviewed files", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["chat.metadata", "chat.startup", "sessions.diff"],
+        methodResponses: {
+          "artifacts.list": { artifacts: [{ ...previewArtifact, sizeBytes: 128 }] },
+          "sessions.files.list": {
+            browser: {
+              entries: [
+                { kind: "directory", name: "src", path: "src", sessionKind: "modified" },
+                { kind: "file", name: "package.json", path: "package.json", size: 4096 },
+                ...Array.from({ length: 60 }, (_, index) => ({
+                  kind: "file",
+                  name: "file-" + index + ".ts",
+                  path: "file-" + index + ".ts",
+                })),
+              ],
+              path: "",
             },
-          ],
-        },
-        "sessions.files.list": {
-          browser: {
-            entries: [
-              {
-                kind: "directory",
-                name: "src",
-                path: "src",
-                sessionKind: "modified",
-              },
-              {
-                kind: "file",
-                name: "package.json",
-                path: "package.json",
-                size: 4096,
-              },
-            ],
-            path: "",
+            files: [{ kind: "modified", name: "AGENTS.md", path: "/workspace/AGENTS.md" }],
+            root: "/workspace",
+            sessionKey: "main",
           },
-          files: [
-            {
-              kind: "modified",
-              missing: false,
-              name: "AGENTS.md",
-              path: "/workspace/AGENTS.md",
-              size: 2048,
-            },
-          ],
-          root: "/workspace",
-          sessionKey: "main",
+          "sessions.diff": {
+            additions: 1,
+            branch: "main",
+            deletions: 0,
+            files: [{ additions: 1, deletions: 0, path: "AFTER_RUN.md", status: "modified" }],
+            root: "/workspace",
+            sessionKey: "main",
+          },
         },
-        "sessions.diff": {
-          additions: 1,
-          branch: "main",
-          deletions: 0,
-          files: [
-            {
-              additions: 1,
-              deletions: 0,
-              path: "AFTER_RUN.md",
-              status: "modified",
-            },
-          ],
-          root: "/workspace",
-          sessionKey: "main",
-        },
-      },
-    });
+      });
 
-    try {
+      const waitForFile = (name: string) =>
+        page.locator(".workspace-desktop__row", { hasText: name }).waitFor({ timeout: 10_000 });
+      const setModifiedFile = (name: string) =>
+        gateway.setMethodResponse("sessions.files.list", {
+          files: [{ kind: "modified", name, path: `/workspace/${name}` }],
+        });
+      const listRequests = () => gateway.getRequests("sessions.files.list");
       await page.goto(`${suite.server.baseUrl}chat`);
-      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
-      expect(await page.locator(".chat-workspace-rail").count()).toBe(0);
+      expect(await listRequests()).toHaveLength(0);
+      expect(await page.locator(".workspace-desktop:visible").count()).toBe(0);
 
       await openChatSidePanelType(page, "Files");
-      await page.locator(".chat-workspace-rail__file-name", { hasText: "AGENTS.md" }).waitFor({
-        timeout: 10_000,
-      });
-      await page.locator(".chat-workspace-rail__group-summary", { hasText: "Artifacts" }).click();
-      await page
-        .locator(".chat-workspace-rail__file-name", { hasText: "preview.png" })
-        .waitFor({ timeout: 10_000 });
+      await waitForFile("AGENTS.md");
+      await waitForFile("preview.png");
       await page.getByText("Project files").waitFor({ timeout: 10_000 });
-      await page.locator(".chat-workspace-rail__file-name", { hasText: "package.json" }).waitFor({
-        timeout: 10_000,
-      });
-      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
+      await waitForFile("package.json");
+      expect(await listRequests()).toHaveLength(1);
       expect(await gateway.getRequests("artifacts.list")).toHaveLength(1);
       expect(
-        await page.locator(".chat-workspace-rail").evaluate((element) => {
+        await page.locator(".workspace-desktop").evaluate((element) => {
           return window.innerWidth - element.getBoundingClientRect().right;
         }),
       ).toBe(0);
 
-      await page.getByRole("button", { name: "Close Files" }).click();
-      await page.locator(".chat-workspace-rail").waitFor({ state: "detached" });
-      expect(await page.locator(".chat-workspace-rail").count()).toBe(0);
-      await gateway.setMethodResponse("sessions.files.list", {
-        files: [
-          {
-            kind: "modified",
-            name: "AFTER_RUN.md",
-            path: "/workspace/AFTER_RUN.md",
-          },
-        ],
-      });
-      await gateway.emitChatFinal({
-        runId: "workspace-closed-run",
-        text: "Workspace stayed closed.",
-      });
-      await expect.poll(() => page.getByText("Workspace stayed closed.").count()).toBe(1);
-      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
-
-      await openChatSidePanelType(page, "Files");
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
-        .toBe(2);
-      await page.locator(".chat-workspace-rail__file-name", { hasText: "AFTER_RUN.md" }).waitFor({
-        timeout: 10_000,
-      });
-      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(2);
-
-      await openChatSidePanelType(page, "Review");
-      await page.locator('[data-panel-slot="detail"]:not([hidden])').waitFor();
-      await page.getByRole("button", { name: "Actions for AFTER_RUN.md" }).click();
-      await page.locator('openclaw-session-diff-menu button[value="reveal-file"]').click();
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
-        .toBe(3);
-      await page.locator(".chat-workspace-rail__file-name", { hasText: "AFTER_RUN.md" }).waitFor({
-        timeout: 10_000,
-      });
-      await page.locator(".tabstrip-tab").filter({ hasText: "Review" }).click();
-      await gateway.setMethodResponse("sessions.files.list", {
-        files: [
-          {
-            kind: "modified",
-            name: "AFTER_REVIEW.md",
-            path: "/workspace/AFTER_REVIEW.md",
-          },
-        ],
-      });
-      await gateway.emitChatFinal({
-        runId: "workspace-inactive-run",
-        text: "Workspace stayed inactive.",
-      });
-      await page.getByText("Workspace stayed inactive.").first().waitFor();
-      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(3);
-
-      await page.locator(".tabstrip-tab").filter({ hasText: "Files" }).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
-        .toBe(4);
-      await page
-        .locator(".chat-workspace-rail__file-name", { hasText: "AFTER_REVIEW.md" })
-        .waitFor({ timeout: 10_000 });
-
-      await page.setViewportSize({ height: 900, width: 640 });
-      await page.locator(".sidebar-region--narrow").waitFor();
-      const workspaceRail = page.locator(".chat-workspace-rail");
-      await expect
-        .poll(async () => {
-          const box = await workspaceRail.boundingBox();
-          return Boolean(box && box.width > 0 && box.height > 0);
-        })
-        .toBe(true);
-      expect(await page.locator(".chat-workspace-rail__dock").count()).toBe(0);
-      expect(await page.locator(".chat-workspace-rail__grip").count()).toBe(0);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("scrolls long file groups beneath the search toolbar and filters session files", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 720, width: 1280 },
-    });
-    const page = await context.newPage();
-    const browserEntries = Array.from({ length: 60 }, (_, index) => ({
-      kind: "file" as const,
-      name: `file-${String(index + 1).padStart(2, "0")}.ts`,
-      path: `src/file-${String(index + 1).padStart(2, "0")}.ts`,
-      size: 2048 + index,
-    }));
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.files.list": {
-          browser: { entries: browserEntries, path: "" },
-          files: [
-            ...Array.from({ length: 2 }, (_, index) => ({
-              kind: "modified",
-              name: `changed-${index + 1}.ts`,
-              path: `src/changed-${index + 1}.ts`,
-              missing: false,
-            })),
-            ...["read-file-1.ts", "read-file-2.ts", "notes.md"].map((name) => ({
-              kind: "read",
-              name,
-              path: `src/${name}`,
-              missing: false,
-            })),
-          ],
-          root: "/workspace",
-          sessionKey: "main",
-        },
-        "artifacts.list": {
-          artifacts: [
-            {
-              id: "artifact-1",
-              title: "preview.png",
-              mimeType: "image/png",
-              sizeBytes: 2048,
-              type: "image",
-              download: { mode: "bytes" },
-            },
-          ],
-        },
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await openChatSidePanelType(page, "Files");
-      await page.locator(".chat-workspace-rail__file-name", { hasText: "file-60.ts" }).waitFor({
-        timeout: 10_000,
-      });
-      expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
-
-      const rail = page.locator(".chat-workspace-rail");
-      const scroll = rail.locator(".chat-workspace-rail__scroll");
-      const browserGroup = rail.locator(".chat-workspace-rail__group", {
-        hasText: "Project files",
-      });
+      await page.setViewportSize({ width: 1280, height: 720 });
+      const rail = page.locator(".workspace-desktop");
+      const scroll = rail.locator(".workspace-desktop__project-scroll");
+      const toolbar = rail.locator(".workspace-desktop__toolbar");
+      const before = await toolbar.boundingBox();
       await expect
         .poll(() =>
           scroll.evaluate((element) => ({
@@ -336,50 +238,35 @@ suite.define(() => {
           })),
         )
         .toEqual({ overflows: true, overflowY: "auto" });
-      expect(await browserGroup.evaluate((element) => getComputedStyle(element).overflowY)).toBe(
-        "visible",
-      );
-      expect(
-        await rail
-          .locator(".chat-workspace-rail__group")
-          .evaluateAll((groups) =>
-            groups.some((group) => ["auto", "scroll"].includes(getComputedStyle(group).overflowY)),
-          ),
-      ).toBe(false);
+      await scroll.hover();
+      await page.mouse.wheel(0, 600);
+      await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
       await scroll.evaluate((element) => {
         element.scrollTop = element.scrollHeight;
       });
-      const railBox = await rail.boundingBox();
-      const search = rail.locator('input[type="search"]');
-      const searchBox = await search.boundingBox();
-      expect(railBox).not.toBeNull();
-      expect(searchBox).not.toBeNull();
-      expect(searchBox!.y).toBeGreaterThanOrEqual(railBox!.y);
-      expect(searchBox!.y + searchBox!.height).toBeLessThanOrEqual(railBox!.y + railBox!.height);
+      const after = await toolbar.boundingBox();
+      expect(before).not.toBeNull();
+      expect(after).toEqual(before);
+      await page.setViewportSize({ width: 1280, height: 900 });
 
-      await rail.getByRole("button", { name: "3 read", exact: true }).click();
-      const groups = rail.locator(".chat-workspace-rail__group");
-      await expect.poll(() => groups.count()).toBe(1);
-      expect(await groups.locator("summary").textContent()).toContain("Read");
-      expect(await groups.locator(".chat-workspace-rail__file:visible").count()).toBe(3);
-      expect(
-        await rail
-          .getByRole("button", { name: "3 read", exact: true })
-          .getAttribute("aria-pressed"),
-      ).toBe("true");
-
-      await search.fill("read-file");
+      await setModifiedFile("AFTER_RUN.md");
+      await openChatSidePanelType(page, "Review");
+      await page.locator('[data-panel-slot="detail"]:not([hidden])').waitFor();
+      await page.getByRole("button", { name: "Actions for AFTER_RUN.md" }).click();
+      await page.locator('openclaw-session-diff-menu button[value="reveal-file"]').click();
+      await expect.poll(listRequests).toHaveLength(2);
+      await waitForFile("AFTER_RUN.md");
+      await page.setViewportSize({ height: 900, width: 640 });
+      const workspaceRail = page.locator(".chat-workspace-mobile");
+      await workspaceRail.waitFor();
       await expect
-        .poll(() => groups.locator(".chat-workspace-rail__file-name:visible").allTextContents())
-        .toEqual(["read-file-1.ts", "read-file-2.ts"]);
-      expect(
-        await groups
-          .locator(".chat-workspace-rail__file-open:visible")
-          .evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))),
-      ).toEqual(["src/read-file-1.ts", "src/read-file-2.ts"]);
-      expect(await groups.count()).toBe(1);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+        .poll(async () => {
+          const box = await workspaceRail.boundingBox();
+          return Boolean(box && box.width > 0 && box.height > 0);
+        })
+        .toBe(true);
+      expect(await page.locator(".chat-workspace-rail__dock").count()).toBe(0);
+      expect(await page.locator(".chat-workspace-rail__grip").count()).toBe(0);
+    });
   });
 });

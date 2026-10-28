@@ -7,11 +7,16 @@ import {
 } from "./onboard.js";
 import { buildXiaomiProvider, buildXiaomiTokenPlanProvider } from "./provider-catalog.js";
 
+// Onboarding writes catalog rows as authored config, which cannot carry the catalog family.
+function withoutCatalogFamilies<T extends { models: Array<{ family?: string }> }>(provider: T): T {
+  return { ...provider, models: provider.models.map(({ family: _family, ...model }) => model) };
+}
+
 describe("xiaomi onboard", () => {
   it("adds Xiaomi provider with correct settings", () => {
     const cfg = applyXiaomiConfig({});
     const provider = cfg.models?.providers?.xiaomi;
-    expect(provider).toEqual(buildXiaomiProvider());
+    expect(provider).toEqual(withoutCatalogFamilies(buildXiaomiProvider()));
     expect(provider?.models.map((m) => m.id)).toEqual([
       "mimo-v2.6-pro",
       "mimo-v2.6-flash",
@@ -49,7 +54,7 @@ describe("xiaomi onboard", () => {
     const cfg = applyXiaomiTokenPlanConfig({ models: { mode: "replace" } }, "ams");
     const provider = cfg.models?.providers?.["xiaomi-token-plan"];
     expect(provider).toEqual({
-      ...buildXiaomiTokenPlanProvider(),
+      ...withoutCatalogFamilies(buildXiaomiTokenPlanProvider()),
       baseUrl: "https://token-plan-ams.xiaomimimo.com/v1",
     });
     expect(provider?.models.map((m) => m.id)).toEqual([

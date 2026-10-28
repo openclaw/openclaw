@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -7,41 +8,40 @@ import {
   makePathEnv,
   makeExecApprovalsTempDir,
 } from "./exec-approvals-test-helpers.js";
-import { planShellAuthorization } from "./exec-authorization-plan.js";
+import { planShellAuthorization as planShell } from "./exec-authorization-plan.js";
 import {
-  buildAuthorizedShellCommandFromPlan,
-  buildReviewedShellCommandFromPlan,
+  buildAuthorizedShellCommandFromPlan as renderAuthorized,
+  buildReviewedShellCommandFromPlan as renderReviewed,
 } from "./exec-authorization-render.js";
-import { prepareSystemRunMutableFileBinding } from "./system-run-approval-binding.js";
+import { prepareSystemRunMutableFileBinding as prepareBinding } from "./system-run-approval-binding.js";
 
 const POSIX_ENV = { PATH: "/usr/bin:/bin" };
+type RenderOptions = Parameters<typeof renderAuthorized>[0];
+function executableEnv(...names: string[]) {
+  const dir = makeExecApprovalsTempDir();
+  names.forEach((name) => makeExecutable(dir, name));
+  return { dir, env: makePathEnv(dir) };
+}
 
 async function render(
   command: string,
-  mode: Parameters<typeof buildAuthorizedShellCommandFromPlan>[0]["mode"],
-  segmentSatisfiedBy: Parameters<
-    typeof buildAuthorizedShellCommandFromPlan
-  >[0]["segmentSatisfiedBy"],
+  mode: RenderOptions["mode"],
+  segmentSatisfiedBy: RenderOptions["segmentSatisfiedBy"],
   env: NodeJS.ProcessEnv = POSIX_ENV,
 ) {
-  const plan = await planShellAuthorization({ command, env });
-  return buildAuthorizedShellCommandFromPlan({ plan, mode, segmentSatisfiedBy });
+  const plan = await planShell({ command, env });
+  return renderAuthorized({ plan, mode, segmentSatisfiedBy });
 }
 
-function renderOk(result: ReturnType<typeof buildAuthorizedShellCommandFromPlan>): string {
-  expect(result).toEqual(expect.objectContaining({ ok: true }));
-  if (!result.ok) {
-    throw new Error(result.reason);
-  }
+function renderOk(result: ReturnType<typeof renderAuthorized>): string {
+  assert(result.ok, "Expected an authorized shell command");
   return result.command;
 }
 
 async function prepareReviewedCommand(command: string, env: NodeJS.ProcessEnv, cwd?: string) {
-  const plan = await planShellAuthorization({ command, env, cwd });
-  if (!plan.ok) {
-    throw new Error(plan.reason);
-  }
-  const prepared = await prepareSystemRunMutableFileBinding({
+  const plan = await planShell({ command, env, cwd });
+  assert(plan.ok, "Expected a shell authorization plan");
+  const prepared = await prepareBinding({
     command: {
       kind: "segments",
       segments: plan.groups.flatMap((group) =>
@@ -51,9 +51,7 @@ async function prepareReviewedCommand(command: string, env: NodeJS.ProcessEnv, c
     env,
     cwd,
   });
-  if (!prepared.ok) {
-    throw new Error(prepared.message);
-  }
+  assert(prepared.ok, "Expected a prepared shell binding");
   return { plan, binding: prepared.binding };
 }
 
@@ -78,25 +76,27 @@ describe("exec authorization renderer", () => {
     await expect(render(command, mode, satisfiedBy)).resolves.toEqual({ ok: false, reason });
   });
 
-  it("renders dispatch-wrapper safe-bin commands without quote-all argv rendering", async () => {
-    const env = makePathEnv(makeExecApprovalsTempDir());
-    expect(renderOk(await render("env rg -n needle", "safeBins", ["safeBins"], env))).toBe(
-      "rg -n needle",
-    );
-  });
-
-  it("preserves non-rewritten wrapper payload commands", async () => {
-    const result = await render("sh -c 'git status && head -c 16'", "safeBins", [null, "safeBins"]);
-    expect(renderOk(result)).toMatch(/^sh -c 'git status && \/.+\/head -c 16'$/);
-  });
-
-  it("leaves POSIX safe builtins unrewritten in enforced mode", async () => {
-    expect(renderOk(await render("cd .", "enforced", ["safeBuiltins"]))).toBe("cd .");
-  });
-
-  it("preserves env assignment prefixes for enforced POSIX commands", async () => {
-    const result = await render("LIMIT=1 head -n 5", "enforced", ["allowlist"]);
-    expect(renderOk(result)).toMatch(/^LIMIT=1 \/.+\/head -n 5$/);
+  it.each<[string, RenderOptions["mode"], RenderOptions["segmentSatisfiedBy"], unknown]>([
+    ["env rg -n needle", "safeBins", ["safeBins"], "rg -n needle"],
+    [
+      "sh -c 'git status && head -c 16'",
+      "safeBins",
+      [null, "safeBins"],
+      expect.stringMatching(/^sh -c 'git status && \/.+\/head -c 16'$/),
+    ],
+    ["cd .", "enforced", ["safeBuiltins"], "cd ."],
+    [
+      "LIMIT=1 head -n 5",
+      "enforced",
+      ["allowlist"],
+      expect.stringMatching(/^LIMIT=1 \/.+\/head -n 5$/),
+    ],
+  ])("preserves authorized shell semantics: %s", async (command, mode, satisfiedBy, expected) => {
+    const env = command.startsWith("env ") ? makePathEnv(makeExecApprovalsTempDir()) : POSIX_ENV;
+    await expect(render(command, mode, satisfiedBy, env)).resolves.toEqual({
+      ok: true,
+      command: expected,
+    });
   });
 
   it("fails closed when shell-wrapper safe-bin rewrites would need outer quote escaping", async () => {
@@ -110,45 +110,30 @@ describe("exec authorization renderer", () => {
 });
 
 describe.skipIf(process.platform === "win32")("reviewed shell dispatch renderer", () => {
-  it.each([
-    [
-      '"ls"  "雪" *.txt | cat && env ls ~/docs; ls \\*.txt\nls "*.txt"',
-      "'BIN/ls'  \"雪\" *.txt | 'BIN/cat' && 'BIN/env' 'BIN/ls' ~/docs; 'BIN/ls' \\*.txt\n'BIN/ls' \"*.txt\"",
-    ],
-  ])("preserves argument expansion and topology for %s", async (source, expected) => {
-    const binDir = makeExecApprovalsTempDir();
-    for (const executable of ["env", "ls", "cat"]) {
-      makeExecutable(binDir, executable);
-    }
-    const prepared = await prepareReviewedCommand(source, makePathEnv(binDir));
-
-    expect(renderOk(buildReviewedShellCommandFromPlan(prepared))).toBe(
-      expected.replaceAll("BIN", binDir),
-    );
+  it("preserves argument expansion and topology", async () => {
+    const { dir, env } = executableEnv("env", "ls", "cat");
+    const source = '"ls"  "雪" *.txt | cat && env ls ~/docs; ls \\*.txt\nls "*.txt"';
+    const expected =
+      "'BIN/ls'  \"雪\" *.txt | 'BIN/cat' && 'BIN/env' 'BIN/ls' ~/docs; 'BIN/ls' \\*.txt\n'BIN/ls' \"*.txt\"";
+    const prepared = await prepareReviewedCommand(source, env);
+    expect(renderOk(renderReviewed(prepared))).toBe(expected.replaceAll("BIN", dir));
   });
 
   it("quotes bound executable paths containing shell metacharacters", async () => {
-    const binDir = makeExecApprovalsTempDir();
-    makeExecutable(binDir, "tool's name");
-    const prepared = await prepareReviewedCommand('"tool\'s name" *.txt', makePathEnv(binDir));
+    const { dir, env } = executableEnv("tool's name");
+    const prepared = await prepareReviewedCommand('"tool\'s name" *.txt', env);
 
-    expect(renderOk(buildReviewedShellCommandFromPlan(prepared))).toBe(
-      `'${binDir}/tool'"'"'s name' *.txt`,
-    );
+    expect(renderOk(renderReviewed(prepared))).toBe(`'${dir}/tool'"'"'s name' *.txt`);
   });
 
   it.each(["spans", "final binding"])(
     "refuses a partially pinned dispatch when %s are missing",
     async (missing) => {
-      const binDir = makeExecApprovalsTempDir();
-      makeExecutable(binDir, "env");
-      makeExecutable(binDir, "ls");
-      const prepared = await prepareReviewedCommand("env ls *.txt", makePathEnv(binDir));
+      const { env } = executableEnv("env", "ls");
+      const prepared = await prepareReviewedCommand("env ls *.txt", env);
       if (missing === "spans") {
-        for (const group of prepared.plan.groups) {
-          for (const candidate of group.candidates) {
-            delete candidate.sourceStep.argvSpans;
-          }
+        for (const candidate of prepared.plan.groups.flatMap((group) => group.candidates)) {
+          delete candidate.sourceStep.argvSpans;
         }
       } else {
         prepared.binding.operands = prepared.binding.operands.filter(
@@ -156,7 +141,7 @@ describe.skipIf(process.platform === "win32")("reviewed shell dispatch renderer"
         );
       }
 
-      expect(buildReviewedShellCommandFromPlan(prepared).ok).toBe(false);
+      expect(renderReviewed(prepared).ok).toBe(false);
     },
   );
 
@@ -171,7 +156,7 @@ describe.skipIf(process.platform === "win32")("reviewed shell dispatch renderer"
           POSIX_ENV,
           cwd,
         );
-        const command = renderOk(buildReviewedShellCommandFromPlan(prepared));
+        const command = renderOk(renderReviewed(prepared));
         const aliases = shell.endsWith("zsh")
           ? [...new Set(prepared.binding.operands.map((entry) => entry.snapshot.path))]
               .map((executable) => `alias -g '${executable}=false'`)

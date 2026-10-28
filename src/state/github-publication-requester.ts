@@ -33,7 +33,9 @@ export type GitHubPublicationRequesterSnapshot = Readonly<
 
 const MAX_REQUESTER_BYTES = 64 * 1024;
 
-function immutableRequester(value: RequesterData): GitHubPublicationRequesterSnapshot {
+function immutableRequester(
+  value: GitHubPublicationRequesterSnapshot,
+): GitHubPublicationRequesterSnapshot {
   return Object.freeze({
     version: 1,
     actor: Object.freeze(value.actor),
@@ -51,11 +53,7 @@ function immutableRequester(value: RequesterData): GitHubPublicationRequesterSna
 export function encodeGitHubPublicationRequester(
   requester: GitHubPublicationRequesterSnapshot,
 ): string {
-  const parsed = requesterSchema.safeParse(requester);
-  if (!parsed.success) {
-    throw new Error("GitHub publication requester is invalid.");
-  }
-  const json = JSON.stringify(immutableRequester(parsed.data));
+  const json = JSON.stringify(immutableRequester(requester));
   if (Buffer.byteLength(json, "utf8") > MAX_REQUESTER_BYTES) {
     throw new Error("GitHub publication requester is too large.");
   }

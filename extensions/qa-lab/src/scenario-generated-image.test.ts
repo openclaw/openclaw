@@ -1,13 +1,11 @@
-import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createOutboundPayloadPlan } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { mergeAttemptToolMediaPayloads } from "openclaw/plugin-sdk/qa-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
+import { extractGatewayMessageText } from "./gateway-log-sentinel.js";
 import { waitForQaTransportCondition } from "./qa-transport.js";
 import { readQaScenarioById } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
@@ -34,7 +32,12 @@ const png = Buffer.from(
 
 async function runImageScenario(
   options: {
-    fault?: "late duplicate message" | "failed turn";
+    fault?:
+      | "late duplicate message"
+      | "failed turn"
+      | "initial acknowledgement only"
+      | "wrong completion run"
+      | "mismatched completion text";
     isGenerating?: () => boolean;
   } = {},
 ) {
@@ -46,15 +49,8 @@ async function runImageScenario(
   const generatedPath = path.join(tempDirs.make("qa-generated-image-"), "generated.png");
   await fs.writeFile(generatedPath, png);
   const caption = "A QA lighthouse on the coast.";
-  const finalText = `${caption}\n\nMEDIA:${generatedPath}`;
-  const [delivery] = createOutboundPayloadPlan(
-    mergeAttemptToolMediaPayloads({
-      payloads: [{ text: finalText }],
-      toolMediaUrls: [generatedPath],
-    }) ?? [],
-  );
-  assert.ok(delivery);
-  expect(delivery.parts).toMatchObject({ text: caption, mediaUrls: [generatedPath] });
+  const taskId = "tool:image_generate:qa-image";
+  const completionRunId = `image_generate:${taskId}:ok:agent-loop:attempt:1`;
   const attachment = {
     id: "generated-image",
     kind: "image" as const,
@@ -64,7 +60,7 @@ async function runImageScenario(
   const deliverImage = () =>
     state.addOutboundMessage({
       to: "dm:qa-operator",
-      text: delivery.parts.text,
+      text: "",
       attachments: [attachment],
     });
   let settled = false;
@@ -93,33 +89,64 @@ async function runImageScenario(
           expect(params).toEqual({ sessionKey, limit: 100, maxChars: 131072 });
           const actions = ["status", "generate", "status"];
           return {
-            messages: actions.flatMap((action, index) => {
-              const call = {
-                role: "assistant",
-                content: [
+            messages: [
+              ...actions.flatMap((action, index) => {
+                const call = {
+                  role: "assistant",
+                  content: [
+                    {
+                      type: "toolCall",
+                      id: `image-${index}`,
+                      name: "image_generate",
+                      arguments: { action },
+                    },
+                  ],
+                };
+                return [
+                  call,
                   {
-                    type: "toolCall",
-                    id: `image-${index}`,
-                    name: "image_generate",
-                    arguments: { action },
+                    role: "toolResult",
+                    toolCallId: `image-${index}`,
+                    toolName: "image_generate",
+                    isError: false,
+                    content:
+                      action === "generate"
+                        ? [
+                            {
+                              type: "text",
+                              text: `Background task started for image generation (${taskId}). Do not call image_generate again for this request.`,
+                            },
+                          ]
+                        : [],
                   },
-                ],
-              };
-              return [
-                call,
-                {
-                  role: "toolResult",
-                  toolCallId: `image-${index}`,
-                  toolName: "image_generate",
-                  isError: false,
-                },
-              ];
-            }),
+                ];
+              }),
+              ...(options.fault === "initial acknowledgement only"
+                ? []
+                : [
+                    {
+                      role: "assistant",
+                      content: [{ type: "text", text: caption }],
+                      __openclaw: {
+                        runId:
+                          options.fault === "wrong completion run"
+                            ? "initial-run"
+                            : completionRunId,
+                      },
+                    },
+                  ]),
+            ],
           };
         }
         if (method === "agent") {
-          if (options.isGenerating) {
-            state.addOutboundMessage({ to: "dm:qa-operator", text: "Rendering the lighthouse." });
+          if (options.isGenerating || options.fault === "initial acknowledgement only") {
+            state.addOutboundMessage({
+              to: "dm:qa-operator",
+              text:
+                options.fault === "initial acknowledgement only"
+                  ? caption
+                  : "Rendering the lighthouse.",
+            });
           }
           return { runId: "image-run" };
         }
@@ -130,6 +157,12 @@ async function runImageScenario(
           return { status: "error", error: "image generation failed" };
         }
         deliverImage();
+        if (options.fault !== "initial acknowledgement only") {
+          state.addOutboundMessage({
+            to: "dm:qa-operator",
+            text: options.fault === "mismatched completion text" ? "Unpersisted caption." : caption,
+          });
+        }
         return {
           status: "ok",
           terminalDelivery: { status: "sent", resultCount: 1 },
@@ -154,6 +187,7 @@ async function runImageScenario(
       randomUUID: () => "test",
       normalizeLowercaseStringOrEmpty,
       projectQaToolMessages,
+      extractGatewayMessageText,
       readEffectiveTools: async () => new Set(["image_generate"]),
       reset: () => state.reset(),
       runAgentPrompt,
@@ -168,7 +202,7 @@ async function runImageScenario(
         }
         return {
           successfulToolCallCounts: { image_generate: options.isGenerating ? 2 : 1 },
-          finalText: settled ? finalText : "Rendering the lighthouse.",
+          finalText: settled ? caption : "Rendering the lighthouse.",
         };
       },
       runScenario: runQaSuiteScenarioSteps,
@@ -177,7 +211,7 @@ async function runImageScenario(
 }
 
 describe("native image scenario delivery evidence", () => {
-  it("accepts one exact image after progress and completion", async () => {
+  it("correlates the public task receipt without private details after image completion", async () => {
     vi.useFakeTimers();
     const waiting = createDeferred<"waiting">();
     let active = true;
@@ -192,7 +226,8 @@ describe("native image scenario delivery evidence", () => {
       observeStatusWait.mockReset();
       vi.useRealTimers();
     }
-    expect(await result).toMatchObject({ status: "pass" });
+    const outcome = await result;
+    expect(outcome, outcome.details).toMatchObject({ status: "pass" });
   });
 
   it.each([
@@ -202,6 +237,17 @@ describe("native image scenario delivery evidence", () => {
     expect(await runImageScenario({ fault })).toMatchObject({
       status: "fail",
       details: expect.stringContaining(error),
+    });
+  });
+
+  it.each([
+    "initial acknowledgement only",
+    "wrong completion run",
+    "mismatched completion text",
+  ] as const)("rejects %s as completion evidence", async (fault) => {
+    expect(await runImageScenario({ fault })).toMatchObject({
+      status: "fail",
+      details: expect.stringContaining("generated image completion was not persisted"),
     });
   });
 });

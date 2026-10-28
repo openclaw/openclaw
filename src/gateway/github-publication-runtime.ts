@@ -3,6 +3,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { createGitHubPublicationWorkerScope } from "../state/github-publication-worker.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { createGitHubPublicationRecoveryBackoff } from "./github-publication-recovery.js";
 import {
   listRepositoryGitHubPublicationsAsync,
   listSharedGitHubPublicationsAsync,
@@ -23,6 +24,10 @@ export function createGitHubPublicationRuntime(params: {
 }) {
   const context = captureOpenClawStateWorkerContext();
   const scope = createGitHubPublicationWorkerScope(context);
+  const recovery = {
+    shared: createGitHubPublicationRecoveryBackoff(),
+    repository: createGitHubPublicationRecoveryBackoff(),
+  };
   const pendingRequests = new Set<string>();
   let pendingKnown = false;
   let reconcileNeeded = true;
@@ -85,15 +90,19 @@ export function createGitHubPublicationRuntime(params: {
       for (const [key, pending] of updates) {
         updatePending(key, pending);
       }
+      // This invocation can skip empty recovery only until a receipt changes the loaded facts.
+      return (kind: "shared" | "repository") =>
+        (kind === "shared" ? shared : repository).length === 0 &&
+        updates.size === 0 &&
+        pendingKnown;
     } catch (error) {
       pendingKnown = false;
       throw error;
-    } finally {
-      loadingUpdates = undefined;
     }
   };
   const coordinator = createGitHubPublicationCoordinator({
     ...params,
+    recovery,
     assertCurrent: scope.assertCurrent,
     signal: scope.signal,
   });
@@ -160,48 +169,54 @@ export function createGitHubPublicationRuntime(params: {
     if (isStopping?.()) {
       return;
     }
-    if (!pendingKnown) {
-      await loadPendingRequests();
-    }
-    if (isStopping?.()) {
-      return;
-    }
-    if (!reconcileNeeded && pendingRequests.size === 0) {
-      return;
-    }
-    reconcileNeeded = false;
     try {
-      await coordinator.deferOrphanedRequestsAsync();
-      if (!isStopping?.()) {
-        await coordinator.resumeSessionRequests(isStopping);
+      const isPendingEmpty = !pendingKnown ? await loadPendingRequests() : undefined;
+      if (isStopping?.()) {
+        return;
       }
-    } catch (error) {
-      reconcileNeeded = true;
-      params.warn(`GitHub publication recovery deferred: ${formatErrorMessage(error)}`);
-    }
-    if (isStopping?.()) {
-      reconcileNeeded = true;
-      return;
-    }
-    try {
-      for (const publication of await coordinator.listUnreportedResultsAsync()) {
-        if (isStopping?.()) {
-          reconcileNeeded = true;
-          break;
-        }
-        if (!(await reportDeferred(publication))) {
-          reconcileNeeded = true;
-        }
+      if (!reconcileNeeded && pendingRequests.size === 0) {
+        recovery.shared.clear();
+        recovery.repository.clear();
+        return;
       }
-    } catch (error) {
-      reconcileNeeded = true;
-      throw error;
+      reconcileNeeded = false;
+      try {
+        await coordinator.deferOrphanedRequestsAsync(isPendingEmpty);
+        if (!isStopping?.()) {
+          await coordinator.resumeSessionRequests(isStopping, isPendingEmpty);
+        }
+      } catch (error) {
+        reconcileNeeded = true;
+        params.warn(`GitHub publication recovery deferred: ${formatErrorMessage(error)}`);
+      }
+      if (isStopping?.()) {
+        reconcileNeeded = true;
+        return;
+      }
+      try {
+        for (const publication of await coordinator.listUnreportedResultsAsync()) {
+          if (isStopping?.()) {
+            reconcileNeeded = true;
+            break;
+          }
+          if (!(await reportDeferred(publication))) {
+            reconcileNeeded = true;
+          }
+        }
+      } catch (error) {
+        reconcileNeeded = true;
+        throw error;
+      }
+    } finally {
+      loadingUpdates = undefined;
     }
   };
   return {
     ready,
     close: () => {
       stopFacts();
+      recovery.shared.clear();
+      recovery.repository.clear();
       return scope.close();
     },
     coordinator,

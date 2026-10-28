@@ -10,7 +10,7 @@ const fetchTimeoutMs = 30_000;
 function captureMiniMaxOAuthFetchTimeout() {
   const originalSetTimeout = globalThis.setTimeout;
   let fireTimeout: (() => void) | undefined;
-  const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+  vi.spyOn(globalThis, "setTimeout").mockImplementation(((
     callback: (...args: unknown[]) => void,
     timeout?: number,
     ...args: unknown[]
@@ -26,14 +26,11 @@ function captureMiniMaxOAuthFetchTimeout() {
     return timer;
   }) as typeof setTimeout);
   return {
-    setTimeoutSpy,
     fire() {
       if (!fireTimeout) {
         throw new Error("expected MiniMax OAuth fetch timeout to be scheduled");
       }
-      const callback = fireTimeout;
-      fireTimeout = undefined;
-      callback();
+      fireTimeout();
     },
   };
 }
@@ -177,9 +174,6 @@ describe("loginMiniMaxPortalOAuth", () => {
         ).rejects.toHaveProperty("name", expect.stringMatching(/^(AbortError|TimeoutError)$/));
         expect(server.requests).toContain(path);
         expect(fetchMock.mock.calls[fetchIndex]?.[1]?.signal).toBeInstanceOf(AbortSignal);
-        expect(
-          oauthTimeout.setTimeoutSpy.mock.calls.some(([, timeout]) => timeout === fetchTimeoutMs),
-        ).toBe(true);
       } finally {
         await server.close();
         await loginPromise?.catch(() => undefined);

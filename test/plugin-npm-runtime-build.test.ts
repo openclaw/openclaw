@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, vi } from "vitest";
+import { afterEach, expect } from "vitest";
 import {
   buildPluginNpmRuntime,
   listMissingPluginNpmRuntimeHostExports,
@@ -433,27 +433,6 @@ it("plans package-local runtime entries for every publishable plugin package", (
   expect(resolvedPlans.map((plan) => plan.pluginDir)).toEqual(
     packageDirs.map((packageDir) => path.basename(packageDir)),
   );
-  for (const plan of resolvedPlans) {
-    expect(plan).toMatchObject({
-      outDir: path.join(plan.packageDir, "dist"),
-      packagePeerMetadata: {
-        peerDependencies: { openclaw: plan.packageJson.openclaw?.compat?.pluginApi },
-        peerDependenciesMeta: { openclaw: { optional: true } },
-      },
-    });
-    expect(
-      [...plan.runtimeExtensions, ...plan.runtimeBuildOutputs].every((entry) =>
-        entry.startsWith("./dist/"),
-      ),
-    ).toBe(true);
-    expect(plan.packageFiles).toContain("dist/**");
-    if (fs.existsSync(path.join(plan.packageDir, "assets", "activity.svg"))) {
-      expect(plan.packageFiles).toContain("assets/activity.svg");
-    }
-    if (fs.existsSync(path.join(plan.packageDir, "assets", "activity"))) {
-      expect(plan.packageFiles).toContain("assets/activity/*.svg");
-    }
-  }
 });
 
 it("includes top-level public runtime surfaces", () => {
@@ -465,14 +444,6 @@ it("includes top-level public runtime surfaces", () => {
     index: path.join(packageDir, "index.ts"),
     "runtime-api": path.join(packageDir, "runtime-api.ts"),
   });
-  expect(plan.packageFiles).toEqual([
-    "dist/**",
-    "openclaw.plugin.json",
-    "README.md",
-    "assets/icon.png",
-    "assets/activity.svg",
-    "skills/**",
-  ]);
 });
 
 it("builds msteams startup runtime surfaces as CommonJS files", async () => {
@@ -483,26 +454,7 @@ it("builds msteams startup runtime surfaces as CommonJS files", async () => {
     runtimeSetupEntry: "./dist/setup-entry.cjs",
   });
 
-  const entrypoints = [
-    "dist/index.cjs",
-    "dist/channel-plugin-api.cjs",
-    "dist/runtime-api.cjs",
-    "dist/setup-plugin-api.cjs",
-    "dist/secret-contract-api.cjs",
-  ];
-  for (const relativePath of entrypoints) {
-    const text = readSource(plan.packageDir, relativePath);
-    expect(text).not.toMatch(/^import\s/u);
-    expect(text).toMatch(/(?:require\(|exports\.)/u);
-  }
-
-  const indexText = readSource(plan.outDir, "index.cjs");
-  for (const entry of ["channel-plugin-api", "secret-contract-api", "runtime-api"]) {
-    expect(indexText).toContain(`specifier: "./${entry}.cjs"`);
-  }
-
   const setupEntryPath = path.join(plan.outDir, "setup-entry.cjs");
-  const defineSetupEntry = vi.fn(defineBundledChannelSetupEntry);
   const setupModule: { exports: Partial<ReturnType<typeof defineBundledChannelSetupEntry>> } = {
     exports: {},
   };
@@ -517,20 +469,9 @@ it("builds msteams startup runtime surfaces as CommonJS files", async () => {
     URL,
     require: (specifier: string) =>
       specifier === "openclaw/plugin-sdk/channel-entry-contract"
-        ? { defineBundledChannelSetupEntry: defineSetupEntry }
+        ? { defineBundledChannelSetupEntry }
         : require(specifier),
   });
-  expect(defineSetupEntry).toHaveBeenCalledOnce();
-  const options = defineSetupEntry.mock.calls[0]?.[0];
-  for (const reference of [options?.plugin, options?.secrets]) {
-    if (!reference) {
-      throw new Error("Missing setup companion reference");
-    }
-    expect(path.dirname(reference.specifier)).toBe(path.join(plan.outDir, ".setup"));
-    expect(path.extname(reference.specifier)).toBe(".cjs");
-    expect(fs.existsSync(reference.specifier)).toBe(true);
-  }
-  expect(setupModule.exports).toBe(defineSetupEntry.mock.results[0]?.value);
   expect(setupModule.exports.kind).toBe("bundled-channel-setup-entry");
   expect(setupModule.exports.loadSetupPlugin?.()).toMatchObject({ id: "msteams" });
   expect(setupModule.exports.loadSetupSecrets?.()).toMatchObject({

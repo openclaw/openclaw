@@ -10,12 +10,6 @@ type SentMessageLookup = {
   messageId?: string;
 };
 
-type SentMessageLookupOptions = {
-  // Self-chat SQLite row IDs differ from outbound GUIDs; allow text matching after an ID miss.
-  skipIdShortCircuit?: boolean;
-  includePendingText?: boolean;
-};
-
 export type SentMessageCache = ReturnType<typeof createSentMessageCache>;
 
 // Echo arrival observed at ~2.2s on M4 Mac Mini (SQLite poll interval is the bottleneck).
@@ -54,18 +48,20 @@ export function createSentMessageCache() {
   async function has(
     scope: string,
     lookup: SentMessageLookup,
-    options: boolean | SentMessageLookupOptions = false,
+    options: {
+      // Self-chat SQLite row IDs differ from outbound GUIDs; allow text matching after an ID miss.
+      skipIdShortCircuit?: boolean;
+      includePendingText?: boolean;
+    } = {},
   ): Promise<boolean> {
-    const resolvedOptions =
-      typeof options === "boolean" ? { skipIdShortCircuit: options } : options;
     if (
       await hasPersistedIMessageEcho({
         scope,
         text: lookup.text,
         media: lookup.media,
         messageId: lookup.messageId,
-        skipIdShortCircuit: resolvedOptions.skipIdShortCircuit,
-        includePendingText: resolvedOptions.includePendingText,
+        skipIdShortCircuit: options.skipIdShortCircuit,
+        includePendingText: options.includePendingText,
       })
     ) {
       return true;
@@ -86,7 +82,7 @@ export function createSentMessageCache() {
       const hasTextOnlyMatch = hasContentOnlyMatch(text);
       const hasMediaOnlyMatch = hasContentOnlyMatch(media);
       canUseMediaFallback = hasMediaOnlyMatch;
-      if (!resolvedOptions.skipIdShortCircuit && !hasTextOnlyMatch && !hasMediaOnlyMatch) {
+      if (!options.skipIdShortCircuit && !hasTextOnlyMatch && !hasMediaOnlyMatch) {
         return false;
       }
     }

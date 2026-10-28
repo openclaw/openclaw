@@ -1,14 +1,11 @@
 import { createHmac } from "node:crypto";
-import { IncomingMessage } from "node:http";
-import { Socket } from "node:net";
 import { App, HTTPReceiver, SocketModeReceiver } from "@slack/bolt";
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
-import { vi } from "vitest";
+import { createMockIncomingRequest, createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { setSlackRuntime } from "../runtime.js";
 import type { SlackMessageEvent } from "../types.js";
 import { registerSlackMessageEvents } from "./events/messages.js";
@@ -22,7 +19,7 @@ import {
 
 /** Real native receivers and message preparation, with Slack Web API lookups kept local. */
 export async function withSlackIngressIdentityTestHarness(
-  params: { cfg: OpenClawConfig; runtime: PluginRuntime; stateDir: string },
+  { cfg, runtime, stateDir }: { cfg: OpenClawConfig; runtime: PluginRuntime; stateDir: string },
   run: (harness: {
     contexts: FinalizedMsgContext[];
     receiveSocket: (user: string) => Promise<void>;
@@ -33,7 +30,7 @@ export async function withSlackIngressIdentityTestHarness(
   const queue = createChannelIngressQueueForTests<Parameters<Queue["enqueue"]>[1]>({
     channelId: "slack",
     accountId: "team",
-    stateDir: params.stateDir,
+    stateDir,
   });
   const pending = createSlackDurableIngress({ accountId: "team", queue });
   const message: SlackMessageEvent = {
@@ -56,17 +53,28 @@ export async function withSlackIngressIdentityTestHarness(
     ignoreSelf: false,
   });
   const ctx = createInboundSlackTestContext({
-    cfg: params.cfg,
+    cfg,
     accountId: "team",
     app,
-    channelRuntime: params.runtime.channel,
+    channelRuntime: runtime.channel,
   });
-  setSlackRuntime(params.runtime);
+  setSlackRuntime(runtime);
   ctx.resolveChannelName = async () => ({ name: "direct", type: "im" });
   ctx.resolveUserName = async () => ({ name: "Slack label" });
   ctx.resolveUserAvatar = () => undefined;
   const contexts: FinalizedMsgContext[] = [];
   let onPrepared: (() => void) | undefined;
+  async function receive<T>(deliver: (prepared: Promise<void>) => Promise<T>) {
+    const prepared = createDeferred<void>();
+    onPrepared = prepared.resolve;
+    try {
+      const result = await deliver(prepared.promise);
+      await ingress.waitForIdle();
+      return result;
+    } finally {
+      onPrepared = undefined;
+    }
+  }
   const handleSlackMessage: SlackMessageHandler = async (inbound, opts) => {
     const result = await prepareSlackMessage({
       ctx,
@@ -98,22 +106,16 @@ export async function withSlackIngressIdentityTestHarness(
     await ingress.waitForIdle();
     await run({
       contexts,
-      receiveSocket: async (user) => {
-        const prepared = createDeferred<void>();
-        onPrepared = prepared.resolve;
-        try {
+      receiveSocket: (user) =>
+        receive(async (prepared) => {
           // The SDK emits socket events synchronously; completion belongs to preparation.
           receiver.client.emit("slack_event", { body: envelope(user), ack: async () => {} });
-          await prepared.promise;
-          await ingress.waitForIdle();
-        } finally {
-          onPrepared = undefined;
-        }
-      },
+          await prepared;
+        }),
       receiveHttp: async (validSignature) => {
         const body = JSON.stringify(envelope("U123"));
         const timestamp = String(Math.floor(Date.now() / 1000));
-        const request = new IncomingMessage(new Socket());
+        const request = createMockIncomingRequest([body]);
         request.method = "POST";
         request.url = "/slack/events";
         request.headers = {
@@ -124,32 +126,24 @@ export async function withSlackIngressIdentityTestHarness(
             ? `v0=${createHmac("sha256", "synthetic-signing-secret").update(`v0:${timestamp}:${body}`).digest("hex")}`
             : "v0=invalid",
         };
-        request.push(body);
-        request.push(null);
         const response = createMockServerResponse();
         const complete = createDeferred<void>();
-        const prepared = createDeferred<void>();
-        onPrepared = prepared.resolve;
-        response.writeHead = vi.fn((code: number) => {
+        response.writeHead = (code: number) => {
           response.statusCode = code;
           return response;
-        });
-        vi.spyOn(response, "end").mockImplementation(() => {
+        };
+        response.end = () => {
           complete.resolve();
           return response;
-        });
-        try {
+        };
+        return await receive(async (prepared) => {
           http.requestListener(request, response);
           await complete.promise;
           if (validSignature && response.statusCode === 200) {
-            await prepared.promise;
+            await prepared;
           }
-          await ingress.waitForIdle();
           return response.statusCode;
-        } finally {
-          onPrepared = undefined;
-          request.destroy();
-        }
+        }).finally(() => request.destroy());
       },
     });
   } finally {

@@ -13,11 +13,7 @@ import {
   publicationSourceRequest,
   type PublicationSelection,
 } from "../../scripts/full-release-publication-contract.mjs";
-import {
-  isShaPinnedReleaseValidationBranch,
-  normalizeFullReleaseValidationRun,
-  validateFullReleaseValidationEvidence as validateEvidence,
-} from "../../scripts/validate-full-release-validation-evidence.mjs";
+import { validateFullReleaseValidationEvidence as validateEvidence } from "../../scripts/validate-full-release-validation-evidence.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 function checkEvidence(
@@ -141,7 +137,7 @@ function strictEvidenceReuse(version = 3) {
   return {
     schema: `openclaw.release-validation-evidence/v${version}`,
     valid: true,
-    current: { runId: "123", targetSha },
+    current: { runId: "123", targetSha, conclusion: "success" },
     root: { runId: "122", targetSha },
     evidenceReuse: {
       changedPaths: [],
@@ -150,7 +146,6 @@ function strictEvidenceReuse(version = 3) {
       rootRunId: "122",
       selectedRunId: "122",
     },
-    conclusions: { allRequiredSucceeded: true },
   };
 }
 
@@ -210,8 +205,6 @@ describe("full release validation evidence", () => {
     "missing",
     "selection",
     "windows-after-admission",
-    "context",
-    "tooling",
     "missing-publication",
     "new-publish-without-admission",
   ])("authenticates new source-admission evidence: %s", (scenario) => {
@@ -259,12 +252,12 @@ describe("full release validation evidence", () => {
       rerunGroup: "all",
       runReleaseSoak: "true",
       trustedWorkflow: {
-        fullRef: scenario === "tooling" ? "refs/heads/other" : "refs/heads/main",
+        fullRef: "refs/heads/main",
         sha: workflowSha,
       },
       validationInputs: {
         ...publicationIntentInputs(source),
-        targetContextRef: scenario === "context" ? "release/2026.9.8" : "release/2026.9.9",
+        targetContextRef: "release/2026.9.9",
         allowUnreleasedChangelog: "false",
       },
     });
@@ -349,38 +342,22 @@ describe("full release validation evidence", () => {
     },
   );
 
-  it("normalizes REST and gh run metadata", () => {
-    const normalized = normalizeFullReleaseValidationRun(releaseRun());
-
-    expect(normalized).toMatchObject({
-      databaseId: "123",
-      runAttempt: 2,
-      workflowName: "Full Release Validation",
-      workflowPath: ".github/workflows/full-release-validation.yml",
-      repository: "openclaw/openclaw",
-      headBranch: pinnedBranch,
-      headSha: workflowSha,
-    });
-    expect(
-      normalizeFullReleaseValidationRun({
+  it("accepts gh metadata with a qualified workflow path and v4 evidence bound to current main", () => {
+    const { isTrustedMainAncestor, result } = validate(
+      {
+        id: undefined,
         databaseId: 123,
+        run_attempt: undefined,
         attempt: 2,
+        name: undefined,
         workflowName: "Full Release Validation",
-        workflowPath: ".github/workflows/full-release-validation.yml@refs/heads/main",
-      }),
-    ).toMatchObject({
-      databaseId: "123",
-      runAttempt: 2,
-      workflowPath: ".github/workflows/full-release-validation.yml",
-      workflowQualifiedRef: "refs/heads/main",
-    });
-  });
-
-  it("accepts v4 SHA-pinned evidence bound to current main", () => {
-    const { isTrustedMainAncestor, result } = validate({}, { version: 4 });
+        path: undefined,
+        workflowPath: `.github/workflows/full-release-validation.yml@${pinnedBranch}`,
+      },
+      { version: 4 },
+    );
     expect(result.source).toBe("sha-pinned-main");
     expect(isTrustedMainAncestor).toHaveBeenCalledWith(workflowSha);
-    expect(isShaPinnedReleaseValidationBranch(pinnedBranch)).toBe(true);
   });
 
   it.each([false, true])("accepts protected tooling evidence (historical: %s)", (historical) => {
@@ -429,13 +406,6 @@ describe("full release validation evidence", () => {
         isTrustedMainAncestor: () => !historical,
       }),
     ).toThrow(message);
-  });
-
-  it("accepts a REST workflow path qualified with release-ci/aaaaaaaaaaaa-1783705000000", () => {
-    const { result } = validate({
-      path: `.github/workflows/full-release-validation.yml@${pinnedBranch}`,
-    });
-    expect(result.source).toBe("sha-pinned-main");
   });
 
   it.each([
@@ -505,7 +475,10 @@ describe("full release validation evidence", () => {
   it.each([
     [undefined, "requires strict chain validation"],
     [
-      () => ({ ...strictEvidenceReuse(), conclusions: { allRequiredSucceeded: false } }),
+      () => ({
+        ...strictEvidenceReuse(),
+        current: { ...strictEvidenceReuse().current, conclusion: "failure" },
+      }),
       "failed strict chain validation",
     ],
   ] as const)(

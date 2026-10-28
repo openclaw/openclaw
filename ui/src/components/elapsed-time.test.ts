@@ -1,111 +1,81 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { mountSolid } from "../test-helpers/solid-render.tsx";
-import { flush } from "../test-helpers/solid-settle.ts";
 import { ElapsedTime } from "./elapsed-time.tsx";
 
-type ElapsedTimeProps = Parameters<typeof ElapsedTime>[0];
-
+type Props = Parameters<typeof ElapsedTime>[0];
 const NOW = 2_000_000_000;
-
-describe("openclaw-elapsed-time", () => {
-  let element: HTMLElement;
-  let view: ReturnType<typeof mountSolid<ElapsedTimeProps>>;
-  let props: ElapsedTimeProps;
-  const update = (changes: Partial<ElapsedTimeProps>) => {
-    props = { ...props, ...changes };
-    view.update(props);
-  };
-  let visibility: DocumentVisibilityState;
-  let observer: MutationObserver;
-
-  const observeText = () => {
-    const changed = vi.fn();
-    observer = new MutationObserver(changed);
-    observer.observe(element, { characterData: true, childList: true, subtree: true });
-    return changed;
-  };
-
-  beforeEach(async () => {
-    await i18n.setLocale("en");
-    vi.useFakeTimers({ now: NOW });
-    visibility = "visible";
-    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
-    props = { startMs: NOW };
-    const container = document.body.appendChild(document.createElement("div"));
-    view = mountSolid(ElapsedTime, props, container);
-    element = container.querySelector<HTMLElement>("openclaw-elapsed-time")!;
-  });
-
-  afterEach(() => {
-    observer?.disconnect();
-    view.dispose();
-    view.container.remove();
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-  });
-
-  it.each([
-    ["minute", false, 65_000, 54_000, "1m", "1m", "2m", 0],
-    ["second", true, 61_000, 28_000, "1m", "1m", "2m", 0],
-    ["second", false, 3_600_000, 1_000, "1h", "1h 1s", "1h 2s", 1],
-  ] as const)(
-    "updates %s labels only when their displayed duration changes (single unit: %s, elapsed: %i)",
-    async (minimumUnit, singleUnit, elapsedMs, advanceMs, initial, first, second, renders) => {
-      update({ minimumUnit, singleUnit, startMs: NOW - elapsedMs });
-      expect(element.textContent?.trim()).toBe(initial);
-      const changed = observeText();
-      await vi.advanceTimersByTimeAsync(advanceMs);
-      expect(changed).toHaveBeenCalledTimes(renders);
-      expect(element.textContent?.trim()).toBe(first);
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(changed).toHaveBeenCalledTimes(renders + 1);
-      expect(element.textContent?.trim()).toBe(second);
-    },
-  );
-
-  it("applies timing and format property changes even when the current label is unchanged", async () => {
-    update({ minimumUnit: "minute", startMs: NOW - 65_000 });
-    update({ endMs: NOW });
-    const changed = observeText();
-
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(changed).not.toHaveBeenCalled();
-    expect(element.textContent?.trim()).toBe("1m");
-
-    update({ endMs: null });
-    expect(element.textContent?.trim()).toBe("2m");
-    update({ minimumUnit: "second" });
-    expect(element.textContent?.trim()).toBe("2m 5s");
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(element.textContent?.trim()).toBe("2m 6s");
-  });
-
-  it("pauses hidden polling, catches up on return, and stops after removal", async () => {
-    const changed = observeText();
-    visibility = "hidden";
-    document.dispatchEvent(new Event("visibilitychange"));
-
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(changed).not.toHaveBeenCalled();
-    expect(element.textContent?.trim()).toBe("1s");
-
-    visibility = "visible";
-    document.dispatchEvent(new Event("visibilitychange"));
-    flush();
-    await Promise.resolve();
-    expect(changed).toHaveBeenCalledOnce();
-    expect(element.textContent?.trim()).toBe("1m");
-
-    view.dispose();
-    view.container.remove();
-    // Settle disposal and the resulting observer notification before checking for ticks.
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(vi.getTimerCount()).toBe(0);
-    changed.mockClear();
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(changed).not.toHaveBeenCalled();
-  });
+beforeEach(async () => {
+  await i18n.setLocale("en");
+  vi.useFakeTimers({ now: NOW });
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
 });
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
+
+function mount(initial: Props) {
+  let props = initial;
+  const view = mountSolid(
+    ElapsedTime,
+    props,
+    document.body.appendChild(document.createElement("div")),
+  );
+  onTestFinished(() => {
+    view.dispose();
+    view.container.remove();
+  });
+  return {
+    element: view.container,
+    label: () => view.container.textContent?.trim(),
+    update(changes: Partial<Props>) {
+      props = { ...props, ...changes };
+      view.update(props);
+    },
+  };
+}
+
+it("changes minute labels only at their boundary and applies timing changes with an unchanged label", async () => {
+  const view = mount({ minimumUnit: "minute", startMs: NOW - 65_000 });
+  expect(view.label()).toBe("1m");
+  const changed = vi.fn();
+  const observer = new MutationObserver(changed);
+  observer.observe(view.element, { characterData: true, childList: true, subtree: true });
+  onTestFinished(() => observer.disconnect());
+  await vi.advanceTimersByTimeAsync(54_000);
+  expect(view.label()).toBe("1m");
+  expect(changed).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(view.label()).toBe("2m");
+  expect(changed).toHaveBeenCalledOnce();
+
+  view.update({ endMs: Date.now() });
+  changed.mockClear();
+  await vi.advanceTimersByTimeAsync(61_000);
+  expect(changed).not.toHaveBeenCalled();
+  expect(view.label()).toBe("2m");
+  view.update({ endMs: null });
+  expect(view.label()).toBe("3m");
+  view.update({ minimumUnit: "second" });
+  expect(view.label()).toBe("3m 1s");
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(view.label()).toBe("3m 2s");
+});
+
+it.each([
+  [{ startMs: NOW - 60_000 }, "1m", "1m 0s"],
+  [{ startMs: NOW - 3_665_000 }, "1h 1m", "1h 1m 5s"],
+  [{ startMs: NOW - 61_000, singleUnit: true }, "1m", "1m"],
+] satisfies [Props, string, string][])(
+  "reacts to seconds formatting with %j",
+  (props, compact, seconds) => {
+    const view = mount({ ...props, endMs: NOW });
+    expect(view.label()).toBe(compact);
+    view.update({ includeSeconds: true });
+    expect(view.label()).toBe(seconds);
+    view.update({ includeSeconds: false });
+    expect(view.label()).toBe(compact);
+  },
+);

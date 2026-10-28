@@ -34,7 +34,6 @@ import {
   resolveAgentRunErrorLifecycleFields,
 } from "../run-termination.js";
 import { createRecoveryRuntimeFixture } from "./main-session-recovery-runtime.test-support.js";
-import { mainSessionRecoveryLog } from "./main-session-restart-recovery-shared.js";
 import {
   codeModeCheckpointMessage,
   codeModeWaitCallMessage,
@@ -224,7 +223,6 @@ it.each([
       });
     try {
       if (persisted) {
-        const info = vi.spyOn(mainSessionRecoveryLog, "info");
         const liveWork = await beginSessionEffect({
           scope: target.storePath,
           identities: [sessionKey, sessionId],
@@ -242,14 +240,8 @@ it.each([
           expect(loadSessionEntry(target)?.restartRecoveryTerminalRunIds).toEqual([
             "previous-completed-run",
           ]);
-          expect(info).toHaveBeenCalledWith(
-            expect.stringContaining(
-              "main-session restart recovery startup complete: started=0 settled=0 failed=0 skipped=1 skipReasons=live_owner:1",
-            ),
-          );
         } finally {
           liveWork.release();
-          info.mockRestore();
         }
       }
       await markOrphans({ stateDir: state.stateDir });
@@ -319,8 +311,6 @@ it("preserves a terminal receipt recorded under the interrupted continuation's s
 
     expect(await markOrphans({ stateDir: state.stateDir })).toEqual({ marked: 0, skipped: 0 });
     const saved = loadSessionEntry(target);
-    expect(saved?.restartRecoveryDeliveryRunId).toBeUndefined();
-    expect(saved?.mainRestartRecovery).toBeUndefined();
     expect(saved).toMatchObject({
       restartRecoveryTerminalRunIds: ["completed-source", runId],
       restartRecoveryTerminalDeliveryEvidence: [

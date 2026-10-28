@@ -32,6 +32,7 @@ export type ImageLightboxProps = {
   src: string;
   originalSrc: string;
   imageTitle: string;
+  imageDescription: string;
   imageWidth?: number;
   imageHeight?: number;
 };

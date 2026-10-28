@@ -20,27 +20,39 @@ import { ReefTransportClient } from "./transport.js";
 beforeEach(resetFlowStoresForTests);
 afterEach(resetFlowStoresForTests);
 
+async function fixture(rules?: { outbound: string }, fetcher?: typeof fetch) {
+  const alice = reefKeys();
+  const cfg = config();
+  cfg.handle = "alice";
+  if (rules) {
+    cfg.guard!.rules = rules;
+  }
+  const policyVersion = effectiveGuardPolicyVersion("v1", cfg.guard!.rules);
+  const guardMock = guard({ ...allow, policyVersion });
+  const trustedPeer = peerTrust(generateIdentity());
+  const { trusted, audit, ...stores } = await workerFlowStores(cfg, { bob: trustedPeer });
+  const relay = transport();
+  const flow = new ReefMessageFlow({
+    config: cfg,
+    trust: trusted,
+    keys: alice,
+    transport: fetcher
+      ? new ReefTransportClient(cfg.relayUrl, "alice", alice, fetcher)
+      : (relay as unknown as ReefTransportClient),
+    guard: guardMock,
+    audit,
+    replay: new MemoryReplayStore(),
+    ...stores,
+    onIngress: async () => {},
+    onOwnerNotice: async () => {},
+  });
+  return { flow, trusted, trustedPeer, relay, guardMock, policyVersion };
+}
+
 describe("ReefMessageFlow send recovery", () => {
   it("does not send to a peer revoked while delivery dispatch is prepared", async () => {
-    const alice = reefKeys();
     const fetcher = vi.fn<typeof fetch>();
-    const cfg = config();
-    cfg.handle = "alice";
-    const { trusted, audit, ...stores } = await workerFlowStores(cfg, {
-      bob: peerTrust(generateIdentity()),
-    });
-    const flow = new ReefMessageFlow({
-      config: cfg,
-      trust: trusted,
-      keys: alice,
-      transport: new ReefTransportClient(cfg.relayUrl, "alice", alice, fetcher),
-      guard: guard(allow),
-      audit,
-      replay: new MemoryReplayStore(),
-      ...stores,
-      onIngress: async () => {},
-      onOwnerNotice: async () => {},
-    });
+    const { flow, trusted } = await fixture(undefined, fetcher);
 
     const error = await flow
       .send("bob", "private coordination", {
@@ -55,66 +67,24 @@ describe("ReefMessageFlow send recovery", () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 
-  it("persists automatic resends as non-resendable deliveries", async () => {
-    const alice = reefKeys();
-    const bob = generateIdentity();
-    const cfg = config();
-    cfg.handle = "alice";
-    const trustedPeer = peerTrust(bob);
-    const { trusted, audit, ...stores } = await workerFlowStores(cfg, { bob: trustedPeer });
-    const relay = transport();
-    const flow = new ReefMessageFlow({
-      config: cfg,
-      trust: trusted,
-      keys: alice,
-      transport: relay as unknown as ReefTransportClient,
-      guard: guard(allow),
-      audit,
-      replay: new MemoryReplayStore(),
-      ...stores,
-      onIngress: async () => {},
-      onOwnerNotice: async () => {},
-    });
-
-    const id = await flow.send("bob", " rephrased coordination ", { resendDisabled: true });
-
-    expect((await trusted.readOutboundDelivery("bob", id))?.delivery).toEqual({
-      bodyHash: expect.any(String),
-      textHash: reefMessageTextHash("rephrased coordination"),
-      recipient: reefPeerIdentity(trustedPeer),
-      resendDisabled: true,
-      sentAt: expect.any(Number),
-    });
-    expect(relay.sendEnvelope).toHaveBeenCalledOnce();
-  });
-
-  it("classifies under the rules-bound effective guard policy version", async () => {
-    const alice = reefKeys();
-    const bob = generateIdentity();
-    const cfg = config();
-    cfg.handle = "alice";
-    cfg.guard!.rules = { outbound: "Never mention project Nightjar." };
-    const policyVersion = effectiveGuardPolicyVersion("v1", cfg.guard!.rules);
-    expect(policyVersion).toMatch(/^v1\+[0-9a-f]{64}$/);
-    const guardMock = guard({ ...allow, policyVersion });
-    const { trusted, audit, ...stores } = await workerFlowStores(cfg, { bob: peerTrust(bob) });
-    const relay = transport();
-    const flow = new ReefMessageFlow({
-      config: cfg,
-      trust: trusted,
-      keys: alice,
-      transport: relay as unknown as ReefTransportClient,
-      guard: guardMock,
-      audit,
-      replay: new MemoryReplayStore(),
-      ...stores,
-      onIngress: async () => {},
-      onOwnerNotice: async () => {},
-    });
-
-    await flow.send("bob", "meeting at ten");
-
-    expect(guardMock.classify).toHaveBeenCalledWith(expect.objectContaining({ policyVersion }));
+  it.each(["automatic resend", "rules-bound policy"] as const)("sends with %s", async (mode) => {
+    const resendDisabled = mode === "automatic resend" ? true : undefined;
+    const rules = resendDisabled ? undefined : { outbound: "Never mention project Nightjar." };
+    const { flow, trusted, trustedPeer, relay, guardMock, policyVersion } = await fixture(rules);
+    const text = resendDisabled ? " rephrased coordination " : "meeting at ten";
+    const id = await flow.send("bob", text, { resendDisabled });
+    if (resendDisabled) {
+      expect((await trusted.readOutboundDelivery("bob", id))?.delivery).toEqual({
+        bodyHash: expect.any(String),
+        textHash: reefMessageTextHash("rephrased coordination"),
+        recipient: reefPeerIdentity(trustedPeer),
+        resendDisabled: true,
+        sentAt: expect.any(Number),
+      });
+    } else {
+      expect(policyVersion).toMatch(/^v1\+[0-9a-f]{64}$/);
+      expect(guardMock.classify).toHaveBeenCalledWith(expect.objectContaining({ policyVersion }));
+    }
     expect(relay.sendEnvelope).toHaveBeenCalledOnce();
   });
 });

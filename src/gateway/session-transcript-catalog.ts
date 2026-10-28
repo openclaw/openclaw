@@ -15,6 +15,7 @@ import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-ent
 import { readSessionHistoryPageInWorker } from "../config/sessions/session-history-worker-runtime.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { readPluginInlineViewBlock } from "../shared/plugin-inline-view.js";
 import { isAssistantTextContentType } from "./chat-display-projection.helpers.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { prepareSessionCatalogSourceParticipantProjector } from "./session-catalog-identity.js";
@@ -102,6 +103,15 @@ function projectContentItem(
   role: unknown,
   value: unknown,
 ): SessionCatalogTranscriptItem | undefined {
+  const record = asOptionalRecord(value);
+  const inline =
+    role !== "user" &&
+    (readPluginInlineViewBlock(value) ??
+      readPluginInlineViewBlock(asOptionalRecord(record?.details)?.pluginView));
+  if (inline) {
+    // The catalog is an explicitly text-only transfer: never forward component data or authority.
+    return { type: "agentMessage", ...boundedText(inline.summary) };
+  }
   if (role !== "user" && role !== "assistant") {
     return undefined;
   }
@@ -140,7 +150,8 @@ function projectMessageItems(
   const content = Array.isArray(message.content)
     ? message.content
     : [message.content ?? message.text];
-  return content
+  const inline = readPluginInlineViewBlock(asOptionalRecord(message.details)?.pluginView);
+  return (inline ? [inline] : content)
     .flatMap((block, index) => {
       const item = projectContentItem(message.role, block);
       if (!item) {
@@ -162,6 +173,7 @@ function projectMessageItems(
 /** Reads conversation text without joining the source Gateway's writer lifecycle. */
 export async function readSessionTranscriptCatalogPage(
   params: CatalogReadParams,
+  captureActorCurrent?: (assertCurrent: () => void) => void,
 ): Promise<SessionTranscriptCatalogPage> {
   const cursor = decodeCursor(params.cursor);
   if (!Number.isSafeInteger(params.limit) || params.limit < 1 || params.limit > MAX_CATALOG_ITEMS) {
@@ -183,6 +195,7 @@ export async function readSessionTranscriptCatalogPage(
         read.value,
         cursor,
         owner.assertCurrent,
+        captureActorCurrent,
       );
     },
   );
@@ -193,6 +206,7 @@ async function readCatalogPageFromEntry(
   entry: SessionEntry,
   cursor: CatalogCursor | undefined,
   assertSourceCurrent: () => void,
+  captureActorCurrent?: (assertCurrent: () => void) => void,
 ): Promise<SessionTranscriptCatalogPage> {
   const storePath = params.storePath;
   const scope = {
@@ -203,10 +217,10 @@ async function readCatalogPageFromEntry(
     storePath,
   };
   const scopeHash = createHash("sha256")
-    // Item offsets from the earlier tool-inclusive projection cannot resume this view.
+    // Item offsets from earlier projections (without inline summaries) cannot resume this view.
     .update(
       JSON.stringify([
-        "conversation",
+        "conversation-inline",
         params.agentId,
         params.sessionKey,
         entry.sessionId,
@@ -214,28 +228,29 @@ async function readCatalogPageFromEntry(
       ]),
     )
     .digest("base64url");
-  const snapshot = await readCatalogHistoryPage(scope, {
+  let page = await readCatalogHistoryPage(scope, {
     offset: 0,
-    maxMessages: 1,
+    maxMessages: cursor ? 1 : params.limit + 1,
   });
+  const { totalMessages, displaySource } = page;
   if (
     cursor &&
     (cursor.scope !== scopeHash ||
-      cursor.source !== snapshot.displaySource ||
-      cursor.anchor.seq > snapshot.totalMessages ||
-      cursor.before > snapshot.totalMessages)
+      cursor.source !== displaySource ||
+      cursor.anchor.seq > totalMessages ||
+      cursor.before > totalMessages)
   ) {
     throw new Error(
       "Session transcript cursor no longer matches this session; reload the session.",
     );
   }
-  const tail = snapshot.events.at(-1);
+  const tail = page.events.at(-1);
   const anchor = cursor?.anchor ?? (tail ? { seq: tail.seq, eventSeq: tail.eventSeq } : undefined);
   // Appends retain this active-path anchor; leaf rewinds can preserve the rewrite
   // generation, so source hashes alone cannot fence a cursor onto its original branch.
   if (cursor) {
     const anchoredPage = await readCatalogHistoryPage(scope, {
-      offset: snapshot.totalMessages - cursor.anchor.seq,
+      offset: totalMessages - cursor.anchor.seq,
       maxMessages: 1,
     });
     if (anchoredPage.events[0]?.eventSeq !== cursor.anchor.eventSeq) {
@@ -245,7 +260,7 @@ async function readCatalogPageFromEntry(
     }
   }
   const limit = params.limit;
-  let before = cursor?.before ?? snapshot.totalMessages;
+  let before = cursor?.before ?? totalMessages;
   let skip = cursor?.skip ?? 0;
   let scanned = 0;
   const items: SessionCatalogTranscriptItem[] = [];
@@ -254,10 +269,12 @@ async function readCatalogPageFromEntry(
     Awaited<ReturnType<typeof prepareSessionCatalogSourceParticipantProjector>>
   >();
   while (before > 0 && items.length < limit && scanned < MAX_CATALOG_SCAN_MESSAGES) {
-    const page = await readCatalogHistoryPage(scope, {
-      offset: snapshot.totalMessages - before,
-      maxMessages: Math.min(before, limit + 1),
-    });
+    if (cursor || scanned > 0) {
+      page = await readCatalogHistoryPage(scope, {
+        offset: totalMessages - before,
+        maxMessages: Math.min(before, limit + 1),
+      });
+    }
     const projected = projectChatDisplayMessages(page.events.map(sqliteMessageEventWithSeq), {
       maxChars: MAX_CATALOG_TEXT_CHARS,
       // Catalog assistant items contain text/model facts, not forwarded sender labels.
@@ -319,13 +336,20 @@ async function readCatalogPageFromEntry(
           JSON.stringify({
             version: 1,
             scope: scopeHash,
-            source: snapshot.displaySource,
+            source: displaySource,
             anchor,
             before,
             skip,
           } satisfies CatalogCursor),
         ).toString("base64url")
       : undefined;
+  const assertActorsCurrent = () => {
+    for (const projector of senderProjectors.values()) {
+      projector.assertCurrent();
+    }
+  };
+  assertActorsCurrent();
+  captureActorCurrent?.(assertActorsCurrent);
   return { items, ...(nextCursor ? { nextCursor } : {}) };
 }
 

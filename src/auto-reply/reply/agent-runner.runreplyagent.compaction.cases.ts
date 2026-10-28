@@ -240,7 +240,6 @@ export function registerReplyCompactionCases({
               modelPrompt: "Current request.",
               transcriptPrompt: "Current request.",
               onFinalPromptText: () => {},
-              onSteeringAcknowledged: () => {},
               persistToolResultProjections: async () => {},
               withTranscriptWrite,
               runtimeOnly: false,

@@ -8,6 +8,7 @@ import {
   mountSidebar,
   TWO_AGENTS,
 } from "../app-sidebar.ts";
+import { sessionListResult } from "../chat-model.ts";
 import { settleLitElement } from "../lit-settle.ts";
 import "../../components/app-sidebar.tsx";
 
@@ -83,7 +84,7 @@ describe("AppSidebar session section visibility", () => {
     );
     const filter = toolbar?.querySelector<HTMLButtonElement>(".sidebar-session-sort");
     expect(filter).not.toBeNull();
-    expect(filter?.getAttribute("aria-label")).toBe("Filter & sort");
+    expect(filter?.getAttribute("aria-label")).toBe("Filter & sort · Active");
     expect(sidebar.querySelector('.sidebar-rail [aria-label="New conversation"]')).not.toBeNull();
     filter?.click();
     await sidebar.updateComplete;
@@ -114,7 +115,7 @@ describe("AppSidebar session section visibility", () => {
     const filter = sidebar.querySelector<HTMLButtonElement>(
       ".sidebar-session-toolbar .sidebar-session-sort",
     );
-    expect(filter?.getAttribute("aria-label")).toBe("Filter & sort");
+    expect(filter?.getAttribute("aria-label")).toBe("Filter & sort · Active");
     expect(filter?.classList.contains("sidebar-session-sort--filtered")).toBe(false);
 
     await activateSessionMenuValue(sidebar, "status:all");
@@ -134,8 +135,9 @@ describe("AppSidebar session section visibility", () => {
     harness.publish({ groups: ["Empty", "Alpha"] });
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    await activateSessionMenuValue(sidebar, "empty-groups:never");
 
-    // Empty user-created groups stay visible (creation and drag targets);
+    // Never keeps empty user-created groups as creation and drag targets;
     // only the bare Other header disappears while nothing lives in it.
     const emptyCategory = sidebar.querySelector('[data-session-section="category:Empty"]');
     const emptyCategoryHeader = emptyCategory?.querySelector(
@@ -168,6 +170,7 @@ describe("AppSidebar session section visibility", () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const mounted = await mountSidebar(gateway, harness.sessions);
     let sidebar = mounted.sidebar;
+    await activateSessionMenuValue(sidebar, "empty-groups:never");
     sidebar.sessionOrganizer.saveCollapsedSessionSections(new Set(["category:Alpha"]));
     await sidebar.updateComplete;
 
@@ -227,22 +230,16 @@ describe("AppSidebar session section visibility", () => {
     const harness = createSessionsHarness("main", ["agent:main:child"]);
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
     harness.publishList({
-      result: {
-        ts: 2,
-        path: "",
-        count: 1,
-        defaults: { modelProvider: null, model: null, contextTokens: null },
-        sessions: [
-          {
-            key: "agent:main:child",
-            spawnedBy: "agent:main:missing-parent",
-            kind: "direct",
-            label: "Reachable orphan",
-            updatedAt: 2,
-            status: "done",
-          },
-        ],
-      },
+      result: sessionListResult(2, [
+        {
+          key: "agent:main:child",
+          spawnedBy: "agent:main:missing-parent",
+          kind: "direct",
+          label: "Reachable orphan",
+          updatedAt: 2,
+          status: "done",
+        },
+      ]),
     });
     (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
     sidebar.sessionKey = "agent:main:child";

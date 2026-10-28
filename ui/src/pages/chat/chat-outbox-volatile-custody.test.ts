@@ -1,5 +1,7 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
@@ -18,10 +20,7 @@ import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { removeQueuedMessage, updateQueuedMessage } from "./chat-queue.ts";
 import { resumeStoredChatOutboxes, retryQueuedChatMessage } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import {
-  listStoredChatOutboxes,
-  updateStoredChatComposerQueueItems,
-} from "./composer-persistence.ts";
+import { updateStoredChatComposerQueueItems } from "./composer-queue-persistence.ts";
 import { admitInitialTurnHandoff } from "./initial-turn-handoff-admission.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
@@ -37,20 +36,21 @@ function custodyHost(
   options: Parameters<typeof makeChatHost>[0],
   subscribed = true,
   replacement = false,
+  initialAccount = "owner-a",
+  discarded?: () => void,
 ) {
-  const {
-    requestHandlers = {
+  const host = makeChatHost({
+    requestHandlers: {
       "chat.send": () => {
         throw new Error("gateway closed (1006)");
       },
     },
-    ...overrides
-  } = options ?? {};
-  const host = makeChatHost({ ...overrides, requestHandlers });
-  let account = "owner-a";
+    ...options,
+  });
+  let account = initialAccount;
   vi.spyOn(host.client!, "recoveryScope", "get").mockImplementation(() => account);
   const owner = chatOutboxOwner(host);
-  const stop = subscribed ? owner.subscribe(host) : () => {};
+  const stop = subscribed ? owner.subscribe(host, discarded) : () => {};
   onTestFinished(stop);
   const select = (
     next: string,
@@ -71,70 +71,96 @@ function custodyHost(
 }
 
 it.each([
-  { subscribed: false, replacement: false },
-  { subscribed: true, replacement: true },
-])(
-  "retains a genuinely volatile send across account return ($subscribed/$replacement)",
-  async ({ subscribed, replacement }) => {
+  { mode: "replay", replacement: false },
+  { mode: "replay", replacement: true },
+  { mode: "held", replacement: false },
+  { mode: "retired", replacement: false },
+] as const)("preserves $mode custody ($replacement)", async ({ mode, replacement }) => {
+  if (mode !== "retired") {
     failStorageWrites(new DOMException("quota exceeded", "QuotaExceededError"));
-    let attempts = 0;
-    const {
-      host,
-      owner: originalOwner,
-      select: changeAccount,
-    } = custodyHost(
-      {
-        chatMessage: "Only unsaved copy",
-        requestHandlers: {
-          "chat.send": (params: unknown) => {
-            const payload = requireRecord(params, "memory send");
-            attempts += 1;
-            if (attempts === 1) {
-              throw new Error("gateway closed (1006): connection lost");
-            }
+  }
+  const entered = createDeferred();
+  const reply = createDeferred<unknown>();
+  let attempts = 0;
+  const {
+    host,
+    owner,
+    select: changeAccount,
+  } = custodyHost(
+    {
+      chatMessage: "Only unsaved copy",
+      currentSessionId: mode === "replay" ? "volatile-original-session" : undefined,
+      requestHandlers: {
+        "chat.send": (params: unknown) => {
+          const payload = requireRecord(params, "memory send");
+          attempts += 1;
+          entered.resolve();
+          if (attempts > 1) {
             return { runId: payload.idempotencyKey, status: "started" };
-          },
+          }
+          if (mode === "replay") {
+            throw new Error("gateway closed (1006): connection lost");
+          }
+          return reply.promise;
         },
       },
-      subscribed,
-      replacement,
-    );
-    const select = (next: string) => changeAccount(next, true);
-    await handleSendChat(host);
-    expect(listStoredChatOutboxes(host)).toEqual([]);
-    const original = host.chatQueue[0]!;
-    expect(host).toMatchObject({
-      chatMessage: "",
-      chatQueue: [{ text: "Only unsaved copy", sendState: "unconfirmed", sendAttempts: 1 }],
-    });
-    expect(originalOwner.hasVolatile(host, original.id)).toBe(true);
-    select("owner-b");
-    expect(host.chatQueue).toEqual([]);
-    expect(chatOutboxOwner(host).allItems(host)).toEqual([]);
-    await retryQueuedChatMessage(host, original.id);
-    expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
-    select("owner-a");
-    expect(host.chatQueue).toMatchObject([
-      {
-        id: original.id,
-        text: original.text,
-        sendRunId: original.sendRunId,
-        sendState: "unconfirmed",
-      },
-    ]);
-    await resumeStoredChatOutboxes(host);
-    expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
-    await retryQueuedChatMessage(host, original.id);
-    expect(requestCalls(host.request, "chat.send")).toHaveLength(2);
+    },
+    mode === "replay" ? replacement : true,
+    replacement,
+  );
+  const select = (next: string) => changeAccount(next, true);
+  const sending = handleSendChat(host);
+  await entered.promise;
+  if (mode === "replay") {
+    await sending;
+  }
+  const original = host.chatQueue[0]!;
+  try {
+    expect(original.sendState).toBe(mode === "replay" ? "waiting-reconnect" : "sending");
+    expect(original.sendAttempts).toBe(1);
+    if (mode === "retired") {
+      expect(owner.remove(host, original.id)?.id).toBe(original.id);
+    } else {
+      expect(listStoredChatOutboxes(host)).toEqual([]);
+      expect(owner.hasVolatile(host, original.id)).toBe(true);
+      select("owner-b");
+      expect(host.chatQueue).toEqual([]);
+      expect(chatOutboxOwner(host).allItems(host)).toEqual([]);
+      if (mode === "replay") {
+        await retryQueuedChatMessage(host, original.id);
+      }
+      expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
+      select("owner-a");
+      const { id, text, sendRunId } = original;
+      const sendState = mode === "held" ? "held" : "waiting-reconnect";
+      expect(host.chatQueue).toMatchObject([{ id, text, sendRunId, sendState }]);
+      expect(host.chatQueue[0]?.sendAttempts).toBe(1);
+      await resumeStoredChatOutboxes(host);
+    }
+  } finally {
+    if (mode !== "replay") {
+      reply.reject(
+        new GatewayRequestError({ code: "UNAVAILABLE", message: "closed", retryable: true }),
+      );
+      await sending;
+    }
+  }
+  expect(requestCalls(host.request, "chat.send")).toHaveLength(mode === "replay" ? 2 : 1);
+  if (mode === "held") {
+    expect(host.chatQueue[0]?.sendState).toBe("held");
+    expect(removeQueuedMessage(host, original.id, { discard: true })).toBe("removed");
+  } else if (mode === "replay") {
     expect(requestCalls(host.request, "chat.send")[1]?.[1]).toMatchObject({
       idempotencyKey: original.sendRunId,
     });
-    expect(host.chatQueue).toEqual([]);
-    select("owner-b");
-    select("owner-a");
-    expect(host.chatQueue).toEqual([]);
-  },
-);
+  }
+  expect(host.chatMessage).toBe("");
+  expect(host.chatError ?? null).toBeNull();
+  expect(host.lastError ?? null).toBeNull();
+  select("owner-b");
+  select("owner-a");
+  expect(host.chatQueue).toEqual([]);
+});
 
 it.each(["retry", "discard"])(
   "keeps rejected initial-turn attachment bytes until explicit %s",
@@ -171,21 +197,17 @@ it.each(["retry", "discard"])(
       finishNavigation: vi.fn(),
     });
     expect(clearDraft).toHaveBeenCalledWith(false);
-    const host = makeChatHost({
-      client,
-      sessionKey,
-      settings: { gatewayUrl: context.gateway.connection.gatewayUrl },
-    });
     const originalAccount = client.recoveryScope;
-    const select = (value: string) => {
-      Object.defineProperty(client, "recoveryScope", { configurable: true, value });
-      host.connectionEpoch += 1;
-      chatOutboxOwner(host).syncHost(host);
-    };
-    const owner = chatOutboxOwner(host);
     const discarded = vi.fn();
-    const stop = owner.subscribe(host, discarded);
-    onTestFinished(stop);
+    const fixture = custodyHost(
+      { client, sessionKey, settings: { gatewayUrl: context.gateway.connection.gatewayUrl } },
+      true,
+      false,
+      originalAccount,
+      discarded,
+    );
+    const { host, owner, stop } = fixture;
+    const select = (value: string) => fixture.select(value, true);
     expect(admitInitialTurnHandoff(host, sessionKey)).toBe(true);
     expect(listStoredChatOutboxes(host)).toEqual([]);
     const original = host.chatQueue[0]!;
@@ -228,46 +250,6 @@ it.each(["retry", "discard"])(
     expect(chatOutboxOwner(host)).not.toBe(owner);
   },
 );
-
-it("parks an in-flight memory turn without resurrecting its retired sending operation", async () => {
-  failStorageWrites();
-  const entered = createDeferred();
-  const reply = createDeferred<unknown>();
-  const { host, select } = custodyHost({
-    chatMessage: "In flight unsaved input",
-    requestHandlers: {
-      "chat.send": () => {
-        entered.resolve();
-        return reply.promise;
-      },
-    },
-  });
-  const sending = handleSendChat(host);
-  await entered.promise;
-  const original = host.chatQueue[0]!;
-  expect(original.sendState).toBe("sending");
-  try {
-    select("owner-b", true);
-    expect(host.chatQueue).toEqual([]);
-    select("owner-a", true);
-    expect(host.chatQueue).toMatchObject([
-      {
-        id: original.id,
-        text: original.text,
-        sendRunId: original.sendRunId,
-        sendAttempts: 1,
-        sendState: "held",
-      },
-    ]);
-    await resumeStoredChatOutboxes(host);
-    expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
-  } finally {
-    reply.reject(new Error("gateway closed (1006)"));
-    await sending;
-  }
-  expect(host.chatQueue[0]?.sendState).toBe("held");
-  expect(removeQueuedMessage(host, original.id, { discard: true })).toBe("removed");
-});
 
 it("does not revive submission authority or old presentation over a newer durable edit", async () => {
   const { host, owner, select } = custodyHost({
@@ -316,7 +298,11 @@ it("moves peer panes together while retaining each volatile input under its orig
   const { host: left, select } = custodyHost({
     chatMessage: "Left private input",
   });
-  const right = makeChatHost({ client: left.client, chatMessage: "Right private input" });
+  const right = makeChatHost({
+    client: left.client,
+    sessionKey: "agent:main:right",
+    chatMessage: "Right private input",
+  });
   onTestFinished(chatOutboxOwner(right).subscribe(right));
   await handleSendChat(left);
   await handleSendChat(right);

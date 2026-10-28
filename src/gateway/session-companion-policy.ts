@@ -1,3 +1,4 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import {
   assertOperatorModelAllowed,
   type AdmittedRunOperatorAuthority,
@@ -5,19 +6,103 @@ import {
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveApiKeyForProviderCore } from "../agents/model-auth-provider.js";
 import { isProviderAuthError } from "../agents/model-auth-runtime-shared.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
   isCliRuntimeAliasForProvider,
   resolveCliRuntimeExecutionProvider,
 } from "../agents/model-runtime-aliases.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
+import { resolveAllowedModelRefCore } from "../agents/model-selection-resolve.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
 import type { AgentSimpleCompletionSelection } from "../agents/simple-completion.types.js";
 import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
+import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
+import { normalizeThinkLevel, type ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
 import { SessionCompanionAskError } from "./session-companion-errors.js";
 
 export const SESSION_COMPANION_TOOLS = ["read", "sessions_history", "sessions_search"] as const;
+
+/** Reasoning and speed chosen for one Side chat question; omitted fields use model defaults. */
+export type SessionCompanionRunControls = { thinkLevel?: ThinkLevel; fastMode?: FastMode };
+
+/** Operator-chosen model controls for one Side chat question. */
+export type SessionCompanionAskSelection = {
+  /** Validated allowlisted model; omitted uses the utility model and its fallbacks. */
+  model?: { provider: string; model: string };
+  controls?: SessionCompanionRunControls;
+};
+
+/**
+ * A chosen model is the answer route, like a pinned chat model: it answers alone.
+ * Utility fallbacks describe only the default route.
+ */
+export function resolveSessionCompanionRoute(
+  cfg: OpenClawConfig,
+  agentId: string,
+  selection: SessionCompanionAskSelection | undefined,
+): { modelRef: string | undefined; fallbacks: string[] } {
+  if (selection?.model) {
+    return { modelRef: `${selection.model.provider}/${selection.model.model}`, fallbacks: [] };
+  }
+  const utility = readUtilityModelSetting(cfg, agentId);
+  return {
+    modelRef: resolveUtilityModelRefForAgent({ cfg, agentId }),
+    fallbacks: utility.kind === "disabled" ? [] : utility.fallbacks,
+  };
+}
+
+/**
+ * Validates a question's model controls against the agent's model allowlist, the
+ * same catalog check a chat model selection uses. Account pins stay with chat
+ * sessions: Side chat has no per-operator account selection to prove ownership.
+ */
+export async function resolveSessionCompanionAskSelection(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  model?: string;
+  thinkingLevel?: string;
+  fastMode?: FastMode;
+  loadModelCatalog: () => Promise<ModelCatalogEntry[]>;
+}): Promise<{ ok: true; selection?: SessionCompanionAskSelection } | { ok: false; error: string }> {
+  const selection: SessionCompanionAskSelection = {};
+  const controls: SessionCompanionRunControls = {};
+  if (params.thinkingLevel !== undefined) {
+    const thinkLevel = normalizeThinkLevel(params.thinkingLevel);
+    if (!thinkLevel) {
+      return { ok: false, error: `invalid thinkingLevel: ${params.thinkingLevel}` };
+    }
+    controls.thinkLevel = thinkLevel;
+  }
+  if (params.fastMode !== undefined) {
+    controls.fastMode = params.fastMode;
+  }
+  if (Object.keys(controls).length) {
+    selection.controls = controls;
+  }
+  if (params.model !== undefined) {
+    const { model, profile } = splitTrailingAuthProfile(params.model.trim());
+    if (profile) {
+      return { ok: false, error: "Side chat cannot pin a model account." };
+    }
+    const fallback = resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
+    const resolved = resolveAllowedModelRefCore({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      catalog: await params.loadModelCatalog(),
+      defaultProvider: fallback.provider,
+      defaultModel: fallback,
+      raw: model,
+    });
+    if ("error" in resolved) {
+      return { ok: false, error: resolved.error };
+    }
+    selection.model = { provider: resolved.ref.provider, model: resolved.ref.model };
+  }
+  return Object.keys(selection).length ? { ok: true, selection } : { ok: true };
+}
 
 /** Side chat uses its utility route when permitted, then the requester's configured default. */
 export function resolveSessionCompanionModel(params: {

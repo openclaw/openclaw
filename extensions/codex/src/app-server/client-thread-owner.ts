@@ -2,6 +2,8 @@ import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-
 import type { CodexServiceTier, JsonObject } from "./protocol.js";
 
 export type ThreadOwnerToken = {
+  /** Immutable creation policy follows the exact claim through deferred background cleanup. */
+  configFingerprint?: string;
   invalidated: boolean;
   invalidate: () => void;
   releaseAfterProtection?: () => Promise<void>;
@@ -13,6 +15,24 @@ export type ThreadReleaseTransition = {
   retainedOwnerToken?: ThreadOwnerToken;
   invalidated?: boolean;
 };
+
+/** Background custody can survive projection replacement only under its creation policy. */
+export function isThreadBackgroundOnly(
+  runtime: ThreadOwnershipState | undefined,
+  threadId: string,
+  configFingerprint?: string,
+): boolean {
+  if (!runtime || runtime.closed || !runtime.protectedThreads.has(threadId)) {
+    return false;
+  }
+  const claim = runtime.claimedThreads.get(threadId);
+  const policy =
+    claim?.configFingerprint ?? runtime.retainedThreads.get(threadId)?.configFingerprint;
+  return (
+    (!claim || claim.releaseAfterProtection !== undefined) &&
+    (configFingerprint === undefined || policy === configFingerprint)
+  );
+}
 
 /**
  * Exact lifecycle inputs a live ephemeral thread was told. The generic policy is

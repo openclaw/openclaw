@@ -6,7 +6,6 @@ import type {
   ReplyPreRunRejectionCode,
 } from "../../sessions/session-controller.contracts.js";
 import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status.js";
-import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import type { SessionEventExecution } from "./session-event-contract.js";
 export type {
   ReplyOperationRunState,
@@ -14,7 +13,7 @@ export type {
 } from "../../sessions/session-controller.contracts.js";
 
 // Carries this invocation's admission decision through reply option spreads so
-// heartbeat cleanup never infers it from whichever operation is active later.
+// cleanup never infers it from whichever operation is active later.
 export const REPLY_OPERATION_RUN_STATE = Symbol("openclaw.replyOperationRunState");
 
 export type ReplyOptionsWithOperationRunState = {
@@ -74,6 +73,7 @@ export function recordReplyFollowupAdmission(
   params: {
     explicitFollowup: boolean;
     requesterMismatch: boolean;
+    collaborationBlocked?: boolean;
     unavailableSteer: boolean;
     followupRun: FollowupRun;
   },
@@ -86,14 +86,16 @@ export function recordReplyFollowupAdmission(
     mode: "followup",
     ...(params.explicitFollowup
       ? { reason: "explicit-followup" as const }
-      : params.requesterMismatch
-        ? { reason: "requester-mismatch" as const }
-        : params.unavailableSteer &&
-            params.followupRun.currentInboundEventKind !== "room_event" &&
-            (!params.followupRun.run.inputProvenance ||
-              params.followupRun.run.inputProvenance.kind === "external_user")
-          ? { reason: "steering-unavailable" as const }
-          : {}),
+      : params.collaborationBlocked
+        ? { reason: "collaborative-steering-disabled" as const }
+        : params.requesterMismatch
+          ? { reason: "requester-mismatch" as const }
+          : params.unavailableSteer &&
+              params.followupRun.currentInboundEventKind !== "room_event" &&
+              (!params.followupRun.run.inputProvenance ||
+                params.followupRun.run.inputProvenance.kind === "external_user")
+            ? { reason: "steering-unavailable" as const }
+            : {}),
   };
 }
 
@@ -104,8 +106,4 @@ export function recordReplyPreRunRejection(
   if (state && rejection) {
     state.preRunRejection ??= rejection;
   }
-}
-
-export function resolveReplyOperationAgentTurn(state: ReplyOperationRunState | undefined) {
-  return isReplyOperationSuperseded(state?.agentTurnOwner) ? "superseded" : state?.agentTurn;
 }

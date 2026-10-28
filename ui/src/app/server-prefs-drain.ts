@@ -191,12 +191,7 @@ export async function drainPendingPrefs(
                   writer.state.client,
                   batch,
                   () => {
-                    if (
-                      !profileIsCurrent() ||
-                      writer.state.client !== capturedClient ||
-                      !writer.state.connected ||
-                      !sync.pushCanWrite
-                    ) {
+                    if (!profileIsCurrent() || !sync.pushCanWrite) {
                       return false;
                     }
                     sync.reconcilePersistedPendingPrefs();

@@ -62,16 +62,25 @@ function createRefreshHarness(method: "cron.status" | "cron.runs") {
 describe.each(["cron.status", "cron.runs"] as const)("%s event refresh ownership", (method) => {
   it("publishes progress during sustained events while keeping one trailing reread", async () => {
     const harness = createRefreshHarness(method);
-    void harness.load();
+    const explicit = harness.load(false);
     for (let revision = 1; revision <= 3; revision += 1) {
+      let queuedSettled = false;
       if (revision < 3) {
         for (let event = 0; event < 20; event += 1) {
-          void harness.load();
+          void harness.load().then(() => {
+            queuedSettled = true;
+          });
         }
       }
       expect(harness.request).toHaveBeenCalledTimes(revision);
       harness.response(revision - 1).resolve(harness.payload(revision));
-      await vi.waitFor(() => expect(harness.revision()).toBe(revision));
+      if (revision === 1) {
+        await explicit;
+        expect(queuedSettled).toBe(false);
+      } else {
+        await vi.waitFor(() => expect(harness.revision()).toBe(revision));
+      }
+      expect(harness.revision()).toBe(revision);
       if (revision < 3) {
         expect(harness.request).toHaveBeenCalledTimes(revision + 1);
       }
@@ -124,25 +133,6 @@ describe.each(["cron.status", "cron.runs"] as const)("%s event refresh ownership
     await resumed;
     expect(harness.revision()).toBe(2);
   });
-
-  it("completes an explicit read without waiting for its queued event refresh", async () => {
-    const harness = createRefreshHarness(method);
-    const explicit = harness.load(false);
-    const queued = harness.load();
-    let queuedSettled = false;
-    void queued.then(() => {
-      queuedSettled = true;
-    });
-    expect(harness.request).toHaveBeenCalledTimes(1);
-    harness.response(0).resolve(harness.payload(1));
-    await explicit;
-    expect(harness.revision()).toBe(1);
-    expect(harness.request).toHaveBeenCalledTimes(2);
-    expect(queuedSettled).toBe(false);
-    harness.response(1).resolve(harness.payload(2));
-    await queued;
-    expect(harness.revision()).toBe(2);
-  });
 });
 
 it("requires a successful replacement page before appending after a failed refresh", async () => {
@@ -185,6 +175,21 @@ it("requires a successful replacement page before appending after a failed refre
   harness.response(3).resolve(harness.payload(3));
   await nextPage;
   expect(harness.state.cronRuns.map((entry) => entry.ts)).toEqual([2, 3]);
+  const failedRefresh = harness.load(false);
+  harness.response(4).reject(new Error("Previous history failed"));
+  await failedRefresh;
+  expect(harness.revision()).toBe(2);
+  expect(harness.error()).toBe("Previous history failed");
+  harness.state.cronRunsQuery = "another filter";
+  const changed = harness.load(false);
+  expect(harness.state.cronRuns).toEqual([]);
+  expect(harness.state.cronRunsHasMore).toBe(false);
+  expect(harness.state.cronRunsNextOffset).toBeNull();
+  expect(harness.error()).toBeNull();
+  harness.response(5).reject(new Error("Current history failed"));
+  await changed;
+  expect(harness.state.cronRuns).toEqual([]);
+  expect(harness.error()).toBe("Current history failed");
 });
 
 it.each(["scope", "agent", "delivery", "job", "connection"] as const)(
@@ -221,25 +226,3 @@ it.each(["scope", "agent", "delivery", "job", "connection"] as const)(
     expect(harness.error()).toBeNull();
   },
 );
-
-it("retires accepted rows and errors before a changed query resolves", async () => {
-  const harness = createRefreshHarness("cron.runs");
-  await harness.seed(1, { total: 2, hasMore: true, nextOffset: 1 });
-  const failedRefresh = harness.load(false);
-  harness.response(1).reject(new Error("Previous history failed"));
-  await failedRefresh;
-  expect(harness.revision()).toBe(1);
-  expect(harness.error()).toBe("Previous history failed");
-
-  harness.state.cronRunsQuery = "new filter";
-  const replacement = harness.load(false);
-  expect(harness.state.cronRuns).toEqual([]);
-  expect(harness.state.cronRunsTotal).toBe(0);
-  expect(harness.state.cronRunsHasMore).toBe(false);
-  expect(harness.state.cronRunsNextOffset).toBeNull();
-  expect(harness.error()).toBeNull();
-  harness.response(2).reject(new Error("Current history failed"));
-  await replacement;
-  expect(harness.state.cronRuns).toEqual([]);
-  expect(harness.error()).toBe("Current history failed");
-});

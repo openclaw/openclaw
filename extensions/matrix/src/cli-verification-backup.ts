@@ -135,84 +135,67 @@ export function registerMatrixVerificationBackupCommands(verify: Command): void 
       },
     );
 
-  verify
+  const bootstrap = verify
     .command("bootstrap")
-    .description("Bootstrap Matrix cross-signing and device verification state")
-    .option("--account <id>", "Account ID (for multi-account setups)")
-    .option(
-      "--recovery-key <key>",
-      "Recovery key to apply before bootstrap (prefer --recovery-key-stdin)",
-    )
-    .option("--recovery-key-stdin", "Read the Matrix recovery key from stdin")
-    .option(
-      "--force-reset-cross-signing",
-      "Force reset cross-signing identity before bootstrap (requires active recovery key)",
-    )
-    .option("--verbose", "Show detailed diagnostics")
-    .option("--json", "Output as JSON")
-    .action(
-      async (
-        options: cli.MatrixCliOptions & {
-          recoveryKey?: string;
-          recoveryKeyStdin?: boolean;
-          forceResetCrossSigning?: boolean;
-        },
-      ) => {
-        const recoveryKey = cli.resolveMatrixCliRecoveryKeyInput(options);
-        await cli.runMatrixCliAccountCommand(options, {
-          gateway: {
-            method: "matrix.verify.bootstrap.owner",
-            params: async () => ({
-              accountId: options.account,
-              recoveryKey: await recoveryKey,
-              forceResetCrossSigning: options.forceResetCrossSigning === true,
-            }),
-          },
-          run: async ({ accountId, cfg }) =>
-            await verification.bootstrapMatrixVerification({
-              accountId,
-              cfg,
-              recoveryKey: await recoveryKey,
-              forceResetCrossSigning: options.forceResetCrossSigning === true,
-            }),
-          onText: (result, verbose, accountId) => {
-            console.log(`Bootstrap success: ${result.success ? "yes" : "no"}`);
-            if (result.error) {
-              console.log(`Error: ${cli.formatMatrixCliText(result.error)}`);
-            }
-            console.log(`Verified by owner: ${result.verification.verified ? "yes" : "no"}`);
-            cli.printVerificationIdentity(result.verification);
-            if (verbose) {
-              cli.printVerificationTrustDiagnostics(result.verification);
-              console.log(
-                `Cross-signing published: ${result.crossSigning.published ? "yes" : "no"} (master=${result.crossSigning.masterKeyPublished ? "yes" : "no"}, self=${result.crossSigning.selfSigningKeyPublished ? "yes" : "no"}, user=${result.crossSigning.userSigningKeyPublished ? "yes" : "no"})`,
-              );
-              cli.printBackupStatus(result.verification.backup);
-              cli.printTimestamp(
-                "Recovery key created at",
-                result.verification.recoveryKeyCreatedAt,
-              );
-              console.log(`Pending verifications: ${result.pendingVerifications}`);
-            } else {
-              console.log(
-                `Cross-signing published: ${result.crossSigning.published ? "yes" : "no"}`,
-              );
-              cli.printBackupSummary(result.verification.backup);
-            }
-            cli.printVerificationGuidance(
-              {
-                ...result.verification,
-                pendingVerifications: result.pendingVerifications,
-              },
-              accountId,
-            );
-          },
-          shouldFail: (result) => !result.success,
-          errorPrefix: "Verification bootstrap failed",
-          onJsonError: (message) => ({ success: false, error: message }),
-        });
+    .description("Bootstrap Matrix cross-signing and device verification state");
+  cli.withMatrixVerificationBootstrapOptions(bootstrap).action(
+    async (
+      options: cli.MatrixCliOptions & {
+        recoveryKey?: string;
+        recoveryKeyStdin?: boolean;
+        forceResetCrossSigning?: boolean;
       },
-    );
+    ) => {
+      const recoveryKey = cli.resolveMatrixCliRecoveryKeyInput(options);
+      await cli.runMatrixCliAccountCommand(options, {
+        gateway: {
+          method: "matrix.verify.bootstrap.owner",
+          params: async () => ({
+            accountId: options.account,
+            recoveryKey: await recoveryKey,
+            forceResetCrossSigning: options.forceResetCrossSigning === true,
+          }),
+        },
+        run: async ({ accountId, cfg }) =>
+          await verification.bootstrapMatrixVerification({
+            accountId,
+            cfg,
+            recoveryKey: await recoveryKey,
+            forceResetCrossSigning: options.forceResetCrossSigning === true,
+          }),
+        onText: (result, verbose, accountId) => {
+          console.log(`Bootstrap success: ${result.success ? "yes" : "no"}`);
+          if (result.error) {
+            console.log(`Error: ${cli.formatMatrixCliText(result.error)}`);
+          }
+          console.log(`Verified by owner: ${result.verification.verified ? "yes" : "no"}`);
+          cli.printVerificationIdentity(result.verification);
+          if (verbose) {
+            cli.printVerificationTrustDiagnostics(result.verification);
+            console.log(
+              `Cross-signing published: ${result.crossSigning.published ? "yes" : "no"} (master=${result.crossSigning.masterKeyPublished ? "yes" : "no"}, self=${result.crossSigning.selfSigningKeyPublished ? "yes" : "no"}, user=${result.crossSigning.userSigningKeyPublished ? "yes" : "no"})`,
+            );
+            cli.printBackupStatus(result.verification.backup);
+            cli.printTimestamp("Recovery key created at", result.verification.recoveryKeyCreatedAt);
+            console.log(`Pending verifications: ${result.pendingVerifications}`);
+          } else {
+            console.log(`Cross-signing published: ${result.crossSigning.published ? "yes" : "no"}`);
+            cli.printBackupSummary(result.verification.backup);
+          }
+          cli.printVerificationGuidance(
+            {
+              ...result.verification,
+              pendingVerifications: result.pendingVerifications,
+            },
+            accountId,
+          );
+        },
+        shouldFail: (result) => !result.success,
+        errorPrefix: "Verification bootstrap failed",
+        onJsonError: (message) => ({ success: false, error: message }),
+      });
+    },
+  );
 
   verify
     .command("device [key]")

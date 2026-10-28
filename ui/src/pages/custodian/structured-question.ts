@@ -6,28 +6,20 @@ export type CustodianStructuredQuestion = SchemaContract<
   Omit<SystemAgentChatQuestion, "isOther"> & { isOther: boolean }
 >;
 
-/**
- * Sanitize the typed `question` field from `openclaw.chat`. The gateway owns
- * the schema, but this state renders buttons that send messages, so the page
- * still enforces the card contract locally: 2-4 unique options, at most one
- * recommended. Anything else degrades to the prose reply.
- */
+/** Normalize display text; the Gateway owns the question and option contract. */
 export function parseCustodianQuestion(
   value: SystemAgentChatQuestion | undefined,
 ): CustodianStructuredQuestion | null {
-  if (!value || typeof value !== "object") {
+  if (!value) {
     return null;
   }
   const [id, header, question] = [value.id, value.header, value.question].map(nonEmptyString);
-  if (!id || !header || !question || !Array.isArray(value.options)) {
-    return null;
-  }
-  if (value.options.length < 2 || value.options.length > 4) {
+  if (!id || !header || !question) {
     return null;
   }
   const options: CustodianStructuredQuestion["options"] = [];
   for (const option of value.options) {
-    const label = nonEmptyString(option?.label);
+    const label = nonEmptyString(option.label);
     if (!label) {
       return null;
     }
@@ -38,12 +30,6 @@ export function parseCustodianQuestion(
       ...(option.recommended === true ? { recommended: true } : {}),
       ...(reply ? { reply } : {}),
     });
-  }
-  if (new Set(options.map((option) => option.label.toLocaleLowerCase())).size !== options.length) {
-    return null;
-  }
-  if (options.filter((option) => option.recommended).length > 1) {
-    return null;
   }
   return {
     id,

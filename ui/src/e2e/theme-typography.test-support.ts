@@ -3,22 +3,14 @@ import {
   installMockGateway,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
+import { configResponse } from "./appearance-prefs.test-support.ts";
 import type { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 export const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 export function themeConfigResponse(theme: string, mode: "dark" | "light") {
-  const config = { ui: { prefs: { theme, themeMode: mode } } };
   const hash = `theme-typography-${theme}-${mode}`;
-  return {
-    appliedConfigHash: hash,
-    config,
-    configRevisionHash: hash,
-    hash,
-    issues: [],
-    raw: JSON.stringify(config),
-    valid: true,
-  };
+  return configResponse({ theme, themeMode: mode }, hash);
 }
 
 export function createThemedChatOpener(suite: ReturnType<typeof createControlUiE2eSuite>) {

@@ -1,13 +1,31 @@
+import { normalizeOptionalStringifiedId } from "@openclaw/normalization-core/string-coerce";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
-import {
-  normalizeConversationTargetParams,
-  type ConversationTargetParams,
-} from "../utils/conversation-target.js";
 import {
   normalizeDeliveryContext,
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
+import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { getChannelPlugin, normalizeChannelId } from "./plugins/registry.js";
+
+type ConversationTargetParams = {
+  channel?: string;
+  conversationId?: string | number;
+  parentConversationId?: string | number;
+};
+
+function normalizeConversationTargetParams(params: ConversationTargetParams): {
+  channel?: string;
+  conversationId?: string;
+  parentConversationId?: string;
+} {
+  const channel =
+    typeof params.channel === "string"
+      ? (normalizeMessageChannel(params.channel) ?? params.channel.trim())
+      : undefined;
+  const conversationId = normalizeOptionalStringifiedId(params.conversationId);
+  const parentConversationId = normalizeOptionalStringifiedId(params.parentConversationId);
+  return { channel, conversationId, parentConversationId };
+}
 
 function resolveConversationDeliveryTarget({
   channel,

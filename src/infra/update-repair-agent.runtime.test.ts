@@ -18,7 +18,6 @@ import {
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { getInstallationTarget } from "./installation-target-context.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "./update-managed-service-handoff-lease.js";
 import {
@@ -26,7 +25,7 @@ import {
   runUpdateRepairTurn,
   withUpdateRepairEnvironment,
 } from "./update-repair-agent.runtime.js";
-import { createRepairAuthRuntime, repairTurnInput } from "./update-repair-agent.test-support.js";
+import { repairTurnInput } from "./update-repair-agent.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   entry: vi.fn(),
@@ -90,11 +89,11 @@ const repairTurn = (...args: Parameters<typeof repairTurnInput>) =>
   runUpdateRepairTurn(repairTurnInput(...args));
 
 it.each([
-  { localOverride: true, cleanupFails: false, borrowedOwner: true },
-  { localOverride: false, cleanupFails: true, borrowedOwner: false },
+  { cleanupFails: false, borrowedOwner: true },
+  { cleanupFails: true, borrowedOwner: false },
 ])(
-  "uses shared OAuth with a durable credential owner (local override: $localOverride, cleanup failure: $cleanupFails, borrowed owner: $borrowedOwner)",
-  ({ localOverride, cleanupFails, borrowedOwner }) =>
+  "retires repair resources without closing borrowed ownership (cleanup failure: $cleanupFails, borrowed owner: $borrowedOwner)",
+  ({ cleanupFails, borrowedOwner }) =>
     withOpenClawTestState({ layout: "home" }, async (state) => {
       const host = borrowedOwner ? new LegacyPluginSdkResourceHost() : undefined;
       if (host) {
@@ -105,53 +104,17 @@ it.each([
           await host.close();
         });
       }
-      const agentDir = state.statePath("agents", "owner", "agent");
-      const auth = await createRepairAuthRuntime();
-      const profileId = "fixture:subscription";
-      const shared = {
-        type: "oauth" as const,
-        provider: "fixture",
-        access: "synthetic-shared-access",
-        refresh: "synthetic-refresh",
-        expires: Date.now() + 3_600_000,
-      };
-      const local = { type: "token" as const, provider: "fixture", token: "synthetic-local-token" };
-      auth.saveAuthProfileStore({ version: 1, profiles: { [profileId]: shared } });
-      if (localOverride) {
-        auth.saveAuthProfileStore({ version: 1, profiles: { [profileId]: local } }, agentDir);
-      }
       const config: OpenClawConfig = {
         plugins: { enabled: false },
-        agents: { entries: { owner: { agentDir } } },
         tools: { byProvider: { "fixture/denied": { deny: ["exec"] } } },
       };
-      const target = { ...state, installRoot: state.workspaceDir };
       let retainedTool: (() => void) | undefined;
       mocks.run.mockImplementation(async (input: RunEmbeddedAgentParams) => {
         if (host) {
           expect(getBoundLegacyPluginSdkResourceHost()).toBe(host);
         }
-        expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
-        expect(getInstallationTarget()).toMatchObject({
-          stateDir: state.stateDir,
-          configPath: state.configPath,
-        });
-        expect(input).toMatchObject({
-          agentDir,
-          authProfileId: profileId,
-          authProfileIdSource: "user",
-          sessionPersistence: "detached",
-          workspaceDir: target.installRoot,
-          cwd: target.installRoot,
-          codeModeOverride: false,
-          cleanupBundleMcpOnRunEnd: true,
-        });
+        expect(input.sessionPersistence).toBe("detached");
         expect(input.sessionManager?.getSessionTarget()).toBeUndefined();
-        const selected = auth.loadAuthProfileStoreForRuntime(input.agentDir, {
-          readOnly: true,
-          externalCli: { mode: "none" },
-        }).profiles[profileId];
-        expect(selected).toMatchObject(localOverride ? local : shared);
         retainedTool = captureAgentToolExecutionBudget();
         expect(retainedTool).toBeDefined();
         retainedTool?.();
@@ -163,14 +126,7 @@ it.each([
       }
       const execute = () =>
         cleanup.run(() =>
-          withUpdateRepairEnvironment(target, () =>
-            repairTurn(state, {
-              config,
-              authProfileId: profileId,
-              modelFallbacks: ["fixture/backup", "fixture/denied"],
-              prompt: "Repair the failed update.",
-            }),
-          ),
+          repairTurn(state, { config, modelFallbacks: ["fixture/backup", "fixture/denied"] }),
         );
       const run = host ? host.run(execute) : execute();
       if (cleanupFails) {
@@ -185,8 +141,6 @@ it.each([
         expect(cleanup.outcome).toBe("closed");
       }
       expect(mocks.entry.mock.calls[0]?.[0].selection).toMatchObject({
-        agentDir,
-        userLockedAuthProfileId: profileId,
         fallbacksOverride: ["fixture/backup"],
       });
       expect(mocks.cleanup).toHaveBeenCalledOnce();

@@ -514,6 +514,7 @@ struct GatewayProcessManagerTests {
 
     private nonisolated func gatewayTask(
         healthSucceedsAfter unavailableResponses: Int?,
+        coreReadyAfter pendingResponses: Int? = nil,
         stallsFirstHealthResponse: Bool = false,
         healthResponseGates: [AsyncTestGate] = [],
         firstHealthRequest: AsyncTestGate? = nil) -> GatewayTestWebSocketTask
@@ -545,7 +546,16 @@ struct GatewayProcessManagerTests {
                     task.emitReceiveSuccess(.data(response))
                     return
                 }
-                task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+                if let pendingResponses {
+                    let response = Data(
+                        """
+                        {"type":"res","id":"\(id)","ok":true,
+                         "payload":{"coreReady":\(healthIndex > pendingResponses)}}
+                        """.utf8)
+                    task.emitReceiveSuccess(.data(response))
+                } else {
+                    task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+                }
             })
     }
 
@@ -2383,7 +2393,7 @@ struct GatewayProcessManagerTests {
                     },
                     wait: {
                         await exits[index].wait()
-                        return "fixture startup failed"
+                        return .launch("fixture startup failed")
                     },
                     terminate: { exits[index].open() })
             }
@@ -2687,14 +2697,18 @@ struct GatewayProcessManagerTests {
     }
 
     @Test(arguments: [
-        (Duration.zero, Duration.milliseconds(300), true),
-        (.milliseconds(600), .milliseconds(300), true),
-        (.milliseconds(900), .milliseconds(100), false),
+        (Duration.zero, Duration.milliseconds(300), true, false),
+        (.milliseconds(600), .milliseconds(300), true, false),
+        (.milliseconds(900), .milliseconds(100), false, false),
+        (.zero, .milliseconds(300), true, true),
+        (.milliseconds(600), .milliseconds(300), true, true),
+        (.milliseconds(900), .milliseconds(100), false, true),
     ])
-    func `transient unavailable health response retries within its budget`(
+    func `transient health startup response retries within its budget`(
         responseDelay: Duration,
         retryDelay: Duration,
-        becomesReady: Bool) async throws
+        becomesReady: Bool,
+        coreReadyInPayload: Bool) async throws
     {
         let stateDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-gateway-ready-\(UUID().uuidString)", isDirectory: true)
@@ -2712,7 +2726,8 @@ struct GatewayProcessManagerTests {
                 defer { responseGate.open() }
                 let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url, clock: clock) {
                     self.gatewayTask(
-                        healthSucceedsAfter: 1,
+                        healthSucceedsAfter: coreReadyInPayload ? 0 : 1,
+                        coreReadyAfter: coreReadyInPayload ? 1 : nil,
                         healthResponseGates: [responseGate],
                         firstHealthRequest: firstHealthRequest)
                 }
@@ -2749,6 +2764,8 @@ struct GatewayProcessManagerTests {
                 #expect(session.latestTask()?.snapshotSendCount() == (becomesReady ? 4 : 3))
                 #expect(manager.status == (becomesReady ? .running(details: "pid 4242") : .starting))
                 #expect(!manager._testHasLaunchAgentReadinessFailure())
+                #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                    .allSatisfy { $0.first != "install" })
 
                 await connection.shutdown()
                 await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
@@ -3063,6 +3080,47 @@ struct GatewayProcessManagerTests {
 
             await connection.shutdown()
             await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+        }
+    }
+
+    @Test func `stopped launchd startup surfaces recent ownership refusal without extra polling`() async throws {
+        let port = 19117
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            GatewayTestWebSocketTask()
+        }
+        let payload = """
+        {"service":{"loaded":true,"runtime":{"status":"stopped"}},
+        "lastError":"Gateway ownership could not be verified. If the recorded holder has stopped, run `openclaw gateway recover-lock` to inspect it."}
+        """
+        try await self.withLaunchAgentEnvironment(port: port, statusPayload: payload) {
+            manager.lastFailureReason = nil
+            manager._testClearLaunchAgentReadinessFailure()
+            manager._testClearLaunchAgentInstallEvidence()
+            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+            defer {
+                manager.lastFailureReason = nil
+                manager._testClearLaunchAgentReadinessFailure()
+                manager._testClearLaunchAgentInstallEvidence()
+            }
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            manager._testStartLaunchdGatewayReadiness(
+                port: port, pid: nil, firstInstallReadinessBudget: 0.1)
+            await manager.waitForStartupAttempt()
+
+            guard case let .failed(reason) = manager.status else {
+                Issue.record("stopped Gateway did not expose its startup failure")
+                await connection.shutdown()
+                return
+            }
+            #expect(reason.contains("may be from an earlier run"))
+            #expect(reason.contains("openclaw gateway recover-lock"))
+            #expect(manager.lastFailureReason == reason)
+            #expect(!manager._testHasLaunchAgentReadinessFailure())
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == [
+                ["status", "--json", "--no-probe"],
+            ])
+            await connection.shutdown()
         }
     }
 

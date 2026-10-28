@@ -1,7 +1,9 @@
 import { dynamic, render, type JSX } from "@solidjs/web";
-import { createMemo, createSignal, For, onCleanup, runWithOwner, Show, untrack } from "solid-js";
+import { createMemo, createSignal, For, onSettled, runWithOwner, Show } from "solid-js";
 import { PRESENTATION_CHANGED_EVENT, type PresentationBinding } from "../../../lib/presentation.ts";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
@@ -10,65 +12,59 @@ import {
   createSolidRenderLifecycle,
   type SolidRenderLifecycle,
 } from "../solid-render-lifecycle.ts";
-import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
-import { ChatDivider, ChatNotice } from "./chat-divider.tsx";
-import { ChatHistoryBoundary } from "./chat-history-boundary.tsx";
-import { ActivityGroup, MessageGroup } from "./chat-message-group-view.tsx";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import {
-  StreamGroup,
-  UnplacedSubagentWait,
-  WorkGroupSummary,
-} from "./chat-message-stream-view.tsx";
-import { RealtimeTalkConversation } from "./chat-realtime-controls.tsx";
-import { ChatSystemEvents } from "./chat-system-events.tsx";
-import { TranscriptWorkPreviews } from "./chat-transcript-content.tsx";
-import type { TranscriptContent, TranscriptLayoutProps } from "./chat-transcript-layout.ts";
+  TranscriptRowKeyContext,
+  type TranscriptContent,
+  type TranscriptLayoutProps,
+} from "./chat-transcript-layout.ts";
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 import { TranscriptMessageElementsContext } from "./chat-transcript-message-elements.ts";
-import {
-  GuardedTranscriptItem,
-  type NativeTranscriptView,
-} from "./chat-transcript-render-guard.ts";
-import { ChatTypingIndicator } from "./chat-typing-indicator.tsx";
-import { TurnRecapRow } from "./chat-working-indicator.tsx";
-
-const nativeRows = {
-  "system-events": ChatSystemEvents,
-  group: MessageGroup,
-  activity: ActivityGroup,
-  stream: StreamGroup,
-  work: WorkGroupSummary,
-  frame: AgentRunFrame,
-  wait: UnplacedSubagentWait,
-  divider: ChatDivider,
-  notice: ChatNotice,
-  "work-previews": TranscriptWorkPreviews,
-  realtime: RealtimeTalkConversation,
-  recap: TurnRecapRow,
-  typing: ChatTypingIndicator,
-};
+import { GuardedTranscriptItem } from "./chat-transcript-render-guard.ts";
+import { nativeRows, type NativeTranscriptView } from "./chat-transcript-rows.ts";
 
 function NativeRow(props: { value: NativeTranscriptView }): JSX.Element {
   const Row = dynamic(() => nativeRows[props.value.kind]);
-  return <Row {...props.value} />;
-}
-
-function GuardedRow(props: { value: GuardedTranscriptItem }): JSX.Element {
-  // Equal dependency vectors preserve the accepted row across unrelated stream updates.
-  const current = createMemo(() => props.value, {
-    equals: (before, next) => transcriptArraysEqual(before.dependencies, next.dependencies),
-  });
-  return <Show when={current().native}>{(view) => <NativeRow value={view()} />}</Show>;
+  return (
+    <Show
+      when={props.value.kind === "group"}
+      fallback={
+        <ChatLazyBoundary
+          fallback={
+            <div class="chat-group" role="status">
+              {t("common.loading")}
+            </div>
+          }
+        >
+          <Row {...props.value} />
+        </ChatLazyBoundary>
+      }
+    >
+      <Row {...props.value} />
+    </Show>
+  );
 }
 
 function RowContent(props: { value: TranscriptContent }): JSX.Element {
+  // Cut off unchanged rows before the content-kind branch and its child bindings.
+  const current = createMemo(() => props.value, {
+    equals: (before, next) =>
+      before instanceof GuardedTranscriptItem && next instanceof GuardedTranscriptItem
+        ? transcriptArraysEqual(before.dependencies, next.dependencies)
+        : Object.is(before, next),
+  });
+  const native = () => {
+    const value = current();
+    return value instanceof GuardedTranscriptItem ? value.native : undefined;
+  };
+  const fallback = () => {
+    const value = current();
+    return value instanceof GuardedTranscriptItem ? null : value;
+  };
   return (
-    <Show
-      when={props.value instanceof GuardedTranscriptItem ? props.value : undefined}
-      fallback={props.value instanceof GuardedTranscriptItem ? null : props.value}
-    >
-      {(item) => <GuardedRow value={item()} />}
+    <Show when={native()} fallback={fallback()}>
+      {(view) => <NativeRow value={view()} />}
     </Show>
   );
 }
@@ -81,9 +77,19 @@ function TranscriptRows(props: {
   const virtualRows = createMemo(() => {
     return props.snapshot.virtualizer.getVirtualItems();
   });
+  const rowRef = (key: string) => {
+    const measureRef = props.measureRowRefFor(key);
+    return elementRef((element: HTMLDivElement) => {
+      measureRef(element);
+      return () => measureRef(undefined);
+    });
+  };
   return (
     <>
-      <Show when={props.snapshot.header}>{(header) => <ChatHistoryBoundary {...header()} />}</Show>
+      {/* Live controls can retire before a gesture releases the accepted row model. */}
+      <div style={{ height: `${props.snapshot.headerHeight}px`, "transition-property": "none" }}>
+        {props.snapshot.header}
+      </div>
       <div class="chat-virtual-sizer" ref={(element) => props.columnRef(element)}>
         {props.snapshot.overlay}
         <div
@@ -103,26 +109,27 @@ function TranscriptRows(props: {
                   ? virtualRow().start - previous.end
                   : 0;
               };
-              // The keyed row owns one measurement binding for its entire mounted lifetime.
-              const initialKey = untrack(() => String(virtualRow().key));
-              const measureRef = props.measureRowRefFor(initialKey);
-              onCleanup(() => measureRef(undefined));
               return (
                 <>
                   <Show when={gap() > 0}>
                     <div aria-hidden="true" style={{ height: `${gap()}px` }} />
                   </Show>
                   <div
-                    ref={measureRef}
+                    ref={[rowRef(String(virtualRow().key))]}
                     class={[
                       "chat-virtual-row",
                       { "chat-virtual-row--first": virtualRow().index === 0 },
                     ]}
-                    style={{ "contain-intrinsic-block-size": `${virtualRow().size}px` }}
+                    style={{
+                      "contain-intrinsic-block-size": `${virtualRow().size}px`,
+                      "min-height": `${props.snapshot.layout.rowMinimum(index())}px`,
+                    }}
                     data-index={String(virtualRow().index)}
                     data-virtual-row-key={row()?.key}
                   >
-                    <RowContent value={content()} />
+                    <TranscriptRowKeyContext value={() => row()?.key}>
+                      <RowContent value={content()} />
+                    </TranscriptRowKeyContext>
                   </div>
                 </>
               );
@@ -285,7 +292,7 @@ export class ChatTranscriptRenderer {
           this.lifecycle = lifecycle;
           const snapshot = createMemo(lifecycle.snapshot);
           const capture = (event: Event) => snapshot().captureInteractionResize(event);
-          onCleanup(listen(element, "click", capture, true));
+          onSettled(() => listen(element, "click", capture, true));
           const content = () => (
             <TranscriptMessageElementsContext value={next.messageElements}>
               <TranscriptMediaDisconnect value={this.mediaDisconnect}>

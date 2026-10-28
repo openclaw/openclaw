@@ -1,46 +1,48 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
+import { runMeetingBrowserAct } from "./browser-act-lock.js";
 import { openMeetingWithBrowser, recoverMeetingBrowserTab } from "./browser-controller.js";
 import { isMeetingBrowserTransientNavigationError } from "./browser-navigation-errors.js";
-import type { MeetingBrowserRequestCaller } from "./platform-adapter-contract.js";
+import { leaveMeetingWithBrowser } from "./browser-session-control.js";
+import { TEST_MEETING_PLATFORM_ADAPTER } from "./observation-provenance.test-support.js";
+import type {
+  MeetingBrowserLeaveStep,
+  MeetingBrowserRequestCaller,
+} from "./platform-adapter-contract.js";
 
-beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 const meetingUrl = "https://meet.test/meeting";
+type LeaveOptions = {
+  openedByPlugin?: boolean;
+  buildSessionLeaveScript?: Parameters<
+    typeof leaveMeetingWithBrowser
+  >[0]["adapter"]["browser"]["buildSessionLeaveScript"];
+  onDelete?: () => Promise<void>;
+};
 
-function createBrowser(onFirstEvaluation: () => void) {
+function createBrowser(
+  onFirstEvaluation: () => void,
+  leave?: LeaveOptions & { steps: MeetingBrowserLeaveStep[] },
+) {
   const adoption: boolean[] = [];
   const captureCaptions: boolean[] = [];
   const timeouts: number[] = [];
-  const state = { evaluations: 0, adoption, captions: captureCaptions, timeouts };
+  const deletedTabs: string[] = [];
+  const state = { evaluations: 0, adoption, captions: captureCaptions, timeouts, deletedTabs };
   const adapter: Parameters<typeof openMeetingWithBrowser>[0]["adapter"] = {
-    browserLabel: "Test meeting",
-    urls: {
-      accountHint: () => undefined,
-      buildJoinUrl: (session) => session.url,
-      isPreferredJoinUrl: () => true,
-      isRecoverableTab: () => true,
-      isSameMeeting: () => true,
-      localeAction: () => undefined,
-      normalizeForReuse: () => "test-meeting",
-      validateAndNormalize: (input) => String(input),
-    },
+    ...TEST_MEETING_PLATFORM_ADAPTER,
     browser: {
-      allowsMicrophone: () => false,
-      browserControlUnavailable: () => ({
-        category: "browser-control-unavailable",
-        reason: "browser-unavailable",
-        message: "Browser unavailable.",
-      }),
-      buildLeaveScript: () => "",
+      ...TEST_MEETING_PLATFORM_ADAPTER.browser,
       captions: {
-        buildTranscriptScript: () => "",
+        ...TEST_MEETING_PLATFORM_ADAPTER.browser.captions,
         enabled: () => false,
-        parseTranscript: () => ({ droppedLines: 0, lines: [] }),
       },
-      classifyManualAction: () => undefined,
-      parseLeaveResult: () => ({ departed: false }),
       parseStatus: () => ({ status: "browser-control", inCall: true }),
-      permissions: () => undefined,
+      buildSessionLeaveScript: leave?.buildSessionLeaveScript,
+      parseLeaveResult: () =>
+        leave?.steps[Math.min(state.evaluations - 1, leave.steps.length - 1)] ?? {
+          departed: false,
+        },
       permissionNotes: () => [],
       buildStatusJoinScript: (params) => {
         state.adoption.push(params.allowSessionAdoption);
@@ -50,6 +52,11 @@ function createBrowser(onFirstEvaluation: () => void) {
     },
   };
   const callBrowser: MeetingBrowserRequestCaller = async (request) => {
+    if (request.method === "DELETE") {
+      deletedTabs.push(request.path);
+      await leave?.onDelete?.();
+      return {};
+    }
     if (request.path === "/tabs") {
       return { tabs: [{ targetId: "target-1", url: meetingUrl }] };
     }
@@ -58,6 +65,9 @@ function createBrowser(onFirstEvaluation: () => void) {
       if (++state.evaluations === 1) {
         onFirstEvaluation();
       }
+    }
+    if (leave && request.path !== "/act") {
+      throw new Error(`Unexpected browser request: ${request.method} ${request.path}`);
     }
     return {};
   };
@@ -76,6 +86,7 @@ function makeConfig(timeoutMs: number) {
 }
 
 describe("meeting browser", () => {
+  beforeEach(() => vi.useFakeTimers());
   it.each([
     ["Protocol error: Cannot find context with specified id", true],
     ["browser unavailable", false],
@@ -145,9 +156,96 @@ describe("meeting browser", () => {
     expect(state.adoption).toEqual([true, false]);
     expect(state.timeouts[0]).toBeLessThanOrEqual(500);
     expect(state.timeouts[1]).toBeLessThan(state.timeouts[0] ?? 0);
-    expect(result.browser).toMatchObject({
-      inCall: true,
-      notes: ["Test meeting navigated while recovering; retrying browser inspection."],
+    expect(result.browser?.inCall).toBe(true);
+    expect(result.browser?.notes).toEqual([expect.stringContaining("navigated while recovering")]);
+  });
+});
+
+function startLeaving(steps: MeetingBrowserLeaveStep[], options: LeaveOptions = {}) {
+  const { adapter, callBrowser, state } = createBrowser(() => {}, { steps, ...options });
+  const leaving = leaveMeetingWithBrowser({
+    adapter,
+    callBrowser,
+    launch: true,
+    meetingSessionId: "session-1",
+    meetingUrl,
+    tab: { targetId: "target-1", openedByPlugin: options.openedByPlugin ?? true },
+    timeoutMs: 1_000,
+  });
+  return { leaving, deletedTabs: state.deletedTabs };
+}
+
+describe("meeting browser leave ownership", () => {
+  it.each([
+    [
+      { departed: false, sessionConflict: true, sessionMatched: false },
+      true,
+      true,
+      "belongs to another OpenClaw meeting session",
+    ],
+    [{ departed: false, sessionMatched: false }, true, false, "could not verify"],
+    [{ departed: true }, false, true, "kept the reused browser tab open"],
+  ] as const)(
+    "keeps tab ownership for %j (plugin=%s, left=%s)",
+    async (step, openedByPlugin, left, note) => {
+      const { leaving, deletedTabs } = startLeaving([{ ...step, urlMatched: true }], {
+        openedByPlugin,
+      });
+      await expect(leaving).resolves.toEqual({ left, note: expect.stringContaining(note) });
+      expect(deletedTabs).toEqual([]);
+    },
+  );
+
+  it("carries initiated-leave evidence into the next page evaluation", async () => {
+    const leaveInitiated: boolean[] = [];
+    const deleteStarted = createDeferredCore();
+    const deleteGate = createDeferredCore();
+    const { leaving, deletedTabs } = startLeaving(
+      [
+        { departed: false, leaveAction: "leave", urlMatched: true },
+        { departed: false, sessionMatched: false, urlMatched: true },
+        { departed: true, urlMatched: false },
+      ],
+      {
+        buildSessionLeaveScript: (context) => {
+          leaveInitiated.push(context.leaveInitiated);
+          return "() => '{}'";
+        },
+        onDelete: async () => {
+          deleteStarted.resolve();
+          await deleteGate.promise;
+        },
+      },
+    );
+    await deleteStarted.promise;
+    let concurrentStarted = false;
+    const concurrent = runMeetingBrowserAct({
+      deadline: performance.now() + 1_000,
+      targetId: "target-1",
+      operation: async () => {
+        concurrentStarted = true;
+      },
     });
+    await Promise.resolve();
+    expect(concurrentStarted).toBe(false);
+    deleteGate.resolve();
+    const result = await leaving;
+    await concurrent;
+    expect(leaveInitiated).toEqual([false, true, true]);
+    expect(deletedTabs).toEqual(["/tabs/target-1"]);
+    expect(concurrentStarted).toBe(true);
+    expect(result.left).toBe(true);
+  });
+
+  it("reserves enough time to close a plugin tab after leave polling expires", async () => {
+    vi.useFakeTimers();
+    const { leaving, deletedTabs } = startLeaving([
+      { departed: false, leaveAction: "leave", urlMatched: true },
+      { departed: false, urlMatched: true },
+    ]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await leaving;
+    expect(deletedTabs).toEqual(["/tabs/target-1"]);
+    expect(result.left).toBe(true);
   });
 });

@@ -1,7 +1,7 @@
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseDurationMs } from "../../../cli/parse-duration.js";
 import { getRecord, type LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
-import { moveLegacyConfigKey } from "./legacy-config-record-shared.js";
+import { deleteRetiredPath, moveLegacyConfigKey } from "./legacy-config-record-shared.js";
 
 /** Match only parser-valid values that resolve to an unsafe zero-duration cutoff. */
 function isZeroDuration(val: unknown): boolean {
@@ -63,12 +63,9 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
       },
     ],
     apply: (raw, changes) => {
-      const maintenance = getRecord(getRecord(raw.session)?.maintenance);
-      if (!maintenance || !Object.hasOwn(maintenance, "rotateBytes")) {
-        return;
+      if (deleteRetiredPath(getRecord(raw.session)?.maintenance, ["rotateBytes"])) {
+        changes.push("Removed deprecated session.maintenance.rotateBytes.");
       }
-      delete maintenance.rotateBytes;
-      changes.push("Removed deprecated session.maintenance.rotateBytes.");
     },
   },
   {

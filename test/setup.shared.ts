@@ -2,7 +2,14 @@
 import "./vitest/vitest.sqlite-preload.mts";
 import { vi } from "vitest";
 import { installProcessWarningFilter } from "../src/infra/warning-filter.js";
+import {
+  declarePostgresTestRoot,
+  installPostgresTestRootGuard,
+} from "./helpers/postgres-pool-roots.js";
 import { withIsolatedTestHome } from "./test-env.js";
+
+declarePostgresTestRoot();
+installPostgresTestRootGuard();
 
 const openAiCodexTokenRefreshTestHook = "__OPENCLAW_TEST_REFRESH_OPENAI_CODEX_TOKEN__";
 type GlobalWithOpenAiCodexTokenRefreshTestHook = typeof globalThis & {

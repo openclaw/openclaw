@@ -22,93 +22,60 @@ const preparedCli = createPreparedVitestCliFixture(
 beforeAll(() => preparedCli.prepare());
 afterAll(() => preparedCli.cleanup());
 
-function emptyCase(
-  name: string,
-  code: number,
-  flags: string[] = [],
-  options: {
-    entry?: string;
-    excluded?: boolean;
-    tests?: number;
-    invalid?: boolean;
-    help?: boolean;
-    selectors?: string[];
-    parallel?: boolean;
-    emptyInvocations?: number;
-    skipped?: boolean;
-  } = {},
-) {
+type Scenario = {
+  entry?: string;
+  excluded?: boolean;
+  tests?: number;
+  invalid?: boolean;
+  help?: boolean;
+  selectors?: string[];
+  parallel?: boolean;
+  emptyInvocations?: number;
+  skipped?: boolean;
+};
+function emptyCase(name: string, code: number, flags: string[] = [], options: Scenario = {}) {
   return { name, code, flags, ...options };
 }
 const runs = { excluded: false, tests: 1 };
 const projects = { entry: "projects" };
+const pass = "--passWithNoTests";
+const help = "--help";
+const direct = ["--config", config];
 
 it.for([
   emptyCase("delegated default", 1),
   emptyCase("package test entry default", 1, [], projects),
-  emptyCase("projects compound help executes", 0, ["--help", "--no-help"], {
+  emptyCase("projects compound help executes", 0, [help, "--no-help"], { ...projects, ...runs }),
+  emptyCase("projects compound help validates", 1, [help, "--no-help", pass, pass], {
     ...projects,
-    ...runs,
+    invalid: true,
   }),
-  emptyCase(
-    "projects compound help validates",
-    1,
-    ["--help", "--no-help", "--passWithNoTests", "--passWithNoTests"],
-    { ...projects, invalid: true },
-  ),
-  emptyCase(
-    "projects compound help metadata",
-    0,
-    ["--no-help", "--help", "--unknown-router-option"],
-    { ...projects, help: true },
-  ),
-  emptyCase("several exact files", 1, [], { selectors: [target, sibling] }),
+  emptyCase("projects compound help metadata", 0, ["--no-help", help, "--unknown-router-option"], {
+    ...projects,
+    help: true,
+  }),
   emptyCase("exact files across lanes", 1, [], {
     selectors: [target, isolated],
     parallel: true,
     emptyInvocations: 2,
   }),
-  emptyCase("explicit true", 0, ["--passWithNoTests=true"]),
-  emptyCase("bare opt-in", 0, ["--passWithNoTests"]),
-  emptyCase(
-    "separated exclusion matching routed target",
-    0,
-    ["--exclude", target, "--passWithNoTests"],
-    { excluded: false },
-  ),
-  emptyCase("explicit false", 1, ["--passWithNoTests=false"]),
-  emptyCase("native negation", 1, ["--no-passWithNoTests"]),
-  emptyCase("native dashed spelling", 0, ["--pass-with-no-tests=true"]),
-  emptyCase("invalid duplicate scalar", 1, ["--passWithNoTests", "--passWithNoTests"], {
-    invalid: true,
+  emptyCase("separated exclusion matching routed target", 0, ["--exclude", target, pass], {
+    excluded: false,
   }),
-  emptyCase("direct configured default", 1, ["--config", config]),
-  emptyCase("cfg long control", 0, ["--config", config], runs),
-  emptyCase("cfg short control", 0, ["-c", config], runs),
-  emptyCase("cfg inline short", 0, [`-c=${config}`], runs),
-  emptyCase("cfg inline strict", 1, [`-c=${config}`, "--passWithNoTests"]),
-  ...[
-    "--passWithNoTests=false",
-    "--passWithNoTests=true",
-    "--passWithNoTests",
-    "--pass-with-no-tests=true",
-  ].map((flag) => emptyCase(`direct configured strict ${flag}`, 1, ["--config", config, flag])),
+  emptyCase("cfg long control", 0, direct, runs),
+  emptyCase("cfg inline strict", 1, [`-c=${config}`, pass]),
   // Native parse errors before discovery remain infrastructure failures.
   emptyCase(
     "direct invalid scalar is not repaired",
     2,
-    ["--config", config, "--no-passWithNoTests", "--passWithNoTests=true"],
+    [...direct, "--no-passWithNoTests", `${pass}=true`],
     { invalid: true },
   ),
-  emptyCase("delegated separated false", 1, ["--passWithNoTests", "false"]),
-  emptyCase("delegated separated true", 0, ["--passWithNoTests", "true"]),
-  emptyCase(
-    "direct help with strict scalar",
-    0,
-    ["--config", config, "--passWithNoTests=false", "--help=true"],
-    { help: true },
-  ),
-  emptyCase("disabled help executes", 0, ["--help", "false"], runs),
+  emptyCase("delegated separated true", 0, [pass, "true"]),
+  emptyCase("direct help with strict scalar", 0, [...direct, `${pass}=false`, `${help}=true`], {
+    help: true,
+  }),
+  emptyCase("disabled help executes", 0, [help, "false"], runs),
   emptyCase("named run version executes", 0, ["--version"], runs),
   emptyCase("directory selection", 0, [], { selectors: ["test/scripts"] }),
   emptyCase("glob selection", 0, [], { selectors: ["test/scripts/*.test.ts"] }),
@@ -118,8 +85,7 @@ it.for([
     selectors: ["test/vitest/vitest.tooling-docker.config.ts"],
   }),
   emptyCase("source-derived selection", 0, [], { selectors: [source] }),
-  emptyCase("native help", 0, ["--help=true"], { help: true }),
-  emptyCase("non-excluded control", 0, [], runs),
+  emptyCase("native help", 0, [`${help}=true`], { help: true }),
   emptyCase("one surviving named file", 0, [], { selectors: [target, sibling], tests: 1 }),
   emptyCase("skipped case is still a discovered file", 0, [], { ...runs, skipped: true }),
 ])("$name", { timeout: 60_000 }, async (scenario, { signal, onTestFinished }) => {

@@ -1,17 +1,24 @@
 /** Loads and normalizes OpenClaw plugin manifests, including contracts and config schemas. */
 import path from "node:path";
+import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
+import type {
+  ModelCatalog,
+  ModelCatalogModel,
+  ModelDecisionCapabilities,
+} from "@openclaw/model-catalog-core/model-catalog-types";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { validatePluginUiCapabilities } from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
 import { validatePluginCategories } from "../../packages/plugin-package-contract/src/index.js";
 import { matchRootFileOpenFailure } from "../infra/boundary-file-read.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { isRecord } from "../utils.js";
 import { loadPluginControlUiDeclaration } from "./control-ui-build-manifest.js";
 import { coerceDoctorSessionRouteStateOwners } from "./doctor-session-route-state-owner-types.js";
 import * as capabilityNormalizers from "./manifest-capability-normalizers.js";
 import { normalizeManifestCommandAliases } from "./manifest-command-aliases.js";
 import { normalizeConfigGroups } from "./manifest-config-groups.js";
-import { normalizeManifestModelCatalog } from "./manifest-decision-catalog.js";
 import * as modelProviderNormalizers from "./manifest-model-provider-normalizers.js";
 import { normalizeManifestPlatforms } from "./manifest-platforms.js";
 import * as setupNormalizers from "./manifest-setup-normalizers.js";
@@ -227,6 +234,30 @@ export function loadPluginManifest(
     return fail(`invalid plugin manifest categories: ${categories.error}`);
   }
 
+  const kind = parsePluginKind(raw.kind);
+  let contextEngineIds: string[] | undefined;
+  if (raw.contextEngineIds !== undefined) {
+    const kinds = Array.isArray(kind) ? kind : [kind];
+    if (
+      !kinds.includes("context-engine") ||
+      !Array.isArray(raw.contextEngineIds) ||
+      raw.contextEngineIds.length === 0 ||
+      raw.contextEngineIds.some(
+        (value) =>
+          typeof value !== "string" ||
+          !value.trim() ||
+          ["legacy", "none"].includes(value.trim().toLowerCase()),
+      )
+    ) {
+      return cacheResult({
+        ok: false,
+        error:
+          "contextEngineIds requires context-engine kind and a nonempty array of nonreserved engine IDs",
+        manifestPath,
+      });
+    }
+    contextEngineIds = [...new Set(normalizeTrimmedStringList(raw.contextEngineIds))];
+  }
   const requiresPlugins = normalizeTrimmedStringList(raw.requiresPlugins);
   const enabledByDefaultOnPlatforms = normalizeManifestPlatforms(raw.enabledByDefaultOnPlatforms);
   const legacyPluginIds = normalizeTrimmedStringList(raw.legacyPluginIds);
@@ -250,15 +281,104 @@ export function loadPluginManifest(
         ...(stateMigrations !== undefined ? { stateMigrations } : {}),
       } as PluginManifestDoctorContract)
     : undefined;
+  /** The documented V1 manifest is an input adapter, not a second catalog. */
+  const normalizeManifestModelCatalog = (): ModelCatalog | undefined => {
+    const ownedProviders = new Set([
+      ...providers,
+      ...cliBackends,
+      ...(contracts?.decisionProviders ?? []),
+    ]);
+    const catalog = normalizeModelCatalog(raw.modelCatalog, { ownedProviders });
+    const legacy = capabilityNormalizers.normalizeManifestDecisionModels(
+      raw.decisionModels,
+      contracts?.decisionProviders,
+    );
+    if (!legacy?.length) {
+      return catalog;
+    }
+    // Reserve explicit identities before validation: a rejected canonical declaration
+    // must not be resurrected as an apparently usable legacy capability.
+    const declaredModels = new Map<string, Set<string>>();
+    if (isRecord(raw.modelCatalog) && isRecord(raw.modelCatalog.providers)) {
+      for (const [catalogProviderId, provider] of Object.entries(raw.modelCatalog.providers)) {
+        if (!isRecord(provider) || !Array.isArray(provider.models)) {
+          continue;
+        }
+        const key = normalizeProviderId(catalogProviderId);
+        const ids = declaredModels.get(key) ?? new Set<string>();
+        for (const row of provider.models) {
+          const modelId = isRecord(row) ? normalizeOptionalString(row.id) : undefined;
+          if (modelId) {
+            ids.add(modelId);
+          }
+        }
+        declaredModels.set(key, ids);
+      }
+    }
+    const catalogProviders = { ...catalog?.providers };
+    for (const model of legacy) {
+      const provider = normalizeProviderId(model.provider);
+      if (!provider || isBlockedObjectKey(provider)) {
+        continue;
+      }
+      const current = catalogProviders[provider];
+      // An explicit canonical declaration owns the entire row, never a blended contract.
+      if (declaredModels.get(provider)?.has(model.id)) {
+        continue;
+      }
+      const capabilities = model.capabilities;
+      const questions: NonNullable<ModelDecisionCapabilities["questions"]> = {};
+      for (const questionKind of capabilities?.questionTypes ?? []) {
+        questions[questionKind] = {
+          // V1 reports estimates, but never promises categorical normalization or abstention.
+          probabilities: questionKind === "boolean" ? "boolean" : "provider-defined",
+          abstention: false,
+          ...(questionKind === "boolean" && capabilities?.requiresBooleanCriteria !== undefined
+            ? { requiresCriteria: capabilities.requiresBooleanCriteria }
+            : {}),
+          ...(questionKind === "choice" && capabilities?.maxChoiceAlternatives !== undefined
+            ? { maxOptions: capabilities.maxChoiceAlternatives }
+            : {}),
+          ...(questionKind === "score" && capabilities?.maxScoreLevels !== undefined
+            ? { maxOptions: capabilities.maxScoreLevels }
+            : {}),
+        };
+      }
+      const row: ModelCatalogModel = {
+        id: model.id,
+        name: model.name,
+        inference: {
+          chat: false,
+          decision: {
+            protocol: "decision-v1",
+            input: ["text"],
+            ...(capabilities
+              ? {
+                  questions,
+                  ...(capabilities.confidence ? { confidence: capabilities.confidence } : {}),
+                  limits: {
+                    ...(capabilities.maxQuestions !== undefined
+                      ? { maxQuestions: capabilities.maxQuestions }
+                      : {}),
+                    ...(capabilities.maxInputTokens !== undefined
+                      ? { maxInputTokens: capabilities.maxInputTokens }
+                      : {}),
+                    ...(capabilities.inputTokenScope
+                      ? { inputTokenScope: capabilities.inputTokenScope }
+                      : {}),
+                  },
+                }
+              : {}),
+          },
+        },
+      };
+      catalogProviders[provider] = { ...current, models: [...(current?.models ?? []), row] };
+    }
+    return normalizeModelCatalog({ ...catalog, providers: catalogProviders }, { ownedProviders });
+  };
   let modelCatalog: ReturnType<typeof normalizeManifestModelCatalog>;
   try {
-    modelCatalog = normalizeManifestModelCatalog({
-      modelCatalog: raw.modelCatalog,
-      decisionModels: raw.decisionModels,
-      providers,
-      cliBackends,
-      decisionProviders: contracts?.decisionProviders,
-    });
+    modelCatalog = normalizeManifestModelCatalog();
   } catch {
     return cacheResult({
       ok: false,
@@ -278,7 +398,11 @@ export function loadPluginManifest(
     ...(enabledByDefaultOnPlatforms.length > 0 ? { enabledByDefaultOnPlatforms } : {}),
     ...(legacyPluginIds.length > 0 ? { legacyPluginIds } : {}),
     ...(autoEnableWhenConfiguredProviders.length > 0 ? { autoEnableWhenConfiguredProviders } : {}),
-    kind: parsePluginKind(raw.kind),
+    kind,
+    ...(contextEngineIds ? { contextEngineIds } : {}),
+    ...(isRecord(raw.reload) && raw.reload.turnHandover === true
+      ? { reload: { turnHandover: true } }
+      : {}),
     channels,
     channelAccountKeyPolicies: setupNormalizers.normalizeChannelAccountKeyPolicies(
       raw.channelAccountKeyPolicies,
@@ -301,7 +425,7 @@ export function loadPluginManifest(
       raw.modelIdNormalization,
       { ownedProviders: new Set(providers) },
     ),
-    providerEndpoints: modelProviderNormalizers.normalizeManifestProviderEndpoints(
+    providerEndpoints: capabilityNormalizers.normalizeManifestProviderEndpoints(
       raw.providerEndpoints,
     ),
     providerRequest: modelProviderNormalizers.normalizeManifestProviderRequest(

@@ -23,26 +23,6 @@ export type ModelDirectiveSelection = {
   alias?: string;
 };
 
-function formatNotAllowedError(params: {
-  modelRef: string;
-  policyPath: string;
-  rawRuntime?: string | undefined;
-}): string {
-  const rawRuntime = params.rawRuntime?.trim();
-  const retryCommand = rawRuntime
-    ? `/model ${params.modelRef} --runtime ${rawRuntime}`
-    : `/model ${params.modelRef}`;
-  const lines = [
-    `Model "${params.modelRef}" is not allowed. Use /models to list providers, or /models <provider> to list models.`,
-    `Add "${params.modelRef}" or its provider wildcard to ${params.policyPath}.`,
-    `Then retry: ${retryCommand}`,
-  ];
-  if (rawRuntime && normalizeProviderId(rawRuntime) === "codex") {
-    lines.push("If the Codex runtime is missing, run: openclaw plugins enable codex");
-  }
-  return lines.join("\n");
-}
-
 const FUZZY_VARIANT_TOKENS = [
   "lightning",
   "preview",
@@ -54,79 +34,6 @@ const FUZZY_VARIANT_TOKENS = [
   "small",
   "nano",
 ];
-
-function scoreFuzzyMatch(params: {
-  provider: string;
-  model: string;
-  fragment: string;
-  aliasIndex: ModelAliasIndex;
-  defaultProvider: string;
-  defaultModel: string;
-}) {
-  const provider = normalizeProviderId(params.provider);
-  const model = params.model;
-  const fragment = params.fragment;
-  const modelLower = normalizeLowercaseStringOrEmpty(model);
-  const haystack = `${provider}/${modelLower}`;
-  const key = modelKey(provider, model);
-
-  const scoreFragment = (value: string, exact: number, starts: number, includes: number) => {
-    if (value === fragment) {
-      return exact;
-    }
-    if (value.startsWith(fragment)) {
-      return starts;
-    }
-    return value.includes(fragment) ? includes : 0;
-  };
-
-  let score =
-    scoreFragment(haystack, 220, 140, 110) +
-    scoreFragment(provider, 180, 120, 90) +
-    scoreFragment(modelLower, 160, 110, 80);
-
-  // Best-effort typo tolerance for common near-misses like "claud" vs "claude".
-  // Bounded to keep this cheap across large model sets.
-  const distModel = levenshteinDistance(fragment, modelLower, 3);
-  if (distModel != null) {
-    score += (3 - distModel) * 70;
-  }
-
-  const aliases = params.aliasIndex.byKey.get(key) ?? [];
-  for (const alias of aliases) {
-    score += scoreFragment(normalizeLowercaseStringOrEmpty(alias), 140, 90, 60);
-  }
-
-  if (modelLower.startsWith(provider)) {
-    score += 30;
-  }
-
-  const fragmentVariants = FUZZY_VARIANT_TOKENS.filter((token) => fragment.includes(token));
-  const variantMatchCount = fragmentVariants.filter((token) => modelLower.includes(token)).length;
-  const variantCount = FUZZY_VARIANT_TOKENS.filter((token) => modelLower.includes(token)).length;
-  if (fragmentVariants.length === 0 && variantCount > 0) {
-    score -= variantCount * 30;
-  } else if (fragmentVariants.length > 0) {
-    score += variantMatchCount > 0 ? variantMatchCount * 40 : -20;
-  }
-
-  const defaultProvider = normalizeProviderId(params.defaultProvider);
-  const isDefault = provider === defaultProvider && model === params.defaultModel;
-  if (isDefault) {
-    score += 20;
-  }
-
-  return {
-    provider: params.provider,
-    model,
-    score,
-    isDefault,
-    variantCount,
-    variantMatchCount,
-    modelLength: modelLower.length,
-    key,
-  };
-}
 
 export function resolveModelDirectiveSelection(params: {
   raw: string;
@@ -209,9 +116,74 @@ export function resolveModelDirectiveSelection(params: {
     }
 
     const scored = candidates
-      .map((candidate) =>
-        scoreFuzzyMatch({ ...candidate, fragment, aliasIndex, defaultProvider, defaultModel }),
-      )
+      .map((candidate) => {
+        const provider = normalizeProviderId(candidate.provider);
+        const model = candidate.model;
+        const modelLower = normalizeLowercaseStringOrEmpty(model);
+        const haystack = `${provider}/${modelLower}`;
+        const key = modelKey(provider, model);
+
+        const scoreFragment = (value: string, exact: number, starts: number, includes: number) => {
+          if (value === fragment) {
+            return exact;
+          }
+          if (value.startsWith(fragment)) {
+            return starts;
+          }
+          return value.includes(fragment) ? includes : 0;
+        };
+
+        let score =
+          scoreFragment(haystack, 220, 140, 110) +
+          scoreFragment(provider, 180, 120, 90) +
+          scoreFragment(modelLower, 160, 110, 80);
+
+        // Best-effort typo tolerance for common near-misses like "claud" vs "claude".
+        // Bounded to keep this cheap across large model sets.
+        const distModel = levenshteinDistance(fragment, modelLower, 3);
+        if (distModel != null) {
+          score += (3 - distModel) * 70;
+        }
+
+        const aliases = aliasIndex.byKey.get(key) ?? [];
+        for (const alias of aliases) {
+          score += scoreFragment(normalizeLowercaseStringOrEmpty(alias), 140, 90, 60);
+        }
+
+        if (modelLower.startsWith(provider)) {
+          score += 30;
+        }
+
+        const fragmentVariants = FUZZY_VARIANT_TOKENS.filter((token) => fragment.includes(token));
+        const variantMatchCount = fragmentVariants.filter((token) =>
+          modelLower.includes(token),
+        ).length;
+        const variantCount = FUZZY_VARIANT_TOKENS.filter((token) =>
+          modelLower.includes(token),
+        ).length;
+        if (fragmentVariants.length === 0 && variantCount > 0) {
+          score -= variantCount * 30;
+        } else if (fragmentVariants.length > 0) {
+          score += variantMatchCount > 0 ? variantMatchCount * 40 : -20;
+        }
+
+        const isDefault =
+          provider === normalizeProviderId(defaultProvider) && model === defaultModel;
+        if (isDefault) {
+          score += 20;
+        }
+
+        return {
+          provider: candidate.provider,
+          model,
+          score,
+          isDefault,
+          variantCount,
+          variantMatchCount,
+          modelLength: modelLower.length,
+          key,
+        };
+      })
       .toSorted(
         (a, b) =>
           // Tie-break deterministically so repeated prompts pick the same model.
@@ -283,13 +255,21 @@ export function resolveModelDirectiveSelection(params: {
 
   const selection =
     resolveFuzzy({ fragment: rawTrimmed }) ?? (permitted ? explicitSelection : undefined);
-  return selection
-    ? { selection }
-    : {
-        error: formatNotAllowedError({
-          modelRef: `${resolved.ref.provider}/${resolved.ref.model}`,
-          policyPath: policy.allowRepairConfigPath,
-          rawRuntime: params.rawRuntime,
-        }),
-      };
+  if (selection) {
+    return { selection };
+  }
+  const modelRef = `${resolved.ref.provider}/${resolved.ref.model}`;
+  const rawRuntime = params.rawRuntime?.trim();
+  const retryCommand = rawRuntime
+    ? `/model ${modelRef} --runtime ${rawRuntime}`
+    : `/model ${modelRef}`;
+  const lines = [
+    `Model "${modelRef}" is not allowed. Use /models to list providers, or /models <provider> to list models.`,
+    `Add "${modelRef}" or its provider wildcard to ${policy.allowRepairConfigPath}.`,
+    `Then retry: ${retryCommand}`,
+  ];
+  if (rawRuntime && normalizeProviderId(rawRuntime) === "codex") {
+    lines.push("If the Codex runtime is missing, run: openclaw plugins enable codex");
+  }
+  return { error: lines.join("\n") };
 }

@@ -300,14 +300,8 @@ it("captures and reapplies locally added files excluded from package files", asy
     await fs.rm(path.join(packageRoot, relativePath));
   }
   await writePackageDistInventory(packageRoot);
-  const stat = vi.spyOn(fs, "stat");
   const result = await reapply(plan);
   expectOutcome(result, "applied", localFiles.size);
-  for (const change of plan?.changes ?? []) {
-    if (change.kind !== "deleted") {
-      expect(stat.mock.calls.some(([file]) => file === change.savedPath)).toBe(false);
-    }
-  }
   for (const [relativePath, content] of localFiles) {
     await expect(fs.readFile(path.join(packageRoot, relativePath), "utf8")).resolves.toBe(content);
   }

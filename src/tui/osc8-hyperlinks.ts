@@ -75,181 +75,6 @@ interface UrlRange {
   url: string;
 }
 
-function findUrlRanges(
-  visibleText: string,
-  knownUrls: ReadonlySet<string>,
-  pending: { url: string; consumed: number } | null,
-  nextVisibleText?: string,
-): { ranges: UrlRange[]; pending: { url: string; consumed: number } | null } {
-  const ranges: UrlRange[] = [];
-  let newPending: { url: string; consumed: number } | null = null;
-  let searchFrom = 0;
-
-  if (pending) {
-    const remaining = pending.url.slice(pending.consumed);
-    const trimmed = visibleText.trimStart();
-    const leadingSpaces = visibleText.length - trimmed.length;
-
-    let matchLen = 0;
-    for (let j = 0; j < remaining.length && j < trimmed.length; j++) {
-      if (remaining[j] === trimmed[j]) {
-        matchLen++;
-      } else {
-        break;
-      }
-    }
-
-    if (matchLen > 0) {
-      ranges.push({
-        start: leadingSpaces,
-        end: leadingSpaces + matchLen,
-        url: pending.url,
-      });
-      searchFrom = leadingSpaces + matchLen;
-
-      if (pending.consumed + matchLen < pending.url.length) {
-        newPending = { url: pending.url, consumed: pending.consumed + matchLen };
-      }
-    }
-  }
-
-  const urlRe =
-    /https?:\/\/(?:\[[0-9a-f:.]+\](?::\d+)?[^\s\]>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]*|[^\s[\]>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]*)/gi;
-  urlRe.lastIndex = searchFrom;
-  let match: RegExpExecArray | null;
-
-  while ((match = urlRe.exec(visibleText)) !== null) {
-    const fragment = trimUrlTrailingPunctuation(match[0], knownUrls);
-    const start = match.index;
-
-    let resolvedUrl = fragment;
-    let found = false;
-
-    // A wrap may split immediately after the scheme. Only accept that fragment
-    // when the next line actually continues a known URL; otherwise a stray
-    // `https://` could inherit an unrelated target from the URL list.
-    if (!hasUrlContent(fragment)) {
-      const hasUnpunctuatedSchemeAtLineEnd =
-        fragment === match[0] && visibleText.slice(start + match[0].length).trim().length === 0;
-      if (!hasUnpunctuatedSchemeAtLineEnd) {
-        continue;
-      }
-      const nextToken =
-        nextVisibleText
-          ?.trimStart()
-          .match(/^[^\s\]>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]+/)?.[0] ?? "";
-      const nextFragment = trimUrlTrailingPunctuation(nextToken);
-      for (const known of knownUrls) {
-        if (!known.startsWith(fragment)) {
-          continue;
-        }
-        const remaining = known.slice(fragment.length);
-        const continuesKnownUrl = nextFragment.length > 0 && remaining.startsWith(nextFragment);
-        if (continuesKnownUrl && known.length > resolvedUrl.length) {
-          resolvedUrl = known;
-          found = true;
-        }
-      }
-      if (!found) {
-        continue;
-      }
-    }
-
-    if (!found && !knownUrls.has(fragment)) {
-      let prefix = "";
-      let parent = "";
-      for (const known of knownUrls) {
-        if (known.startsWith(fragment) && known.length > prefix.length) {
-          prefix = known;
-        }
-        if (fragment.startsWith(known) && known.length > parent.length) {
-          parent = known;
-        }
-      }
-      resolvedUrl = prefix || parent || fragment;
-    }
-
-    ranges.push({ start, end: start + fragment.length, url: resolvedUrl });
-
-    if (resolvedUrl.length > fragment.length && resolvedUrl.startsWith(fragment)) {
-      newPending = { url: resolvedUrl, consumed: fragment.length };
-    }
-  }
-
-  return { ranges, pending: newPending };
-}
-
-function applyOsc8Ranges(line: string, ranges: UrlRange[]): string {
-  if (ranges.length === 0) {
-    return line;
-  }
-
-  let result = "";
-  let visiblePos = 0;
-  let activeUrl: string | null = null;
-  let rendererLink = false;
-  let rangeIndex = 0;
-  let range = ranges[rangeIndex];
-
-  for (const segment of iterateAnsiSegments(line)) {
-    if (segment.kind === "ansi") {
-      let code = segment.value;
-      if (code.startsWith("\x1b]8;")) {
-        if (activeUrl !== null) {
-          result += "\x1b]8;;\x07";
-        }
-        code = code.replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "");
-        const body = code.slice(4, code.endsWith("\x1b\\") ? -2 : -1);
-        rendererLink = body.slice(body.indexOf(";") + 1).length > 0;
-        // The parsed Markdown href owns this span, even when its label is another URL.
-        activeUrl = null;
-      }
-      result += code;
-      continue;
-    }
-
-    let offset = 0;
-    while (offset < segment.value.length) {
-      while (range && visiblePos >= range.end) {
-        range = ranges[++rangeIndex];
-      }
-      const targetUrl = !rendererLink && range && visiblePos >= range.start ? range.url : null;
-      if (targetUrl !== activeUrl) {
-        if (activeUrl !== null) {
-          result += "\x1b]8;;\x07";
-        }
-        if (targetUrl !== null) {
-          result += `\x1b]8;;${targetUrl}\x07`;
-        }
-        activeUrl = targetUrl;
-      }
-      let end =
-        rendererLink || !range
-          ? segment.value.length
-          : Math.min(
-              segment.value.length,
-              offset + (visiblePos < range.start ? range.start : range.end) - visiblePos,
-            );
-      // UTF-16 range boundaries must keep whole code points, even when a wrapped
-      // continuation matched only a leading surrogate.
-      const last = segment.value.charCodeAt(end - 1);
-      const next = segment.value.charCodeAt(end);
-      if (last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
-        end += 1;
-      }
-      result += segment.value.slice(offset, end);
-      visiblePos += end - offset;
-      offset = end;
-    }
-  }
-
-  if (activeUrl !== null) {
-    result += "\x1b]8;;\x07";
-  }
-
-  return result;
-}
-
 export function addOsc8Hyperlinks(lines: string[], urls: ReadonlySet<string>): string[] {
   if (urls.size === 0) {
     return lines;
@@ -259,13 +84,171 @@ export function addOsc8Hyperlinks(lines: string[], urls: ReadonlySet<string>): s
   const visibleLines = lines.map(stripAnsi);
 
   return lines.map((line, index) => {
-    const result = findUrlRanges(
-      expectDefined(visibleLines[index], "visible lines entry at index"),
-      urls,
-      pending,
-      visibleLines[index + 1],
-    );
-    pending = result.pending;
-    return applyOsc8Ranges(line, result.ranges);
+    const visibleText = expectDefined(visibleLines[index], "visible lines entry at index");
+    const nextVisibleText = visibleLines[index + 1];
+    const ranges: UrlRange[] = [];
+    let newPending: { url: string; consumed: number } | null = null;
+    let searchFrom = 0;
+
+    if (pending) {
+      const remaining = pending.url.slice(pending.consumed);
+      const trimmed = visibleText.trimStart();
+      const leadingSpaces = visibleText.length - trimmed.length;
+
+      let matchLen = 0;
+      for (let j = 0; j < remaining.length && j < trimmed.length; j++) {
+        if (remaining[j] === trimmed[j]) {
+          matchLen++;
+        } else {
+          break;
+        }
+      }
+
+      if (matchLen > 0) {
+        ranges.push({
+          start: leadingSpaces,
+          end: leadingSpaces + matchLen,
+          url: pending.url,
+        });
+        searchFrom = leadingSpaces + matchLen;
+
+        if (pending.consumed + matchLen < pending.url.length) {
+          newPending = { url: pending.url, consumed: pending.consumed + matchLen };
+        }
+      }
+    }
+
+    const urlRe =
+      /https?:\/\/(?:\[[0-9a-f:.]+\](?::\d+)?[^\s\]>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]*|[^\s[\]>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]*)/gi;
+    urlRe.lastIndex = searchFrom;
+    let match: RegExpExecArray | null;
+
+    while ((match = urlRe.exec(visibleText)) !== null) {
+      const fragment = trimUrlTrailingPunctuation(match[0], urls);
+      const start = match.index;
+
+      let resolvedUrl = fragment;
+      let found = false;
+
+      // A wrap may split immediately after the scheme. Only accept that fragment
+      // when the next line actually continues a known URL; otherwise a stray
+      // `https://` could inherit an unrelated target from the URL list.
+      if (!hasUrlContent(fragment)) {
+        const hasUnpunctuatedSchemeAtLineEnd =
+          fragment === match[0] && visibleText.slice(start + match[0].length).trim().length === 0;
+        if (!hasUnpunctuatedSchemeAtLineEnd) {
+          continue;
+        }
+        const nextToken =
+          nextVisibleText
+            ?.trimStart()
+            .match(/^[^\s\]>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]+/)?.[0] ?? "";
+        const nextFragment = trimUrlTrailingPunctuation(nextToken);
+        for (const known of urls) {
+          if (!known.startsWith(fragment)) {
+            continue;
+          }
+          const remaining = known.slice(fragment.length);
+          const continuesKnownUrl = nextFragment.length > 0 && remaining.startsWith(nextFragment);
+          if (continuesKnownUrl && known.length > resolvedUrl.length) {
+            resolvedUrl = known;
+            found = true;
+          }
+        }
+        if (!found) {
+          continue;
+        }
+      }
+
+      if (!found && !urls.has(fragment)) {
+        let prefix = "";
+        let parent = "";
+        for (const known of urls) {
+          if (known.startsWith(fragment) && known.length > prefix.length) {
+            prefix = known;
+          }
+          if (fragment.startsWith(known) && known.length > parent.length) {
+            parent = known;
+          }
+        }
+        resolvedUrl = prefix || parent || fragment;
+      }
+
+      ranges.push({ start, end: start + fragment.length, url: resolvedUrl });
+
+      if (resolvedUrl.length > fragment.length && resolvedUrl.startsWith(fragment)) {
+        newPending = { url: resolvedUrl, consumed: fragment.length };
+      }
+    }
+
+    pending = newPending;
+    if (ranges.length === 0) {
+      return line;
+    }
+
+    let result = "";
+    let visiblePos = 0;
+    let activeUrl: string | null = null;
+    let rendererLink = false;
+    let rangeIndex = 0;
+    let range = ranges[rangeIndex];
+
+    for (const segment of iterateAnsiSegments(line)) {
+      if (segment.kind === "ansi") {
+        let code = segment.value;
+        if (code.startsWith("\x1b]8;")) {
+          if (activeUrl !== null) {
+            result += "\x1b]8;;\x07";
+          }
+          code = code.replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "");
+          const body = code.slice(4, code.endsWith("\x1b\\") ? -2 : -1);
+          rendererLink = body.slice(body.indexOf(";") + 1).length > 0;
+          // The parsed Markdown href owns this span, even when its label is another URL.
+          activeUrl = null;
+        }
+        result += code;
+        continue;
+      }
+
+      let offset = 0;
+      while (offset < segment.value.length) {
+        while (range && visiblePos >= range.end) {
+          range = ranges[++rangeIndex];
+        }
+        const targetUrl = !rendererLink && range && visiblePos >= range.start ? range.url : null;
+        if (targetUrl !== activeUrl) {
+          if (activeUrl !== null) {
+            result += "\x1b]8;;\x07";
+          }
+          if (targetUrl !== null) {
+            result += `\x1b]8;;${targetUrl}\x07`;
+          }
+          activeUrl = targetUrl;
+        }
+        let end =
+          rendererLink || !range
+            ? segment.value.length
+            : Math.min(
+                segment.value.length,
+                offset + (visiblePos < range.start ? range.start : range.end) - visiblePos,
+              );
+        // UTF-16 range boundaries must keep whole code points, even when a wrapped
+        // continuation matched only a leading surrogate.
+        const last = segment.value.charCodeAt(end - 1);
+        const next = segment.value.charCodeAt(end);
+        if (last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
+          end += 1;
+        }
+        result += segment.value.slice(offset, end);
+        visiblePos += end - offset;
+        offset = end;
+      }
+    }
+
+    if (activeUrl !== null) {
+      result += "\x1b]8;;\x07";
+    }
+
+    return result;
   });
 }

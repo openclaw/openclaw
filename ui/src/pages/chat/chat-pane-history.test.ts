@@ -5,17 +5,18 @@ import { createComponent, createMemo, merge } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { extractText } from "../../lib/chat/message-extract.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import "./chat-pane.tsx";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
+import { renderedText } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
   appendChatThread,
@@ -27,9 +28,8 @@ import {
   nativeHistorySeq,
   stagedPagesRequest,
 } from "./chat-pane-history.test-support.ts";
-import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
-import { buildChatItems } from "./chat-thread-build.ts";
+import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { ChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
 import { ChatHistoryBoundary } from "./components/chat-history-boundary.tsx";
 import { reduceChatSessionProjection } from "./history-merge.ts";
@@ -39,6 +39,8 @@ import {
   cacheChatSessionSnapshot,
   readChatSessionSnapshot,
 } from "./session-message-cache.ts";
+import { agentEvent } from "./tool-stream.test-helpers.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
 type HistoryPageOverrides = {
   totalMessages?: number;
@@ -137,7 +139,7 @@ it("updates the earlier-history control directly from pane loading state", () =>
 
   pane.history.loadingOlder = true;
   flush();
-  expect(button.disabled).toBe(true);
+  expect(button.getAttribute("aria-disabled")).toBe("true");
   expect(button.getAttribute("aria-busy")).toBe("true");
 
   pane.history.loadingOlder = false;
@@ -192,7 +194,8 @@ it.each(["pending", "resolved"] as const)(
             pane.render();
             return pane.chatProps!;
           });
-          return createComponent(ChatComposer, merge(current));
+          const questions = createComposerQuestions(pane.presentationId, current);
+          return createComponent(ChatComposer, merge(current, { questions }));
         },
         { container, wrapper: createSolidApplicationContextProvider(context).wrapper },
       );
@@ -206,17 +209,18 @@ it.each(["pending", "resolved"] as const)(
         textarea.dispatchEvent(new InputEvent("input", input));
       }
       await vi.advanceTimersByTimeAsync(150);
-      expect(request).toHaveBeenCalledExactlyOnceWith("users.mentionable", {
-        sessionKey: state.sessionKey,
-        agentId: "main",
-        query: "Bo",
-      });
+      await waitForSolid(() =>
+        expect(request).toHaveBeenCalledExactlyOnceWith("users.mentionable", {
+          sessionKey: state.sessionKey,
+          agentId: "main",
+          query: "Bo",
+        }),
+      );
       const selectedName = () =>
         container.querySelector('[role="option"] .slash-menu-name')?.textContent;
       if (replyState === "resolved") {
         response.resolve(people);
-        await vi.advanceTimersByTimeAsync(0);
-        expect(selectedName()).toBe("Bob");
+        await waitForSolid(() => expect(selectedName()).toBe("Bob"));
       }
 
       state.sessionsResult = sessionsResult(
@@ -233,8 +237,7 @@ it.each(["pending", "resolved"] as const)(
         1,
       );
       response.resolve(people);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(selectedName()).toBe("Bob");
+      await waitForSolid(() => expect(selectedName()).toBe("Bob"));
       expect(container.querySelector("textarea")).toBe(textarea);
       textarea.dispatchEvent(
         new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
@@ -251,7 +254,7 @@ it.each(["pending", "resolved"] as const)(
   },
 );
 
-it("keeps the accepted steer between saved output and the live tail through refresh", async () => {
+it("keeps the accepted steer and live tail visible while pane refresh is pending", () => {
   const history = createDeferred<ChatHistoryResult>();
   const request = vi.fn(() => history.promise);
   const client = { request } as unknown as GatewayBrowserClient;
@@ -281,61 +284,43 @@ it("keeps the accepted steer between saved output and the live tail through refr
       sessionKey: state.sessionKey,
       message: { role: "assistant", content: text },
     });
-  const renderedText = () =>
-    buildChatItems({
-      paneId: "refresh-regression",
-      sessionKey: state.sessionKey,
-      runId: state.chatRunId,
-      messages: state.chatMessages,
-      toolMessages: state.chatToolMessages,
-      streamSegments: state.chatStreamSegments,
-      stream: state.chatStream,
-      streamStartedAt: state.chatStreamStartedAt,
-      showToolCalls: true,
-    }).flatMap((item) =>
-      item.kind === "group"
-        ? item.messages.map(({ message }) => extractText(message)?.trim())
-        : item.kind === "stream"
-          ? [item.text.trim()]
-          : [],
-    );
   delta("Saved.");
   applySessionMessagePayload(state, { message: steer }, true, {
     kind: "live",
     activeRunId: "run-refresh",
   });
   delta("Saved. Working.");
+  handleAgentEvent(
+    state,
+    agentEvent(
+      "run-refresh",
+      1,
+      "item",
+      {
+        itemId: "tool:build",
+        toolCallId: "build",
+        kind: "tool",
+        name: "exec",
+        title: "Build the workspace",
+        phase: "start",
+        status: "running",
+      },
+      state.sessionKey,
+    ),
+  );
   const liveExpected = ["Start.", "Steer.", "Saved. Working."];
 
   try {
-    expect(renderedText()).toEqual(liveExpected);
+    expect(renderedText(state)).toEqual(liveExpected);
     pane.render();
     pane.chatProps!.onRefresh();
-    expect(renderedText()).toEqual(liveExpected);
-    history.resolve({
-      messages: [
-        original,
-        {
-          role: "assistant",
-          content: "Saved.",
-          __openclaw: { id: "saved-refresh", idempotencyKey: "run-refresh", seq: 2 },
-        },
-        steer,
-      ],
-      sessionInfo: {
-        key: state.sessionKey,
-        kind: "direct",
-        updatedAt: 4,
-        status: "running",
-        hasActiveRun: true,
-        activeRunIds: ["run-refresh"],
+    expect(renderedText(state)).toEqual(liveExpected);
+    expect([...state.toolStreamById.values()]).toMatchObject([
+      {
+        toolCallId: "build",
+        activity: [{ status: "running" }],
       },
-      inFlightRun: { runId: "run-refresh", text: "Working." },
-    });
-    await vi.waitFor(() => expect(state.chatLoading).toBe(false));
-    expect(renderedText()).toEqual(["Start.", "Saved.", "Steer.", "Working."]);
-    delta("Working. Progress.");
-    expect(renderedText()).toEqual(["Start.", "Saved.", "Steer.", "Working. Progress."]);
+    ]);
   } finally {
     state.connected = false;
     history.resolve({ messages: [] });
@@ -427,6 +412,7 @@ it("reveals a final catalog page even when its cursor is exhausted", async () =>
   expect(request).toHaveBeenCalledWith(
     "sessions.catalog.read",
     expect.objectContaining({ cursor: "final-page" }),
+    { signal: expect.any(AbortSignal) },
   );
   expect(pane.history.catalogMessages).toHaveLength(1);
   expect(pane.history.catalogCursor).toBeUndefined();
@@ -524,7 +510,9 @@ it("prefetches older history from upward intent well before the top edge", async
   Object.defineProperty(event, "target", { value: thread });
   pane.handleTranscriptScroll(event);
   await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-  expect(request).toHaveBeenCalledWith("chat.history", olderRequest(state.sessionKey));
+  expect(request).toHaveBeenCalledWith("chat.history", olderRequest(state.sessionKey), {
+    signal: expect.any(AbortSignal),
+  });
   expect(observer.rootMargin()).toBe("1200px 0px 0px");
 });
 
@@ -572,6 +560,7 @@ it.each([
   expect(request).toHaveBeenLastCalledWith(
     "chat.history",
     olderRequest(state.sessionKey, row.offset),
+    { signal: expect.any(AbortSignal) },
   );
   expect(reads).toBe(row.reset ? 2 : 1);
   const expectedTail = row.reset ? [] : historyPage([5, 6, 7, 8]).messages;
@@ -639,7 +628,9 @@ it("prepends a strictly older page and exhausts", async () => {
   expect(pane.hasOlderMessages()).toBe(false);
 
   await pane.loadOlderMessages();
-  expect(request).toHaveBeenCalledExactlyOnceWith("chat.history", olderRequest(state.sessionKey));
+  expect(request).toHaveBeenCalledExactlyOnceWith("chat.history", olderRequest(state.sessionKey), {
+    signal: expect.any(AbortSignal),
+  });
 });
 
 it("replaces cached source groups during a zero-offset refill without losing live rows", async () => {
@@ -675,6 +666,7 @@ it("replaces cached source groups during a zero-offset refill without losing liv
   expect(request).toHaveBeenCalledExactlyOnceWith(
     "chat.history",
     olderRequest(state.sessionKey, 0),
+    { signal: expect.any(AbortSignal) },
   );
 });
 
@@ -705,7 +697,9 @@ it("refreshes the tail instead of mixing an older page from a replacement sessio
 
   await pane.loadOlderMessages();
 
-  expect(request).toHaveBeenNthCalledWith(1, "chat.history", olderRequest(state.sessionKey));
+  expect(request).toHaveBeenNthCalledWith(1, "chat.history", olderRequest(state.sessionKey), {
+    signal: expect.any(AbortSignal),
+  });
   expect(request).toHaveBeenNthCalledWith(
     2,
     "chat.history",

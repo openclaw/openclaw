@@ -1,3 +1,4 @@
+import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -125,6 +126,7 @@ type ChatFrame = ChatTerminal | { state: "delta"; text: string };
 function broadcastChatFrame(
   params: ChatBroadcastParams & ChatFrame,
   liveText?: GatewayBroadcastOpts["liveText"],
+  excludeClientCapability?: GatewayBroadcastOpts["excludeClientCapability"],
 ): void {
   const visibility = getAgentRunContext(params.runId);
   if (visibility?.isControlUiVisible === false && visibility.projectSessionMessages === false) {
@@ -169,6 +171,7 @@ function broadcastChatFrame(
       ? { group, settle: params.state === "final" || params.state === "error" ? true : undefined }
       : undefined);
   const opts: GatewayBroadcastOpts = {
+    ...(excludeClientCapability ? { excludeClientCapability } : {}),
     ...(delivery ? { liveText: delivery } : {}),
     ...(liveText ? { dropIfSlow: true } : {}),
     sessionKeys: resolveChatSessionKeys({
@@ -178,6 +181,15 @@ function broadcastChatFrame(
     }),
   };
   broadcastChatPayload({ ...params, agentId: payloadAgentId }, "chat", payload, opts);
+}
+
+/** Text-only clients need one acknowledgment; queue-aware clients use pending inputs. */
+export function broadcastChatQueueNotice(params: ChatBroadcastParams & { text: string }): void {
+  broadcastChatFrame(
+    { ...params, state: "delta" },
+    undefined,
+    GATEWAY_CLIENT_CAPS.CHAT_QUEUE_STATUS,
+  );
 }
 
 export function broadcastChatDelta(

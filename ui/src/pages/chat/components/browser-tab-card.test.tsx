@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { projectToolResultDetails } from "../../../../../src/gateway/chat-display-projection.canvas.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
@@ -13,16 +12,18 @@ import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts"
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
-import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { createInitializationContext } from "../chat-pane.test-support.ts";
+import { createInitializationContext } from "../chat-application-context.test-support.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { BrowserTabCardHost } from "./browser-tab-card.tsx";
 import { ActivityGroup } from "./chat-message-group-view.tsx";
+import { WorkGroupSummary } from "./chat-work-group-summary.tsx";
 
 const hosts: HTMLElement[] = [];
 type ActivityProps = Parameters<typeof ActivityGroup>[0];
-const activityGroups = new Map<HTMLElement, (props: ActivityProps) => void>();
+const activityGroups = new Map<HTMLElement, ReturnType<typeof mountSolid<ActivityProps>>>();
 type CardProps = Parameters<typeof BrowserTabCardHost>[0];
 const cards = new Map<
   HTMLElement,
@@ -33,27 +34,28 @@ const cards = new Map<
   }
 >();
 
-function drawGroup(host: HTMLElement, props: ActivityProps, context?: ApplicationContext) {
-  const update = activityGroups.get(host);
-  if (update) {
-    update(props);
+async function drawGroup(host: HTMLElement, props: ActivityProps, context?: ApplicationContext) {
+  const view = activityGroups.get(host);
+  if (view) {
+    view.update(props);
   } else {
-    mountSolid(
-      () => {
-        const [current, setCurrent] = createSignal(props);
-        activityGroups.set(host, setCurrent);
-        return context ? (
-          <ApplicationProvider value={context}>
-            <ActivityGroup {...current()} />
-          </ApplicationProvider>
-        ) : (
-          <ActivityGroup {...current()} />
-        );
-      },
-      { container: host },
+    activityGroups.set(
+      host,
+      mountSolid(
+        (current: ActivityProps) =>
+          context ? (
+            <ApplicationProvider value={context}>
+              <ActivityGroup {...current} />
+            </ApplicationProvider>
+          ) : (
+            <ActivityGroup {...current} />
+          ),
+        props,
+        host,
+      ),
     );
   }
-  flush();
+  await waitForSolid(() => expect(host.querySelector("openclaw-browser-tab-card")).not.toBeNull());
 }
 
 function updateCard(element: HTMLElement, patch: Partial<CardProps>) {
@@ -83,10 +85,21 @@ function openedTargets(elements: HTMLElement[]) {
   });
 }
 
-function messageEntries(messages: Array<{ toolCallId: string }>): MessageGroup["messages"] {
-  return groupMessages(
-    messages.map((message) => ({ kind: "message", key: message.toolCallId, message })),
-  ).flatMap((item) => (item.kind === "group" ? item.messages : []));
+function browserResultGroup(
+  messages: Array<{ toolCallId: string }>,
+  key = "browser-results",
+): MessageGroup {
+  return {
+    kind: "group",
+    key,
+    role: "tool",
+    visibleContent: "text",
+    isStreaming: false,
+    timestamp: 1,
+    messages: groupMessages(
+      messages.map((message) => ({ kind: "message", key: message.toolCallId, message })),
+    ).flatMap((item) => (item.kind === "group" ? item.messages : [])),
+  };
 }
 
 afterEach(() => {
@@ -189,16 +202,8 @@ async function drawActivity(
   messages: ReturnType<typeof browserResult>[],
   expanded: boolean,
 ) {
-  const group: MessageGroup = {
-    kind: "group",
-    key: "browser-results",
-    role: "tool",
-    visibleContent: "text",
-    isStreaming: false,
-    timestamp: 1,
-    messages: messageEntries(messages),
-  };
-  drawGroup(
+  const group: MessageGroup = browserResultGroup(messages);
+  await drawGroup(
     host,
     {
       groups: [group],
@@ -226,22 +231,62 @@ async function card(
     latest,
     context,
   } satisfies CardProps;
-  let update!: (props: CardProps) => void;
-  const view = mountSolid(
-    () => {
-      const [current, setCurrent] = createSignal<CardProps>(props);
-      update = setCurrent;
-      return <BrowserTabCardHost {...current()} />;
-    },
-    { container: container() },
-  );
-  flush();
+  const view = mountSolid<CardProps>(BrowserTabCardHost, props, container());
   const element = view.container.querySelector<HTMLElement>("openclaw-browser-tab-card")!;
-  cards.set(element, { props, update, unmount: view.unmount });
+  cards.set(element, {
+    props,
+    update: (next) => view.update(next),
+    unmount: () => view.dispose(),
+  });
   return element;
 }
 
 describe("browser tab card", () => {
+  it("keeps completed-work text visible while media access gates its browser preview", async () => {
+    const gateway = gatewayContext();
+    type Props = Parameters<typeof WorkGroupSummary>[0];
+    const props: Props = {
+      item: { key: "completed-work", durationMs: 1000, groups: [] },
+      options: {
+        expanded: false,
+        onToggle: () => {},
+        mediaReadAllowed: false,
+        browserTabPreviews: [
+          {
+            preview: {
+              kind: "browser-tab",
+              target: "host",
+              profile: "managed",
+              targetId: "tab-1",
+              url: "https://example.com/page",
+            },
+            latest: true,
+          },
+        ],
+      },
+    };
+    const view = mountSolid(
+      (current: Props) => (
+        <ApplicationProvider value={gateway.context}>
+          <WorkGroupSummary {...current} />
+        </ApplicationProvider>
+      ),
+      props,
+      container(),
+    );
+    expect(view.container.textContent).toContain("Worked for");
+    expect(view.container.querySelector("openclaw-browser-tab-card")).toBeNull();
+    view.update({ ...props, options: { ...props.options, mediaReadAllowed: true } });
+    await waitForSolid(() =>
+      expect(view.container.querySelector("openclaw-browser-tab-card")).not.toBeNull(),
+    );
+    view.update(props);
+    await waitForSolid(() =>
+      expect(view.container.querySelector("openclaw-browser-tab-card")).toBeNull(),
+    );
+    expect(view.container.textContent).toContain("Worked for");
+  });
+
   it("retains browser-title post text when metadata only supplies the author", async () => {
     vi.useFakeTimers();
     const gateway = gatewayContext([], ["operator.read"], true);
@@ -472,6 +517,48 @@ describe("browser tab card", () => {
     expect(gateway.request).toHaveBeenCalledTimes(2);
   });
 
+  it("retains failed images through screenshot refreshes and unavailable targets until a new target", async () => {
+    const gateway = gatewayContext(["browser.request"], ["operator.admin"], true);
+    const image = "data:image/png;base64,dGh1bWJuYWls";
+    gateway.request.mockImplementation(async (method: string) =>
+      method === "controlUi.linkPreview"
+        ? { imageDataUrl: image, faviconDataUrl: "data:image/png;base64,aWNvbg==" }
+        : { path: "/tmp/tab.png" },
+    );
+    const element = await card(gateway.context);
+    await waitForSolid(() => {
+      expect(element.querySelector(".shot img")?.getAttribute("src")).toBe(image);
+      expect(element.querySelector(".shot.social")).toBeNull();
+      expect(element.querySelector(".icon img")).not.toBeNull();
+    });
+    for (const img of element.querySelectorAll("img")) {
+      img.dispatchEvent(new Event("error"));
+    }
+    flush();
+    expect(element.querySelector("img")).toBeNull();
+
+    updateCard(element, { revision: "two" });
+    flush();
+    await waitForSolid(() => expect(gateway.fetchMock).toHaveBeenCalledTimes(2));
+    expect(element.querySelector("img")).toBeNull();
+
+    gateway.context.config.current.automaticallyFetchFavicons = false;
+    gateway.notify();
+    flush();
+    expect(element.querySelector("img")).toBeNull();
+    updatePreview(element, { url: "https://example.com/new" });
+    flush();
+    expect(element.querySelector("img")).toBeNull();
+
+    gateway.context.config.current.automaticallyFetchFavicons = true;
+    gateway.notify();
+    flush();
+    await waitForSolid(() => {
+      expect(element.querySelector(".shot img")?.getAttribute("src")).toBe(image);
+      expect(element.querySelector(".icon img")).not.toBeNull();
+    });
+  });
+
   it("keeps the live screenshot ahead of the social image while using the favicon", async () => {
     const gateway = gatewayContext(["browser.request"], ["operator.admin"], true);
     const screenshot = createDeferred<{ path: string }>();
@@ -695,16 +782,8 @@ describe("browser tab card", () => {
       details: { browserTab: { profile: "managed", ...browserTab } },
     }));
     const host = container();
-    const group: MessageGroup = {
-      kind: "group",
-      key: "browser-results",
-      role: "tool",
-      visibleContent: "text",
-      isStreaming: false,
-      timestamp: 1,
-      messages: messageEntries(messages),
-    };
-    drawGroup(host, {
+    const group: MessageGroup = browserResultGroup(messages);
+    await drawGroup(host, {
       groups: [group],
       options: { showReasoning: false },
       presentation: "standalone",
@@ -720,7 +799,7 @@ describe("browser tab card", () => {
     ),
   )(
     "preserves ambiguous URL prefixes ($length units, history: $history)",
-    ({ length, history }) => {
+    async ({ length, history }) => {
       const prefix = "https://example.com/blog?value=".padEnd(length, "x");
       const messages = ["first", "second"].map((targetId) => {
         const url =
@@ -736,17 +815,9 @@ describe("browser tab card", () => {
             : { browserTab: { ...browserTab, url: truncateUtf16Safe(url, 2_048) } },
         };
       });
-      const group: MessageGroup = {
-        kind: "group",
-        key: "bounded-browser-results",
-        role: "tool",
-        visibleContent: "text",
-        isStreaming: false,
-        timestamp: 1,
-        messages: messageEntries(messages),
-      };
+      const group: MessageGroup = browserResultGroup(messages, "bounded-browser-results");
       const host = container();
-      drawGroup(host, {
+      await drawGroup(host, {
         groups: [group],
         options: { showReasoning: false },
         presentation: "standalone",

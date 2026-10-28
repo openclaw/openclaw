@@ -28,6 +28,7 @@ import {
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-support.js";
 import { createDispatchVerboseSession } from "./dispatch-from-config.verbose-session.test-support.js";
+import { withVerboseDefault } from "./get-reply-config.test-support.js";
 import { isReplyDispatchDeliveryError } from "./reply-dispatch-outcome.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
@@ -110,7 +111,6 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     mocks.routeReply.mockClear();
     installThreadingTestPlugin({ id: "slack" });
-    const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "webchat",
@@ -128,7 +128,7 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
 
     const routeCall = firstRouteReplyCall();
     expect(routeCall?.threadId).toBe("101.000");
@@ -152,7 +152,6 @@ describe("dispatchReplyFromConfig", () => {
         threadId: "stale-root",
       },
     };
-    const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "webchat",
@@ -166,7 +165,7 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
 
     const routeCall = firstRouteReplyCall();
     expect(routeCall?.channel).toBe("mattermost");
@@ -178,7 +177,6 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     mocks.routeReply.mockClear();
     installThreadingTestPlugin({ id: "telegram" });
-    const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "slack",
@@ -193,7 +191,7 @@ describe("dispatchReplyFromConfig", () => {
       return { text: "hi" } satisfies ReplyPayload;
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
     expect(mocks.routeReply).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "telegram",
@@ -206,7 +204,6 @@ describe("dispatchReplyFromConfig", () => {
 
   it("forces suppressTyping for internal webchat turns", async () => {
     setNoAbort();
-    const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "webchat",
@@ -221,57 +218,46 @@ describe("dispatchReplyFromConfig", () => {
       return { text: "hi" } satisfies ReplyPayload;
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
   });
 
-  it("routes when provider is webchat but surface carries originating channel metadata", async () => {
-    setNoAbort();
-    mocks.routeReply.mockClear();
-    installThreadingTestPlugin({ id: "telegram" });
-    const cfg = emptyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "webchat",
-      Surface: "telegram",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:999",
+  for (const [name, channel, to] of [
+    [
+      "routes when provider is webchat but surface carries originating channel metadata",
+      "telegram",
+      "telegram:999",
+    ],
+    [
+      "routes Feishu replies when provider is webchat and origin metadata points to Feishu",
+      "feishu",
+      "ou_feishu_direct_123",
+    ],
+  ] as const) {
+    it(name, async () => {
+      setNoAbort();
+      mocks.routeReply.mockClear();
+      installThreadingTestPlugin({ id: channel });
+      const dispatcher = createDispatcher();
+      const ctx = buildTestCtx({
+        Provider: "webchat",
+        Surface: channel,
+        OriginatingChannel: channel,
+        OriginatingTo: to,
+      });
+
+      const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+      await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      const routeCall = firstRouteReplyCall();
+      expect(routeCall?.channel).toBe(channel);
+      expect(routeCall?.to).toBe(to);
     });
-
-    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    const routeCall = firstRouteReplyCall();
-    expect(routeCall?.channel).toBe("telegram");
-    expect(routeCall?.to).toBe("telegram:999");
-  });
-
-  it("routes Feishu replies when provider is webchat and origin metadata points to Feishu", async () => {
-    setNoAbort();
-    mocks.routeReply.mockClear();
-    installThreadingTestPlugin({ id: "feishu" });
-    const cfg = emptyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "webchat",
-      Surface: "feishu",
-      OriginatingChannel: "feishu",
-      OriginatingTo: "ou_feishu_direct_123",
-    });
-
-    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    const routeCall = firstRouteReplyCall();
-    expect(routeCall?.channel).toBe("feishu");
-    expect(routeCall?.to).toBe("ou_feishu_direct_123");
-  });
+  }
 
   it("does not route when provider already matches originating channel", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
-    const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "telegram",
@@ -281,7 +267,7 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
 
     expect(mocks.routeReply).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
@@ -326,10 +312,7 @@ describe("dispatchReplyFromConfig", () => {
   it("provides onToolResult in DM sessions", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
-    const cfg = {
-      ...emptyConfig,
-      agents: { defaults: { verboseDefault: "on" } },
-    } satisfies OpenClawConfig;
+    const cfg = withVerboseDefault(emptyConfig);
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "telegram",
@@ -498,7 +481,6 @@ describe("dispatchReplyFromConfig", () => {
   it("does not synthesize hidden text-only tool summaries into TTS media", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeToolAudio = true;
-    const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "telegram",
@@ -511,7 +493,7 @@ describe("dispatchReplyFromConfig", () => {
       return { text: "done" } satisfies ReplyPayload;
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
 
     expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalledWith(
       expect.objectContaining({ kind: "tool" }),
@@ -522,7 +504,6 @@ describe("dispatchReplyFromConfig", () => {
 
   it("suppresses late text-only tool results after final delivery starts", async () => {
     setNoAbort();
-    const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "discord",
@@ -537,7 +518,7 @@ describe("dispatchReplyFromConfig", () => {
       return { text: "done" } satisfies ReplyPayload;
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
     await lateToolResult?.({ text: "failed command output", isError: true });
 
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
@@ -618,14 +599,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("allows group tool summaries when the agent verbose default is enabled", async () => {
     setNoAbort();
-    const cfg = {
-      ...automaticGroupReplyConfig,
-      agents: {
-        defaults: {
-          verboseDefault: "on",
-        },
-      },
-    } as const satisfies OpenClawConfig;
+    const cfg = withVerboseDefault(automaticGroupReplyConfig);
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "matrix",
@@ -650,14 +624,7 @@ describe("dispatchReplyFromConfig", () => {
   it("keeps group tool summaries suppressed when session verbose is disabled", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = { verboseLevel: "off" };
-    const cfg = {
-      ...automaticGroupReplyConfig,
-      agents: {
-        defaults: {
-          verboseDefault: "on",
-        },
-      },
-    } as const satisfies OpenClawConfig;
+    const cfg = withVerboseDefault(automaticGroupReplyConfig);
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       ChatType: "group",

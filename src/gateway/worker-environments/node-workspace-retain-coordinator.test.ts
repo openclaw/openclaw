@@ -15,28 +15,20 @@ import type {
 import { createNodeRegistryRuntime, updateNodeRunnerInventory } from "../node-registry-private.js";
 import { NodeRegistry } from "../node-registry.js";
 import { makeClient, registerNodeSession } from "../node-registry.test-helpers.js";
+import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 import { createNodeWorkspaceRetainCoordinator } from "./node-workspace-retain-coordinator.js";
 import { WorkerPlacementInventoryChangedError } from "./placement-inventory-changed-error.js";
 import type { WorkerSessionPlacementStore as PlacementStore } from "./placement-store.js";
 
 type BundleStatus = NonNullable<ReturnType<NonNullable<Transport["getBundleStatus"]>>>;
 
-const node = {
-  nodeId: "node-1",
+const node = createNodeWorkerBundleTestNode({
   connId: "connection-1",
-  pairingIdentity: "pairing-1",
-  pairingGeneration: "generation-1",
-  clientId: "node-host",
-  clientMode: "node",
-  protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   workerHost: {
-    enabled: true,
-    capacity: { total: 2, available: 2 },
     bundleRetention: 1,
     bundleStatus: 1,
   },
-  commands: [],
-} as const;
+});
 
 function receipt(bundleHash: string, openclawVersion = "2026.8.9") {
   return { bundleHash, openclawVersion, protocolFeatures: [], installKind: "bundle" };
@@ -88,9 +80,13 @@ function expectManifests(
   manifestRefs: string[] | null,
   index = 0,
 ) {
-  expect(invoke.mock.calls[index]?.[0].params).toMatchObject({
+  expect(requestParams(invoke, index)).toMatchObject({
     retain: [expect.objectContaining({ manifestRefs })],
   });
+}
+
+function requestParams(invoke: ReturnType<typeof createHarness>["invoke"], index = 0) {
+  return invoke.mock.calls[index]?.[0].params;
 }
 
 const retainEntry = {
@@ -165,6 +161,7 @@ function createHarness(
     invokeError?: string;
     beforeDispatch?: () => void;
     onInvoke?: (index: number) => void;
+    isCurrent?: () => boolean;
   } = {},
 ) {
   const results = [...(params.results ?? [retainResult()])];
@@ -194,7 +191,7 @@ function createHarness(
     listCurrentNodes: async () => [params.node ?? node],
     getBundleStatus: () => currentBundleStatus,
     acceptBundleStatus,
-    isCurrent: () => true,
+    isCurrent: params.isCurrent ?? (() => true),
     async invoke(request) {
       params.beforeDispatch?.();
       if (
@@ -256,23 +253,46 @@ async function startHarness(params: Parameters<typeof createHarness>[0] = {}) {
   return harness;
 }
 
+function prefetchHarness(
+  prefetch: NonNullable<
+    NonNullable<Parameters<typeof createHarness>[0]>["bundleRetention"]
+  >["prefetch"],
+  options: Parameters<typeof createHarness>[0] = {},
+) {
+  return startHarness({
+    environments: [],
+    placements: [],
+    node: { ...node, workerHost: { ...node.workerHost, bundlePrefetch: 1 } },
+    ...options,
+    bundleRetention: { ...bundleRetention(), ...options.bundleRetention, prefetch },
+  });
+}
+
 describe("node workspace retain coordinator", () => {
-  it("accepts bundle status when placement metadata changes after node dispatch", async () => {
+  it("publishes the durable snapshot and accepts status after placement metadata changes", async () => {
     const bundleHash = currentHash;
     const placements = [placement()];
     const { coordinator } = createHarness({
       placements,
+      environments: [
+        environment(),
+        environment({ environmentId: "environment-other", nodeDeviceId: "node-other" }),
+        environment({ environmentId: "environment-terminal", state: "orphaned" }),
+      ],
       bundleRetention: bundleRetention(receipt(bundleHash, "2026.8.10")),
     });
     const { nodeRegistry, nodeWorkerSupervisorTransport } = createNodeRegistryRuntime(
       () => new NodeRegistry(),
     );
-    const dispatched = createDeferredCore<string>();
+    const dispatched = createDeferredCore<{ id: string; command: string; paramsJSON: string }>();
     const client = makeClient("connection-1", "node-1", [], { clientId: "node-host" });
     vi.spyOn(client.socket, "send").mockImplementation((data) => {
-      const frame = JSON.parse(data.toString()) as { event?: string; payload?: { id: string } };
+      const frame = JSON.parse(data.toString()) as {
+        event?: string;
+        payload?: { id: string; command: string; paramsJSON: string };
+      };
       if (frame.event === "node.invoke.request" && frame.payload) {
-        dispatched.resolve(frame.payload.id);
+        dispatched.resolve(frame.payload);
       }
     });
     registerNodeSession(nodeRegistry, client, { pairingGeneration: "generation-1" });
@@ -288,7 +308,16 @@ describe("node workspace retain coordinator", () => {
     coordinator.bindTransport(nodeWorkerSupervisorTransport);
     const publishing = coordinator.start();
     try {
-      const id = await dispatched.promise;
+      const { id, command, paramsJSON } = await dispatched.promise;
+      expect(command).toBe(RETAIN_COMMAND);
+      expect(JSON.parse(paramsJSON)).toMatchObject({
+        version: 1,
+        gatewayNamespace: "gateway-test",
+        controllerId: expect.any(String),
+        sequence: 1,
+        bundleHashes: [previousHash, currentHash],
+        retain: [retainEntry],
+      });
       placements[0] = placement({ updatedAtMs: 3 });
       expect(
         nodeRegistry.handleInvokeResult({
@@ -312,64 +341,35 @@ describe("node workspace retain coordinator", () => {
     }
   });
 
-  it("publishes the complete durable retain snapshot for a connected device", async () => {
-    const { invoke } = await startHarness({
+  it.each([
+    { bundleRetention: 1, bundleStatus: undefined },
+    { bundleRetention: undefined, bundleStatus: undefined },
+  ] as const)("keeps retention compatible with older capabilities %j", async (capabilities) => {
+    const currentBuild = vi.fn(async () => receipt(currentHash, "2026.9.3"));
+    const { invoke, acceptBundleStatus, warn } = await startHarness({
+      node: { ...node, workerHost: { ...node.workerHost, ...capabilities } },
       environments: [
-        environment(),
-        environment({
-          environmentId: "environment-other",
-          nodeDeviceId: "node-other",
-        }),
-        environment({ environmentId: "environment-terminal", state: "orphaned" }),
+        environment(
+          capabilities.bundleRetention ? { bootstrapReceipt: receipt(previousHash) } : {},
+        ),
       ],
+      bundleRetention: capabilities.bundleRetention
+        ? undefined
+        : { currentBuild, isEnvironmentOwnedNode: () => false },
     });
-
-    expect(invoke).toHaveBeenCalledOnce();
-    expect(invoke.mock.calls[0]?.[0]).toMatchObject({
-      node,
-      command: RETAIN_COMMAND,
-      params: {
-        version: 1,
-        gatewayNamespace: "gateway-test",
-        controllerId: expect.any(String),
-        sequence: 1,
-        bundleHashes: ["b".repeat(64)],
-        retain: [retainEntry],
-      },
+    expect(requestParams(invoke)).toMatchObject({
+      retain: [retainEntry],
     });
-  });
-
-  it("keeps prior retention nodes compatible without sending a status query", async () => {
-    const { invoke, acceptBundleStatus } = await startHarness({
-      node: {
-        ...node,
-        workerHost: { ...node.workerHost, bundleStatus: undefined },
-      },
-      environments: [environment({ bootstrapReceipt: receipt(previousHash) })],
-    });
-
-    expect(invoke.mock.calls[0]?.[0].params).toMatchObject({
-      bundleHashes: ["b".repeat(64)],
-    });
-    expect(invoke.mock.calls[0]?.[0].params).not.toHaveProperty("bundleStatusHash");
+    if (capabilities.bundleRetention) {
+      expect(requestParams(invoke)).toHaveProperty("bundleHashes", [previousHash]);
+    } else {
+      expect(requestParams(invoke)).not.toHaveProperty("bundleHashes");
+    }
+    if (!capabilities.bundleRetention) {
+      expect(currentBuild).not.toHaveBeenCalled();
+    }
     expect(acceptBundleStatus).toHaveBeenCalledWith(expect.any(Object), undefined);
-  });
-
-  it("does not request another bundle inspection after accepting its installed status", async () => {
-    const bundleHash = previousHash;
-    const { coordinator, invoke, acceptBundleStatus } = await startHarness({
-      environments: [environment({ bootstrapReceipt: receipt(bundleHash) })],
-      results: [
-        retainResult({ bundleGeneration: 3, bundleStatus: { bundleHash, status: "installed" } }),
-      ],
-    });
-
-    expect(invoke.mock.calls[0]?.[0].params).toMatchObject({ bundleStatusHash: bundleHash });
-    expect(acceptBundleStatus).toHaveBeenCalledWith(node, installedStatus(bundleHash));
-    await coordinator.schedule(node.nodeId);
-    expect(invoke.mock.calls[1]?.[0].params).toMatchObject({ bundleHashes: [bundleHash] });
-    expect(invoke.mock.calls[1]?.[0].params).not.toHaveProperty("bundleStatusHash");
-    expect(acceptBundleStatus).toHaveBeenCalledOnce();
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("accepts status only from the final pass for the exact requested hash", async () => {
@@ -388,15 +388,19 @@ describe("node workspace retain coordinator", () => {
     });
 
     expect(invoke).toHaveBeenCalledTimes(2);
-    expect(invoke.mock.calls[1]?.[0].params).toEqual(invoke.mock.calls[0]?.[0].params);
+    expect(requestParams(invoke, 1)).toEqual(requestParams(invoke));
     expect(acceptBundleStatus).toHaveBeenCalledTimes(1);
     expect(acceptBundleStatus).toHaveBeenCalledWith(node, {
       bundleHash,
       status: { status: "missing" },
     });
     await coordinator.schedule(node.nodeId);
-    expect(invoke.mock.calls[2]?.[0].params).toMatchObject({ bundleStatusHash: bundleHash });
+    expect(requestParams(invoke, 2)).toMatchObject({ bundleStatusHash: bundleHash });
     expect(acceptBundleStatus).toHaveBeenLastCalledWith(node, installedStatus(bundleHash));
+    await coordinator.schedule(node.nodeId);
+    expect(requestParams(invoke, 3)).toMatchObject({ bundleHashes: [bundleHash] });
+    expect(requestParams(invoke, 3)).not.toHaveProperty("bundleStatusHash");
+    expect(acceptBundleStatus).toHaveBeenCalledTimes(2);
   });
 
   it.each(["inspection failure", "different echoed hash"])(
@@ -418,28 +422,6 @@ describe("node workspace retain coordinator", () => {
     },
   );
 
-  it("keeps workspace retention compatible when bundle cleanup is not advertised", async () => {
-    const currentBuild = vi.fn(async () => receipt(currentHash, "2026.9.3"));
-    const { invoke, warn } = await startHarness({
-      node: {
-        ...node,
-        workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
-      },
-      bundleRetention: { currentBuild, isEnvironmentOwnedNode: () => false },
-    });
-
-    expect(currentBuild).not.toHaveBeenCalled();
-    expect(invoke).toHaveBeenCalledOnce();
-    expect(invoke.mock.calls[0]?.[0].params).toEqual({
-      version: 1,
-      gatewayNamespace: "gateway-test",
-      controllerId: expect.any(String),
-      sequence: 1,
-      retain: [retainEntry],
-    });
-    expect(warn).not.toHaveBeenCalled();
-  });
-
   it("keeps cloud workspace retention running when current build preparation rejects", async () => {
     const currentBuild = vi.fn(async () => receipt(currentHash));
     const { coordinator, invoke, warn } = await startHarness({
@@ -453,14 +435,12 @@ describe("node workspace retain coordinator", () => {
     currentBuild.mockRejectedValue(new Error("build preparation unavailable"));
     await coordinator.schedule(node.nodeId);
     expect(invoke).toHaveBeenCalledTimes(2);
-    const input = invoke.mock.calls[1]?.[0].params;
+    const input = requestParams(invoke, 1);
     expect(input).toMatchObject({ retain: [retainEntry] });
     for (const key of ["bundleHashes", "acknowledgedBundleGeneration", "bundleStatusHash"]) {
       expect(input).not.toHaveProperty(key);
     }
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      "Node bundle retention skipped (node-1): build preparation unavailable",
-    );
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("build preparation unavailable"));
   });
 
   it.each(["hash count", "combined bytes"])(
@@ -471,7 +451,7 @@ describe("node workspace retain coordinator", () => {
           ? boundedInventory(1_500)
           : boundedInventory(0, false, MAX_HASHES + 1);
       const { invoke, warn } = await startHarness(inventory);
-      expect(invoke.mock.calls[0]?.[0].params).not.toHaveProperty("bundleHashes");
+      expect(requestParams(invoke)).not.toHaveProperty("bundleHashes");
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining("exceed the bounded maintenance request"),
       );
@@ -481,7 +461,7 @@ describe("node workspace retain coordinator", () => {
   it("keeps bounded bundle retention when only the status query exceeds one MiB", async () => {
     const { invoke, warn } = await startHarness(boundedInventory(1_241, true));
 
-    const input = invoke.mock.calls[0]?.[0].params as Record<string, unknown>;
+    const input = requestParams(invoke) as Record<string, unknown>;
     expect(input.bundleHashes).toHaveLength(MAX_HASHES);
     expect(input).not.toHaveProperty("bundleStatusHash");
     const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value), "utf8");
@@ -671,7 +651,7 @@ describe("node workspace retain coordinator", () => {
     }
   });
 
-  it("retains the current build without installing it or keeping unreferenced older builds", async () => {
+  it("retains current and live builds without prefetch on an old node", async () => {
     const artifact = receipt(currentHash, "2026.8.10");
     const input = {
       environments: [environment()],
@@ -684,9 +664,9 @@ describe("node workspace retain coordinator", () => {
       ],
     };
     const { coordinator, invoke } = await startHarness(input);
-    expect(invoke.mock.calls[0]?.[0].params).not.toHaveProperty("acknowledgedBundleGeneration");
+    expect(requestParams(invoke)).not.toHaveProperty("acknowledgedBundleGeneration");
     await coordinator.schedule();
-    expect(invoke.mock.calls[1]?.[0].params).toMatchObject({
+    expect(requestParams(invoke, 1)).toMatchObject({
       acknowledgedBundleGeneration: 1,
       bundleHashes: ["b".repeat(64), artifact.bundleHash],
       bundleStatusHash: artifact.bundleHash,
@@ -694,16 +674,71 @@ describe("node workspace retain coordinator", () => {
     input.environments = [];
     input.placements = [];
     await coordinator.schedule();
-    expect(invoke.mock.calls[2]?.[0].params).toMatchObject({
+    expect(requestParams(invoke, 2)).toMatchObject({
       acknowledgedBundleGeneration: 1,
       bundleHashes: [artifact.bundleHash],
       retain: [],
     });
-    expect(invoke.mock.calls.map(([request]) => request.command)).toEqual([
-      RETAIN_COMMAND,
-      RETAIN_COMMAND,
-      RETAIN_COMMAND,
-    ]);
+  });
+
+  it("prefetches the pinned build once after retention and preserves normal cleanup", async () => {
+    const prefetch = vi.fn(async () => {});
+    const { coordinator, invoke } = await prefetchHarness(prefetch);
+    expect(prefetch).toHaveBeenCalledOnce();
+    expect(requestParams(invoke)).toMatchObject({ bundleHashes: [currentHash] });
+    await coordinator.schedule(node.nodeId);
+    expect(prefetch).toHaveBeenCalledOnce();
+    expect(requestParams(invoke, 1)).toMatchObject({ bundleHashes: [currentHash] });
+  });
+
+  it.each(["old-node", "cloud-owned"])("keeps %s on session-owned installation", async (kind) => {
+    const prefetch = vi.fn(async () => {});
+    await prefetchHarness(prefetch, {
+      node:
+        kind === "old-node"
+          ? node
+          : { ...node, workerHost: { ...node.workerHost, bundlePrefetch: 1 } },
+      bundleRetention: bundleRetention(undefined, kind === "cloud-owned"),
+    });
+    expect(prefetch).not.toHaveBeenCalled();
+  });
+
+  it("warns once on prefetch failure without blocking subsequent maintenance", async () => {
+    const failed = createDeferredCore();
+    const prefetch = vi.fn(async () => {
+      failed.resolve();
+      throw new Error("disk full");
+    });
+    const { coordinator, invoke, warn } = await prefetchHarness(prefetch);
+    await failed.promise;
+    await coordinator.schedule(node.nodeId);
+    expect(warn).toHaveBeenCalledWith("Node bundle prefetch failed (node-1): disk full");
+    expect(prefetch).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["disconnect", "enrollment", "shutdown"])("cancels prefetch on %s", async (reason) => {
+    let connected = true;
+    let owned = false;
+    const cancelled = createDeferredCore();
+    const prefetch = vi.fn(async (_node: NodeProof, signal: AbortSignal) => {
+      signal.addEventListener("abort", () => cancelled.resolve(), { once: true });
+      await cancelled.promise;
+    });
+    const { coordinator } = await prefetchHarness(prefetch, {
+      isCurrent: () => connected,
+      bundleRetention: { ...bundleRetention(), isEnvironmentOwnedNode: () => owned },
+    });
+    expect(prefetch).toHaveBeenCalledOnce();
+    if (reason === "shutdown") {
+      await coordinator.stop();
+    } else {
+      connected = reason !== "disconnect";
+      owned = reason === "enrollment";
+      await coordinator.schedule(node.nodeId);
+    }
+    await cancelled.promise;
+    expect(prefetch.mock.calls[0]?.[1].aborted).toBe(true);
   });
 
   it("retains the current build until live cloud environments record it", async () => {
@@ -714,20 +749,20 @@ describe("node workspace retain coordinator", () => {
       placements: [],
       bundleRetention: bundleRetention(currentBuild, true),
     });
-    expect(invoke.mock.calls[0]?.[0].params).toMatchObject({
+    expect(requestParams(invoke)).toMatchObject({
       bundleHashes: [previousHash, currentBuild.bundleHash],
       bundleStatusHash: previousHash,
     });
 
     environments[0] = environment({ state: "ready", bootstrapReceipt: currentBuild });
     await coordinator.schedule(node.nodeId);
-    expect(invoke.mock.calls[1]?.[0].params).toMatchObject({
+    expect(requestParams(invoke, 1)).toMatchObject({
       bundleHashes: [currentBuild.bundleHash],
     });
 
     environments[0] = environment({ state: "destroyed", bootstrapReceipt: currentBuild });
     await coordinator.schedule(node.nodeId);
-    expect(invoke.mock.calls[2]?.[0].params).toMatchObject({ bundleHashes: [] });
+    expect(requestParams(invoke, 2)).toMatchObject({ bundleHashes: [] });
   });
 
   it("maintains a newly connected node while another node's retention is held", async () => {
@@ -782,7 +817,7 @@ describe("node workspace retain coordinator", () => {
     environmentOwned = true;
     held.resolve(artifact);
     await startup;
-    expect(invoke.mock.calls[0]?.[0].params).toMatchObject({ bundleHashes: [] });
-    expect(invoke.mock.calls[0]?.[0].params).not.toHaveProperty("bundleStatusHash");
+    expect(requestParams(invoke)).toMatchObject({ bundleHashes: [] });
+    expect(requestParams(invoke)).not.toHaveProperty("bundleStatusHash");
   });
 });

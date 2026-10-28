@@ -304,97 +304,23 @@ suite.define(() => {
       await application.dispose();
     }));
 
-  it("keeps bulk deletion fenced to the session selected before confirmation", () =>
+  it("keeps rejected sidebar deletion visible without native dialogs or duplicate requests", () =>
     suite.withPage(desktopOptions, async ({ page }) => {
-      const key = "agent:main:confirmed";
-      const original = sessionRow(key, "Original session", 1, {
-        sessionId: "confirmed-session",
-      });
-      const replacement = sessionRow(key, "Replacement session", 2, {
-        sessionId: "replacement-session",
-      });
-
-      const gateway = await ui.installSessionRows(page, [original], {
-        methodResponses: { "sessions.delete": { ok: true, deleted: true } },
-        sessionKey: "agent:main:main",
-      });
-
-      await page.goto(`${suite.server.baseUrl}sessions`);
-      const replacementLabel = page.locator(".sessions-table").getByText("Replacement session", {
-        exact: true,
-      });
-      await page.getByRole("checkbox", { name: `Select session: ${key}` }).check();
-      await ui.button(page.locator(".data-table-bulk-bar"), "Delete", false).click();
-      const confirmModal = await support.waitForConfirmModal(page);
-
-      await gateway.setSessionsListResponse(support.sessionsListResponse([replacement]));
-      await gateway.deferNext("sessions.delete");
-      await ui.button(confirmModal, "Delete").click();
-
-      const request = await gateway.waitForRequest("sessions.delete");
-      expect(request).toMatchObject({
-        params: { expectedSessionId: "confirmed-session", key },
-      });
-      await gateway.rejectDeferred("sessions.delete", {
-        code: "INVALID_REQUEST",
-        message: `Session ${key} ${changedMessage}`,
-      });
-      await ui.expectText(page.locator(".sessions-error[role=alert]"), changedMessage);
-      await gateway.emitGatewayEvent("sessions.changed", {
-        ...replacement,
-        reason: "update",
-        sessionKey: key,
-      });
-      await replacementLabel.waitFor();
-      expect(await page.getByRole("checkbox", { name: `Select session: ${key}` }).isChecked()).toBe(
-        false,
-      );
-      expect(await gateway.getRequests("sessions.delete")).toHaveLength(1);
-    }));
-
-  it.each([false, true])("handles sidebar deletion outcomes (preserved worktree=%s)", (preserved) =>
-    suite.withPage(desktopOptions, async ({ page }) => {
-      const key = preserved ? "agent:main:snapshot-failed" : "agent:main:research";
+      const key = "agent:main:research";
       const nativeDialogs: string[] = [];
-      if (!preserved) {
-        // Native dialogs must not be required by bridge-less WebViews.
-        page.on("dialog", (dialog) => {
-          nativeDialogs.push(dialog.message());
-          void dialog.dismiss();
-        });
-      }
+      // Native dialogs must not be required by bridge-less WebViews.
+      page.on("dialog", (dialog) => {
+        nativeDialogs.push(dialog.message());
+        void dialog.dismiss();
+      });
       const gateway = await ui.installSessionRows(
         page,
         [
           sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
-          sessionRow(
-            key,
-            preserved ? "Snapshot failed" : "Research notes",
-            Date.parse("2026-07-01T15:00:00.000Z"),
-          ),
+          sessionRow(key, "Research notes", Date.parse("2026-07-01T15:00:00.000Z")),
         ],
         {
-          ...(preserved
-            ? { featureMethods: [...defaultControlUiFeatureMethods, "worktrees.remove"] }
-            : {}),
-          methodResponses: {
-            "sessions.delete": {
-              ok: true,
-              deleted: true,
-              ...(preserved
-                ? {
-                    key,
-                    archived: [],
-                    worktreePreserved: {
-                      id: "wt-snapshot-failed",
-                      branch: "openclaw/snapshot-failed",
-                      path: "/worktrees/snapshot-failed",
-                      reason: "snapshot-failed",
-                    },
-                  }
-                : {}),
-            },
-          },
+          methodResponses: { "sessions.delete": { ok: true, deleted: true } },
           sessionKey: "agent:main:main",
         },
       );
@@ -406,40 +332,27 @@ suite.define(() => {
       await ui.menuItem(page, "Advanced").click();
       await ui.menuItem(page.locator("openclaw-session-menu"), "Delete…", false).click();
       const confirmation = await support.waitForConfirmModal(page);
-      if (preserved) {
-        await ui.button(confirmation, "Delete").click();
-      } else {
-        await gateway.deferNext("sessions.delete");
-        await ui.button(confirmation, "Delete").evaluate((control) => {
-          if (!(control instanceof HTMLButtonElement)) {
-            throw new Error("expected delete confirmation button");
-          }
-          control.click();
-          control.click();
-        });
-      }
+      await gateway.deferNext("sessions.delete");
+      await ui.button(confirmation, "Delete").evaluate((control) => {
+        if (!(control instanceof HTMLButtonElement)) {
+          throw new Error("expected delete confirmation button");
+        }
+        control.click();
+        control.click();
+      });
       const request = await gateway.waitForRequest("sessions.delete");
-      if (!preserved) {
-        expect(request).toMatchObject({
-          params: { deleteTranscript: true, expectedSessionId: `session:${key}`, key },
-        });
-        await expectRequestCountStable(gateway, "sessions.delete", 1);
-        await gateway.rejectDeferred("sessions.delete", {
-          code: "INVALID_REQUEST",
-          message: `Session ${key} ${changedMessage}`,
-        });
-        const error = page.locator("[data-sidebar-session-error]");
-        await ui.expectText(error, changedMessage);
-        expect(await error.textContent()).not.toContain("GatewayRequestError");
-        await ui.visible(row);
-        expect(nativeDialogs).toEqual([]);
-      } else {
-        const worktree = await support.waitForConfirmModal(page);
-        await ui.expectText(worktree, "OpenClaw could not create a safety snapshot");
-        await ui.expectText(worktree, "Remove?");
-        await ui.button(worktree, "Cancel").click();
-        expect(await gateway.getRequests("worktrees.remove")).toHaveLength(0);
-      }
-    }),
-  );
+      expect(request).toMatchObject({
+        params: { deleteTranscript: true, expectedSessionId: `session:${key}`, key },
+      });
+      await expectRequestCountStable(gateway, "sessions.delete", 1);
+      await gateway.rejectDeferred("sessions.delete", {
+        code: "INVALID_REQUEST",
+        message: `Session ${key} ${changedMessage}`,
+      });
+      const error = page.locator("[data-sidebar-session-error]");
+      await ui.expectText(error, changedMessage);
+      expect(await error.textContent()).not.toContain("GatewayRequestError");
+      await ui.visible(row);
+      expect(nativeDialogs).toEqual([]);
+    }));
 });

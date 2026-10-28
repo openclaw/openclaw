@@ -201,7 +201,7 @@ it.each(["completed", "revoked"] as const)("HTTP %s waits for cleanup", async (e
 it("releases authority on parent-context failure", async () => {
   const model = execution();
   bindModelExecution.mockReturnValue(model.binding);
-  const registration = proxy.context.register({
+  const registration = await proxy.context.register({
     threadId: "root",
     text: "synthetic private instructions",
     signal: new AbortController().signal,

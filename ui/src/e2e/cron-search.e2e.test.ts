@@ -1,9 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
-import type { CronJob } from "../api/types.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { cronJob, cronList } from "./cron-fixtures.test-support.ts";
 
 // Exercise shipped CSS chunks: a cold source-mode route omits cross-page selectors.
 const suite = createControlUiE2eSuite({
@@ -14,27 +14,19 @@ const suite = createControlUiE2eSuite({
 suite.define(() => {
   it("keeps query loading local before replacing an expanded inventory", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page, context }) => {
-      const jobs: CronJob[] = Array.from({ length: 100 }, (_, index) => ({
-        id: "inventory-" + index,
-        name: "Inventory reminder " + index,
-        enabled: true,
-        createdAtMs: 0,
-        updatedAtMs: 0,
-        schedule: { kind: "every", everyMs: 3_600_000 },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "Synthetic inventory reminder" },
-        state: {},
-      }));
-      const inventoryPage = (offset: number) => ({
-        jobs: jobs.slice(offset, offset + 50),
-        snapshotRevision: "inventory-query",
-        total: jobs.length,
-        offset,
-        limit: 50,
-        hasMore: offset === 0,
-        nextOffset: offset === 0 ? 50 : null,
-      });
+      const jobs = Array.from({ length: 100 }, (_, index) =>
+        cronJob("inventory-" + index, "Inventory reminder " + index, {
+          schedule: { kind: "every", everyMs: 3_600_000 },
+          payload: { kind: "systemEvent", text: "Synthetic inventory reminder" },
+        }),
+      );
+      const inventoryPage = (offset: number) =>
+        cronList(jobs.slice(offset, offset + 50), "inventory-query", {
+          total: jobs.length,
+          offset,
+          hasMore: offset === 0,
+          nextOffset: offset === 0 ? 50 : null,
+        });
       const gateway = await installMockGateway(page, {
         methodResponses: {
           "cron.list": cronListResponseFixture([
@@ -50,9 +42,18 @@ suite.define(() => {
       const loadMore = page.getByRole("button", { name: "Load more", exact: true });
       await loadMore.click();
       await expect.poll(() => rows.count()).toBe(jobs.length);
+      await page.locator(".cron-job-menu__trigger").first().click();
+      await page.getByRole("menuitem", { name: "Remove", exact: true }).waitFor();
+      await page.keyboard.press("Escape");
+      await page
+        .getByRole("menuitem", { name: "Remove", exact: true })
+        .waitFor({ state: "hidden" });
       const search = page.getByRole("searchbox", { name: "Search automations" });
       await search.click();
-      await gateway.deferNext("cron.list", { query: "i" });
+      const query = "inventory";
+      const deferredMatch = { query: query.slice(0, 1), offset: 0 };
+      const requestsBefore = (await gateway.getRequests("cron.list")).length;
+      const deferredAfter = await gateway.deferNext("cron.list", deferredMatch);
       await page.evaluate(() => document.fonts.ready.then(() => undefined));
       await page.evaluate(
         () =>
@@ -61,63 +62,83 @@ suite.define(() => {
           }),
       );
       const client = await context.newCDPSession(page);
-      const { frameTree } = await client.send("Page.getFrameTree");
-      const recalculated: number[] = [];
-      client.on("Tracing.dataCollected", ({ value }) => {
-        for (const event of value) {
-          if (event.name !== "UpdateLayoutTree") {
-            continue;
-          }
-          const args = event.args;
-          if (
-            isRecord(args) &&
-            isRecord(args.beginData) &&
-            args.beginData.frame === frameTree.frame.id &&
-            typeof args.elementCount === "number"
-          ) {
-            recalculated.push(args.elementCount);
-          }
-        }
-      });
-      await client.send("Tracing.start", {
-        categories: "devtools.timeline",
-        transferMode: "ReportEvents",
-      });
       try {
-        await search.press("i");
-        await gateway.waitForRequest("cron.list", { match: { query: "i", offset: 0 } });
-        await page.evaluate(
-          () =>
-            new Promise<void>((resolve) => {
-              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-            }),
-        );
-      } finally {
-        const complete = new Promise<void>((resolve) => {
-          client.once("Tracing.tracingComplete", () => resolve());
+        const { frameTree } = await client.send("Page.getFrameTree");
+        const recalculated: number[] = [];
+        client.on("Tracing.dataCollected", ({ value }) => {
+          for (const event of value) {
+            if (event.name !== "UpdateLayoutTree") {
+              continue;
+            }
+            const args = event.args;
+            if (
+              isRecord(args) &&
+              isRecord(args.beginData) &&
+              args.beginData.frame === frameTree.frame.id &&
+              typeof args.elementCount === "number"
+            ) {
+              recalculated.push(args.elementCount);
+            }
+          }
         });
-        await client.send("Tracing.end");
-        await complete;
+        await client.send("Tracing.start", {
+          categories: "devtools.timeline",
+          transferMode: "ReportEvents",
+        });
+        try {
+          await search.press(query.slice(0, 1));
+          await gateway.waitForRequest("cron.list", {
+            after: deferredAfter,
+            match: deferredMatch,
+          });
+          await search.pressSequentially(query.slice(1));
+          await page.evaluate(
+            () =>
+              new Promise<void>((resolve) => {
+                requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+              }),
+          );
+          expect(await search.inputValue()).toBe(query);
+          expect(
+            (await gateway.getRequests("cron.list"))
+              .slice(requestsBefore)
+              .map(({ params }) => (isRecord(params) ? [params.query, params.offset] : null)),
+          ).toEqual([[deferredMatch.query, 0]]);
+        } finally {
+          const complete = new Promise<void>((resolve) => {
+            client.once("Tracing.tracingComplete", () => resolve());
+          });
+          await client.send("Tracing.end");
+          await complete;
+        }
+        expect(await rows.count()).toBe(jobs.length);
+        expect(await page.locator(".cron-table").getAttribute("aria-busy")).toBe("true");
+        // A loading indicator may restyle itself, not every retained row or shadow part.
+        // Count work rather than wall time so the regression is independent of CPU speed.
+        expect(recalculated.length).toBeGreaterThan(0);
+        expect(Math.max(...recalculated)).toBeLessThan(jobs.length);
+        await gateway.resolveDeferred("cron.list");
+        // The pending read queues one replacement for the latest typed query.
+        await gateway.waitForRequest("cron.list", { match: { query, offset: 0 } });
+        await expect.poll(() => rows.count()).toBe(50);
+        await expect.poll(() => page.locator(".cron-table").getAttribute("aria-busy")).toBe(null);
+        expect(await search.inputValue()).toBe(query);
+        expect(await search.evaluate((element) => element === document.activeElement)).toBe(true);
+        await expect.poll(() => loadMore.isEnabled()).toBe(true);
+        await loadMore.click();
+        await expect.poll(() => rows.count()).toBe(jobs.length);
+        expect(
+          (await gateway.getRequests("cron.list"))
+            .slice(requestsBefore)
+            .map(({ params }) => (isRecord(params) ? [params.query, params.offset] : null)),
+        ).toEqual([
+          [deferredMatch.query, 0],
+          [query, 0],
+          [query, 50],
+        ]);
+      } finally {
         await client.detach();
       }
-      expect(await rows.count()).toBe(jobs.length);
-      expect(await page.locator(".cron-table").getAttribute("aria-busy")).toBe("true");
-      // A loading indicator may restyle itself, not every retained row or shadow part.
-      // Count work rather than wall time so the regression is independent of CPU speed.
-      expect(recalculated.length).toBeGreaterThan(0);
-      expect(Math.max(...recalculated)).toBeLessThan(jobs.length);
-      await gateway.resolveDeferred("cron.list");
-      await expect.poll(() => rows.count()).toBe(50);
-      expect(await search.inputValue()).toBe("i");
-      expect(await search.evaluate((element) => element === document.activeElement)).toBe(true);
-      await expect.poll(() => loadMore.isEnabled()).toBe(true);
-      await loadMore.click();
-      await expect.poll(() => rows.count()).toBe(jobs.length);
-      expect(
-        (await gateway.getRequests("cron.list", { query: "i" })).map(
-          ({ params }) => isRecord(params) && params.offset,
-        ),
-      ).toEqual([0, 50]);
     });
   });
 });

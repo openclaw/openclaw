@@ -7,7 +7,9 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
+import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 
 type AuditIdentityDatabase = Pick<
@@ -24,9 +26,7 @@ const AUDIT_IDENTITY_KEY_BYTES = 32;
 const AUDIT_IDENTITY_KEY_ID_BYTES = 16;
 const AUDIT_IDENTITY_KEY_ID_RE = /^[a-f0-9]{32}$/u;
 const AUDIT_IDENTITY_DOMAIN = "openclaw.audit.identity.v1";
-// Only a top-level (depth-0) audit/evidence write may create the key: each
-// caller clears this cache on rollback, because a rolled-back outer transaction
-// around a nested creation would leave a cached key that was never persisted.
+// A newly created key stays transaction-local until the outer writer commits.
 const identityByDatabase = new WeakMap<EngineConnection, AuditIdentityKey>();
 
 type AuditIdentityKey = {
@@ -89,11 +89,7 @@ export function loadOrCreateAuditIdentityKey(db: EngineConnection): AuditIdentit
     db,
     kysely.selectFrom("audit_events").select("sequence").where("kind", "=", "message").limit(1),
   );
-  const hasExecutionContextTable = Boolean(
-    db /* sqlite-allow-raw -- Missing-key integrity must tolerate pre-ensure current-schema DBs. */
-      .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
-      .get("execution_identity_contexts"),
-  );
+  const hasExecutionContextTable = tableExists(db, "execution_identity_contexts");
   const retainedExecutionContext = hasExecutionContextTable
     ? executeSqliteQueryTakeFirstSync(
         db,
@@ -115,6 +111,11 @@ export function loadOrCreateAuditIdentityKey(db: EngineConnection): AuditIdentit
   executeSqliteQuerySync(db, kysely.insertInto("audit_identity_keys").values(candidate));
   const identity = { keyId: candidate.key_id, key: candidate.key };
   registerAuditIdentityKeyForRedaction(identity.key);
+  stageSqliteTransactionState(db, {
+    commit: () => {},
+    rollback: () => identityByDatabase.delete(db),
+    invalidate: () => identityByDatabase.delete(db),
+  });
   identityByDatabase.set(db, identity);
   return identity;
 }

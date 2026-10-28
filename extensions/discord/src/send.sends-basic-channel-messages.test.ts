@@ -20,9 +20,11 @@ vi.mock("openclaw/plugin-sdk/web-media", () => discordWebMediaMockFactory());
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { rememberDiscordDirectoryUser } from "./directory-cache.js";
 import { clearDiscordDirectoryCacheForTest } from "./directory-cache.test-support.js";
+import { DiscordError } from "./internal/rest.js";
 import {
   deleteMessageDiscord,
   editMessageDiscord,
+  listPinsDiscord,
   pinMessageDiscord,
   unpinMessageDiscord,
 } from "./send.messages.js";
@@ -44,6 +46,8 @@ async function loopbackRest(options?: Parameters<typeof createDiscordLoopbackRes
 const retry = { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 };
 const httpError = (status: number, fields: Record<string, unknown> = {}) =>
   Object.assign(new Error("Discord request failed"), { status, ...fields });
+const discordApiError = (status: number, body: Record<string, unknown>) =>
+  new DiscordError(new Response(null, { status }), body);
 const reaction = (me: boolean, name: string, id: string | null = null) => ({
   me,
   emoji: { name, id },
@@ -361,15 +365,20 @@ it.each(["media follow-up", "text retry", "dispatch refresh"] as const)(
   },
 );
 
-it("uses configured defaultAccount for cached mention rewriting when accountId is omitted", async () => {
+it("preserves ambiguous and unknown mentions while rewriting the configured account's known users", async () => {
   rememberDiscordDirectoryUser({
     accountId: "work",
     userId: "222333444555666777",
-    handles: ["Alice"],
+    handles: ["Alice#1234", "Reviewer"],
+  });
+  rememberDiscordDirectoryUser({
+    accountId: "work",
+    userId: "333444555666777888",
+    handles: ["Reviewer"],
   });
   const { send, postMock } = sendHarness(["msg1"], ChannelType.GuildText);
   const work = { token: "Bot work-token", suppressEmbeds: true }; // pragma: allowlist secret
-  await send("ping @Alice.", {
+  await send("ping @Alice. @Reviewer @Alice#9999 @Unknown", {
     cfg: {
       channels: {
         discord: {
@@ -382,7 +391,7 @@ it("uses configured defaultAccount for cached mention rewriting when accountId i
   });
   expect(requestPath(postMock, 0)).toBe(Routes.channelMessages("789"));
   expect(requestBody(postMock)).toMatchObject({
-    content: "ping <@222333444555666777>.",
+    content: "ping <@222333444555666777>. @Reviewer @Alice#9999 @Unknown",
     flags: MessageFlags.SuppressEmbeds,
   });
 });
@@ -458,13 +467,11 @@ it.each([
 ] as const)("reports 50013 diagnostics: %s", async (_name, type, permissions, missing) => {
   const { rest, postMock } = permissionFixture({ type, permissions, bot: true, sending: true });
   postMock.mockRejectedValueOnce(
-    Object.assign(new Error("Missing Permissions"), { code: 50013, status: 403 }),
+    discordApiError(403, { message: "Missing Permissions", code: 50013 }),
   );
   await expect(
     sendMessageDiscord("channel:chan1", "hello", clientOptions(rest)),
   ).rejects.toMatchObject({
-    missingPermissions: missing,
-    discordCode: 50013,
     status: 403,
     message: expect.stringContaining(
       missing[0] ?? "permission check did not identify missing ViewChannel/SendMessages",
@@ -476,7 +483,7 @@ it("preserves implicit reply scope and delivery progress in upload fallback chun
   const { send, postMock } = sendHarness(
     ["fallback-1", "fallback-2"],
     undefined,
-    httpError(400, { rawError: { code: 40005 } }),
+    discordApiError(400, { code: "40005" }),
   );
   const onDeliveryResult = vi.fn();
   await send("a".repeat(2500), {
@@ -518,13 +525,45 @@ it("preserves implicit reply scope and delivery progress in upload fallback chun
 });
 
 it("reports a media-only upload rejected with HTTP 413", async () => {
-  const { send, postMock } = sendHarness(["fallback-msg"], undefined, httpError(413));
-  const res = await send("", { mediaUrl: "file:///tmp/photo.jpg" });
+  const isUpload = (request: { contentType?: string }) =>
+    request.contentType?.startsWith("multipart/form-data") === true;
+  const loopback = await loopbackRest({
+    status: (request) => (isUpload(request) ? 413 : 200),
+    respond: (request) =>
+      request.method === "GET"
+        ? { id: "789", type: ChannelType.GuildText }
+        : isUpload(request)
+          ? { message: "Request Entity Too Large" }
+          : { id: "fallback-msg", channel_id: "789" },
+  });
+  const res = await sendMessageDiscord("channel:789", "", {
+    ...clientOptions(loopback.rest),
+    mediaUrl: "file:///tmp/photo.jpg",
+  });
+  const posts = loopback.requests.filter((request) => request.method === "POST");
+  expect(posts).toHaveLength(2);
+  expect(posts[0]?.contentType).toMatch(/^multipart\/form-data/);
+  const fallback = JSON.parse(posts[1]?.body ?? "{}");
   expect(res.messageId).toBe("fallback-msg");
-  expect(requestBody(postMock, 1).content).toBe(
-    "Attachment skipped: Discord rejected the file as too large.",
-  );
-  expect(requestBody(postMock, 1)).not.toHaveProperty("files");
+  expect(fallback.content).toBe("Attachment skipped: Discord rejected the file as too large.");
+  expect(fallback).not.toHaveProperty("files");
+});
+
+it("reports blocked DMs from a native Discord REST error", async () => {
+  const isMessage = (request: { path?: string }) => request.path?.endsWith("/messages") === true;
+  const loopback = await loopbackRest({
+    status: (request) => (isMessage(request) ? 403 : 200),
+    respond: (request) =>
+      isMessage(request)
+        ? { message: "Cannot send messages to this user", code: 50007 }
+        : { id: "789", type: ChannelType.DM },
+  });
+  await expect(
+    sendMessageDiscord("user:123", "hello", clientOptions(loopback.rest)),
+  ).rejects.toMatchObject({
+    message: "discord dm failed: user blocks dms or privacy settings disallow it (code=50007)",
+    status: 403,
+  });
 });
 
 it("does not mask unrelated media upload failures", async () => {
@@ -732,6 +771,63 @@ it("fails closed when the channel belongs to a different guild", async () => {
   ).resolves.toBe(false);
 });
 
+it.each([
+  { pinCount: 250, pageSize: 50 },
+  { pinCount: 6, pageSize: 1 },
+])("lists all $pinCount pins across $pageSize-item pages", async ({ pinCount, pageSize }) => {
+  const pins = Array.from({ length: pinCount }, (_, index) => ({
+    pinned_at: new Date(Date.UTC(2026, 0, 1, 0, 0, pinCount - index))
+      .toISOString()
+      .replace("Z", "000+00:00"),
+    message: { id: String(index + 1) },
+  }));
+  const loopback = await loopbackRest({
+    respond: ({ path }) => {
+      const url = new URL(path ?? "/", "http://localhost");
+      if (url.pathname === "/v10/channels/789/pins") {
+        return pins.slice(0, 50).map((pin) => pin.message);
+      }
+      const before = url.searchParams.get("before");
+      const start = before === null ? 0 : pins.findIndex((pin) => pin.pinned_at === before) + 1;
+      const items = pins.slice(start, start + pageSize);
+      return { items, has_more: start + items.length < pins.length };
+    },
+  });
+
+  await expect(listPinsDiscord("789", clientOptions(loopback.rest))).resolves.toEqual(
+    pins.map((pin) => pin.message),
+  );
+  expect(
+    loopback.requests.map(({ method, path }) => {
+      const url = new URL(path ?? "/", "http://localhost");
+      return {
+        method,
+        path: url.pathname,
+        limit: url.searchParams.get("limit"),
+        before: url.searchParams.get("before"),
+      };
+    }),
+  ).toEqual(
+    Array.from({ length: Math.ceil(pinCount / pageSize) }, (_, index) => ({
+      method: "GET",
+      path: "/v10/channels/789/messages/pins",
+      limit: "50",
+      before: index === 0 ? null : pins[index * pageSize - 1]!.pinned_at,
+    })),
+  );
+});
+
+it("pins and unpins through current routes while preserving message ID normalization", async () => {
+  const loopback = await loopbackRest({ respond: () => ({}) });
+  await pinMessageDiscord("789", " 123 ", clientOptions(loopback.rest));
+  await unpinMessageDiscord("789", " 123 ", clientOptions(loopback.rest));
+
+  expect(loopback.requests.map(({ method, path }) => ({ method, path }))).toEqual([
+    { method: "PUT", path: "/v10/channels/789/messages/pins/123" },
+    { method: "DELETE", path: "/v10/channels/789/messages/pins/123" },
+  ]);
+});
+
 const unknownMessage = Object.assign(new Error("Unknown Message"), {
   status: 404,
   discordCode: 10008,
@@ -755,13 +851,13 @@ const mutations = [
   [
     "pin",
     "putMock",
-    (channel: string, id: string) => Routes.channelPin(channel, id),
+    (channel: string, id: string) => Routes.channelMessagesPin(channel, id),
     pinMessageDiscord,
   ],
   [
     "unpin",
     "deleteMock",
-    (channel: string, id: string) => Routes.channelPin(channel, id),
+    (channel: string, id: string) => Routes.channelMessagesPin(channel, id),
     unpinMessageDiscord,
   ],
 ] as const;

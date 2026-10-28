@@ -6,17 +6,22 @@
   container-type: inline-size;
 }
 
+.agent-chat__composer-shell,
+.new-session-page__blocked-submit.agent-chat__composer-status {
+  /* The new-session page reuses this shell outside .chat, where the tokens are
+     not defined; the fallbacks keep its geometry identical there. */
+  width: calc(100% - var(--chat-composer-side-inset, 36px));
+  max-width: var(--chat-thread-max-width, 48rem);
+  margin-inline: auto;
+}
+
 .agent-chat__composer-shell {
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   align-items: end;
   gap: 6px;
-  /* The new-session page reuses this shell outside .chat, where the tokens are
-     not defined; the fallbacks keep its geometry identical there. */
-  width: calc(100% - var(--chat-composer-side-inset, 36px));
-  max-width: var(--chat-thread-max-width, 48rem);
-  margin: var(--chat-composer-top-margin, 8px) auto var(--chat-composer-bottom-gap, 14px);
+  margin-block: var(--chat-composer-top-margin, 8px) var(--chat-composer-bottom-gap, 14px);
 }
 .agent-chat__composer-notices {
   display: grid;
@@ -31,12 +36,7 @@
 }
 
 .agent-chat__composer-notices:not(
-  :has(
-    > :not(openclaw-chat-child-attention, .chat-composer-lit-content),
-    > openclaw-chat-child-attention > *,
-    > .chat-composer-lit-content > :not(openclaw-chat-child-attention),
-    > .chat-composer-lit-content > openclaw-chat-child-attention > *
-  )
+  :has(> :not(.chat-composer-lit-content), > .chat-composer-lit-content > *)
 ) {
   display: none;
 }
@@ -73,16 +73,8 @@
       openclaw-plugin-contributions,
       openclaw-chat-outbox-recovery
     ),
-    > .agent-chat__composer-notices
-      > :not(openclaw-chat-child-attention, .chat-composer-lit-content),
-    > .agent-chat__composer-notices > openclaw-chat-child-attention > *,
-    > .agent-chat__composer-notices
-      > .chat-composer-lit-content
-      > :not(openclaw-chat-child-attention),
-    > .agent-chat__composer-notices
-      > .chat-composer-lit-content
-      > openclaw-chat-child-attention
-      > *,
+    > .agent-chat__composer-notices > :not(.chat-composer-lit-content),
+    > .agent-chat__composer-notices > .chat-composer-lit-content > *,
     > .chat-composer-lit-content
       > :not(openclaw-plugin-contributions, openclaw-chat-outbox-recovery),
     > .chat-composer-lit-content > openclaw-plugin-contributions > *,
@@ -104,18 +96,18 @@
     .session-progress-card__body,
     .chat-queue__scroll,
     .agent-chat__goal-detail-objective,
-    .chat-swarm__tasks,
     .chat-error__diagnostic
   ) {
   overscroll-behavior: auto;
 }
 
 :root[data-theme-mode="light"]
-  .session-progress-card--composer:not(.session-progress-card--details) {
+  .session-progress-card--composer:not(.session-progress-card--details),
+:root[data-theme-mode="light"] .chat-queue {
   border-color: var(--chat-composer-light-outline);
 }
 
-:root[data-theme-mode="light"] :is(.chat-queue, .agent-chat__goal--active) {
+:root[data-theme-mode="light"] .agent-chat__goal--active {
   border-color: transparent;
   box-shadow: inset 0 0 0 1px var(--chat-composer-light-outline);
 }
@@ -140,7 +132,6 @@
 .agent-chat__composer-shell,
 .agent-chat__input {
   --chat-composer-radius: calc(20px * var(--openclaw-corner-radius-scale));
-  --chat-composer-surface: var(--popover);
   --chat-composer-light-outline: rgb(0 0 0 / 6%);
   --composer-attached-surface: color-mix(
     in srgb,
@@ -164,26 +155,34 @@
 
 .agent-chat__input {
   --chat-box-inset: 8px;
-  --chat-composer-surface: var(--popover);
-  --chat-composer-secondary: color-mix(
-    in srgb,
-    var(--text-strong) 65%,
-    var(--chat-composer-surface)
+  --chat-composer-secondary: var(
+    --control-secondary-text,
+    color-mix(in srgb, var(--text-strong) 65%, var(--chat-composer-surface))
   );
   --chat-composer-tertiary: color-mix(
     in srgb,
     var(--text-strong) 48%,
     var(--chat-composer-surface)
   );
-  --chat-composer-hover: color-mix(in srgb, var(--text-strong) 8%, transparent);
-  --chat-composer-group-hover: color-mix(in srgb, var(--text-strong) 6%, transparent);
-  --chat-composer-popover-background: color-mix(in srgb, var(--bg-elevated) 96%, var(--card));
+  --chat-composer-hover: var(--surface-hover);
+  --chat-composer-group-hover: var(--surface-hover);
   --chat-composer-popover-border: var(--overlay-border);
   --chat-composer-popover-radius: calc(14px * var(--openclaw-corner-radius-scale));
   /* Footer control box. Smaller than the editor's own line box on purpose: the
      controls read as chrome beside the text, not as peers of it. */
   --chat-composer-control-size: 28px;
   --chat-composer-send-size: 32px;
+  --chat-composer-primary-surface-size: 30px;
+  --chat-composer-icon-size: 16px;
+  --chat-composer-plus-icon-size: 20px;
+  --chat-composer-context-icon-size: 15px;
+  --chat-composer-context-stroke: 2.5px;
+  --chat-composer-microphone-icon-size: 16px;
+  --chat-composer-primary-icon-size: 18px;
+  --chat-composer-chevron-size: 12px;
+  --chat-composer-icon-stroke: 2;
+  --chat-composer-control-gap: 4px;
+  --chat-composer-group-gap: 4px;
   /* The labelled chips in the action row — model, reasoning, session mode — are
      one control family, so their box, type and rhythm live here instead of each
      chip restating its own. They are peers describing the next turn, and a
@@ -191,9 +190,9 @@
      outside the composer keep the same values as fallbacks; the mobile block
      raises the whole family to touch size by rewriting these four. */
   --chat-composer-chip-height: 30px;
-  --chat-composer-chip-gap: 6px;
+  --chat-composer-chip-gap: 4px;
   --chat-composer-chip-padding-inline: 8px;
-  --chat-composer-chip-text: var(--control-ui-text-md);
+  --chat-composer-chip-text: calc(13px * var(--control-ui-text-scale));
   --chat-composer-chip-icon: 16px;
   /* Menu-row family: every option row inside a composer popover (model, effort,
      permission, plus menu, attach, microphone) shares one box, icon size, and
@@ -212,14 +211,14 @@
      every composer that uses this surface. The resting stature is unaffected:
      the surface's own floor is taller than the editor plus these insets. */
   --chat-composer-editor-inset-inline: 14px;
+  --chat-composer-editor-scroll-inset: 4px;
   --chat-composer-editor-inset-block: 6px;
-  --chat-attachment-hit-slop: calc(var(--chat-composer-editor-inset-block) * 2);
-  /* The editor is a reading and writing surface, not a compact form field, so it
-     owns a 16px base instead of the shared control token, whose 14px base only
-     reaches 16px through an iOS zoom floor — text that size by accident does not
-     follow the operator's text scale until the scale passes 1.15, and it drops
-     the moment that floor moves. The max() keeps 16px as a hard floor. */
-  --chat-composer-editor-size: max(16px, calc(16px * var(--control-ui-text-scale)));
+  /* Attachment controls keep their clearance when the compact editor loses its inset. */
+  --chat-attachment-inset-block: 6px;
+  --chat-attachment-hit-slop: calc(var(--chat-attachment-inset-block) * 2);
+  /* Writing follows the conversation's text size; footer controls stay one
+     step smaller. Touch keeps its editing floor below. */
+  --chat-composer-editor-size: var(--control-ui-text-md);
   /* One editor line. The single-line box centres a line of exactly this height,
      and the multiline editor never gets shorter than one of them. Derived, so a
      scaled-up editor keeps its leading instead of crowding its own descenders. */
@@ -241,17 +240,10 @@
   min-height: var(--chat-composer-min-height, 112px);
   margin: 0;
   padding: 0;
-  /* The app owns the artwork; keep one translucent writing surface, not a
-     second texture. Foreground/menu tokens retain their opaque surface color. */
-  background: color-mix(in srgb, var(--chat-composer-surface) 78%, transparent);
-
-  &:where(.shell[data-background-managed] *) {
-    /* Personal artwork never changes the writing surface's readability. */
-    --chat-composer-fill: color-mix(in srgb, var(--chat-composer-surface) 78%, transparent);
-    background:
-      linear-gradient(var(--chat-composer-fill), var(--chat-composer-fill)),
-      var(--bg-content, var(--bg));
-  }
+  /* The app owns the artwork; the writing surface stays opaque above it. */
+  background:
+    linear-gradient(var(--chat-composer-surface), var(--chat-composer-surface)),
+    var(--bg-content, var(--bg));
   border: 1px solid var(--chat-composer-hairline);
   /* Deliberately lighter than --shadow-sm: with the border and the luminance
      step already doing the separating, a heavier drop reads as a second frame. */
@@ -260,6 +252,14 @@
   transition:
     border-color var(--duration-fast) ease,
     box-shadow var(--duration-fast) ease;
+}
+
+@media (pointer: coarse) {
+  .agent-chat__input {
+    /* Match the touch input floor at the owner so placeholders, predictions,
+       and the editor's line box stay aligned with the native control. */
+    --chat-composer-editor-size: max(16px, calc(16px * var(--control-ui-text-scale)));
+  }
 }
 
 :root[data-theme-mode="dark"] :is(.chat-footer, .agent-chat__composer-shell, .agent-chat__input) {
@@ -336,13 +336,21 @@
   z-index: 1;
 }
 
-.agent-chat__input--disabled {
+.agent-chat__input--disabled > * {
   opacity: 0.6;
 }
 
 @media (forced-colors: active), (prefers-contrast: more), (prefers-reduced-transparency: reduce) {
   .agent-chat__input {
     background: var(--chat-composer-surface);
+  }
+}
+
+@media (forced-colors: active) {
+  /* Forced colors drop the box shadows and border shift that mark focus above. */
+  .agent-chat__input:has(.agent-chat__composer-combobox > :is(textarea, input):focus-visible) {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
   }
 }
 
@@ -364,6 +372,15 @@
   min-width: 0;
 }
 
+.agent-chat__composer-combobox
+  > :where(textarea, input, .agent-chat__composer-placeholder, .agent-chat__composer-prediction),
+.agent-chat__composer-prediction-actions {
+  /* Keep text aligned while the native scrollport reaches the surface edge. */
+  padding-inline: calc(
+    var(--chat-composer-editor-inset-inline) - var(--chat-composer-editor-scroll-inset)
+  );
+}
+
 .agent-chat__composer-combobox > :is(textarea, input) {
   --control-ui-touch-input-size: var(--chat-composer-editor-size);
 
@@ -377,9 +394,6 @@
   );
   resize: none;
   padding-block: var(--chat-composer-editor-inset-block);
-  /* The horizontal inset belongs to the row, so the text keeps one origin while
-     the surface changes shape; the control adds none of its own. */
-  padding-inline: 0;
   border: none;
   background: transparent;
   color: var(--text-strong);
@@ -389,7 +403,50 @@
 }
 
 .agent-chat__composer-combobox > textarea {
+  --scrollbar-thumb: color-mix(in srgb, var(--muted) 20%, transparent);
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--muted) 28%, transparent);
+
   field-sizing: content;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+@supports selector(::-webkit-scrollbar) {
+  .agent-chat__input {
+    --chat-composer-editor-scroll-inset: 0px;
+  }
+
+  .agent-chat__composer-combobox > textarea {
+    --scrollbar-size: 8px;
+    --scrollbar-thumb-inset: 1px;
+
+    /* Short drafts use padding: reserving a native gutter makes every edit relayout slower. */
+    padding-inline-end: var(--chat-composer-editor-inset-inline);
+    scrollbar-gutter: auto;
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+
+  .agent-chat__composer-combobox > textarea:where([data-composer-scrollable]) {
+    /* Exchange the same inset for a real gutter without changing the text width. */
+    padding-inline-end: calc(var(--chat-composer-editor-inset-inline) - var(--scrollbar-size));
+    scrollbar-gutter: stable;
+  }
+
+  .agent-chat__composer-combobox > textarea::-webkit-scrollbar-track {
+    /* Clear the rounded corner vertically instead of moving the whole bar inward. */
+    margin-block-start: max(
+      0px,
+      calc(var(--chat-composer-radius) - var(--chat-composer-editor-inset-block))
+    );
+  }
+
+  .agent-chat__composer-combobox > textarea::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb);
+  }
+
+  .agent-chat__composer-combobox > textarea::-webkit-scrollbar-thumb:hover {
+    background-color: var(--scrollbar-thumb-hover);
+  }
 }
 
 .agent-chat__composer-combobox > textarea:is([data-scroll-fade-top], [data-scroll-fade-bottom]) {
@@ -432,6 +489,7 @@
   padding-block: var(--chat-composer-editor-inset-block);
   color: var(--muted);
   font-size: var(--chat-composer-editor-size);
+  font-weight: var(--control-ui-font-weight-normal);
   line-height: var(--chat-composer-editor-line);
   font-variant-ligatures: no-contextual;
   letter-spacing: normal;
@@ -503,7 +561,7 @@
   align-items: flex-end;
   gap: 4px;
   min-width: 0;
-  padding: var(--chat-composer-editor-inset-block) var(--chat-composer-editor-inset-inline) 0;
+  padding: var(--chat-composer-editor-inset-block) var(--chat-composer-editor-scroll-inset) 0;
 }
 
 /* Two fixed sides keep turn access beside the add button while model, effort,
@@ -521,11 +579,11 @@
   grid-template-columns: minmax(0, auto) minmax(0, 1fr);
   align-items: center;
   flex-shrink: 0;
-  column-gap: 5px;
+  column-gap: var(--chat-composer-group-gap);
   min-height: var(--chat-composer-control-size);
   margin-top: auto;
-  margin-bottom: 4px;
-  padding-block: var(--chat-composer-editor-inset-block);
+  margin-bottom: 6px;
+  padding-block: var(--chat-composer-editor-inset-block) 0;
   padding-inline: 8px;
 }
 
@@ -535,21 +593,71 @@
 .agent-chat__composer-context {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--chat-composer-control-gap);
   min-width: 0;
 }
 
 .agent-chat__composer-lead {
   grid-column: 1;
+  gap: 0;
 }
 
 .agent-chat__composer-footer svg {
   display: block;
+  width: var(--chat-composer-icon-size);
+  height: var(--chat-composer-icon-size);
+  flex-shrink: 0;
+  stroke-width: var(--chat-composer-icon-stroke);
+}
+
+/* Flex roots avoid an inline trigger's descender space shifting its center. */
+.agent-chat__attach-control,
+.agent-chat__composer-footer .chat-controls__permission-picker {
+  display: flex;
+  align-items: center;
+}
+
+.agent-chat__composer-footer .chat-controls__model-settings {
+  gap: var(--chat-composer-control-gap);
+}
+
+.agent-chat__composer-footer .chat-controls__permission-icon {
+  width: var(--chat-composer-icon-size);
+  height: var(--chat-composer-icon-size);
+  flex-basis: var(--chat-composer-icon-size);
+}
+
+.agent-chat__composer-footer .context-ring__dial {
+  width: var(--chat-composer-context-icon-size);
+  height: var(--chat-composer-context-icon-size);
+  flex-basis: var(--chat-composer-context-icon-size);
+}
+
+.agent-chat__composer-footer :is(.chat-controls__effort-gauge, .chat-controls__effort-speed) > svg {
+  width: 100%;
+  height: 100%;
+}
+
+.agent-chat__composer-footer .context-usage {
+  --context-ring-track: color-mix(in srgb, currentColor 22%, transparent);
+}
+
+/* A quantitative gauge needs a clear track and arc at this compact size. */
+.agent-chat__composer-footer :is(.context-ring__track, .context-ring__fill) {
+  stroke-width: var(--chat-composer-context-stroke);
+}
+
+.agent-chat__composer-footer .chat-controls__inline-select-chevron,
+.agent-chat__composer-footer .chat-controls__inline-select-chevron svg,
+.agent-chat__composer-footer .chat-talk-input-picker__trigger svg {
+  width: var(--chat-composer-chevron-size);
+  height: var(--chat-composer-chevron-size);
 }
 
 .agent-chat__composer-trail {
   justify-content: flex-end;
   grid-column: 2;
+  gap: var(--chat-composer-group-gap);
 }
 
 .agent-chat__composer-meta,
@@ -574,7 +682,7 @@
 .agent-chat__composer-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--chat-composer-group-gap);
   flex: 0 0 auto;
 }
 
@@ -610,7 +718,7 @@
   height: var(--chat-composer-control-size);
   padding: 0;
   border-radius: var(--radius-full);
-  color: var(--chat-composer-secondary);
+  color: var(--icon-interactive, var(--chat-composer-secondary));
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -627,18 +735,31 @@
 }
 
 .agent-chat__input-btn svg {
-  stroke-width: 1.5px;
+  stroke-width: var(--chat-composer-icon-stroke, 2);
 }
 
-/* Icons draw at 16 regardless of the 20-unit viewBox some of them carry. */
+/* Button glyphs share the footer tier; the primary action keeps one larger tier. */
 .agent-chat__input :is(.agent-chat__input-btn, .chat-send-btn) svg {
-  width: 16px;
-  height: 16px;
+  width: var(--chat-composer-icon-size);
+  height: var(--chat-composer-icon-size);
 }
 
-.agent-chat__input .chat-send-btn--send > svg {
-  width: 21px;
-  height: 21px;
+.agent-chat__input
+  :is(.chat-send-btn--send, .chat-send-btn--talk-mode, .new-session-page__start-submit)
+  > svg {
+  width: var(--chat-composer-primary-icon-size);
+  height: var(--chat-composer-primary-icon-size);
+}
+
+.agent-chat__input .chat-send-btn--voice > svg {
+  width: var(--chat-composer-microphone-icon-size);
+  height: var(--chat-composer-microphone-icon-size);
+}
+
+/* Filled Stop keeps its compact square inside the primary action's hit target. */
+.agent-chat__input :is(.chat-send-btn--stop, .chat-send-btn--dictating) > svg {
+  width: 18px;
+  height: 18px;
 }
 
 /* The plus turns into a close mark while its menu is open, instead of a second
@@ -651,14 +772,38 @@
    Counter-clockwise: the menu opens upward off this button, so the glyph turns
    back against that travel and unwinds forward into it on close. */
 .agent-chat__attach-menu .agent-chat__input-btn--attach svg {
-  width: 22px;
-  height: 22px;
+  width: var(--chat-composer-plus-icon-size);
+  height: var(--chat-composer-plus-icon-size);
+  stroke-width: var(--chat-composer-icon-stroke);
   transform-origin: center;
   transition: transform 165ms ease;
 }
 
-.agent-chat__input-btn--attach {
+.agent-chat__input .agent-chat__input-btn--attach {
   position: relative;
+  color: color-mix(in srgb, var(--icon-interactive, var(--chat-composer-secondary)) 90%, white);
+}
+
+:where(:root[data-theme-mode="light"]) .agent-chat__input .agent-chat__input-btn--attach {
+  color: color-mix(
+    in srgb,
+    var(--icon-interactive, var(--chat-composer-secondary)) 90%,
+    var(--text-strong)
+  );
+}
+
+.agent-chat__input .agent-chat__attach-menu .agent-chat__input-btn.agent-chat__input-btn--attach {
+  width: var(--chat-composer-send-size);
+  min-width: var(--chat-composer-send-size);
+  height: var(--chat-composer-send-size);
+  padding: calc((var(--chat-composer-send-size) - var(--chat-composer-primary-surface-size)) / 2);
+  background-clip: content-box;
+}
+
+/* Icon-only triggers center the glyph, not the generic flex-growing text label. */
+.agent-chat__input-btn--attach > .oc-menu-item__label,
+.chat-talk-input-picker__trigger > .oc-menu-item__label {
+  display: contents;
 }
 
 .agent-chat__input-btn--has-overrides::after {
@@ -710,7 +855,7 @@
 
 .agent-chat__attach-menu[open] .agent-chat__input-btn--attach {
   color: var(--text);
-  background: var(--bg-hover);
+  background: var(--chat-composer-hover);
 }
 
 /* Send is the primary action of the whole surface, so it gets the same solid
@@ -720,7 +865,7 @@
   width: 36px;
   border-radius: var(--radius-full);
   background: var(--primary);
-  color: var(--primary-foreground);
+  color: var(--chat-send-foreground);
   box-shadow: 0 1px 3px var(--accent-subtle);
   transition:
     background var(--duration-fast) ease,
@@ -777,7 +922,7 @@
   height: var(--chat-composer-send-size);
   padding: 5px;
   background: var(--primary);
-  color: var(--primary-foreground);
+  color: var(--chat-send-foreground);
   box-shadow: none;
 }
 
@@ -785,7 +930,7 @@
    --primary-hover, which several themes leave at the base value and would render
    as no feedback at all. */
 .agent-chat__input .chat-send-btn:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--primary) 86%, var(--text-strong));
+  background: var(--chat-send-hover-bg, color-mix(in srgb, var(--primary) 86%, var(--text-strong)));
   box-shadow: none;
 }
 
@@ -812,7 +957,11 @@
    a second primary action. */
 .agent-chat__input .chat-send-btn--voice {
   background: transparent;
-  color: var(--text);
+  color: var(--icon-interactive, var(--text));
+}
+
+.agent-chat__input .chat-send-btn--voice:not(:disabled, [aria-disabled="true"]) {
+  color: color-mix(in srgb, var(--icon-interactive, var(--text)) 85%, var(--text));
 }
 
 .agent-chat__input .chat-send-btn--voice:disabled {
@@ -885,10 +1034,26 @@
   height: 18px;
 }
 
+.chat-send-btn--stop rect {
+  rx: 3px;
+}
+
 .chat-send-btn--stop:hover:not(:disabled) {
   background: color-mix(in srgb, var(--danger) 18%, transparent);
   color: color-mix(in srgb, var(--danger) 82%, var(--text-strong));
   box-shadow: none;
+}
+
+/* Keep the painted primary surface independent of the target, including hover. */
+.agent-chat__input.agent-chat__input--chat
+  :is(.chat-mobile-primary-action, .chat-desktop-primary-action)
+  .chat-send-btn,
+.new-session-page__composer .agent-chat__input .chat-send-btn.new-session-page__start-submit {
+  width: var(--chat-composer-send-size);
+  min-width: var(--chat-composer-send-size);
+  height: var(--chat-composer-send-size);
+  padding: calc((var(--chat-composer-send-size) - var(--chat-composer-primary-surface-size)) / 2);
+  background-clip: content-box;
 }
 
 /* Keep capture variants after the shared button rules across lazy entry points. */
@@ -1079,6 +1244,7 @@
   /* New Session can load composer styles before the chat layout defaults. */
   .chat-thread-inner,
   .agent-chat__composer-shell,
+  .new-session-page__blocked-submit.agent-chat__composer-status,
   .chat-footer > openclaw-plugin-view > .chat-footer__context {
     /* Physical insets belong to the app; every route centers inside that
        usable canvas, including when its reading-width cap takes effect. */
@@ -1160,25 +1326,29 @@
     overflow: visible;
   }
   .agent-chat__input--mobile-toolbar {
-    --chat-composer-min-height: 105px;
+    --chat-composer-min-height: 92px;
+    --chat-composer-editor-inset-inline: 14px;
+    --chat-composer-icon-size: 18px;
+    --chat-composer-context-icon-size: 16px;
+    --chat-composer-context-stroke: 2.25px;
+    --chat-composer-microphone-icon-size: 20px;
+    --chat-composer-chevron-size: 14px;
+    --chat-composer-control-gap: 2px;
+    --chat-composer-group-gap: 4px;
     --chat-mobile-row-target-size: 32px;
     --chat-mobile-row-icon-size: 20px;
-    --chat-mobile-row-icon-stroke: 2;
+    --chat-mobile-row-permission-stroke: var(--chat-composer-icon-stroke);
+    --chat-mobile-row-mic-stroke: var(--chat-composer-icon-stroke);
+    --chat-mobile-row-mic-opacity: 1;
     --chat-mobile-row-icon-padding: 0px;
-    --chat-mobile-row-muted-icon-size: 18px;
-    --chat-mobile-row-context-icon-size: 16px;
-    --chat-mobile-row-muted-opacity: 0.55;
-    --chat-mobile-row-permission-stroke: 2.25;
+    --chat-mobile-row-muted-opacity: 1;
     --chat-mobile-row-plus-target-size: 36px;
-    --chat-mobile-row-plus-icon-size: 24px;
-    --chat-mobile-row-chevron-size: 14px;
+    --chat-mobile-row-chevron-size: var(--chat-composer-chevron-size);
     --chat-mobile-row-chip-gap: 2px;
     --chat-mobile-row-chip-padding-inline: 6px;
     --chat-mobile-row-action-padding: var(--chat-mobile-row-icon-padding);
     --chat-mobile-row-action-gap: 4px;
     --chat-mobile-row-stop-icon-size: 18px;
-    --chat-mobile-row-mic-opacity: 0.72;
-    --chat-mobile-row-mic-stroke: 2;
     --chat-composer-control-size: var(--chat-mobile-row-target-size);
     --chat-composer-chip-height: var(--chat-mobile-row-target-size);
     --chat-composer-chip-gap: var(--chat-mobile-row-chip-gap);
@@ -1188,29 +1358,28 @@
     --chat-composer-send-size: var(--chat-mobile-row-plus-target-size);
   }
 
-  .agent-chat__input--mobile-toolbar svg {
-    width: var(--chat-mobile-row-icon-size);
-    height: var(--chat-mobile-row-icon-size);
-    stroke-width: var(--chat-mobile-row-icon-stroke);
-  }
-
   .agent-chat__input--mobile-toolbar .agent-chat__composer-footer {
     justify-content: space-between;
-    gap: 0;
+    gap: var(--chat-composer-control-gap);
     min-height: var(--chat-mobile-row-target-size);
+    /* The 44px picker targets already leave 7px below the 30px primary disc. */
     margin-bottom: 0;
+    padding: 4px 8px 0;
   }
 
   .agent-chat__input--mobile-toolbar
-    :is(.agent-chat__composer-lead, .agent-chat__composer-actions) {
+    .agent-chat__composer-combobox
+    > :is(textarea, input, .agent-chat__composer-placeholder) {
+    padding-block: var(--chat-composer-editor-inset-block);
+  }
+
+  /* These adjacent settings retain separate 44px targets even at 320px. */
+  .agent-chat__input--mobile-toolbar .agent-chat__composer-controls .chat-controls__model-settings {
     gap: 0;
   }
 
-  .agent-chat__input--mobile-toolbar .agent-chat__input-btn--attach {
-    width: var(--chat-mobile-row-plus-target-size);
-    min-width: var(--chat-mobile-row-plus-target-size);
-    height: var(--chat-mobile-row-plus-target-size);
-    padding: var(--chat-mobile-row-icon-padding);
+  .agent-chat__input--mobile-toolbar .chat-controls__effort-trigger {
+    padding-inline: 4px;
   }
 
   .agent-chat__input--mobile-toolbar
@@ -1228,16 +1397,18 @@
     border-radius: var(--radius-full);
   }
 
-  /* The small dial keeps a 24px-wide target so both pickers and actions remain
-     separate even when a desktop side panel narrows the composer. */
+  /* Match the adjacent secondary control's target without enlarging the dial. */
   .agent-chat__input.agent-chat__input--mobile-toolbar .context-ring {
-    width: 24px;
-    min-width: 24px;
+    width: var(--chat-composer-control-size);
+    min-width: var(--chat-composer-control-size);
     height: var(--chat-mobile-row-target-size);
   }
 
-  /* Mobile action controls own a real 32px target; Plus uses its explicit 36px
-     role token. Adjacent controls never compete for one tap. */
+  /* The unused track stays lighter than the quantitative arc at phone scale. */
+  .agent-chat__input--mobile-toolbar .context-ring__track {
+    --chat-composer-context-stroke: 1.5px;
+  }
+
   .agent-chat__input--mobile-toolbar
     :is(
       .agent-chat__input-btn--attach,
@@ -1256,27 +1427,6 @@
     justify-content: center;
   }
 
-  /* Row icons share one optical tier; role tokens below express the deliberate
-     exceptions for Plus, quiet state indicators, and Mic. */
-  .agent-chat__input--mobile-toolbar .agent-chat__composer-footer svg {
-    width: var(--chat-mobile-row-icon-size);
-    height: var(--chat-mobile-row-icon-size);
-  }
-
-  /* Keep the muted default below action-specific foregrounds regardless of
-     lazy stylesheet order. */
-  .agent-chat__input--mobile-toolbar :where(.agent-chat__composer-footer) svg {
-    color: var(--muted);
-  }
-
-  .agent-chat__input--mobile-toolbar
-    .agent-chat__composer-footer
-    .agent-chat__input-btn--attach
-    > svg {
-    width: var(--chat-mobile-row-plus-icon-size);
-    height: var(--chat-mobile-row-plus-icon-size);
-  }
-
   .agent-chat__input--mobile-toolbar .agent-chat__composer-actions {
     position: relative;
     z-index: 0;
@@ -1288,11 +1438,21 @@
   }
 
   .agent-chat__input--mobile-toolbar .chat-send-btn--voice > svg {
-    width: var(--chat-mobile-row-icon-size);
-    height: var(--chat-mobile-row-icon-size);
     color: var(--muted);
-    opacity: var(--chat-mobile-row-mic-opacity);
-    stroke-width: var(--chat-mobile-row-mic-stroke);
+  }
+
+  .agent-chat__input--mobile-toolbar
+    .chat-send-btn--voice:not(:disabled, [aria-disabled="true"])
+    > svg {
+    color: inherit;
+  }
+}
+
+/* Keep the separate control targets reachable when a side panel leaves only
+   a phone-narrow composer. Spend the outer inset before shrinking controls. */
+@container chat-composer (max-width: 320px) {
+  .agent-chat__input--mobile-toolbar .agent-chat__composer-footer {
+    padding-inline: 4px;
   }
 }
 
@@ -1301,10 +1461,6 @@
 @container chat-conversation (max-height: 320px) {
   .chat-footer {
     --chat-footer-max-height: 100cqh;
-  }
-
-  .chat-footer::before {
-    display: none;
   }
 
   .agent-chat__input {
@@ -1322,7 +1478,9 @@
     padding-top: 0;
   }
 
-  .agent-chat__composer-combobox > :is(textarea, input, .agent-chat__composer-placeholder) {
+  .agent-chat__input
+    .agent-chat__composer-combobox
+    > :is(textarea, input, .agent-chat__composer-placeholder) {
     min-height: calc(var(--chat-composer-editor-line) + 4px);
     max-height: calc(var(--chat-composer-editor-line) + 4px);
     padding-block: 2px;

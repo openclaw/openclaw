@@ -1,4 +1,3 @@
-// Covers locating OpenClaw docs and source paths from package roots.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,64 +9,37 @@ import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function makePackageRoot(prefix: string): Promise<string> {
-  // Tests create minimal package roots so path resolution is checked without
-  // depending on this checkout's real docs or git state.
-  const root = tempDirs.make(prefix);
+async function makePackageRoot(hasDocs = false, git = false): Promise<string> {
+  const root = tempDirs.make("openclaw-reference-");
   await fs.writeFile(path.join(root, "package.json"), '{"name":"openclaw"}\n');
+  if (hasDocs) {
+    await writeDocsJson(root);
+  }
+  if (git) {
+    await fs.mkdir(path.join(root, ".git"));
+  }
   return root;
 }
 
-async function writeDocsJson(root: string): Promise<void> {
+async function writeDocsJson(root: string) {
   await fs.mkdir(path.join(root, "docs"), { recursive: true });
   await fs.writeFile(path.join(root, "docs", "docs.json"), "{}\n");
 }
 
-describe("resolveOpenClawDocsPath", () => {
-  it("uses the workspace docs directory when it has canonical docs metadata", async () => {
-    const root = await makePackageRoot("openclaw-docs-workspace-");
-    await writeDocsJson(root);
-
-    await expect(resolveOpenClawReferencePaths({ workspaceDir: root })).resolves.toMatchObject({
-      docsPath: path.join(root, "docs"),
-    });
-  });
-
-  it("finds bundled package docs from a nested package path", async () => {
-    const root = await makePackageRoot("openclaw-docs-package-");
-    await writeDocsJson(root);
-    const nested = path.join(root, "dist", "agents");
-    await fs.mkdir(nested, { recursive: true });
-
-    await expect(resolveOpenClawReferencePaths({ cwd: nested })).resolves.toMatchObject({
-      docsPath: path.join(root, "docs"),
-    });
-  });
-
-  it("does not accept incomplete template-only docs directories", async () => {
-    // Template folders alone are not published docs; docs.json is the canonical
-    // marker that the path is usable for model reference context.
-    const root = await makePackageRoot("openclaw-docs-incomplete-");
-    await fs.mkdir(path.join(root, "docs", "reference", "templates"), { recursive: true });
-
-    await expect(resolveOpenClawReferencePaths({ cwd: root })).resolves.toMatchObject({
-      docsPath: null,
-    });
-  });
-});
-
-describe("resolveOpenClawSourcePath", () => {
-  it("omits source path for npm-style package installs", async () => {
-    // npm installs may contain package files but not source checkout metadata.
-    const root = await makePackageRoot("openclaw-source-npm-");
-
-    await expect(resolveOpenClawReferencePaths({ cwd: root })).resolves.toMatchObject({
-      sourcePath: null,
-    });
-  });
-});
+const rejectShell = () =>
+  Promise.reject(new Error("Reference discovery must not execute shell commands"));
 
 describe("resolveOpenClawReferencePaths", () => {
+  it.each([true, false])("requires local reference markers (complete=%s)", async (complete) => {
+    const root = await makePackageRoot(complete, complete);
+    if (!complete) {
+      await fs.mkdir(path.join(root, "docs", "reference", "templates"), { recursive: true });
+    }
+    expect(await resolveOpenClawReferencePaths({ cwd: root })).toEqual({
+      docsPath: complete ? path.join(root, "docs") : null,
+      sourcePath: complete ? root : null,
+    });
+  });
   it.each([
     ["unmounted", null, null],
     ["workspace", "/workspace/docs", "/workspace"],
@@ -79,9 +51,7 @@ describe("resolveOpenClawReferencePaths", () => {
     ["symlink", null, null],
     ["no-bridge", null, null],
   ])("advertises only readable sandbox references: %s", async (scenario, docsPath, sourcePath) => {
-    const root = await makePackageRoot("openclaw-reference-sandbox-");
-    await writeDocsJson(root);
-    await fs.mkdir(path.join(root, ".git"));
+    const root = await makePackageRoot(true, true);
     const workspace = tempDirs.make("openclaw-reference-workspace-");
     if (scenario === "symlink") {
       await fs.symlink(path.join(root, "docs"), path.join(workspace, "docs"), "dir");
@@ -104,38 +74,26 @@ describe("resolveOpenClawReferencePaths", () => {
         agentWorkspaceDir: scenario === "read-only" ? root : workspaceDir,
         workspaceAccess: scenario === "read-only" ? "ro" : "rw",
       },
-      dockerOverrides: {
-        tmpfs: scenario === "bind" ? ["/workspace/docs"] : [],
-        binds:
-          scenario === "bind"
-            ? [`${root}/docs:/reference:ro`]
-            : scenario === "shadow"
-              ? [`${workspace}:/workspace/docs:ro`]
-              : [],
-      },
     });
+    sandbox.docker.tmpfs = scenario === "bind" ? ["/workspace/docs"] : [];
+    sandbox.docker.binds =
+      scenario === "bind"
+        ? [`${root}/docs:/reference:ro`]
+        : scenario === "shadow"
+          ? [`${workspace}:/workspace/docs:ro`]
+          : [];
     if (scenario === "remote" || scenario === "remote-alias") {
       sandbox.fsBridge = createRemoteShellSandboxFsBridge({
         sandbox,
         runtime: {
           remoteWorkspaceDir: "/remote/workspace",
           remoteAgentWorkspaceDir: "/remote/agent",
-          async runRemoteShellScript() {
-            throw new Error("Reference discovery must not execute remote commands");
-          },
+          runRemoteShellScript: rejectShell,
         },
       });
     } else if (scenario !== "no-bridge") {
-      sandbox.fsBridge = createSandboxFsBridge({
-        sandbox: {
-          ...sandbox,
-          backend: {
-            async runShellCommand() {
-              throw new Error("Reference discovery must not execute sandbox commands");
-            },
-          },
-        },
-      });
+      const context = { ...sandbox, backend: { runShellCommand: rejectShell } };
+      sandbox.fsBridge = createSandboxFsBridge({ sandbox: context });
     }
     const references = await resolveOpenClawReferencePaths({
       workspaceDir: sandbox.workspaceDir,
@@ -143,16 +101,5 @@ describe("resolveOpenClawReferencePaths", () => {
       sandbox,
     });
     expect(references).toEqual({ docsPath, sourcePath });
-  });
-
-  it("returns docs and local source together for git checkouts", async () => {
-    const root = await makePackageRoot("openclaw-reference-git-");
-    await writeDocsJson(root);
-    await fs.mkdir(path.join(root, ".git"));
-
-    await expect(resolveOpenClawReferencePaths({ cwd: root })).resolves.toEqual({
-      docsPath: path.join(root, "docs"),
-      sourcePath: root,
-    });
   });
 });

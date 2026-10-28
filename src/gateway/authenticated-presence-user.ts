@@ -1,16 +1,14 @@
 import type { SystemPresence } from "../infra/system-presence.js";
 import { buildControlUiUserAvatarPath } from "./control-ui-contract.js";
 
-type AuthenticatedPresenceProfile = {
-  profileId: string;
-  displayName: string | null;
-  avatarRevision: string;
-};
-
 export function buildAuthenticatedPresenceUser(params: {
   authenticatedUserId?: string;
   authenticatedUserIsTailscaleProvider?: boolean;
-  authenticatedUserProfile?: AuthenticatedPresenceProfile;
+  authenticatedUserProfile?: {
+    profileId: string;
+    displayName: string | null;
+    avatarRevision: string;
+  };
 }): SystemPresence["user"] | undefined {
   if (!params.authenticatedUserProfile) {
     if (!params.authenticatedUserId) {

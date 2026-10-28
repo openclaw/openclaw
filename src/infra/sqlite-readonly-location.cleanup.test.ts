@@ -7,18 +7,36 @@ import {
   registerSignalExitBarrier,
   waitForSignalExitBarriers,
 } from "../cli/signal-exit-barrier.js";
+import { setLoggerOverride } from "../logging/logger.js";
+import { testApi } from "../logging/logger.test-support.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
+import {
+  captureSqliteDatabaseAdmissions,
+  hasSqliteDatabaseSchemaAdmissionForPath,
+} from "./sqlite-database-admission.js";
 import {
   adoptPreparedLocation,
   registerRetainedSnapshotTempDirectory,
   retainSnapshotTempDirectory,
   cleanupSnapshotOperations,
+  removeTempDirectory,
+  removeTempDirectoryAsync,
+  SqliteSnapshotCleanupError,
 } from "./sqlite-readonly-location-cleanup.js";
 import { createReadBarrier, observeSettlement } from "./sqlite-readonly.test-support.js";
+import { admitSqliteSchema } from "./sqlite-schema-facts.js";
 import { prepareSingleFlightSqliteSnapshot } from "./sqlite-snapshot-single-flight.js";
+import {
+  prepareSqliteReadOnlyLocation,
+  startSqliteReadOnlyLocationAsync,
+} from "./sqlite-snapshot-source.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(() => {
+  afterEach(async () => {
+    await testApi.flushFileLogQueueForTests();
+    setLoggerOverride(null);
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     cleanup();
   });
 });
@@ -92,22 +110,134 @@ it.each([false, true])(
   },
 );
 
+function createDatabase(location: string, sql: string): Buffer {
+  {
+    using database = new (requireNodeSqlite().DatabaseSync)(location);
+    database.exec(sql);
+  }
+  return fs.readFileSync(location);
+}
+
+function expectSnapshot(location: string, present: boolean) {
+  expect([
+    fs.existsSync(location),
+    hasSqliteDatabaseSchemaAdmissionForPath(location),
+    captureSqliteDatabaseAdmissions().some((entry) => entry.location === location),
+  ]).toEqual([present, present, present]);
+}
+
+it("keeps synchronous and asynchronous token cleanup in separate snapshot flights", async () => {
+  const root = tempDirs.make("snapshot-cleanup-owner-");
+  const source = path.join(root, "mixed-source.sqlite");
+  const original = createDatabase(
+    source,
+    "CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('preserved');",
+  );
+  vi.stubEnv("XDG_CACHE_HOME", root);
+  const synchronous = prepareSqliteReadOnlyLocation(source, { preserveSourceArtifacts: true });
+  const asynchronous = startSqliteReadOnlyLocationAsync(source, { preserveSourceArtifacts: true });
+  try {
+    const [syncSnapshot, asyncSnapshot] = await Promise.all([synchronous, asynchronous.result]);
+    expect(syncSnapshot.cleanupRoot).toBeDefined();
+    expect(asyncSnapshot.cleanupRoot).toBeDefined();
+    expect(syncSnapshot.cleanupRoot).not.toBe(asyncSnapshot.cleanupRoot);
+    const nestedLocation = path.join(
+      asyncSnapshot.cleanupRoot!,
+      "openclaw-state/state/openclaw.sqlite",
+    );
+    fs.mkdirSync(path.dirname(nestedLocation), { recursive: true });
+    createDatabase(nestedLocation, "CREATE TABLE probe(value TEXT)");
+    {
+      using nested = openNodeSqliteDatabase(nestedLocation, { readOnly: true });
+      admitSqliteSchema(nested);
+    }
+    for (const snapshot of [syncSnapshot, asyncSnapshot]) {
+      using reader = openNodeSqliteDatabase(snapshot.location, { readOnly: true });
+      admitSqliteSchema(reader);
+      expect(reader.prepare("SELECT value FROM probe").get()).toEqual({ value: "preserved" });
+    }
+    for (const location of [syncSnapshot.location, asyncSnapshot.location, nestedLocation]) {
+      expectSnapshot(location, true);
+    }
+    expect(syncSnapshot.cleanup()).toBe(true);
+    expectSnapshot(syncSnapshot.location, false);
+    expectSnapshot(asyncSnapshot.location, true);
+    const failures: unknown[] = [];
+    expect(removeTempDirectory(asyncSnapshot.cleanupRoot!, (error) => failures.push(error))).toBe(
+      false,
+    );
+    expect(failures).toEqual([expect.any(SqliteSnapshotCleanupError)]);
+    expectSnapshot(asyncSnapshot.location, true);
+    const releaseReader = retainSnapshotTempDirectory(path.dirname(asyncSnapshot.location));
+    try {
+      expect(await removeTempDirectoryAsync(asyncSnapshot.cleanupRoot!)).toBe(false);
+      expectSnapshot(asyncSnapshot.location, true);
+      expectSnapshot(nestedLocation, true);
+    } finally {
+      releaseReader();
+    }
+    expect(await asyncSnapshot.cleanupAsync()).toBe(true);
+    expect(fs.existsSync(asyncSnapshot.cleanupRoot!)).toBe(false);
+    expectSnapshot(asyncSnapshot.location, false);
+    expectSnapshot(nestedLocation, false);
+    expect(fs.readFileSync(source)).toEqual(original);
+  } finally {
+    try {
+      for (const result of await Promise.allSettled([synchronous, asynchronous.result])) {
+        if (result.status === "fulfilled") {
+          expect(await result.value.cleanupAsync()).toBe(true);
+        }
+      }
+    } finally {
+      await asynchronous.startClose().result;
+    }
+  }
+});
+
+it("does not throw when the onCleanupFailure callback itself throws", async () => {
+  const log = path.join(tempDirs.make("snapshot-cleanup-log-"), "cleanup.log");
+  fs.writeFileSync(log, "");
+  setLoggerOverride({ level: "warn", file: log });
+  const processWarning = vi.spyOn(process, "emitWarning");
+  const consoleWarning = vi.spyOn(console, "warn");
+  const { ownedRoot, prepared } = fixture(false, () => {
+    throw new Error("callback exploded");
+  });
+  // Mock removal rather than relying on platform-dependent chmod denial.
+  vi.spyOn(fs, "rmSync").mockImplementation(() => {
+    throw busyError();
+  });
+  expect(prepared.cleanup()).toBe(false);
+  expect([processWarning.mock.calls, consoleWarning.mock.calls]).toEqual([[], []]);
+  vi.restoreAllMocks();
+  await testApi.flushFileLogQueueForTests();
+  const records = fs
+    .readFileSync(log, "utf8")
+    .trim()
+    .split("\n")
+    .map((line): unknown => JSON.parse(line));
+  expect(records).toMatchObject([
+    {
+      "1": { path: ownedRoot, operation: "rm", errorCode: "EBUSY" },
+      message: expect.stringContaining("SQLite read-only snapshot cleanup failed"),
+    },
+  ]);
+  expect(JSON.stringify(records)).not.toContain("callback exploded");
+});
+
 it.each([false, true])(
   "retains cancelled orphan cleanup for retry (strict: %s)",
   async (strict) => {
     const { ownedRoot, sibling, prepared } = fixture(strict);
     const { resume, hold } = createReadBarrier();
-    const tracked: Promise<unknown>[] = [];
     const controller = new AbortController();
     const pending = prepareSingleFlightSqliteSnapshot(
       path.join(ownedRoot, "source.sqlite"),
       "orphan-retry",
       () => hold(prepared),
       controller.signal,
-      { trackProducer: (producer) => tracked.push(producer) },
     );
     controller.abort(new Error("cancelled before publication"));
-    await expect(pending).rejects.toThrow("cancelled before publication");
     const remove = fs.promises.rm;
     try {
       using _ = vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
@@ -117,7 +247,7 @@ it.each([false, true])(
         return remove(target, options);
       });
       resume.resolve();
-      await expect(tracked[0]).rejects.toThrow(/cleanup/);
+      await expect(pending).rejects.toThrow("cancelled before publication");
       expect(fs.existsSync(prepared.location)).toBe(true);
     } finally {
       await cleanupSnapshotOperations();

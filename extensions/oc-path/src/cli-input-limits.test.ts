@@ -24,9 +24,11 @@ describe("openclaw path CLI input limits", () => {
     await pathResolveCommand("oc://gateway.jsonc/value", { cwd: workspaceDir, json: true }, rt);
 
     expect(rt.exitCode).toBe(2);
-    expect(stdoutText(rt)).toBe("");
-    expect(JSON.parse(stderrText(rt))).toEqual({
+    expect(stderrText(rt)).toBe("");
+    expect(JSON.parse(stdoutText(rt))).toEqual({
+      ok: false,
       error: {
+        type: "cli_error",
         code: "OC_JSONC_INPUT_TOO_LARGE",
         message: `input exceeds MAX_JSONC_INPUT_BYTES (${JSONC_INPUT_LIMIT_BYTES} bytes; got ${before.length * 3})`,
       },

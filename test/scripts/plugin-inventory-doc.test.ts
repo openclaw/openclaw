@@ -46,7 +46,7 @@ function createInventoryRepository() {
   return { root, git, write, manifest, commit, read, sha: commit() };
 }
 
-it("shares docs classification, includes manifest-only plugins, and excludes docs seeds", () => {
+it("exports committed manifest inventory and excludes docs seeds", () => {
   const { root, sha, read } = createInventoryRepository();
   const report = read();
   const { plugins } = report;
@@ -58,11 +58,11 @@ it("shares docs classification, includes manifest-only plugins, and excludes doc
     ["source", "source", null],
   ]);
   expect(plugins[0]!.declaredSurfaces).toEqual({ channels: ["fixture"], contracts: { tools: {} } });
-  const entries = inventory.collectPluginSourceEntries(root);
-  const excluded = new Set(["external", "source"]);
-  expect(
-    entries.map((entry) => [entry.id, inventory.resolvePluginStatus(entry, excluded)]),
-  ).toEqual(plugins.map(({ id, distribution }) => [id, distribution]));
+  expect(inventory.collectPluginSourceEntries(root).map(({ id }) => id)).toEqual([
+    "core",
+    "external",
+    "source",
+  ]);
   expect(JSON.stringify(report)).not.toContain(root);
 });
 
@@ -111,10 +111,8 @@ it("rejects non-regular metadata instead of following its working-tree target", 
 });
 
 it.each([
-  ["--json", "--write"],
   ["--check", "--commit", "0".repeat(40)],
   ["--json", "--commit"],
-  ["--json", "--unknown"],
   ["--json", "--commit", "0".repeat(40)],
 ])("fails without partial JSON for invalid export arguments %j", (...args) => {
   const { root } = createInventoryRepository();
@@ -139,10 +137,17 @@ it.each<[string, Parameters<typeof doc.resolvePluginSurface>[0], string[]]>([
       contracts: { webSearchProviders: {}, tools: {} },
       dashboard: { dataBindings: [{ id: "items.list" }], actionVerbs: [{ id: "refresh" }] },
       skills: ["example"],
+      cliCommands: [" voicecall ", "browser", "voicecall", " "].map((name) => ({ name })),
+      commandAliases: [
+        ...["voice", " voice ", " "].map((name) => ({ name, kind: "runtime-slash" })),
+        { name: "internal", kind: "activation-only" },
+      ],
     },
     [
       "Channels: `discord`",
       "Providers: `openai`",
+      "CLI commands: `openclaw browser`, `openclaw voicecall`",
+      "Slash commands: `/voice`",
       "Contracts: `tools`, `webSearchProviders`",
       "Dashboard data bindings: `example.items.list`",
       "Dashboard action verbs: `example.refresh`",
@@ -151,25 +156,9 @@ it.each<[string, Parameters<typeof doc.resolvePluginSurface>[0], string[]]>([
   ],
   ["no declared surfaces", {}, []],
   [
-    "root CLI commands and runtime slash aliases",
-    {
-      cliCommands: [" voicecall ", "browser", "voicecall", " "].map((name) => ({ name })),
-      commandAliases: [
-        ...["voice", " voice ", " "].map((name) => ({ name, kind: "runtime-slash" })),
-        { name: "internal", kind: "activation-only" },
-      ],
-    },
-    ["CLI commands: `openclaw browser`, `openclaw voicecall`", "Slash commands: `/voice`"],
-  ],
-  [
-    "dashboard owner delimiter escaping",
-    { id: "dashboard.segmented", dashboard: { actionVerbs: [{ id: "refresh" }] } },
-    ["Dashboard action verbs: `dashboard%2Esegmented.refresh`"],
-  ],
-  [
-    "dashboard literal escape markers",
-    { id: "dashboard%2Esegmented", dashboard: { dataBindings: [{ id: "refresh" }] } },
-    ["Dashboard data bindings: `dashboard%252Esegmented.refresh`"],
+    "dashboard delimiter and literal escape markers",
+    { id: "dashboard%2E.segmented", dashboard: { dataBindings: [{ id: "refresh" }] } },
+    ["Dashboard data bindings: `dashboard%252E%2Esegmented.refresh`"],
   ],
 ])("renders %s", (_name, manifest, expected) =>
   expect(doc.resolvePluginSurface(manifest)).toEqual(expected),

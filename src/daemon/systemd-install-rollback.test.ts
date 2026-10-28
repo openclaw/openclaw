@@ -8,6 +8,7 @@ import {
   withGatewayServiceUpdateAuthority,
 } from "./service-update-authority.js";
 import { withSystemdDefinitionMutation } from "./systemd-definition-mutation.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 import { installSystemdService, stageSystemdService } from "./systemd-install.js";
 
 const native = vi.hoisted(() => ({
@@ -129,12 +130,7 @@ it.each(["success", "failure", "interruption"] as const)(
         activationFailed = true;
         return { code: 1, termination: "exit", stdout: "", stderr: "candidate failed" };
       }
-      return {
-        code: 0,
-        termination: "exit",
-        stdout: args[0] === "is-enabled" ? "enabled" : "",
-        stderr: "",
-      };
+      return nativeExit(args[0] === "is-enabled" ? "enabled" : "");
     });
     const installation = installSystemdService({
       ...installArgs,
@@ -168,12 +164,7 @@ it("retries a failed rollback reload before retiring retained generated inputs",
     async (mutation) => {
       await mutation.publish(environment, "SERVICE_VALUE=candidate\n", 0o600);
       await mutation.publish(unit, `[Service]\nEnvironmentFile=${environment}\n`, 0o600);
-      native.exec.mockResolvedValueOnce({
-        code: 1,
-        termination: "exit",
-        stdout: "",
-        stderr: "reload failed",
-      });
+      native.exec.mockResolvedValueOnce(nativeExit("", "reload failed", 1));
       await expect(mutation.restoreAll()).rejects.toThrow("reload was not confirmed");
       expect(await fs.readFile(unit, "utf8")).toBe(originals.get(unit));
       expect(await fs.readFile(environment, "utf8")).toContain("SERVICE_VALUE=candidate");

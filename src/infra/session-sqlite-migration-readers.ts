@@ -84,7 +84,7 @@ export function readLegacyPrimaryTranscriptIdentity(
   originalPath: string,
   retainedSharedAliasIds?: ReadonlySet<string>,
   registered = false,
-): { sessionId: string; updatedAt: number } | undefined {
+): { sessionId: string; filenameId: string; updatedAt: number } | undefined {
   const filename = path.basename(originalPath);
   const filenameId =
     extractGeneratedTranscriptSessionId(filename) ?? filename.slice(0, -".jsonl".length);
@@ -105,12 +105,9 @@ export function readLegacyPrimaryTranscriptIdentity(
       ) {
         return undefined;
       }
-      if (id !== filenameId) {
-        // Shared aliases retained by an earlier migration are not unregistered primaries.
-        if (retainedSharedAliasIds?.has(id)) {
-          return undefined;
-        }
-        throw new Error("Primary transcript header does not match its original filename");
+      // Shared aliases retained by an earlier migration are not unregistered primaries.
+      if (id !== filenameId && retainedSharedAliasIds?.has(id)) {
+        return undefined;
       }
       version = typeof raw.version === "number" ? raw.version : 1;
       if (!Number.isInteger(version) || version < 1 || version > 3) {
@@ -142,7 +139,7 @@ export function readLegacyPrimaryTranscriptIdentity(
     }
   }
   return sessionId && (messages > 0 || registered)
-    ? { sessionId, updatedAt: Math.max(0, Math.floor(fs.statSync(filePath).mtimeMs)) }
+    ? { sessionId, filenameId, updatedAt: Math.max(0, Math.floor(fs.statSync(filePath).mtimeMs)) }
     : undefined;
 }
 

@@ -10,7 +10,7 @@ doc-schema-version: 1
 
 The macOS app includes a native panel for presenting hosted widget documents.
 The Canvas plugin owns this presentation path. It is not a standalone visual
-workspace or an A2UI push target.
+workspace.
 
 The recommended agent path is [`show_widget`](/tools/show-widget) with
 `presentation.target: "node_panel"`. OpenClaw stores the widget as a hosted
@@ -78,16 +78,6 @@ openclaw-canvas://<session>/<path>
 
 Files addressed by that scheme must remain inside the session's Canvas root in
 Application Support. Directory traversal is blocked.
-
-## A2UI belongs on session dashboards
-
-A2UI widgets render on [session dashboards](/web/dashboards), where they share
-the same pinning, layout, approval, and interaction model as other dashboard
-widgets. Their renderer bundles continue to load from the Gateway's
-`/__openclaw__/a2ui/` asset route.
-
-The macOS panel does not accept A2UI push/reset commands and does not
-automatically navigate to an A2UI page.
 
 ## Migrating documents from a custom root
 

@@ -3,6 +3,7 @@ import { createServer, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as httpFixtures from "../../test/helpers/gateway-integration-fixtures.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
@@ -110,10 +111,7 @@ async function runCustomSetup(scenario: Scenario) {
       response.destroy(error instanceof Error ? error : undefined);
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  const origin = await httpFixtures.listenLoopback(server);
   cleanupTasks.push(async () => {
     env.restore();
     server.closeAllConnections();
@@ -122,11 +120,7 @@ async function runCustomSetup(scenario: Scenario) {
     });
     await fs.rm(root, { recursive: true, force: true });
   });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("custom provider fixture did not bind");
-  }
-  const baseUrl = `http://127.0.0.1:${address.port}${scenario.protocol === "anthropic" ? "" : "/v1"}`;
+  const baseUrl = `${origin}${scenario.protocol === "anthropic" ? "" : "/v1"}`;
   const textAnswers = [
     baseUrl,
     scenario.authless ? "" : scenario.secretRef ? "CUSTOM_SETUP_FIXTURE_KEY" : credential,

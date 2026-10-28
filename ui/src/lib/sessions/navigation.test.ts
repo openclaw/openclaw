@@ -27,6 +27,11 @@ function navigate(
 
 const keys = (navigation: ReturnType<typeof navigate>) =>
   navigation.visibleSessions.map((row) => row.key);
+const session = (key: string, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow => ({
+  key: `agent:main:${key}`,
+  kind: "direct",
+  ...fields,
+});
 
 function roster(
   prefix: string,
@@ -34,26 +39,24 @@ function roster(
   updatedAt: number,
   fields: Partial<GatewaySessionRow> = {},
 ) {
-  return Array.from({ length: count }, (_, index) => ({
-    key: `agent:main:${prefix}-${index}`,
-    kind: "direct" as const,
-    updatedAt: updatedAt - index,
-    ...fields,
-  }));
+  return Array.from({ length: count }, (_, index) =>
+    session(`${prefix}-${index}`, {
+      updatedAt: updatedAt - index,
+      ...fields,
+    }),
+  );
 }
 
 describe("resolveSessionNavigation", () => {
   it("keeps persistent spawned conversations discoverable without selecting or loading their parent", () => {
     const parentKey = "agent:main:discord:channel:parent";
-    const office = {
-      key: "agent:main:dashboard:office-ha",
-      kind: "direct" as const,
+    const office = session("dashboard:office-ha", {
       category: "HOME ASSISTANT",
       spawnedBy: parentKey,
-      createdActor: { type: "agent" as const },
+      createdActor: { type: "agent" },
       updatedAt: 30,
-    };
-    const wake = { key: "agent:main:dashboard:wake-word", kind: "direct" as const, updatedAt: 20 };
+    });
+    const wake = session("dashboard:wake-word", { updatedAt: 20 });
     const rows: GatewaySessionRow[] = [
       office,
       wake,
@@ -68,40 +71,35 @@ describe("resolveSessionNavigation", () => {
   it("hides cron sessions unless showCron opts in", () => {
     // The automation toggle must reveal system-created cron rows without showSystem.
     const rows: GatewaySessionRow[] = [
-      { key: "agent:main:chat", kind: "direct", updatedAt: 300 },
-      {
-        key: "agent:main:cron:job",
+      session("chat", { updatedAt: 300 }),
+      session("cron:job", {
         kind: "cron" as never,
         updatedAt: 200,
         createdVia: "cron",
         createdActor: { type: "system" },
-      },
+      }),
     ];
 
-    const hidden = navigate(rows, { sessionKey: "agent:main:chat" });
-    expect(keys(hidden)).toEqual(["agent:main:chat"]);
-
-    const shown = navigate(rows, { sessionKey: "agent:main:chat", showCron: true });
-    expect(keys(shown)).toEqual(["agent:main:chat", "agent:main:cron:job"]);
+    expect(keys(navigate(rows, { sessionKey: "agent:main:chat" }))).toEqual(["agent:main:chat"]);
+    expect(keys(navigate(rows, { sessionKey: "agent:main:chat", showCron: true }))).toEqual([
+      "agent:main:chat",
+      "agent:main:cron:job",
+    ]);
   });
 
   it("hides isolated heartbeat lanes unless showSystem opts in", () => {
     // Classification comes from persisted provenance, not a matching key suffix.
-    const heartbeatLane: GatewaySessionRow = {
-      key: "agent:main:main:heartbeat",
-      kind: "direct",
+    const heartbeatLane = session("main:heartbeat", {
       updatedAt: 200,
       classification: "heartbeat",
       createdVia: "cron",
-    };
+    });
     const rows: GatewaySessionRow[] = [
-      { key: "agent:main:chat", kind: "direct", updatedAt: 300 },
-      {
-        key: "agent:main:alerts:heartbeat",
-        kind: "direct",
+      session("chat", { updatedAt: 300 }),
+      session("alerts:heartbeat", {
         label: "My heartbeat monitor",
         updatedAt: 250,
-      },
+      }),
       heartbeatLane,
     ];
 
@@ -121,12 +119,8 @@ describe("resolveSessionNavigation", () => {
   });
 
   it("keeps a selected dock conversation readable without adding it to the sidebar", () => {
-    const dock: GatewaySessionRow = {
-      key: "agent:main:board-agent",
-      kind: "direct",
-      isDock: true,
-    };
-    const navigation = navigate([{ key: "agent:main:chat", kind: "direct" }, dock], {
+    const dock = session("board-agent", { isDock: true });
+    const navigation = navigate([session("chat"), dock], {
       sessionKey: dock.key,
       activeSession: dock,
       showSystem: true,
@@ -137,10 +131,7 @@ describe("resolveSessionNavigation", () => {
   });
 
   it("does not synthesize a session row for a catalog session key", () => {
-    const rows = [
-      { key: "agent:main:recent-0", kind: "direct" as const, updatedAt: 100 },
-      { key: "agent:main:recent-1", kind: "direct" as const, updatedAt: 90 },
-    ];
+    const rows = [session("recent-0", { updatedAt: 100 }), session("recent-1", { updatedAt: 90 })];
     const navigation = navigate(rows, { sessionKey: "catalog:claude:gateway%3Alocal:thread-1" });
 
     expect(keys(navigation)).toEqual(rows.map((row) => row.key));
@@ -164,13 +155,11 @@ describe("resolveSessionNavigation", () => {
   });
 
   it("keeps the selected archived session ahead of an active-filtered result", () => {
-    const selectedSession = {
-      key: "agent:main:archived",
-      kind: "direct" as const,
+    const selectedSession = session("archived", {
       archived: true,
       updatedAt: 50,
-    };
-    const navigation = navigate([{ key: "agent:main:recent", kind: "direct", updatedAt: 100 }], {
+    });
+    const navigation = navigate([session("recent", { updatedAt: 100 })], {
       activeSession: selectedSession,
       sessionKey: selectedSession.key,
       archivedFilter: "active",
@@ -253,22 +242,16 @@ describe("visibleSessionMatches", () => {
 });
 
 it("keeps a newly created operator-named CLI session visible", () => {
-  const row: GatewaySessionRow = {
-    key: "agent:main:incident-42",
-    kind: "direct",
+  const row = session("incident-42", {
     createdVia: "run",
     displayName: "incident-42",
-  };
+  });
 
   expect(isSystemCreatedSessionRow(row)).toBe(false);
 });
 
 it("breaks updatedAt ties by key, matching the gateway list order", () => {
-  const rows: GatewaySessionRow[] = ["zeta", "alpha", "mid"].map((name) => ({
-    key: `agent:main:${name}`,
-    kind: "direct",
-    updatedAt: null,
-  }));
+  const rows = ["zeta", "alpha", "mid"].map((name) => session(name, { updatedAt: null }));
   const sorted = rows.toSorted(compareSessionRowsByUpdatedAt).map((row) => row.key);
   expect(sorted).toEqual(["agent:main:alpha", "agent:main:mid", "agent:main:zeta"]);
 });

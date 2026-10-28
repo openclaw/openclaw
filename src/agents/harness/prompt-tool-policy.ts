@@ -81,7 +81,8 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
       const catalogCount = restrictToolSearchCatalog({
         catalogRef: catalog.ref,
         allowedToolNames: new Set(allowedEntries.map((entry) => entry.name)),
-        baselineEntries: catalog.entries,
+        allowedDirectToolNames: new Set(allowedTools.map((tool) => tool.name)),
+        baselineEntries: allowedEntries,
       });
       const allowedNames = new Set(allowedTools.map((tool) => normalizeToolPolicyName(tool.name)));
       const tools = baselineTools.filter((tool) => {

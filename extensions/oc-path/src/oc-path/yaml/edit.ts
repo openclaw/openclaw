@@ -32,6 +32,10 @@ export function setYamlOcPath(ast: YamlAst, path: OcPath, newValue: unknown): Ya
     throw new OcPathEditError("unresolved");
   }
   const segments = match.path;
+  // Object-valued keys cannot retain their identity when the document is cloned.
+  if (segments.some((segment) => segment !== null && typeof segment === "object")) {
+    throw new OcPathEditError("unresolved");
+  }
   if (!ast.doc.hasIn(segments)) {
     throw new OcPathEditError("unresolved");
   }

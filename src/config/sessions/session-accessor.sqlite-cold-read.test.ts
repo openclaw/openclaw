@@ -33,7 +33,6 @@ import {
 import { captureRuntimeConfigAsyncReader } from "../io.js";
 import { copySqliteSessionOwnedStateForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
 import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
-import { readTranscriptMutationStateSync } from "./session-accessor.sqlite-metadata-read.js";
 import {
   findTranscriptEventInDatabase,
   loadTranscriptHeaderSync,
@@ -41,6 +40,7 @@ import {
   readTranscriptStatsSync,
 } from "./session-accessor.sqlite-read.js";
 import { loadTranscriptEventRowsAfterSeqInDatabase } from "./session-accessor.sqlite-transcript-incremental-read.js";
+import { readTranscriptMutationStateInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
 import { readSessionColdStorageInventory } from "./session-cold-storage-inventory.js";
@@ -241,7 +241,7 @@ async function withRace(run: (race: Race, state: OpenClawTestState) => Promise<v
 
 it("detects an archive committed before a warm incremental read begins", async () => {
   await withRace(async (race) => {
-    const read = race.readRows;
+    const read = vi.fn(race.readRows);
     const original = read();
     expect(original.length).toBeGreaterThan(0);
     const nativeExec = race.database.db.exec.bind(race.database.db);
@@ -254,7 +254,9 @@ it("detects an archive committed before a warm incremental read begins", async (
     expect.soft(read).toThrow(/cold storage/);
     expect(race.committed()).toBe(true);
     exec.mockRestore();
+    read.mockClear();
     await expect(readRestoredSessionTranscript(race.scope, read)).resolves.toEqual(original);
+    expect(read).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -370,7 +372,8 @@ it.each(["batch stats", "search", "mutation", "inventory"] as const)(
         "batch stats": () =>
           readTranscriptStatsBatchReadOnlySync([race.scope, ...missingScopes(race.scope, 10)]),
         search: () => searchSessionTranscripts({ ...race.scope, query: "Original" }),
-        mutation: () => readTranscriptMutationStateSync(race.scope),
+        mutation: () =>
+          readTranscriptMutationStateInTransaction(race.database, race.scope.sessionId),
         inventory: () => readSessionColdStorageInventory(race.database),
       }[kind];
       const original =
@@ -467,20 +470,6 @@ it("preserves partial-store stats, UTF-8 bytes, and batch scope-cache freshness"
     } finally {
       resolve.mockRestore();
     }
-  });
-});
-
-it("retries restoration when a peer archives before the atomic read", async () => {
-  await withRace(async (race) => {
-    let reads = 0;
-    const result = await readRestoredSessionTranscript(race.scope, () => {
-      if (++reads === 1) {
-        race.commitArchive();
-      }
-      return loadTranscriptHeaderSync(race.scope);
-    });
-    expect(result).toMatchObject({ type: "session", id: race.scope.sessionId });
-    expect(reads).toBe(2);
   });
 });
 

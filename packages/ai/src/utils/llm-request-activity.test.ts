@@ -12,7 +12,7 @@ it("keeps a replacement activity subscription when an old disposer runs again", 
     unsubscribe();
     notifyLlmRequestActivity(signal, false);
     expect(retired).not.toHaveBeenCalled();
-    expect(active).toHaveBeenCalledExactlyOnceWith(false);
+    expect(active).toHaveBeenCalledExactlyOnceWith(false, undefined);
     stop();
     notifyLlmRequestActivity(signal);
     expect(active).toHaveBeenCalledOnce();

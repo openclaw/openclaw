@@ -1,7 +1,10 @@
 import type { CronPayload } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { toNumber } from "../format.ts";
 import type { CronFormState } from "./types.ts";
+
+registerCronEnglish();
 
 export function buildCronPayload(
   form: CronFormState,
@@ -51,10 +54,16 @@ export function buildCronPayload(
         ? { timeoutSeconds: null }
         : {}),
     ...(lightContext !== undefined ? { lightContext } : {}),
+    ...(form.payloadSkipIfScratchEmpty || original?.skipIfScratchEmpty !== undefined
+      ? { skipIfScratchEmpty: form.payloadSkipIfScratchEmpty }
+      : {}),
     ...restrictions,
     ...(cloned?.fallbacks ? { fallbacks: [...cloned.fallbacks] } : {}),
     ...(cloned?.allowUnsafeExternalContent !== undefined
       ? { allowUnsafeExternalContent: cloned.allowUnsafeExternalContent }
+      : {}),
+    ...(form.payloadIncludeReasoning || original?.includeReasoning !== undefined
+      ? { includeReasoning: form.payloadIncludeReasoning }
       : {}),
   };
 }

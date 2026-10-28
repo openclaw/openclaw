@@ -15,9 +15,10 @@ export class DegenerateToolCallArgumentsError extends Error {
 }
 
 export function countToolCallTrailingWhitespace(delta: string, previous = 0): number {
-  // 32 KiB of consecutive whitespace is a conservative runaway-generation signal,
-  // independent of total argument size. Scan only the new tail, retaining one counter.
-  const limit = 32 * 1024;
+  // Argument JSON escapes newlines, so real indentation runs stay far below 4 KiB.
+  // Live runaways stream ~100 whitespace chars/s; 32 KiB only aborted near the
+  // 360 s session watchdog. Scan only the new tail, retaining one counter.
+  const limit = 4 * 1024;
   let tail = 0;
   for (
     let index = delta.length - 1;

@@ -5,6 +5,7 @@ import type { ExecResult } from "./exec-file.js";
 import { ServiceInspectionError } from "./service-inspection-error.js";
 import { readGatewayServiceState, resolveGatewayService, type GatewayService } from "./service.js";
 import { createMockGatewayService, mockSystemAccountHome } from "./service.test-helpers.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 import { readSystemdServiceRuntime } from "./systemd-runtime.js";
 
 const serviceEnv = (scenario: string) => ({
@@ -32,12 +33,8 @@ function missingFiles(accessible?: string, readable?: string) {
   vi.spyOn(fs, "readdir").mockResolvedValue([]);
 }
 const execSpy = async () => vi.spyOn(await import("./exec-file.js"), "execFileUtf8");
-const nativeResult = (stdout = "", stderr = ""): ExecResult => ({
-  code: stderr ? 1 : 0,
-  termination: "exit",
-  stdout,
-  stderr,
-});
+const nativeResult = (stdout = "", stderr = ""): ExecResult =>
+  nativeExit(stdout, stderr, stderr ? 1 : 0);
 const strictRead = { requireEffective: true, requireLoadedCommand: true };
 const unavailable = "service-manager-unavailable";
 async function missingUserBus(stdout: string) {

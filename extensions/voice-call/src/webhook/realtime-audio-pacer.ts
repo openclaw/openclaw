@@ -57,7 +57,6 @@ export class RealtimeAudioPacer {
 
   constructor(
     private readonly params: {
-      maxQueuedAudioBytes?: number;
       onBackpressure?: () => void;
       /** Fires whenever queued audio and playback state are discarded. */
       onPlaybackReset?: () => void;
@@ -73,10 +72,9 @@ export class RealtimeAudioPacer {
     if (this.closed || muLaw.length === 0) {
       return;
     }
-    const maxQueuedAudioBytes = this.params.maxQueuedAudioBytes ?? DEFAULT_MAX_QUEUED_AUDIO_BYTES;
     for (let offset = 0; offset < muLaw.length; offset += TELEPHONY_CHUNK_BYTES) {
       const chunk = Buffer.from(muLaw.subarray(offset, offset + TELEPHONY_CHUNK_BYTES));
-      if (this.queuedAudioBytes + chunk.length > maxQueuedAudioBytes) {
+      if (this.queuedAudioBytes + chunk.length > DEFAULT_MAX_QUEUED_AUDIO_BYTES) {
         this.failBackpressure();
         return;
       }

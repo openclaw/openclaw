@@ -11,7 +11,7 @@ vi.mock("./chat-pane.tsx", async () => {
 
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { setNavigationContext, stubMatchMedia } from "./chat-page.test-support.ts";
-import "./chat-page.ts";
+import "./chat-page.tsx";
 
 let childCommit: Promise<void> | undefined;
 

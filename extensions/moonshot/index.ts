@@ -2,12 +2,17 @@ import { describeOpenAiCompatibleVideo } from "openclaw/plugin-sdk/media-underst
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildOpenAICompatibleReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  createDefaultModelsPresetAppliers,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/provider-onboard";
 import { wrapMoonshotStream } from "./native-video.js";
-import { applyMoonshotConfig, applyMoonshotConfigCn } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
   buildMoonshotProvider,
   MOONSHOT_BASE_URL,
+  MOONSHOT_CN_BASE_URL,
+  MOONSHOT_DEFAULT_MODEL_ID,
   MOONSHOT_DEFAULT_MODEL_REF,
 } from "./provider-catalog.js";
 import {
@@ -16,6 +21,25 @@ import {
   resolveThinkingProfile,
 } from "./provider-policy-api.js";
 import { createKimiWebSearchProvider } from "./src/kimi-web-search-provider.js";
+
+const moonshotPresetAppliers = createDefaultModelsPresetAppliers<[string]>({
+  primaryModelRef: MOONSHOT_DEFAULT_MODEL_REF,
+  resolveParams: (cfg: OpenClawConfig, baseUrl: string) => {
+    const defaultModel = buildMoonshotProvider().models.find(
+      ({ id }) => id === MOONSHOT_DEFAULT_MODEL_ID,
+    );
+    return defaultModel
+      ? {
+          providerId: "moonshot",
+          api: "openai-completions",
+          baseUrl,
+          defaultModels: cfg.models?.mode === "replace" ? [defaultModel] : [],
+          defaultModelId: MOONSHOT_DEFAULT_MODEL_ID,
+          aliases: [{ modelRef: MOONSHOT_DEFAULT_MODEL_REF, alias: "Kimi" }],
+        }
+      : null;
+  },
+});
 
 const PROVIDER_ID = "moonshot";
 export default defineSingleProviderPluginEntry({
@@ -27,7 +51,9 @@ export default defineSingleProviderPluginEntry({
     label: "Moonshot",
     docsPath: "/providers/moonshot",
     aliases: ["moonshotai", "moonshot-ai"],
-    manifestAuth: { applyConfig: applyMoonshotConfig },
+    manifestAuth: {
+      applyConfig: (cfg) => moonshotPresetAppliers.applyConfig(cfg, MOONSHOT_BASE_URL),
+    },
     extraAuth: [
       createProviderApiKeyAuthMethod({
         providerId: PROVIDER_ID,
@@ -39,7 +65,7 @@ export default defineSingleProviderPluginEntry({
         envVar: "MOONSHOT_API_KEY",
         promptMessage: "Enter Moonshot API key (.cn)",
         defaultModel: MOONSHOT_DEFAULT_MODEL_REF,
-        applyConfig: applyMoonshotConfigCn,
+        applyConfig: (cfg) => moonshotPresetAppliers.applyConfig(cfg, MOONSHOT_CN_BASE_URL),
         wizard: { groupLabel: "Moonshot AI (Kimi)" },
       }),
     ],

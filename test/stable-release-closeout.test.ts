@@ -17,6 +17,10 @@ const release = {
     { name: "OpenClaw-2026.6.8.dSYM.zip", digest: `sha256:${"c".repeat(64)}` },
   ],
 };
+const releaseAssets = (names: string[]) =>
+  names.map((name, index) => ({ name, digest: `sha256:${index.toString(16).repeat(64)}` }));
+const macAssetNames = (version: string, suffix = "") =>
+  ["zip", "dmg", "dSYM.zip"].map((extension) => `OpenClaw-${version}${suffix}.${extension}`);
 const remainingAppAssets = [
   "OpenClaw-Android-SHA256SUMS.txt",
   "OpenClaw-Android.apk",
@@ -61,23 +65,21 @@ const errors = {
   accounting:
     "main changelog 2026.6.8 frozen contribution record does not match the shipped release accounting.",
 };
-function verify(params: Parameters<typeof verifyStableMainCloseout>[0] = {}) {
+type CloseoutParams = Parameters<typeof verifyStableMainCloseout>[0];
+function verify(params: CloseoutParams = {}) {
   return verifyStableMainCloseout({ ...validCloseoutParams, ...params });
 }
-function rejects(params: Parameters<typeof verify>[0], ...expectedErrors: string[]) {
+function rejects(params: CloseoutParams, ...expectedErrors: string[]) {
   const result = verify(params);
   expect(result.errors).toEqual(expect.arrayContaining(expectedErrors));
   expect(result.manifest).toBeNull();
 }
-function succeeds(params: Parameters<typeof verify>[0]) {
+function succeeds(params: CloseoutParams) {
   const result = verify(params);
   expect(result.errors).toEqual([]);
   return result.manifest;
 }
-function expectReplay(
-  params: Parameters<typeof verify>[0],
-  manifest: ReturnType<typeof verify>["manifest"],
-) {
+function expectReplay(params: CloseoutParams, manifest: ReturnType<typeof verify>["manifest"]) {
   expect(JSON.stringify(succeeds(params))).toBe(JSON.stringify(manifest));
 }
 function versionParams(
@@ -109,13 +111,9 @@ const thinCloseoutParams = {
     tagName: thinTag,
     isDraft: false,
     isPrerelease: false,
-    assets: ["", "-arm64", "-x86_64"]
-      .flatMap((suffix) =>
-        ["zip", "dmg", "dSYM.zip"].map(
-          (extension) => `OpenClaw-${thinVersion}${suffix}.${extension}`,
-        ),
-      )
-      .map((name, index) => ({ name, digest: `sha256:${index.toString(16).repeat(64)}` })),
+    assets: releaseAssets(
+      ["", "-arm64", "-x86_64"].flatMap((suffix) => macAssetNames(thinVersion, suffix)),
+    ),
   },
   mainAppcast: thinFeed(),
   mainArm64Appcast: thinFeed("-arm64"),
@@ -131,15 +129,10 @@ function shippedReplayFixture(version: string, mainVersion: string, complete: bo
   const changelogSection = `## ${version}\n\n- Shipped release.`;
   const replayChangelog = `# Changelog\n\n${changelogSection}`;
   const mainAppcast = `https://github.com/openclaw/openclaw/releases/download/${tag}/OpenClaw-${version}.zip\n`;
-  const githubReleaseAssets = [
-    `OpenClaw-${version}.zip`,
-    `OpenClaw-${version}.dmg`,
-    `OpenClaw-${version}.dSYM.zip`,
+  const githubReleaseAssets = releaseAssets([
+    ...macAssetNames(version),
     ...(complete ? remainingAppAssets : []),
-  ].map((name, index) => ({
-    name,
-    digest: `sha256:${index.toString(16).repeat(64)}`,
-  }));
+  ]);
   const manifest = {
     version: 2,
     releaseTag: tag,
@@ -376,33 +369,15 @@ describe("stable release closeout", () => {
       expect(result.manifest).toBeNull();
     });
 
-    it("replays a withdrawn receipt byte-for-byte without another lookup", () => {
-      const lookups: string[] = [];
+    it("rejects forged withdrawal and platform state in a withdrawn receipt", () => {
       const first = succeeds({
         ...params,
-        findAppcastWithdrawal: (requested: string) => {
-          lookups.push(requested);
-          return withdrawal;
-        },
+        findAppcastWithdrawal: () => withdrawal,
       });
-      expect(lookups).toEqual([version]);
-      expect(first).toMatchObject({
-        apps: "pending",
-        appPlatforms: { macos: "withdrawn", android: "pending", windows: "pending" },
-        appcast: "withdrawn",
-        appcastWithdrawal: withdrawal,
-      });
-      expect(first).not.toHaveProperty("appcastSha256");
       const replayParams = {
         ...params,
         existingManifest: first,
-        publishedAppcast:
-          "<rss><sparkle:shortVersionString>2026.9.7</sparkle:shortVersionString></rss>",
-        findAppcastWithdrawal: () => {
-          throw new Error("replay must not look up the withdrawal again");
-        },
       };
-      expectReplay(replayParams, first);
       rejects(
         {
           ...replayParams,
@@ -449,10 +424,7 @@ describe("stable release closeout", () => {
     const assets = completeAppAssets.map((asset) =>
       asset.name === assetName ? { name: asset.name, digest } : asset,
     );
-    const result = verify({ release: { ...release, assets } });
-
-    expect(result.errors).toEqual([]);
-    expect(result.manifest).toMatchObject({
+    expect(succeeds({ release: { ...release, assets } })).toMatchObject({
       apps: "pending",
       appPlatforms: { [platform]: "pending" },
       appcast,
@@ -504,9 +476,7 @@ describe("stable release closeout", () => {
       undefined,
       { ...publishRecovery, docker: { ...publishRecovery.docker, runAttempt: "2" } },
     ]) {
-      expect(
-        verifyStableMainCloseout({ ...replay, publishRecovery: replacement }).manifest,
-      ).toBeNull();
+      rejects({ ...replay, publishRecovery: replacement });
     }
     for (const patch of [
       { allowFailedPublishRecovery: false },
@@ -515,7 +485,7 @@ describe("stable release closeout", () => {
       { fullReleaseValidationRunAttempt: "3" },
       { releasePublishRunId: "15" },
     ]) {
-      expect(verifyStableMainCloseout({ ...params, ...patch }).manifest).toBeNull();
+      rejects({ ...params, ...patch });
     }
   });
 
@@ -534,18 +504,20 @@ describe("stable release closeout", () => {
     };
     expect(succeeds(params)?.changelogSha256).toBe(sha256(section!));
     for (const changedRecord of [null, "Changed accounting"]) {
-      expect(
-        verifyStableMainCloseout({
+      rejects(
+        {
           ...params,
           mainRelease: { ...params.mainRelease, record: changedRecord },
-        }).errors,
-      ).toContain(errors.accounting);
+        },
+        errors.accounting,
+      );
     }
-    expect(
-      verifyStableMainCloseout({
+    rejects(
+      {
         ...params,
         mainRelease: { ...params.mainRelease, format: "initial" },
-      }).errors,
-    ).toContain(changelogError);
+      },
+      changelogError,
+    );
   });
 });

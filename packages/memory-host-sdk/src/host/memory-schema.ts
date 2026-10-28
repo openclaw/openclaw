@@ -3,11 +3,15 @@ import { formatErrorMessage } from "./error-utils.js";
 import {
   buildMemoryIndexStrictSchema,
   MEMORY_EMBEDDING_CACHE_TABLE,
+  MEMORY_INDEX_META_TABLE,
   MEMORY_INDEX_STATE_TABLE,
 } from "./memory-schema-base.js";
 import { memorySchemaSource } from "./memory-schema-catalog.js";
 import * as provenanceSchema from "./memory-schema-provenance.js";
-import { ensureMemoryRecallMetadataSchema } from "./memory-schema-recall.js";
+import {
+  ensureMemoryRecallMetadataSchema,
+  MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
+} from "./memory-schema-recall.js";
 import { migrateMemoryIndexStorage } from "./memory-schema-storage-migration.js";
 import { memoryTextSearchSchema } from "./memory-search-schema.js";
 import {
@@ -23,6 +27,7 @@ import {
   MEMORY_INDEX_SOURCES_TABLE,
   reconcileMemoryChunkFtsRows,
   canReuseSqliteSchemaInTransaction,
+  getAdmittedSqliteSchemaFacts,
   getSqliteDatabaseAdmission,
   migrateSqliteSchemaToStrict,
   migrateSqliteSchemaToStrictInTransaction,
@@ -91,7 +96,7 @@ type TableColumnInfo = {
   hidden: number;
 };
 
-type MemoryIndexSchemaAdmission = { ftsAvailable: boolean };
+type MemoryIndexSchemaAdmission = { ftsAvailable: boolean; repairWriteToken?: string };
 const memoryIndexSchemaAdmissionKeys = new WeakMap<
   DatabaseSync,
   SqliteDatabaseAdmissionKey<MemoryIndexSchemaAdmission>
@@ -127,10 +132,68 @@ function readMemoryIndexSchemaAdmission(value: unknown): MemoryIndexSchemaAdmiss
   ) {
     return undefined;
   }
-  return { ftsAvailable: value.ftsAvailable };
+  return {
+    ftsAvailable: value.ftsAvailable,
+    ...("repairWriteToken" in value && typeof value.repairWriteToken === "string"
+      ? { repairWriteToken: value.repairWriteToken }
+      : {}),
+  };
+}
+
+function memoryIndexSchemaAdmissionKey(
+  params: Omit<Parameters<typeof ensureMemoryIndexSchema>[0], "db" | "fresh">,
+): SqliteDatabaseAdmissionKey<MemoryIndexSchemaAdmission> {
+  return {
+    name: `memory.index-schema:${JSON.stringify([
+      params.embeddingCacheTable ?? MEMORY_EMBEDDING_CACHE_TABLE,
+      params.cacheEnabled,
+      params.ftsTable ?? MEMORY_INDEX_FTS_TABLE,
+      params.ftsEnabled,
+      params.ftsTokenizer ?? "unicode61",
+    ])}`,
+    schemaDependent: true,
+    read: readMemoryIndexSchemaAdmission,
+  };
+}
+
+/** Reuse completed worker repair only for the same schema, options, and data generation. */
+export function readRepairedMemoryIndexSchema(
+  params: Parameters<typeof ensureMemoryIndexSchema>[0],
+  writeToken: string | undefined,
+): { ftsAvailable: boolean } | undefined {
+  const key = memoryIndexSchemaAdmissionKey(params);
+  const admitted = getSqliteDatabaseAdmission(params.db, key);
+  if (writeToken === undefined || admitted?.repairWriteToken !== writeToken) {
+    return undefined;
+  }
+  // A fresh handle can inherit the shared receipt. Later derived-index replacement
+  // still needs its local key to preserve schema admission through commit.
+  memoryIndexSchemaAdmissionKeys.set(sqlPublicationAnchor(params.db), key);
+  return { ftsAvailable: admitted.ftsAvailable };
+}
+
+/** The worker supplies successful repair's committed receipt; explicit ensure still repairs imports. */
+export function publishRepairedMemoryIndexSchema(
+  params: Parameters<typeof ensureMemoryIndexSchema>[0],
+  writeToken: string | undefined,
+): void {
+  const key = memoryIndexSchemaAdmissionKey(params);
+  const admitted = getSqliteDatabaseAdmission(params.db, key);
+  if (writeToken !== undefined && admitted) {
+    publishSqliteDatabaseAdmission(params.db, key, { ...admitted, repairWriteToken: writeToken });
+  }
 }
 
 function tableColumnInfo(db: DatabaseSync, tableName: string): TableColumnInfo[] {
+  const schema = getAdmittedSqliteSchemaFacts(db);
+  if (
+    schema &&
+    ![...schema.tables, ...schema.views].some(
+      (name) => name.toLowerCase() === tableName.toLowerCase(),
+    )
+  ) {
+    return [];
+  }
   const rows = db.prepare(`PRAGMA main.table_xinfo(${tableName})`).all() as Array<{
     name?: unknown;
     type?: unknown;
@@ -266,6 +329,10 @@ function tableHasIntegerRowIdPrimaryKey(
 }
 
 function tableExists(db: DatabaseSync, tableName: string): boolean {
+  const schema = getAdmittedSqliteSchemaFacts(db);
+  if (schema) {
+    return schema.tables.has(tableName);
+  }
   const row = db
     .prepare(`SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = ?`)
     .get(tableName) as { found?: unknown } | undefined;
@@ -376,17 +443,7 @@ export function ensureMemoryIndexSchema(params: {
   const embeddingCacheTable = params.embeddingCacheTable ?? MEMORY_EMBEDDING_CACHE_TABLE;
   const ftsTable = params.ftsTable ?? MEMORY_INDEX_FTS_TABLE;
   const tokenizer = params.ftsTokenizer ?? "unicode61";
-  const admissionKey: SqliteDatabaseAdmissionKey<MemoryIndexSchemaAdmission> = {
-    name: `memory.index-schema:${JSON.stringify([
-      embeddingCacheTable,
-      params.cacheEnabled,
-      ftsTable,
-      params.ftsEnabled,
-      tokenizer,
-    ])}`,
-    schemaDependent: true,
-    read: readMemoryIndexSchemaAdmission,
-  };
+  const admissionKey = memoryIndexSchemaAdmissionKey(params);
   memoryIndexSchemaAdmissionKeys.set(sqlPublicationAnchor(params.db), admissionKey);
   const admitted = getSqliteDatabaseAdmission(params.db, admissionKey);
   if (admitted) {
@@ -412,7 +469,7 @@ export function ensureMemoryIndexSchema(params: {
         return { ftsAvailable: false, ftsError: formatErrorMessage(err) };
       }
     }
-    return admitted;
+    return { ftsAvailable: admitted.ftsAvailable };
   }
   if (
     !params.fresh &&
@@ -435,12 +492,25 @@ export function ensureMemoryIndexSchema(params: {
       "Retired memory index format detected. Preserve a complete copy of your state and configuration, then use OpenClaw 2026.9.7 to migrate a compatible copy of this index before retrying the upgrade.",
     );
   }
-  params.db.exec(
-    buildMemoryIndexStrictSchema({
-      embeddingCacheTable,
-      includeEmbeddingCache: params.cacheEnabled,
-    }),
-  );
+  const tables = params.fresh ? undefined : getAdmittedSqliteSchemaFacts(params.db)?.tables;
+  if (
+    ![
+      MEMORY_INDEX_META_TABLE,
+      MEMORY_INDEX_SOURCES_TABLE,
+      MEMORY_INDEX_CHUNKS_TABLE,
+      MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
+      provenanceSchema.MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
+      MEMORY_INDEX_STATE_TABLE,
+      ...(params.cacheEnabled ? [embeddingCacheTable] : []),
+    ].every((table) => tables?.has(table))
+  ) {
+    params.db.exec(
+      buildMemoryIndexStrictSchema({
+        embeddingCacheTable,
+        includeEmbeddingCache: params.cacheEnabled,
+      }),
+    );
+  }
   if (!params.fresh) {
     migrateMemoryIndexStorage(params.db, { embeddingCacheTable });
     ensureMemoryRecallMetadataSchema(params.db);
@@ -450,16 +520,28 @@ export function ensureMemoryIndexSchema(params: {
   `);
   if (!params.fresh) {
     migrateMemoryIndexSourcesIdentity(params.db);
+  }
+  // Migrations can replace these indexes; subsequent FTS/provenance work cannot.
+  const indexes = params.fresh ? undefined : getAdmittedSqliteSchemaFacts(params.db)?.indexes;
+  if (!params.fresh && indexes?.has("idx_memory_index_chunks_path") !== false) {
     params.db.exec("DROP INDEX IF EXISTS idx_memory_index_chunks_path;");
   }
-  params.db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_memory_index_sources_source
-      ON ${MEMORY_INDEX_SOURCES_TABLE}(source);
-    CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path_source
-      ON ${MEMORY_INDEX_CHUNKS_TABLE}(path, source);
-    CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_source
-      ON ${MEMORY_INDEX_CHUNKS_TABLE}(source);
-  `);
+  if (
+    ![
+      "idx_memory_index_sources_source",
+      "idx_memory_index_chunks_path_source",
+      "idx_memory_index_chunks_source",
+    ].every((index) => indexes?.has(index))
+  ) {
+    params.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_memory_index_sources_source
+        ON ${MEMORY_INDEX_SOURCES_TABLE}(source);
+      CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path_source
+        ON ${MEMORY_INDEX_CHUNKS_TABLE}(path, source);
+      CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_source
+        ON ${MEMORY_INDEX_CHUNKS_TABLE}(source);
+    `);
+  }
   if (!params.fresh) {
     provenanceSchema.ensureMemoryChunkProvenance(params.db);
   }
@@ -469,10 +551,12 @@ export function ensureMemoryIndexSchema(params: {
       embeddingCacheTable === MEMORY_EMBEDDING_CACHE_TABLE
         ? "idx_memory_embedding_cache_updated_at"
         : "idx_embedding_cache_updated_at";
-    params.db.exec(`
-      CREATE INDEX IF NOT EXISTS ${updatedAtIndex}
-        ON ${embeddingCacheTable}(updated_at);
-    `);
+    if (!indexes?.has(updatedAtIndex)) {
+      params.db.exec(`
+        CREATE INDEX IF NOT EXISTS ${updatedAtIndex}
+          ON ${embeddingCacheTable}(updated_at);
+      `);
+    }
   }
   if (!params.fresh) {
     // Worker admission owns BEGIN, foreign-key policy, and the guarded commit.

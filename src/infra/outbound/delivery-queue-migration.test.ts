@@ -6,13 +6,13 @@ import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   getDeliveryQueueEntryStatus,
   loadDeliveryQueueEntry,
   seedDeliveryQueueEntry,
 } from "../delivery-queue-sqlite.test-support.js";
 import { deliverOutboundPayloadsInternal } from "./deliver.js";
+import { installCustodyMatrixPlugin } from "./delivery-queue-custody.test-support.js";
 import {
   LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
   OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
@@ -122,15 +122,7 @@ describe("outbound prepared queue migration", () => {
     channelMocks.resolveOutboundChannelMessageAdapter.mockReset();
     channelMocks.resolveOutboundChannelMessageAdapter.mockReturnValue(undefined);
     completionMocks.settleUnknownDelivery.mockClear();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({ id: "matrix", outbound: matrixOutbound }),
-        },
-      ]),
-    );
+    installCustodyMatrixPlugin(matrixOutbound);
   });
 
   it("prepares a legacy row once, fences rollback, and never reruns modifiers", async () => {
@@ -215,17 +207,6 @@ describe("outbound prepared queue migration", () => {
     const migration = migrate();
     await vi.waitFor(() => expect(hookMocks.runMessageSending).toHaveBeenCalledOnce());
     const overlappingMigration = migrate();
-    let overlappingSettled = false;
-    void overlappingMigration.then(
-      () => {
-        overlappingSettled = true;
-      },
-      () => {
-        overlappingSettled = true;
-      },
-    );
-    await Promise.resolve();
-    expect(overlappingSettled).toBe(false);
     expect(loadDeliveryQueueEntry(LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir())).toBeNull();
     expect(
       loadDeliveryQueueEntry(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir()),
@@ -238,9 +219,9 @@ describe("outbound prepared queue migration", () => {
 
     await expect(migration).resolves.toEqual({ moved: 1, skipped: 0, remaining: 0 });
     await expect(overlappingMigration).resolves.toEqual({
-      moved: 1,
-      skipped: 0,
-      remaining: 0,
+      moved: 0,
+      skipped: 1,
+      remaining: 1,
     });
     expect(hookMocks.runMessageSending).toHaveBeenCalledOnce();
     expect(loadDeliveryQueueEntry(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir())).toBeNull();
