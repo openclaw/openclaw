@@ -96,7 +96,7 @@ function buildComputerToolDescription(
     targetScope === "session"
       ? "this session's desktop"
       : targetScope === "paired"
-        ? "the Gateway desktop, a paired node (target: gateway or node), or a conversation-attached desktop (environmentId). Omit target to use the configured Gateway, otherwise the sole connected computer-capable node. Use the environmentId returned when opening an environment; later calls retain that desktop"
+        ? "the configured Gateway desktop, otherwise the sole paired node. Omit target for automatic host selection; set target to `gateway` or `node` explicitly. Use `environmentId` for an attached desktop; later calls retain it."
         : "a paired node (omit target or use target: node; omission selects the sole connected computer-capable node), or a conversation-attached desktop (environmentId). The Gateway has no computer provider configured, so target: gateway is unavailable. Use the environmentId returned when opening an environment; later calls retain that desktop";
   const takeover =
     "For an attached or cloud session desktop, `take_control` switches the human viewer to view-only and returns a fresh screenshot; use it when asked to resume. Ordinary input never takes control automatically.";
