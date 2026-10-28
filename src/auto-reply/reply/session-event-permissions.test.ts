@@ -917,7 +917,8 @@ it.for(Object.keys(ownerRequesterOutcomes) as Array<keyof typeof ownerRequesterO
       expect({
         owner: senderIsOwner,
         restart,
-        requester: gatewayCall.mock.calls[0]?.[1]?.requester?.senderId,
+        requester: (gatewayCall.mock.calls[0]?.[1] as { requester?: { senderId?: string } })
+          ?.requester?.senderId,
         scheduled: scheduled.mock.calls.length,
       }).toEqual(ownerRequesterOutcomes[requester]);
     });

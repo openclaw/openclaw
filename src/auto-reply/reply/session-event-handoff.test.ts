@@ -542,9 +542,12 @@ describe("session event target custody", () => {
         { ...eventScope, requesterOrigin: { sessionKey, messageProvider: "telegram", senderId } },
         () => captureTarget("main", sessionKey, { env, retainRequesterOwner: true }),
       );
-    const [owner, sameOwner, guest, otherOwner] = await Promise.all(
-      ["456", "456", "789", "457"].map(capture),
-    );
+    const owner = await capture("456");
+    const [sameOwner, guest, otherOwner] = await Promise.all([
+      capture("456"),
+      capture("789"),
+      capture("457"),
+    ]);
     expect(combineSessionEventTargetsForHost([owner, sameOwner])).toBeDefined();
     // Owners share a source label, but each authority rechecks only its own requester.
     for (const other of [guest, otherOwner]) {
