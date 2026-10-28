@@ -13,11 +13,14 @@ import { startClaimedGateway } from "./test-helpers.listener.js";
 // Prepare the cold module graph outside the real lock-wait proof.
 await import("./server-start.js");
 
+const recover = "recoverWorkerSessionToolOperationsAfterRestart";
+const prune = "pruneOrphanedWorkspaceReconciliations";
 it.for([
-  ["starts after a competing connection releases its recovery lock", "release"],
-  ["fails clearly when the recovery lock outlasts the retry budget", "exhaust"],
-  ["fails immediately for a non-lock recovery error", "fatal"],
-] as const)("%s", { timeout: 90_000 }, async ([_name, mode], { signal }) => {
+  ["starts after a competing connection releases its recovery lock", "release", recover],
+  ["fails clearly when the recovery lock outlasts the retry budget", "exhaust", recover],
+  ["fails immediately for a non-lock recovery error", "fatal", recover],
+  ["starts after a competing connection releases its journal prune lock", "release", prune],
+] as const)("%s", { timeout: 90_000 }, async ([_name, mode, operation], { signal }) => {
   await using state = await createStartupTestState(`worker-recovery-${mode}`, {
     OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
   });
@@ -48,13 +51,7 @@ it.for([
     .spyOn(workers, "loadGatewayWorkerEnvironmentStartupState")
     .mockImplementation(async () => {
       const startup = await load();
-      const recover = startup.placementStore.recoverWorkerSessionToolOperationsAfterRestart.bind(
-        startup.placementStore,
-      );
-      vi.spyOn(
-        startup.placementStore,
-        "recoverWorkerSessionToolOperationsAfterRestart",
-      ).mockImplementation(async () => {
+      const contend = async <T>(run: () => Promise<T>): Promise<T> => {
         attempts += 1;
         if (mode === "fatal") {
           throw failure;
@@ -64,12 +61,20 @@ it.for([
           blocker.exec("BEGIN IMMEDIATE");
         }
         try {
-          return await recover();
+          return await run();
         } catch (error) {
           retryObserved.resolve("retry");
           throw error;
         }
-      });
+      };
+      const store = startup.placementStore;
+      if (operation === recover) {
+        const run = store[recover].bind(store);
+        vi.spyOn(store, recover).mockImplementation(() => contend(run));
+      } else {
+        const run = store[prune].bind(store);
+        vi.spyOn(store, prune).mockImplementation(() => contend(run));
+      }
       return startup;
     });
   const { startGatewayServer } = await import("./server.js");

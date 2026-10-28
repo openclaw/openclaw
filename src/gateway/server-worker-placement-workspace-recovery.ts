@@ -3,6 +3,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
 import { recoverWorkerWorkspaceReconciliation } from "./worker-environments/workspace-reconcile.js";
+import { retryWorkerStartupOnSqliteLock } from "./worker-startup-lock-retry.js";
 
 const workerPlacementLog = createSubsystemLogger("gateway/worker-placement");
 
@@ -18,7 +19,12 @@ export async function recoverGatewayWorkerPlacementWorkspaces(params: {
   if (params.isStopping?.()) {
     return;
   }
-  const orphanedJournals = await params.placements.pruneOrphanedWorkspaceReconciliations();
+  // Pruning only discards journals without an owner, so a locked attempt can run again.
+  const orphanedJournals = await retryWorkerStartupOnSqliteLock(
+    "placementJournals.prune",
+    () => params.placements.pruneOrphanedWorkspaceReconciliations(),
+    (message) => workerPlacementLog.warn(message),
+  );
   for (const owner of orphanedJournals) {
     workerPlacementLog.warn(`discarded orphaned cloud workspace journal for ${owner.sessionId}`);
   }
