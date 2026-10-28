@@ -1748,9 +1748,10 @@ const reviewedOperations = new Map([
           "readWorkerPlacementsForReconcileInDatabase",
           "readWorkerPlacementChangeSnapshotInDatabase",
           "readWorkerPlacementsInDatabase",
+          "readWorkerPlacementIdentitiesInDatabase",
         ],
         evidence:
-          "State read and placement workers own all row queries; GitHub deferral selection runs only in state/github-publication.worker.ts. Host consumers use pure row codecs or async/receipt-backed readers.",
+          "State read and placement workers own all row queries; the identity census runs through placement-lifecycle.worker.ts workerPlacements.readIdentities. GitHub deferral selection runs only in state/github-publication.worker.ts. Host consumers use pure row codecs or async/receipt-backed readers.",
       },
       {
         tier: "W",
