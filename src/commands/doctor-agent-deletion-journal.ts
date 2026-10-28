@@ -8,7 +8,6 @@ import {
 import { formatCliCommand } from "../cli/command-format.js";
 import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { createConfigIO } from "../config/io.js";
-import type { HealthCheck, HealthFinding } from "../flows/health-checks.js";
 import { isTransientSqliteBackupPath } from "../infra/backup-volatile-filter.js";
 import { prepareStateDatabaseInitialization } from "../state/openclaw-state-db-initialization.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -17,66 +16,27 @@ import { quarantineAgentDeletionJournal } from "./doctor-agent-deletion-journal-
 import { restoreDoctorMissingJournalStores } from "./doctor-agent-deletion-journal-restore.js";
 import type { DoctorDatabasePreflight } from "./doctor-database-preflight.js";
 
-export const agentDeletionJournalHealthCheck: HealthCheck = {
-  id: "core/doctor/agent-deletion-journal",
-  kind: "core",
-  description: "Held agent stores include recovery reasons and restoration guidance.",
-  async detect(ctx) {
-    const [{ prepareDoctorDatabasePreflight }, { withDoctorLintStateEnv }] = await Promise.all([
-      import("./doctor-database-preflight.js"),
-      import("./doctor-lint-state-snapshot.js"),
-    ]);
-    const env = ctx.env ?? process.env;
-    return withDoctorLintStateEnv(
-      env,
-      async () =>
-        (
-          await repairDoctorAgentDeletionJournal({
-            preflight: await prepareDoctorDatabasePreflight(),
-            shouldRepair: false,
-            env,
-          })
-        ).findings,
-    );
-  },
-};
-
 /** Doctor alone reconstructs lost deletion history and records the stores it cannot verify. */
 export async function repairDoctorAgentDeletionJournal(params: {
   preflight: DoctorDatabasePreflight;
   shouldRepair: boolean;
   env: NodeJS.ProcessEnv;
-}): Promise<{ changes: string[]; warnings: string[]; findings: HealthFinding[] }> {
+}): Promise<{ changes: string[]; warnings: string[] }> {
   const discovery = params.preflight.agentDatabaseMigrationDiscovery?.discovery;
   const changes: string[] = [];
   const recoveryWarnings: string[] = [];
-  const report = (
-    warnings: string[],
-    errorCode = "agent-deletion-journal-held",
-    severity: HealthFinding["severity"] = "warning",
-  ) => ({
-    changes,
-    warnings,
-    findings: warnings.map((message): HealthFinding => ({
-      checkId: "core/doctor/agent-deletion-journal",
-      severity,
-      errorCode,
-      message,
-      fixHint:
-        "Run openclaw doctor --fix to verify ownership and back up configured stores before restoration. For stores still held, follow the reported original-configuration restoration guidance; preserved stores remain untouched.",
-    })),
-  });
   let quarantined = false;
   if (!discovery) {
-    return report([]);
+    return { changes, warnings: [] };
   }
   if (
     discovery.deletionJournal.status === "unavailable" &&
     discovery.deletionJournal.cause === "unreadable" &&
     !params.shouldRepair
   ) {
-    return report(
-      [
+    return {
+      changes,
+      warnings: [
         sanitizeForLog(
           `${resolveOpenClawStateSqlitePath(params.env)}: ${discovery.deletionJournal.reason}. Stores remain held; restore verified deletion history, then rerun openclaw doctor --fix.`,
         ),
@@ -87,8 +47,7 @@ export async function repairDoctorAgentDeletionJournal(params: {
             ),
         ),
       ],
-      "agent-deletion-journal-unreadable",
-    );
+    };
   }
   const missing =
     discovery.deletionJournal.status === "unavailable" &&
@@ -100,30 +59,30 @@ export async function repairDoctorAgentDeletionJournal(params: {
     prepareStateDatabaseInitialization(resolveOpenClawStateSqlitePath(params.env), params.env)
       .kind === "fresh"
   ) {
-    return report([]);
+    return { changes, warnings: [] };
   }
   let held = discovery.unverifiedTargets.map(({ agentId, path: pathname }) => ({
     agentId,
     path: pathname,
   }));
   if (missing && discovery.failures.length > 0) {
-    return report(
-      [
+    return {
+      changes,
+      warnings: [
         "Agent deletion journal missing; stores remain held because their recovery inventory is incomplete. Repair the listed paths, then rerun openclaw doctor --fix.",
         ...discovery.failures.map(({ path: pathname, reason }) =>
           sanitizeForLog(`${pathname}: ${reason}`),
         ),
       ],
-      "agent-deletion-journal-inventory-incomplete",
-    );
+    };
   }
   if (missing && params.preflight.agentDatabaseRecoveryConfigValid !== true) {
-    return report(
-      [
+    return {
+      changes,
+      warnings: [
         "Agent deletion journal missing; stores remain held because the ownership configuration could not be verified. Repair the configuration, then rerun openclaw doctor --fix.",
       ],
-      "agent-deletion-journal-config-unverified",
-    );
+    };
   }
   if (params.shouldRepair) {
     const recovery = await quarantineAgentDeletionJournal({
@@ -160,7 +119,7 @@ export async function repairDoctorAgentDeletionJournal(params: {
     );
   }
   if (held.length === 0 && (!missing || params.shouldRepair)) {
-    return report(recoveryWarnings, "agent-deletion-journal-recovery", "info");
+    return { changes, warnings: recoveryWarnings };
   }
   const snapshot = await createConfigIO({
     env: params.env,
@@ -200,8 +159,5 @@ export async function repairDoctorAgentDeletionJournal(params: {
         ]
       : []),
   ];
-  return report(
-    warnings,
-    missing && !params.shouldRepair ? "agent-deletion-journal-missing" : undefined,
-  );
+  return { changes, warnings };
 }

@@ -4,6 +4,7 @@ import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeFixtureJsonSync } from "../cli/cli-fixtures.test-support.js";
+import { stateSchemaHealthCheck } from "../flows/doctor-lint-flow.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import { recordLegacyMigrationReceipt } from "../infra/state-migrations.receipts.js";
 import {
@@ -22,11 +23,9 @@ import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.
 import { withEnvAsync } from "../test-utils/env.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { restoreDoctorMissingJournalStores } from "./doctor-agent-deletion-journal-restore.js";
-import {
-  agentDeletionJournalHealthCheck,
-  repairDoctorAgentDeletionJournal,
-} from "./doctor-agent-deletion-journal.js";
+import { repairDoctorAgentDeletionJournal } from "./doctor-agent-deletion-journal.js";
 import { prepareDoctorDatabasePreflight } from "./doctor-database-preflight.js";
+import * as databasePreflight from "./doctor-database-preflight.js";
 import { runDoctorLintCliInProcess } from "./doctor-lint-runner.js";
 import * as migrationBackup from "./doctor-migration-backup.js";
 import { withMaintenance } from "./doctor-schema-migrations.test-support.js";
@@ -322,7 +321,7 @@ it.each(["first-upgrade", "already-held", "upgraded-producer"])(
           expect(sourceReport(database, reconstructionKey)).toContain('"agentId":"main"');
           expect(row(database, "SELECT count(*) AS n FROM migration_runs")?.n).toBeGreaterThan(0);
         });
-        expect(await repair(env)).toEqual({ changes: [], warnings: [], findings: [] });
+        expect(await repair(env)).toEqual({ changes: [], warnings: [] });
       },
       "main",
       phase === "upgraded-producer" ? 26 : 24,
@@ -365,40 +364,42 @@ it.each(["present-incomplete", "different-owner", "unconfigured"])("keeps %s sto
     expect(result.warnings.join("\n")).not.toContain("Automatically restored");
     expect(result.warnings.join("\n")).toContain("held back");
     expect(result.warnings.join("\n")).toContain("agents add");
-    expect(result.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "core/doctor/agent-deletion-journal",
-          severity: "warning",
-          errorCode: "agent-deletion-journal-held",
-          message: expect.stringContaining("1 store held back"),
-          fixHint: expect.stringContaining("openclaw doctor --fix"),
-        }),
-        expect.objectContaining({ message: expect.stringContaining(agentPath) }),
-      ]),
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const findings = await stateSchemaHealthCheck.detect({ mode: "lint", runtime, cfg: {}, env });
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/agent-deletion-journal",
+        severity: "warning",
+        errorCode: "agent-deletion-journal-held",
+        path: agentPath,
+        target: "main",
+        fixHint: expect.stringContaining("openclaw doctor --fix"),
+      }),
     );
     if (kind === "different-owner") {
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
       const scoped = await withEnvAsync(
         {
           OPENCLAW_STATE_DIR: path.join(root, "other-profile"),
           OPENCLAW_CONFIG_PATH: path.join(root, "other-profile.json"),
         },
-        () => agentDeletionJournalHealthCheck.detect({ mode: "lint", runtime, cfg: {}, env }),
+        () => stateSchemaHealthCheck.detect({ mode: "lint", runtime, cfg: {}, env }),
       );
-      expect(scoped).toEqual(result.findings);
+      expect(scoped).toEqual(findings);
+      const preflight = vi.spyOn(databasePreflight, "prepareDoctorDatabasePreflight");
       const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
       try {
         expect(
           await runDoctorLintCliInProcess(runtime, {
             json: true,
-            onlyIds: ["core/doctor/agent-deletion-journal"],
+            onlyIds: ["core/doctor/state-schema"],
           }),
         ).toBe(1);
         const json = JSON.parse(stdout.mock.calls.map(([value]) => String(value)).join(""));
-        expect(json).toMatchObject({ ok: false, checksRun: 1, findings: result.findings });
+        expect(json).toMatchObject({ ok: false, checksRun: 1, findings });
+        expect(preflight).not.toHaveBeenCalled();
       } finally {
         stdout.mockRestore();
+        preflight.mockRestore();
       }
     }
     expect(recoveryHolds(env)).toContainEqual({

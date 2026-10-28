@@ -46,7 +46,6 @@ import {
   withArtifactPreservingStateReads,
   withOpenClawStateDatabaseReadSnapshot,
 } from "../state/openclaw-state-db-readonly.js";
-import { agentDeletionJournalHealthCheck } from "./doctor-agent-deletion-journal.js";
 import {
   resolveLegacyHeartbeatAgents,
   tryProjectRetiredHeartbeatConfig,
@@ -453,7 +452,6 @@ async function executeDoctorLint(
 
   const checks: HealthCheck[] = [
     stateSchemaHealthCheck,
-    agentDeletionJournalHealthCheck,
     ...coreChecks.map((check): HealthCheck => {
       const checkCtx =
         legacyHeartbeatConfig && check.id === HEARTBEAT_CADENCE_CHECK_ID

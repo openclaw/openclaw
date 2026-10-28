@@ -104,10 +104,10 @@ Explicit lint exit codes:
 When the updater runs lint, warning-severity findings below its error threshold are retained in a separate JSON `warnings` array. They do not change the lint exit code. The updater records these advisories in its run history, including intentional open channel policies, so they remain available in `openclaw update status`. Ordinary standalone lint keeps the selected output threshold.
 
 Agent stores held after deletion-journal reconstruction appear under
-`core/doctor/agent-deletion-journal`, with the same recovery messages as text Doctor,
-an `errorCode`, and a `fixHint`. Missing history, unreadable history, incomplete
-recovery inventory, and unverified ownership configuration retain separate reason
-codes. Run `openclaw doctor --fix` to restore verified configured stores after
+`core/doctor/agent-deletion-journal`, with the store path, an `errorCode`, and a
+`fixHint`. The existing `core/doctor/state-schema` check reads these holds and
+missing or unreadable history from its shared-state snapshot; lint does not repeat
+Doctor's database discovery or reconstruction. Run `openclaw doctor --fix` to restore verified configured stores after
 backups; stores whose ownership cannot be verified remain preserved with explicit
 restoration guidance. Dead-holder database leases are reclaimable during repair
 and do not by themselves require adopting or deleting an agent.
