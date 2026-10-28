@@ -632,16 +632,22 @@ describe("ClawHub prepared publication", () => {
     ).toEqual([]);
   });
 
-  it.each(["selected", "all-publishable"])(
-    "retains the %s prepared roster when an exact version is adopted on resume",
-    async (selectionMode) => {
-      const f = preparedFixture(selectionMode, "cloudflare");
+  it.each([
+    { selectionMode: "selected", packageId: "acpx" },
+    { selectionMode: "selected", packageId: "cloudflare" },
+    { selectionMode: "selected", packageId: "diffs" },
+    { selectionMode: "selected", packageId: "feishu" },
+    { selectionMode: "all-publishable", packageId: "cloudflare" },
+  ])(
+    "retains $packageId native family and exact bytes on $selectionMode resume",
+    async ({ selectionMode, packageId }) => {
+      const f = preparedFixture(selectionMode, packageId);
       const [entry] = await resolvePreparedClawHubMatrix(f.resolveOptions);
       expect(entry.alreadyPublished).toBe(true);
-      expect(entry.family).toBe("bundle-plugin");
+      expect(entry.family).toBe("code-plugin");
       expect(entry.publication).toEqual({ state: "published" });
       await restorePreparedClawHubPackage({ ...f.restoreOptions, entry: entry.prepared });
-      expect(readFileSync(join(f.restoreOptions.outputDir, "cloudflare.tgz"))).toEqual(f.tarball);
+      expect(readFileSync(join(f.restoreOptions.outputDir, `${packageId}.tgz`))).toEqual(f.tarball);
     },
   );
 
