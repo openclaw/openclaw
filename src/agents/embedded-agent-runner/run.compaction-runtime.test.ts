@@ -249,13 +249,29 @@ describe("embedded compaction recovery authority", () => {
     });
   });
 
-  it.each(["overflow", "timeout"] as const)(
+  it.each(["overflow", "checkpoint-failed", "timeout"] as const)(
     "accepts a healthy declared successor through the host writer (%s)",
     async (kind) => {
       await withRecoveryFixture({ oversized: false, replyAdmission: true }, async (fixture) => {
         const before = fixture.loadEntry();
+        const checkpoint = vi.fn(async (context: unknown) => {
+          expect(context).toEqual({
+            sessionId: before?.sessionId,
+            provider: "fixture-provider",
+            model: "fixture-model",
+            authProfileIdSource: "auto",
+            contextTokenBudget: 4_096,
+          });
+          expect(fixture.loadEntry()).toEqual(before);
+          if (kind === "checkpoint-failed") {
+            throw new Error("Memory checkpoint unavailable");
+          }
+          return "completed";
+        });
+        fixture.runParams.beforeRecoveryCompaction = checkpoint;
         const successorId = randomUUID();
         fixture.compact.mockImplementationOnce(async ({ sessionTarget }) => {
+          expect(checkpoint).toHaveBeenCalledTimes(kind === "timeout" ? 0 : 1);
           // Only the host transfers the durable row and its private writer facts.
           expect(sessionTarget).not.toHaveProperty("expectedWriterRunId");
           expect(fixture.loadEntry()?.sessionId).toBe(before?.sessionId);
@@ -266,8 +282,8 @@ describe("embedded compaction recovery authority", () => {
           });
         });
 
-        await expect(fixture.recover(kind)).resolves.toEqual(
-          kind === "overflow" ? { action: "retry" } : true,
+        await expect(fixture.recover(kind === "timeout" ? "timeout" : "overflow")).resolves.toEqual(
+          kind === "timeout" ? true : { action: "retry" },
         );
 
         const after = fixture.loadEntry();

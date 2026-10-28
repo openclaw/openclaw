@@ -106,8 +106,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     pluginHarnessOwnsTransport: runtime.pluginHarnessOwnsTransport,
   });
   const attemptFastMode = resolveAttemptFastModeParam();
-  const existingSessionTarget = sessionPromptState.sessionTarget;
-  const selectedPromptTarget = { ...existingSessionTarget };
+  const selectedPromptTarget = { ...sessionPromptState.sessionTarget };
   const resolvedSessionTarget = await resolveAttemptDispatchSessionTarget({
     agentId: workspaceResolution.agentId,
     config: params.config,
@@ -651,6 +650,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     forceCodeModeTools: params.forceCodeModeTools,
     codeModeOverride: params.codeModeOverride,
     disableToolSearch: params.disableToolSearch,
+    compactionForbidden: params.disableCompactionRecovery,
     sessionReadScopeKey: params.sessionReadScopeKey,
     blindPrompt: params.blindPrompt,
     forceMessageTool: params.forceMessageTool,

@@ -567,8 +567,6 @@
 ["extensions/mattermost/src/mattermost/monitor-model-picker.test.ts","./monitor-event-plan.js","9c27528583179624961d84ce8bdefd6fb12a18a4741ac607b71cc1e590f2c3c8",1]
 ["extensions/mattermost/src/mattermost/monitor-model-picker.test.ts","./reply-delivery.js","e562973575de2fade3f66a15c7d65047617db4b8e9d373d6fc6528b649fcd054",1]
 ["extensions/mattermost/src/mattermost/monitor-model-picker.test.ts","openclaw/plugin-sdk/webhook-request-guards","d68343bf2263f1dc1ac476592dce41c2e1024490280dcfb5bd466d8b8a7bc45c",1]
-["extensions/mattermost/src/mattermost/monitor-posts.bot-threads.test.ts","./monitor-turn.js","d6f86c1b13ccd5c65540b150ad1ed5c920e42451c575bc161bc610de2075ea03",1]
-["extensions/mattermost/src/mattermost/monitor-posts.bot-threads.test.ts","./thread-participation.js","e811f4ad093bd3211728b989b2c2eda913021519cadfdd6a48585222b9e40e08",1]
 ["extensions/mattermost/src/mattermost/monitor-posts.thread-history.test.ts","./monitor-turn.js","d6f86c1b13ccd5c65540b150ad1ed5c920e42451c575bc161bc610de2075ea03",1]
 ["extensions/mattermost/src/mattermost/monitor-slash.test.ts","./slash-commands.js","7a044f1c0cfc629a7724bbdff1facf3b90f9739957158834f26b95f1e33f50a7",1]
 ["extensions/mattermost/src/mattermost/monitor.inbound-system-event.test.ts","../runtime.js","109e7a1a5f483040b7544c1214db4f7d5a5648492ad49eb806f50b8a48680057",1]

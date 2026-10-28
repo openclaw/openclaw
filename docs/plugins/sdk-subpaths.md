@@ -573,7 +573,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/realtime-voice-provider` | Private-local JavaScript-only host runtime for official plugins; provider types, audio formats/codecs, audio energy and output activity, response outcomes, and connection lifecycle primitives without host provider registries or agent-consult execution. Media workers use this surface to keep host session runtimes off their startup path. |
     | `plugin-sdk/realtime-voice-activation` | Private-local; activation-name validation and prefix normalization for Doctor and control-plane paths that must not load the realtime voice runtime |
     | `plugin-sdk/realtime-voice` | Private-local after July 2026; Realtime voice provider types, registry helpers, shared audio-energy/speech-onset gates, and realtime voice behavior helpers, including the transport-independent session harness, output activity tracking, and `registerRealtimeVoiceSelection` for a channel-owned call. Bind each agent run to the exact call and current speaker authority; release its binding after the turn and unregister when the call closes. Replacements must revalidate the supplied request before adopting a ready connection. For official runtime consumers, sender-auth contract revision 1 forwards ingress-authenticated `senderId` and `senderIsOwner` unchanged; ingress owns authentication, and consumers requiring the handoff must reject other revisions. |
-    | `plugin-sdk/meeting-page-script-runtime` | Private-local JavaScript-only host runtime for official browser-meeting plugins; shared transcript and leave page-script source builders; not a third-party plugin API |
+    | `plugin-sdk/meeting-page-script-runtime` | Private-local JavaScript-only host runtime for official browser-meeting plugins; shared audio capture, transcript, and leave page-script source builders; not a third-party plugin API |
     | `plugin-sdk/meeting-runtime` | Browser-meeting session runtime, realtime audio engines/transports, `MeetingPlatformAdapter` and its declarative `defineBrowserMeetingPlugin` factory, browser/node control, agent-consult, voice-call delegation, setup checks, and SoX command helpers |
     | `plugin-sdk/image-generation` | Private-local after July 2026; Image generation provider types plus image asset/data URL helpers and the OpenAI-compatible image provider builder. `resolveImageSourceUrl` prefers a trimmed URL, otherwise inlines bytes with the image MIME default; callers supply the missing-data error text. |
     | `plugin-sdk/image-generation-core` | Private-local after July 2026; Provider environment-variable lookup |
@@ -597,6 +597,13 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/test-state` | Repo-local isolated OpenClaw state, config, workspace, environment, and auth-profile fixtures for plugin tests |
     | `plugin-sdk/test-fixtures` | Repo-local generic CLI runtime capture, direct-import smoke, sandbox context, skill writer, agent-message, system-event, module reload, bundled plugin path, terminal-text, chunking, auth-token, and typed-case fixtures |
     | `plugin-sdk/test-node-mocks` | Repo-local focused Node builtin mock helpers for use inside Vitest `vi.mock("node:*")` factories |
+
+    `createMeetingBrowserAudioCaptureSource` accepts an optional `webAudioPlaybackGlobal`
+    naming a page-global playback registry installed before page audio initialization.
+    The registry exposes `early: boolean`, `sources(): { node: AudioNode; output: number }[]`,
+    and `has(node: AudioNode, output: number): boolean`. Google Meet owns this registry
+    and passes `__openclawMeetPlayback`; capture temporarily silences the original
+    playback sink and restores it on cleanup. Omitting the option keeps DOM media capture.
 
     For bundled plugins, `markdown-table-runtime` exposes `getMarkdownTableSource(table)` for tables returned by
     `markdownToIRWithMeta(text, { tableMode: "block" })`. It returns source `start`/`end`

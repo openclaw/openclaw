@@ -3,14 +3,20 @@ import type {
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
 import { describe, expect, it, vi } from "vitest";
+import {
+  freezeJsonSnapshot,
+  isDeeplyFrozenPlainData,
+} from "../../../../src/shared/immutable-data.js";
 import { createResponsesDoneArgumentEvents } from "../../../../test/helpers/openai-responses-events.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { createAiTransportHost, runWithAiTransportHost } from "../host.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
   captureOpenAIResponsesCompaction,
 } from "../transports/openai-responses-compaction-replay.js";
 import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
 import { isInvalidEncryptedContentError } from "../transports/openai-responses-replay-internal.js";
+import { convertResponsesMessages as convertTransportResponsesMessages } from "../transports/openai-responses-replay-messages-internal.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
@@ -272,6 +278,72 @@ it.each([
 );
 
 describe("convertResponsesMessages", () => {
+  it.each([
+    ["provider", convertResponsesMessages],
+    ["transport", convertTransportResponsesMessages],
+  ] as const)("preserves frozen %s bytes, identities and replay fences", (_style, convert) => {
+    const host = createAiTransportHost({
+      immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },
+    });
+    runWithAiTransportHost(host, () => {
+      const model: Model = { ...nativeOpenAIModel, input: ["text", "image"] };
+      const image = { type: "image" as const, mimeType: "image/png", data: "aW1n" };
+      const metadata = buildOpenAIResponsesReasoningReplayMetadata(model, reasoningReplayIdentity);
+      const context: Context = {
+        messages: freezeJsonSnapshot([
+          { role: "user", timestamp: 0, content: [text("question"), image] },
+          assistant(
+            [
+              thinking("hidden", {
+                ...wireReasoning("rs_prior", undefined, "ciphertext"),
+                __openclaw_replay: metadata,
+              }),
+              signedText("answer", "msg_prior"),
+              toolCall("read", "read", { path: "a\nb" }),
+            ],
+            { stopReason: "toolUse" },
+          ),
+          {
+            ...makeTextToolResult("call_read|fc_read", "read", "result", false, 2),
+            content: [text("result"), image],
+          },
+        ]),
+      };
+      const golden = `[${[
+        '{"type":"message","role":"user","content":[{"type":"input_text","text":"question"},{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,aW1n"}]}',
+        '{"id":"rs_prior","type":"reasoning","summary":[],"encrypted_content":"ciphertext"}',
+        '{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}],"status":"completed","id":"msg_prior","phase":"commentary"}',
+        String.raw`{"type":"function_call","id":"fc_read","call_id":"call_read","name":"read","arguments":"{\"path\":\"a\\nb\"}"}`,
+        '{"type":"function_call_output","call_id":"call_read","output":[{"type":"input_text","text":"result"},{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,aW1n"}]}',
+      ].join(",")}]`;
+      const build = (target = model, options = reasoningReplayIdentity) =>
+        convert(target, context, testAllowedToolCallProviders, options);
+      const first = build();
+      expect(JSON.stringify(first)).toBe(golden);
+      for (const [target, options] of [
+        [model, { ...reasoningReplayIdentity, sessionId: "other" }],
+        [model, { ...reasoningReplayIdentity, authProfileId: "other" }],
+        [{ ...model, id: "other-model" }, reasoningReplayIdentity],
+        [{ ...model, baseUrl: "https://other.invalid/v1" }, reasoningReplayIdentity],
+      ] as const) {
+        expect(JSON.stringify(build(target, options))).not.toContain("ciphertext");
+        const again = build();
+        expect(JSON.stringify(again)).toBe(golden);
+        for (const index of [1, 2, 3]) {
+          expect(again[index]).toBe(first[index]);
+        }
+      }
+      const idless = convert(model, context, testAllowedToolCallProviders, {
+        ...reasoningReplayIdentity,
+        replayResponsesItemIds: false,
+      });
+      expect(JSON.stringify(idless)).toBe(
+        golden.replace(/"id":"(?:rs_prior|msg_prior|fc_read)",/g, ""),
+      );
+      expect(first.slice(1, 4).every(isDeeplyFrozenPlainData)).toBe(true);
+    });
+  });
+
   it("strips the internal cache boundary marker from the system prompt message", () => {
     const input = convertResponsesMessages(
       nativeOpenAIModel,
@@ -367,110 +439,45 @@ describe("convertResponsesMessages", () => {
     expect(message).not.toHaveProperty("id");
   });
 
-  it("omits Responses replay item ids when requested by store-disabled callers", () => {
-    const input = replayMessages(
-      [
-        assistant(
-          [
-            thinking("Need a tool.", {
-              type: "reasoning",
-              id: "rs_prior",
-              encrypted_content: "ciphertext",
-            }),
-            signedText("Checking the price.", "msg_prior"),
-            {
-              type: "toolCall",
-              id: "call_abc|fc_prior",
-              name: "price_lookup",
-              arguments: { symbol: "SOL" },
-            },
-          ],
-          { stopReason: "toolUse" },
-        ),
-        makeTextToolResult("call_abc|fc_prior", "price_lookup", "$83.95", false, 2),
-      ],
-      { includeSystemPrompt: false, replayResponsesItemIds: false },
-    );
-    const reasoningItem = input.find((item) => item.type === "reasoning");
-    expect(reasoningItem).toMatchObject({
-      type: "reasoning",
-      encrypted_content: "ciphertext",
-      summary: [],
-    });
-    expect(reasoningItem).not.toHaveProperty("id");
-    const message = input.find((item) => item.type === "message" && item.role === "assistant");
-    expect(message).toMatchObject({ type: "message", role: "assistant", phase: "commentary" });
-    expect(message).not.toHaveProperty("id");
-    const call = input.find((item) => item.type === "function_call");
-    expect(call).toMatchObject({ type: "function_call", call_id: "call_abc" });
-    expect(call).not.toHaveProperty("id");
-  });
-
   it.each([
-    {
-      data: "aW1n",
-      expected: [{ type: "input_image", detail: "auto", image_url: "data:image/png;base64,aW1n" }],
+    [
+      "image",
+      "aW1n",
+      [{ type: "input_image", detail: "auto", image_url: "data:image/png;base64,aW1n" }],
+    ],
+    ["image", "", "(no output)"],
+    ["audio", "YXVkaW8=", "(see attached audio)"],
+  ] as const)(
+    "replays %s tool bytes '%s' without spurious placeholders",
+    (type, data, expected) => {
+      const call = assistant([toolCall("media", "media", {})], { stopReason: "toolUse" });
+      const result = {
+        ...makeTextToolResult("call_media|fc_media", "media", "", false, 2),
+        content: [{ type, data, mimeType: type === "image" ? "image/png" : "audio/mpeg" }],
+      };
+      const input = replayMessages(
+        [...(data ? [call] : []), result] as unknown as Context["messages"],
+        { includeSystemPrompt: false },
+        { ...nativeOpenAIModel, input: ["text", "image"] },
+      );
+      expect(input.find((item) => item.type === "function_call_output")).toEqual({
+        type: "function_call_output",
+        call_id: "call_media",
+        output: expected,
+      });
     },
-    { data: "", expected: "(no output)" },
-  ])("preserves tool image payload '$data' without spurious placeholders", ({ data, expected }) => {
-    const input = replayMessages(
-      [
-        ...(data
-          ? [
-              assistant(
-                [{ type: "toolCall", id: "call_screenshot", name: "screenshot", arguments: {} }],
-                { stopReason: "toolUse" },
-              ),
-            ]
-          : []),
-        {
-          ...makeTextToolResult("call_screenshot", "screenshot", "", false, 2),
-          content: [{ type: "image", mimeType: "image/png", data }],
-        },
-      ],
-      { includeSystemPrompt: false },
-      { ...nativeOpenAIModel, input: ["text", "image"] },
-    );
-    const result = input.find((item) => item.type === "function_call_output");
-    expect(result?.output).toEqual(expected);
-    if (!data) {
-      expect(JSON.stringify(result)).not.toContain("input_image");
-      expect(JSON.stringify(result)).not.toContain("see attached image");
-    }
-  });
+  );
 
-  it("uses audio placeholder for audio-only tool results instead of image or no-output text", () => {
-    const input = replayMessages(
-      [
-        assistant([{ type: "toolCall", id: "call_audio", name: "audio", arguments: {} }], {
-          stopReason: "toolUse",
-        }),
-        {
-          ...makeTextToolResult("call_audio", "audio", "", false, 2),
-          content: [{ type: "audio", mimeType: "audio/mpeg", data: "YXVkaW8=" }],
-        },
-      ] as unknown as Context["messages"],
-      { includeSystemPrompt: false },
-    );
-    const result = input.find((item) => item.type === "function_call_output");
-    expect(result).toMatchObject({
-      type: "function_call_output",
-      call_id: "call_audio",
-      output: "(see attached audio)",
-    });
-  });
-
-  describe.each([
-    { name: "SDK", model: nativeOpenAIModel, summary: [], content: undefined },
-    {
-      name: "native ChatGPT",
-      model: { ...nativeOpenAIModel, api: "openai-chatgpt-responses" },
-      summary: [{ type: "summary_text", text: "safe summary" }],
-      content: [{ type: "reasoning_text", text: "safe content" }],
-    },
-  ] satisfies Array<{ name: string; model: Model; summary: unknown[]; content?: unknown[] }>)(
-    "$name reasoning replay",
-    ({ model, summary, content }) => {
+  describe.each(["openai-responses", "openai-chatgpt-responses"] as const)(
+    "%s reasoning replay",
+    (api) => {
+      const model = { ...nativeOpenAIModel, api };
+      const summary =
+        api === "openai-chatgpt-responses" ? [{ type: "summary_text", text: "safe summary" }] : [];
+      const content =
+        api === "openai-chatgpt-responses"
+          ? [{ type: "reasoning_text", text: "safe content" }]
+          : undefined;
       const sameRoute = buildOpenAIResponsesReasoningReplayMetadata(model, reasoningReplayIdentity);
       const otherSession = buildOpenAIResponsesReasoningReplayMetadata(model, {
         ...reasoningReplayIdentity,
@@ -478,12 +485,14 @@ describe("convertResponsesMessages", () => {
       });
       it.each([
         ["matching block metadata", sameRoute, otherSession, true],
+        ["legacy unattributed metadata", undefined, undefined, true],
         ["mismatched block metadata", otherSession, sameRoute, false],
         ["malformed block metadata", null, sameRoute, false],
         ["mismatched embedded metadata", undefined, otherSession, false],
       ])(
         "fences encrypted reasoning with %s",
         (_name, blockMetadata, embeddedMetadata, preservesCiphertext) => {
+          const replayIds = blockMetadata !== undefined || embeddedMetadata !== undefined;
           const signature = {
             type: "reasoning",
             id: "rs_route_fenced",
@@ -500,28 +509,23 @@ describe("convertResponsesMessages", () => {
             [assistant([block] as unknown as AssistantMessage["content"], { api: model.api })],
             {
               includeSystemPrompt: false,
-              replayResponsesItemIds: true,
+              replayResponsesItemIds: replayIds,
               ...reasoningReplayIdentity,
             },
             model,
           );
           const item = input.find((entry) => entry.type === "reasoning");
-          if (!preservesCiphertext) {
-            expect(item).toBeUndefined();
-            return;
-          }
-          expect(item).toMatchObject({
-            type: "reasoning",
-            id: "rs_route_fenced",
-            summary,
-            encrypted_content: "route-bound-ciphertext",
-          });
-          if (content) {
-            expect(item).toHaveProperty("content", content);
-          } else {
-            expect(item).not.toHaveProperty("content");
-          }
-          expect(item).not.toHaveProperty("__openclaw_replay");
+          expect(item).toEqual(
+            preservesCiphertext
+              ? {
+                  ...(replayIds ? { id: "rs_route_fenced" } : {}),
+                  type: "reasoning",
+                  summary,
+                  ...(content ? { content } : {}),
+                  encrypted_content: "route-bound-ciphertext",
+                }
+              : undefined,
+          );
         },
       );
     },
@@ -1091,22 +1095,16 @@ describe("processResponsesStream", () => {
       completed("resp_parallel_unindexed", { output: [firstItem, secondItem] }),
     ]);
 
-    expect(output.content).toEqual([
+    const expected = [
       toolCall("first_unindexed", "computer", { slot: 1 }),
       toolCall("second_unindexed", "computer", { slot: 2 }),
-    ]);
+    ];
+    expect(output.content).toEqual(expected);
     expect(
       events
         .filter((event) => event.type === "toolcall_end")
-        .map((event) =>
-          event.type === "toolcall_end"
-            ? [event.contentIndex, event.toolCall.id, event.toolCall.arguments]
-            : undefined,
-        ),
-    ).toEqual([
-      [0, "call_first_unindexed|fc_first_unindexed", { slot: 1 }],
-      [1, "call_second_unindexed|fc_second_unindexed", { slot: 2 }],
-    ]);
+        .map((event) => [event.contentIndex, event.toolCall]),
+    ).toEqual(expected.map((call, index) => [index, call]));
     expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(2);
   });
 

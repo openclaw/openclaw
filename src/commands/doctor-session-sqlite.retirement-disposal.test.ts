@@ -17,6 +17,7 @@ import {
   writeSessionSqliteMigrationManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
 import * as sqliteReaders from "../infra/session-sqlite-migration-readers.js";
+import { readMainDatabasePosixLocks } from "../infra/sqlite-posix-locks.test-support.js";
 import * as sqlitePrivateDirectory from "../infra/sqlite-private-directory.js";
 import * as windowsPrivateDirectory from "../infra/windows-private-directory.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -32,7 +33,6 @@ import {
   isDirectoryDescriptor,
   importLegacyStore,
   readMigrationManifest as readManifest,
-  requireMigrationManifestPath,
   useDoctorSessionSqliteTestFixture,
 } from "./doctor-session-sqlite.test-support.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
@@ -87,13 +87,11 @@ it.each([
   "recreated",
   "shared-receipt",
 ])("resumes %s disposal without overclaiming bytes", async (phase) => {
-  const { store, imported, archivePath } = await createVerifiedRecoveryStore();
-  const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
+  const { store, manifestPath, manifest, archivePath } = await createVerifiedRecoveryStore();
   const manifestDir = path.dirname(manifestPath);
   const duplicate =
     phase === "shared-receipt" ? createSessionSqliteMigrationRun(store.env, []) : undefined;
   if (duplicate) {
-    const manifest = readManifest(manifestPath);
     duplicate.manifest.targets = structuredClone(manifest.targets);
     duplicate.manifest.completedAt = manifest.completedAt;
     writeSessionSqliteMigrationManifest(duplicate);
@@ -189,8 +187,7 @@ it.each([
 ] as const)(
   "applies directory-sync policy for $platform $syncFailure",
   async ({ platform, syncFailure, retires }) => {
-    const { store, imported, archivePath } = await createVerifiedRecoveryStore();
-    const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
+    const { store, manifestPath, archivePath } = await createVerifiedRecoveryStore();
     const original = fs.readFileSync(archivePath);
     const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
     const fsync = fs.fsyncSync;
@@ -443,6 +440,10 @@ it("retires verified originals after remount while preserving current SQLite and
   // Keep real source sidecars present independently of cached owner inspection.
   using sourceReader = new DatabaseSync(sqlitePath, { readOnly: true });
   sourceReader.prepare("SELECT count(*) FROM sqlite_schema").get();
+  const locks =
+    process.platform === "linux" || process.platform === "darwin"
+      ? readMainDatabasePosixLocks(sqlitePath)
+      : undefined;
   const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
   expect(artifact(preview, originalMove.archivePath)?.outcome).toBe("candidate");
   const cleanup = await retire(
@@ -450,11 +451,21 @@ it("retires verified originals after remount while preserving current SQLite and
     async () => {
       expect(fs.existsSync(`${sqlitePath}-wal`)).toBe(true);
       expect(fs.existsSync(`${sqlitePath}-shm`)).toBe(true);
+      // Read-only opens can update sidecar bookkeeping without changing history.
+      using reader = new DatabaseSync(sqlitePath, { readOnly: true });
+      reader.prepare("SELECT count(*) FROM sqlite_schema").get();
+      for (const suffix of ["-wal", "-shm"]) {
+        fs.utimesSync(`${sqlitePath}${suffix}`, new Date(0), new Date(0));
+      }
       return true;
     },
     preview,
   );
   expect(cleanup).toMatchObject({ status: "complete", totals: { removedFiles: 2 } });
+  if (locks) {
+    expect(locks.length).toBeGreaterThan(0);
+    expect(readMainDatabasePosixLocks(sqlitePath)).toEqual(locks);
+  }
   expect(cleanup.totals.removedBytes).toBeGreaterThan(original.length);
   expectMissing(originalMove.archivePath);
   expectFiles(databaseBefore, sqlitePath);

@@ -16,6 +16,7 @@ import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { SidebarApprovalRow } from "./exec-approval-card-solid.tsx";
+import { ScopeUpgradeActions, scopeUpgradeText } from "./scope-upgrade-actions.tsx";
 import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
 import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
 import { SidebarDismissButton, SidebarNotificationCard } from "./sidebar-notification-card.tsx";
@@ -222,28 +223,6 @@ export function renderSidebarUpdateSurface(params: {
   );
 }
 
-function scopeUpgradeText(state: Exclude<ScopeUpgradeState, { phase: "hidden" }>): string {
-  switch (state.phase) {
-    case "guidance":
-      return t("connection.scopeUpgrade.guidance");
-    case "available":
-      return t("connection.scopeUpgrade.limited");
-    case "requesting":
-      return t("connection.scopeUpgrade.requesting");
-    case "pending":
-      return t("connection.scopeUpgrade.pending", {
-        command: `openclaw devices approve ${state.requestId}`,
-      });
-    case "rejected":
-      return t(
-        state.expired ? "connection.scopeUpgrade.expired" : "connection.scopeUpgrade.rejected",
-      );
-    case "error":
-      return t("connection.scopeUpgrade.error", { error: state.message });
-  }
-  return state satisfies never;
-}
-
 export function renderSidebarScopeUpgradeItem(params: {
   state: Exclude<ScopeUpgradeState, { phase: "hidden" }>;
   onCancel: () => void;
@@ -252,11 +231,12 @@ export function renderSidebarScopeUpgradeItem(params: {
   onRetry: () => void;
 }) {
   const text = () => scopeUpgradeText(params.state);
-  const summary = () => t("connection.scopeUpgrade.inboxState");
-  const retryable = () =>
-    params.state.phase === "error"
-      ? params.state.retryable
-      : params.state.phase === "pending" || params.state.phase === "rejected";
+  const summary = () =>
+    t(
+      params.state.phase === "guidance" && params.state.reason === "role"
+        ? "connection.scopeUpgrade.roleState"
+        : "connection.scopeUpgrade.inboxState",
+    );
   return (
     <details
       class={[
@@ -289,48 +269,17 @@ export function renderSidebarScopeUpgradeItem(params: {
       </summary>
       <div class="sidebar-issues-panel__body" role="status" aria-live="polite">
         <div>{text()}</div>
-        {params.state.phase === "available" || params.state.phase === "requesting" ? (
+        <Show when={params.state.phase !== "guidance"}>
           <div class="sidebar-issues-panel__actions">
-            <button
-              ref={sidebarAttentionFocusRef()}
-              type="button"
-              class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
-              disabled={params.state.phase === "requesting"}
-              onClick={() => {
-                if (params.state.phase === "available") {
-                  params.onRequest();
-                }
-              }}
-            >
-              {t(
-                params.state.phase === "available"
-                  ? "connection.scopeUpgrade.request"
-                  : "connection.scopeUpgrade.requestingAction",
-              )}
-            </button>
+            <ScopeUpgradeActions
+              state={params.state}
+              inbox
+              onRequest={() => params.onRequest()}
+              onRetry={() => params.onRetry()}
+              onCancel={() => params.onCancel()}
+            />
           </div>
-        ) : retryable() || params.state.phase === "error" ? (
-          <div class="sidebar-issues-panel__actions">
-            {retryable() ? (
-              <button
-                ref={sidebarAttentionFocusRef()}
-                type="button"
-                class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
-                onClick={() => params.onRetry()}
-              >
-                {t("connection.scopeUpgrade.retry")}
-              </button>
-            ) : null}
-            <button
-              ref={sidebarAttentionFocusRef()}
-              type="button"
-              class="sidebar-issues-panel__action"
-              onClick={() => params.onCancel()}
-            >
-              {t("connection.scopeUpgrade.cancel")}
-            </button>
-          </div>
-        ) : null}
+        </Show>
       </div>
     </details>
   );

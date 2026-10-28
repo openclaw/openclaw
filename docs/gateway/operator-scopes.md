@@ -208,6 +208,18 @@ ceiling. A committed change still retires the previous access if returning the
 result fails. An authorized self-downgrade receives its response before its
 connection closes.
 
+The Control UI distinguishes a role ceiling from limited browser pairing. When
+the authenticated role does not allow administrator access, its limited-access
+notice explains that device approval cannot grant it and does not offer
+**Request admin**. Ask a Gateway administrator to change the role if more access
+is needed, then reconnect. A role that permits administrator access can still
+request an upgrade for a pairing-limited browser; approval and RPC authorization
+continue to check the current role.
+
+The optional `hello-ok.auth.roleAllowsAdmin` field reports this ceiling for
+presentation. Clients can ignore it; it does not grant access or change RPC
+authorization.
+
 Use `gateway.roles.assignments.byGithubLogin` to declare assignments before a
 person's first login or share the same mapping across Gateways. Keys are GitHub
 logins, matched case-insensitively after trimming; malformed logins and duplicate
