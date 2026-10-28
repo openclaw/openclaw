@@ -63,18 +63,21 @@ const layout = (slots: MediaImageLayout["slots"], suppressedFactIndexes: number[
 afterEach(() => vi.restoreAllMocks());
 
 describe("structured prompt media replay", () => {
-  it("keeps an omitted image omitted when the source becomes readable on a later request", async () => {
+  it("keeps omitted images omitted and resized inline images included on later requests", async () => {
     const imagePath = path.join(workspaceDir, "late.png");
-    const message = persistedMessage("inspect", mediaAt(imagePath));
+    // A steered inline copy above the model limit is resized again on every request.
+    const inline = image(createSolidPngBuffer(40, 100, { r: 255, g: 0, b: 0 }).toString("base64"));
+    const text = { type: "text" as const, text: "inspect" };
+    const message = persistedMessage([text, inline], [{ kind: "image" }, ...mediaAt(imagePath)]);
     const sessionOptions = {
       ...options(),
       workspaceOnly: true,
+      maxDimensionPx: 50,
+      // Every request of an embedded run passes this callback (attempt-setup).
+      onCurrentTurnImageFailure: () => {},
       imageSessionKey: promptImageSessionKey({ sessionId: "first", agentId: "main", workspaceDir }),
     };
-    const first = await hydratePromptMediaMessages([message], {
-      ...sessionOptions,
-      onCurrentTurnImageFailure: () => {},
-    });
+    const first = await hydratePromptMediaMessages([message], sessionOptions);
     const firstRequest = await materializeProviderContext({
       ...sessionOptions,
       context: { messages: convertToLlm(first) },
@@ -100,46 +103,10 @@ describe("structured prompt media replay", () => {
     });
     expect(secondRequest.messages[0]).toEqual(firstRequest.messages[0]);
     expect(secondRequest.messages[0]?.content).toEqual([
-      { type: "text", text: "inspect" },
+      text,
       { type: "text", text: buildPromptImageFailureNotice(1) },
+      expect.objectContaining({ type: "image" }),
     ]);
-  });
-
-  it("keeps a resized inline image on later requests in the same turn", async () => {
-    const oversized = createSolidPngBuffer(40, 100, { r: 200, g: 10, b: 10 });
-    const imagePath = await writeImage(workspaceDir, "shot.png", oversized);
-    // Chat ingress keeps a resized inline copy that still exceeds the model limit.
-    const message = {
-      role: "user",
-      content: [{ type: "text", text: "inspect" }, image(oversized.toString("base64"))],
-      idempotencyKey: "resized-inline:user",
-      __openclaw: {
-        media: mediaAt(imagePath),
-        mediaImageLayout: layout([{ kind: "inline", factIndex: 0 }]),
-      },
-    } as unknown as AgentMessage;
-    const failures: number[] = [];
-    const sessionOptions = {
-      ...options(),
-      maxDimensionPx: 50,
-      imageSessionKey: promptImageSessionKey({ sessionId: "resized", workspaceDir }),
-      onCurrentTurnImageFailure: (count: number) => failures.push(count),
-    };
-    const request = async () => {
-      // Each model request hydrates the unmodified session message again.
-      const hydrated = await hydratePromptMediaMessages([structuredClone(message)], sessionOptions);
-      return await materializeProviderContext({
-        ...sessionOptions,
-        context: { messages: convertToLlm(hydrated) },
-      });
-    };
-
-    const first = await request();
-    const second = await request();
-
-    expect(first.messages[0]?.content).toContainEqual(expect.objectContaining({ type: "image" }));
-    expect(second.messages[0]).toEqual(first.messages[0]);
-    expect(failures).toEqual([]);
   });
 
   it.each`
@@ -181,19 +148,7 @@ describe("structured prompt media replay", () => {
     });
   });
 
-  it("preserves persisted facts when replay hydration fails", async () => {
-    const missingPath = path.join(workspaceDir, "missing.png");
-    const text = "missing attachment";
-    const message = persistedMessage(text, mediaAt(missingPath));
-
-    const result = await hydrate(message);
-    expect(result).toMatchObject({
-      __openclaw: { media: [expect.objectContaining({ path: missingPath })] },
-    });
-    expect(result).toHaveProperty("content", [{ type: "text", text }]);
-  });
-
-  it("asks the active turn to resend a recorded image it cannot read", async () => {
+  it("keeps persisted facts and asks the active turn to resend an unreadable image", async () => {
     const media = mediaAt(path.join(workspaceDir, "missing.png"));
     const message = {
       role: "user",
@@ -207,6 +162,7 @@ describe("structured prompt media replay", () => {
       onCurrentTurnImageFailure,
     });
     expect(onCurrentTurnImageFailure).toHaveBeenCalledExactlyOnceWith(1);
+    expect(result[0]).toMatchObject({ __openclaw: { media } });
     expect(result[0]).toHaveProperty("content", [
       { type: "text", text: "here" },
       { type: "text", text: buildPromptImageFailureNotice(1) },
