@@ -24,7 +24,7 @@ import type {
 import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
 import { internalSessionConversationId } from "../../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
-import { getRequesterProfile } from "../requester-profile.js";
+import { getRequesterProfile, transferRequesterProfile } from "../requester-profile.js";
 import { shouldUseFromAsSenderFallback } from "../sender-identity.js";
 import type { RuntimeMsgContext } from "../templating.js";
 import { MessageInjectionRequesterMismatchError } from "./message-injection-authority.js";
@@ -36,12 +36,18 @@ export function projectReplyToolAuthorityInput(
   snapshot: ReplyToolAuthorityInput,
   caller: ReplyToolAuthorityCaller | undefined,
   requesterPrincipalKey: string | undefined,
+  sameRequesterProfile = false,
 ): ReplyToolAuthorityInput {
   const continuation = caller && "kind" in caller ? caller : undefined;
   const participant: ReplyToolAuthorityOverlay | ReplyToolAuthorityRequester | undefined =
     caller && "kind" in caller
       ? { ...caller.caller, traceAuthorized: snapshot.run.traceAuthorized === true }
       : caller;
+  if (continuation && sameRequesterProfile) {
+    // Verified guidance follows the selected execution across transports without
+    // replacing its requester, permissions, personal tools, or delivery route.
+    return snapshot;
+  }
   const incomingRequester =
     participant && !("requesterOrigin" in participant) && participant.allowCollaborativeSteering
       ? resolveRequesterPrincipalKey({
@@ -201,7 +207,7 @@ export function resolveInboundReplyToolAuthorityOverlay(params: {
   const { ctx } = params;
   const senderId = normalizeOptionalString(ctx.SenderId);
   const senderE164 = normalizeOptionalString(ctx.SenderE164);
-  return {
+  const overlay: ReplyToolAuthorityOverlay = {
     sessionKey: normalizeOptionalString(ctx.SessionKey),
     operatorAuthority: params.operatorAuthority,
     permissionMode: params.sessionEntry?.permissionMode,
@@ -245,6 +251,8 @@ export function resolveInboundReplyToolAuthorityOverlay(params: {
     gatewayUiCommandTarget: ctx.GatewayUiCommandTarget,
     toolBindings: ctx.GatewayRunToolBindings,
   };
+  transferRequesterProfile(ctx, overlay);
+  return overlay;
 }
 
 /** Resolve configured conversation policy from the same trusted ingress facts as steering. */

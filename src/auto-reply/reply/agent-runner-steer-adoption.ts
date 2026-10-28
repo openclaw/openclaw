@@ -18,10 +18,7 @@ import {
   type ReplyOperation,
 } from "../../sessions/session-controller.js";
 import { canInjectReplyMessageTarget } from "../../sessions/session-controller.message-injection.js";
-import {
-  hasReplySteeringRequesterMismatch,
-  prepareReplyMessageJoin,
-} from "../../sessions/session-controller.message-join.js";
+import { prepareReplyMessageJoin } from "../../sessions/session-controller.message-join.js";
 import {
   getSessionControllerEntryForOperation,
   isCurrentSessionControllerOperation,
@@ -235,23 +232,6 @@ export async function runActiveReplySteer(
       return await fallback("injection_unavailable");
     }
     assertReadCurrent();
-    if (
-      isInboundUserMessage &&
-      followupRun.run.config.messages?.queue?.allowCollaborativeSteering !== true &&
-      hasReplySteeringRequesterMismatch(followupRun, activeReplyOperation)
-    ) {
-      if (!canInjectReplyMessageTarget(injectionTarget)) {
-        return await fallback("injection_unavailable", injectionTarget.runId);
-      }
-      if (followupRun.run.config.messages?.queue?.collaborativeSteeringFallback !== "reject") {
-        return await fallback("collaborative_steering_disabled", injectionTarget.runId);
-      }
-      await refuseCollaborativeSteering(followupRun, replyOperationRunState, () => {
-        custodyFinished = true;
-        parked.consume("consumed");
-      });
-      return "handled";
-    }
     delivery = prepareSteeringDelivery({
       agentId: followupRun.run.agentId,
       sessionKey,
@@ -312,6 +292,23 @@ export async function runActiveReplySteer(
           : undefined,
     });
     if (steeringAuthority.kind === "deferred") {
+      if (
+        steeringAuthority.reason === "requester-mismatch" &&
+        isInboundUserMessage &&
+        followupRun.run.config.messages?.queue?.allowCollaborativeSteering !== true
+      ) {
+        if (!canInjectReplyMessageTarget(injectionTarget)) {
+          return await fallback("injection_unavailable", injectionTarget.runId);
+        }
+        if (followupRun.run.config.messages?.queue?.collaborativeSteeringFallback !== "reject") {
+          return await fallback("collaborative_steering_disabled", injectionTarget.runId);
+        }
+        await refuseCollaborativeSteering(followupRun, replyOperationRunState, () => {
+          custodyFinished = true;
+          parked.consume("consumed");
+        });
+        return "handled";
+      }
       return await fallback(
         steeringAuthority.reason,
         injectionTarget.runId,

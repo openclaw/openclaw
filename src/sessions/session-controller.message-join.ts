@@ -40,9 +40,6 @@ export async function prepareReplyMessageContinuation(params: {
     ...params.input.caller,
     messageChannel: params.input.caller.originatingChannel,
   });
-  if (!principal || principal !== owner.requesterPrincipalKey) {
-    return { kind: "unsupported" as const };
-  }
   const fingerprint = owner.toolAuthorityFingerprint;
   if (!fingerprint) {
     return { kind: "unsupported" as const };
@@ -63,7 +60,11 @@ export async function prepareReplyMessageContinuation(params: {
       assertOwner,
     );
     const observation = selected?.joinObservation;
-    if (!selected || !observation) {
+    if (
+      !selected ||
+      !observation ||
+      (!selected.sameRequesterProfile && (!principal || principal !== owner.requesterPrincipalKey))
+    ) {
       // Released snapshots keep their existing complete-policy compatibility path.
       return { kind: "unsupported" as const };
     }
@@ -155,7 +156,7 @@ export async function prepareReplyMessageJoin(params: {
 }) {
   const { followupRun, operation, target, assertCurrent } = params;
   const requesterMismatch = hasReplySteeringRequesterMismatch(followupRun, operation);
-  if (params.continuation && !requesterMismatch) {
+  if (params.continuation) {
     const joined = await prepareReplyMessageContinuation({
       target,
       input: params.continuation,
@@ -176,6 +177,13 @@ export async function prepareReplyMessageJoin(params: {
         prepareCurrent: joined.prepareCurrent,
       };
     }
+  }
+  if (requesterMismatch && !params.collaborativeCaller) {
+    return {
+      kind: "deferred" as const,
+      reason: "requester-mismatch" as const,
+      errorMessage: undefined,
+    };
   }
   const legacy = await prepareLegacyReplySteeringAuthority(
     followupRun,

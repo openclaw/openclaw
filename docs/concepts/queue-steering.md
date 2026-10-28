@@ -122,7 +122,11 @@ When steering is unavailable, the message runs automatically after the announcem
 and its cleanup finish. The input remains queued and can still be canceled while
 it waits.
 
-The same signed-in person can steer after reconnecting without reproducing the original connection’s policy snapshot. Browser connections and display names do not define a new requester. The turn keeps its original authority, tool bindings, capabilities, and approval destination; incoming caller differences do not expand or retarget them. This continuation rule applies only to ordinary human guidance in the same channel, account, conversation, and thread. It does not bypass access revocation or authorize a new execution configuration. Explicit execution-setting changes, including a different workspace, execution policy, or selected model, can require a followup.
+The same signed-in person can steer after reconnecting without reproducing the original connection’s policy snapshot. Browser connections and display names do not define a new requester. The turn keeps its original authority, tool bindings, capabilities, approval destination, and reply routing; incoming caller differences do not expand or retarget them.
+
+A verified personal requester can also guide that exact active session from another transport when an administrator has [linked their channel identity](/concepts/user-model#channel-identity-links). This works even if the arriving channel has fewer permissions or collaborative steering is disabled. Normal channel admission and session access still apply, and the incoming identity link must remain current through admission. Shared token/password ownership, display names, and contributor attribution do not establish that two senders are the same person. Different-person collaboration remains limited to the same channel, account, conversation, and thread.
+
+This continuation rule applies to ordinary human guidance. It does not change questions, approvals, cancellation, or explicit cross-session `sessions_send` authorization. It does not bypass access revocation or authorize a new execution configuration. Explicit execution-setting changes, including a different workspace, execution policy, or selected model, can require a followup.
 
 This also applies when a subagent completion resumes the conversation: compatible guidance from the same person joins that completion without changing its capabilities, rather than waiting for a separate turn.
 

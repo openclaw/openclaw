@@ -16,6 +16,7 @@ import {
   toolAuthorityOverlay,
 } from "../auto-reply/reply/reply-tool-authority.test-support.js";
 import { prepareSteeringDelivery } from "../auto-reply/reply/steering-delivery-preparation.js";
+import { bindRequesterProfile } from "../auto-reply/requester-profile.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   patchSessionEntryCore,
@@ -81,11 +82,20 @@ type JoinCase = {
   headless?: true;
   caps?: "expand" | "narrow" | "protocol";
   target?: "new" | "removed" | "foreign";
-  mismatch?: "profile" | "tools" | "elevation" | "exec" | "workspace" | "cwd" | "scopes";
-  after?: "settings" | "activity" | "revoke" | "caller-revoke" | "backend" | "delivery";
+  mismatch?: "profile" | "tools" | "elevation" | "exec" | "workspace" | "cwd" | "scopes" | "model";
+  after?:
+    | "settings"
+    | "activity"
+    | "revoke"
+    | "caller-revoke"
+    | "backend"
+    | "delivery"
+    | "link-revoke"
+    | "identity-disconnect";
+  crossSurface?: "incoming" | "outgoing" | "different" | "shared" | "delegated" | "initiator";
   sessionOnly?: true;
 };
-type Outcome = "accepted" | "deferred" | "rejected" | "revoked";
+type Outcome = "accepted" | "deferred" | "rejected" | "revoked" | "failed";
 const uiTarget = (connId: string, profileId = "join-owner") => ({ connId, profileId });
 
 it.each<[string, Outcome, JoinCase?]>([
@@ -122,6 +132,32 @@ it.each<[string, Outcome, JoinCase?]>([
   ["saved settings after preparation", "rejected", { after: "settings" }],
   ["activity after preparation", "accepted", { after: "activity" }],
   ["delivery closed before final submission", "rejected", { after: "delivery" }],
+  ["linked channel guides WebUI authority", "accepted", { crossSurface: "incoming" }],
+  ["WebUI guides linked channel authority", "accepted", { crossSurface: "outgoing" }],
+  ["different linked human", "deferred", { crossSurface: "different" }],
+  [
+    "different linked human with changed model",
+    "deferred",
+    { crossSurface: "different", mismatch: "model" },
+  ],
+  [
+    "linked requester with changed model",
+    "deferred",
+    { crossSurface: "incoming", mismatch: "model" },
+  ],
+  ["shared owner is not personal identity", "deferred", { crossSurface: "shared" }],
+  ["selected delegate requester", "accepted", { crossSurface: "delegated" }],
+  ["causal initiator is not selected requester", "deferred", { crossSurface: "initiator" }],
+  [
+    "linked identity revoked before submission",
+    "failed",
+    { crossSurface: "incoming", after: "link-revoke" },
+  ],
+  [
+    "incumbent identity outlives ingress connection",
+    "accepted",
+    { crossSurface: "outgoing", after: "identity-disconnect" },
+  ],
 ])(
   "joins the selected execution with current admission checks: %s",
   async (name, outcome, c = {}) => {
@@ -174,6 +210,36 @@ it.each<[string, Outcome, JoinCase?]>([
         assertCurrent: assertSource,
       });
       run.operatorAuthority = operatorAuthority;
+      let originalIdentityCurrent = true;
+      let incomingIdentityCurrent = true;
+      if (c.crossSurface) {
+        const originalContext = {};
+        bindRequesterProfile(originalContext, {
+          id:
+            c.crossSurface === "initiator" || c.crossSurface === "delegated"
+              ? "initiator"
+              : "join-owner",
+          displayName: null,
+          isCurrent: () => originalIdentityCurrent,
+        });
+        Object.assign(run, originalContext);
+        if (c.crossSurface === "outgoing") {
+          run.operatorAuthority = undefined;
+          run.originatingChannel = "telegram";
+          run.run.messageProvider = "telegram";
+        } else if (c.crossSurface === "shared") {
+          run.operatorAuthority = createAdmittedRunOperatorAuthority({
+            ...operatorAuthority,
+            profileId: "gateway-owner",
+          });
+        } else if (c.crossSurface === "initiator" || c.crossSurface === "delegated") {
+          run.run.requesterOrigin = {
+            sessionKey: key,
+            operatorProfileId: "join-owner",
+            delegatedCreatorProfileId: "initiator",
+          };
+        }
+      }
       await withSessionTurn({ ...address, sessionId: entry.sessionId }, async (operation) => {
         if (!operation) {
           throw new Error("Expected direct execution owner");
@@ -229,6 +295,15 @@ it.each<[string, Outcome, JoinCase?]>([
                 }),
           },
         };
+        if (c.crossSurface) {
+          incoming.originatingChannel = c.crossSurface === "outgoing" ? "webchat" : "telegram";
+          incoming.run.messageProvider = incoming.originatingChannel;
+          incoming.run.senderId = "transport-specific-sender";
+          incoming.run.requesterOrigin = undefined;
+          incoming.operatorAuthority =
+            c.crossSurface === "outgoing" ? operatorAuthority : undefined;
+          incoming.toolsAllow = ["message"];
+        }
         const incomingRevocation = new AbortController();
         if (c.after === "caller-revoke") {
           incoming.operatorAuthority = createAdmittedRunOperatorAuthority({
@@ -256,6 +331,9 @@ it.each<[string, Outcome, JoinCase?]>([
         }
         if (c.mismatch === "tools") {
           incoming.run.config = { ...cfg, tools: { deny: ["exec"] } };
+        }
+        if (c.mismatch === "model") {
+          incoming.run.model = "another-model";
         }
         if (c.mismatch === "exec") {
           incoming.run.config = { ...cfg, tools: { exec: { security: "deny" } } };
@@ -305,6 +383,22 @@ it.each<[string, Outcome, JoinCase?]>([
           allowCollaborativeSteering: _collaboration,
           ...caller
         } = toolAuthorityOverlay(incoming);
+        if (c.crossSurface) {
+          const incomingContext = {};
+          bindRequesterProfile(incomingContext, {
+            id:
+              c.crossSurface === "shared"
+                ? "gateway-owner"
+                : c.crossSurface === "initiator"
+                  ? "initiator"
+                  : c.crossSurface === "different"
+                    ? "another-human"
+                    : "join-owner",
+            displayName: null,
+            isCurrent: () => incomingIdentityCurrent,
+          });
+          Object.assign(caller, incomingContext);
+        }
         const delivery = prepareSteeringDelivery({
           ...address,
           entry: currentEntry,
@@ -332,6 +426,12 @@ it.each<[string, Outcome, JoinCase?]>([
           },
         });
         expect(joined.kind).toBe(outcome === "deferred" ? "deferred" : "prepared");
+        if (c.crossSurface === "different" && c.mismatch === "model") {
+          expect(joined).toMatchObject({ kind: "deferred", reason: "requester-mismatch" });
+        }
+        if (c.crossSurface === "incoming" && c.mismatch === "model") {
+          expect(joined).toMatchObject({ kind: "deferred", reason: "model-fallback-changed" });
+        }
         assertFrozen();
         if (joined.kind !== "prepared") {
           expect(delivered).not.toHaveBeenCalled();
@@ -339,6 +439,12 @@ it.each<[string, Outcome, JoinCase?]>([
         }
         if (c.after === "revoke") {
           sourceRevocation.abort(new Error("Caller revoked"));
+        }
+        if (c.after === "link-revoke") {
+          incomingIdentityCurrent = false;
+        }
+        if (c.after === "identity-disconnect") {
+          originalIdentityCurrent = false;
         }
         if (c.after === "settings" || c.after === "activity") {
           const settings = c.after === "settings";
@@ -408,7 +514,7 @@ it.each<[string, Outcome, JoinCase?]>([
             ),
           });
           expect((await attempt.outcome).status).toBe(outcome);
-          expect(delivered).toHaveBeenCalledTimes(outcome === "rejected" ? 0 : 1);
+          expect(delivered).toHaveBeenCalledTimes(outcome === "accepted" ? 1 : 0);
           expect(replacement).not.toHaveBeenCalled();
           assertFrozen();
         } finally {
