@@ -5,8 +5,7 @@ type SecretStoreValidationCode =
   | "SECRET_STORE_VALUE_IN_ARGV"
   | "SECRET_STORE_VALUE_REDACTED"
   | "SECRET_STORE_VALUE_CHANGED"
-  | "SECRET_STORE_VALUE_EMPTY"
-  | "SECRET_STORE_INPUT_ENCODING";
+  | "SECRET_STORE_VALUE_EMPTY";
 
 export class SecretStoreValidationError extends Error {
   constructor(

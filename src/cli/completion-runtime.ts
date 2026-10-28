@@ -1,5 +1,3 @@
-// Shell completion runtime: cache paths, profile installation, and shell detection.
-import { isUtf8 } from "node:buffer";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -12,6 +10,7 @@ import {
 import { hasTerminalControl, terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isErrno } from "../infra/errors.js";
+import { decodeUtf8Input, Utf8InputError } from "../infra/utf8-input.js";
 import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
 import { pathExists } from "../utils.js";
 import { publishOutputFileAtomically } from "./output-file.runtime.js";
@@ -23,33 +22,14 @@ export const COMPLETION_SKIP_PLUGIN_COMMANDS_ENV = "OPENCLAW_COMPLETION_SKIP_PLU
 
 type CompletionProfileEncoding = "utf8" | "utf8bom" | "utf16le" | "utf16be";
 
-class InvalidUtf8CompletionProfileError extends Error {
-  readonly profilePath: string;
-
-  constructor(profilePath: string) {
-    super(`Shell profile must be valid UTF-8: ${profilePath}`);
-    this.name = "InvalidUtf8CompletionProfileError";
-    this.profilePath = profilePath;
+class CompletionProfileEncodingError extends Utf8InputError {
+  constructor(
+    readonly profilePath: string,
+    message: string,
+    cause: unknown,
+  ) {
+    super(message, { cause });
   }
-}
-
-function isInvalidUtf8CompletionProfileError(
-  error: unknown,
-): error is InvalidUtf8CompletionProfileError {
-  return error instanceof InvalidUtf8CompletionProfileError;
-}
-
-function decodeUtf8CompletionProfile(
-  buffer: Buffer,
-  profilePath: string,
-  mode: "inspect" | "mutate",
-): string {
-  // Read-only hook detection must keep recognizing ASCII OpenClaw lines beside
-  // Latin-1 comments; strict admission belongs only on the rewrite path.
-  if (mode === "mutate" && !isUtf8(buffer)) {
-    throw new InvalidUtf8CompletionProfileError(profilePath);
-  }
-  return buffer.toString("utf8");
 }
 
 function formatInvalidUtf8InstallMessage(params: {
@@ -81,14 +61,14 @@ async function readCompletionProfile(
       encoding = "utf8bom";
     }
   }
-  // Removing an owned first line must not remove the profile's encoding declaration.
-  return {
-    content:
-      encoding === "utf8"
-        ? decodeUtf8CompletionProfile(buffer, profilePath, mode)
-        : decodeWindowsTextFileBuffer({ buffer }),
-    encoding,
-  };
+  // UTF-16 remains a supported PowerShell file encoding; UTF-8 rewrites are strict.
+  const utf8 = encoding === "utf8" || encoding === "utf8bom";
+  const content = utf8
+    ? mode === "mutate"
+      ? decodeUtf8Input(buffer, `Shell profile ${profilePath}`)
+      : buffer.toString("utf8")
+    : decodeWindowsTextFileBuffer({ buffer });
+  return { content: encoding === "utf8bom" ? content.slice(1) : content, encoding };
 }
 
 function encodeCompletionProfile(content: string, encoding: CompletionProfileEncoding): Buffer {
@@ -527,42 +507,16 @@ export function findOptionalCompletionInstallFailure(
   if (writeError) {
     return { kind: "write", error: writeError };
   }
-  let current: unknown = err;
-  let recoveryMessage: string | undefined;
-  let profilePath: string | undefined;
+  let current = err;
   while (current instanceof Error) {
     if (
-      !recoveryMessage &&
-      current.message.includes("must be valid UTF-8") &&
-      current.message.includes("left untouched")
-    ) {
-      recoveryMessage = current.message;
-      profilePath ??=
-        /Shell profile must be valid UTF-8:\s*(.+?)\./u.exec(current.message)?.[1] ?? undefined;
-    }
-    if (isInvalidUtf8CompletionProfileError(current)) {
-      return {
-        kind: "encoding",
-        message: recoveryMessage ?? current.message,
-        profilePath: current.profilePath,
-      };
-    }
-    // Cross-realm / mocked causes keep the same name + profilePath contract.
-    if (
-      current.name === "InvalidUtf8CompletionProfileError" &&
+      current instanceof Utf8InputError &&
       "profilePath" in current &&
       typeof current.profilePath === "string"
     ) {
-      return {
-        kind: "encoding",
-        message: recoveryMessage ?? current.message,
-        profilePath: current.profilePath,
-      };
+      return { kind: "encoding", message: current.message, profilePath: current.profilePath };
     }
     current = current.cause;
-  }
-  if (recoveryMessage && profilePath) {
-    return { kind: "encoding", message: recoveryMessage, profilePath };
   }
   return undefined;
 }
@@ -589,10 +543,12 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
     try {
       ({ content, encoding } = await readCompletionProfile(profilePath, shell, "mutate"));
     } catch (error) {
-      if (isInvalidUtf8CompletionProfileError(error)) {
-        throw new Error(formatInvalidUtf8InstallMessage({ profilePath, shell, cachePath }), {
-          cause: error,
-        });
+      if (error instanceof Utf8InputError) {
+        throw new CompletionProfileEncodingError(
+          profilePath,
+          formatInvalidUtf8InstallMessage({ profilePath, shell, cachePath }),
+          error,
+        );
       }
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;

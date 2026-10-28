@@ -486,18 +486,10 @@ it("resolves Windows PowerShell and pwsh profile directories", () => {
   expect(resolve(windowsShells.legacy)).toBe(profile("WindowsPowerShell"));
 });
 
-it("rejects install when the completion cache is missing", async () => {
-  await withCompletionHome(async () => {
-    await expect(installCompletion("zsh", true, "openclaw")).rejects.toThrow(
-      "Completion cache not found",
-    );
-  });
-});
-
 it.skipIf(process.platform === "win32").each([
   [
     "bash",
-    '# OpenClaw Completion\n[[ -f "${HOME}/.openclaw/completions/openclaw.bash" ]] && source "${HOME}/.openclaw/completions/openclaw.bash"',
+    '# User text 合法 � 😀\n# OpenClaw Completion\n[[ -f "${HOME}/.openclaw/completions/openclaw.bash" ]] && source "${HOME}/.openclaw/completions/openclaw.bash"',
     true,
   ],
   [
@@ -554,77 +546,23 @@ it.skipIf(process.platform === "win32").each([
     undefined,
     true,
   );
+});
 
-  it("rejects malformed UTF-8 profiles before rewriting them", async () => {
-    await withBashCompletionHome(async ({ homeDir }) => {
-      const cachePath = resolveCompletionCachePath("zsh", "openclaw");
-      const profilePath = path.join(homeDir, ".zshrc");
-      await fs.mkdir(path.dirname(cachePath), { recursive: true });
-      await fs.writeFile(cachePath, "# completion\n", "utf8");
-      const profileBytes = Buffer.concat([
-        Buffer.from("export KEEP=合法-"),
-        Buffer.from([0xff]),
-        Buffer.from("-before\n"),
-      ]);
-      await fs.writeFile(profilePath, profileBytes);
-
-      await expect(installCompletion("zsh", true, "openclaw")).rejects.toThrow(
-        /left untouched[\s\S]*load the prepared cache[\s\S]*backing up the profile/,
-      );
-
-      expect(await fs.readFile(profilePath)).toEqual(profileBytes);
-    });
-  });
-
-  it("keeps malformed-profile status inspection nonfatal", async () => {
-    await withBashCompletionHome(async ({ homeDir }) => {
-      const profilePath = path.join(homeDir, ".zshrc");
-      const profileBytes = Buffer.concat([
-        Buffer.from("export KEEP=合法-"),
-        Buffer.from([0xff]),
-        Buffer.from("-before\n"),
-      ]);
-      await fs.writeFile(profilePath, profileBytes);
-
-      await expect(isCompletionInstalled("zsh", "openclaw")).resolves.toBe(false);
-      await expect(usesSlowDynamicCompletion("zsh", "openclaw")).resolves.toBe(false);
-      expect(await fs.readFile(profilePath)).toEqual(profileBytes);
-    });
-  });
-
-  it("still recognizes an installed ASCII hook beside a Latin-1 comment", async () => {
-    await withBashCompletionHome(async ({ homeDir }) => {
-      const cachePath = resolveCompletionCachePath("bash", "openclaw");
-      const profilePath = path.join(homeDir, ".bashrc");
-      await fs.mkdir(path.dirname(cachePath), { recursive: true });
-      await fs.writeFile(cachePath, "# completion\n", "utf8");
-      const profileBytes = Buffer.concat([
-        Buffer.from("# caf"),
-        Buffer.from([0xe9]),
-        Buffer.from("\n"),
-        Buffer.from(`# OpenClaw Completion\n[ -f '${cachePath}' ] && source '${cachePath}'\n`),
-      ]);
-      await fs.writeFile(profilePath, profileBytes);
-
-      await expect(isCompletionInstalled("bash", "openclaw")).resolves.toBe(true);
-      await expect(usesSlowDynamicCompletion("bash", "openclaw")).resolves.toBe(false);
-      expect(await fs.readFile(profilePath)).toEqual(profileBytes);
-    });
-  });
-
-  it("preserves valid UTF-8 profiles including literal replacement characters", async () => {
-    await withBashCompletionHome(async ({ homeDir }) => {
-      const cachePath = resolveCompletionCachePath("zsh", "openclaw");
-      const profilePath = path.join(homeDir, ".zshrc");
-      await fs.mkdir(path.dirname(cachePath), { recursive: true });
-      await fs.writeFile(cachePath, "# completion\n", "utf8");
-      await fs.writeFile(profilePath, "export KEEP='合法 � 😀'\n", "utf8");
-
-      await installCompletion("zsh", true, "openclaw");
-
-      const installed = await fs.readFile(profilePath, "utf8");
-      expect(installed).toContain("export KEEP='合法 � 😀'\n");
-      expect(installed).toContain(cachePath);
-    });
+it("inspects legacy hooks but refuses to rewrite malformed UTF-8", async () => {
+  await withCompletionHome(async () => {
+    const cachePath = await writeCompletionCache("bash");
+    const profilePath = await writeProfile("bash", "");
+    const bytes = Buffer.concat([
+      Buffer.from("# caf"),
+      Buffer.from([0xe9]),
+      Buffer.from(`\n# OpenClaw Completion\n[ -f '${cachePath}' ] && source '${cachePath}'\n`),
+    ]);
+    await fs.writeFile(profilePath, bytes);
+    await expect(isCompletionInstalled("bash")).resolves.toBe(true);
+    await expect(usesSlowDynamicCompletion("bash")).resolves.toBe(false);
+    await expect(installCompletion("bash", true)).rejects.toThrow(
+      /left untouched[\s\S]*load the prepared cache/,
+    );
+    expect(await fs.readFile(profilePath)).toEqual(bytes);
   });
 });

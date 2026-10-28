@@ -18,9 +18,9 @@ import {
   restoreAuthProfileStorePersistenceSnapshot,
 } from "../agents/auth-profiles/store.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
-import { decodeUtf8File } from "../agents/utf8-file.js";
 import { replaceConfigFile, resolveStateDir, type OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, type SecretProviderConfig } from "../config/types.secrets.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 import {
   findPluginConfigEntry,
   hasPluginConfigId,
@@ -350,12 +350,8 @@ async function projectPlanState(params: {
       const current = bytes.toString("utf8");
       const scrubbed = scrubEnvRaw(current, scrubbedValues, knownSecretEnvVars);
       if (scrubbed !== current) {
-        // The scrubbed text is persisted back to the same path, so only then must
-        // the bytes be strictly decodable: replacement-decodable content would
-        // otherwise be rewritten as U+FFFD over operator-managed content the scrub
-        // never touched (same rule as the edit/apply_patch tools, see
-        // src/agents/utf8-file.ts). Files the scrub leaves alone keep their bytes.
-        decodeUtf8File(bytes, envPath);
+        // No-op inspections may tolerate legacy bytes; rewrites must not replace them.
+        decodeUtf8Input(bytes, `File ${envPath}`);
         envRawByPath.set(envPath, scrubbed);
         changedFiles.add(envPath);
       }
@@ -556,9 +552,7 @@ function captureFileSnapshot(pathname: string): FileSnapshot {
   const stat = fs.statSync(pathname);
   return {
     existed: true,
-    // Snapshots feed rollback writes; a lossy decode here would be persisted
-    // back over the original bytes when a later write fails.
-    content: decodeUtf8File(fs.readFileSync(pathname), pathname),
+    content: decodeUtf8Input(fs.readFileSync(pathname), `File ${pathname}`),
     mode: stat.mode & 0o777,
   };
 }

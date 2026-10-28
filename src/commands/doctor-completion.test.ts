@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as noteModule from "../../packages/terminal-core/src/note.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { completionInstallError as wrappedFsError } from "../cli/completion-profile.test-support.js";
 import {
   COMPLETION_SKIP_PLUGIN_COMMANDS_ENV,
   formatCompletionReloadCommand,
@@ -116,11 +117,6 @@ function expectCompletionNote(text: string) {
   expect(noteModule.note).toHaveBeenCalledWith(expect.stringContaining(text), "Shell completion");
 }
 
-function wrappedFsError(code: string, profilePath: string): Error {
-  const cause = Object.assign(new Error(code), { code, path: profilePath });
-  return new Error(`Failed to install completion: ${cause.message}`, { cause });
-}
-
 describe("doctorShellCompletion", () => {
   beforeEach(() => {
     installCompletionMock.mockReset();
@@ -162,10 +158,10 @@ describe("doctorShellCompletion", () => {
     },
   );
 
-  it("offers session recovery when completion is not installed after EPERM", async () => {
+  it.each(["EPERM", "ERR_INVALID_UTF8"])("offers session recovery after %s", async (code) => {
     const { profilePath } = await setupBashHome();
-    const failedPath = path.dirname(profilePath);
-    installCompletionMock.mockRejectedValue(wrappedFsError("EPERM", failedPath));
+    const failedPath = code === "EPERM" ? path.dirname(profilePath) : profilePath;
+    installCompletionMock.mockRejectedValue(wrappedFsError(code, failedPath));
     await expect(doctorShellCompletion(makePrompter(true, true))).resolves.not.toThrow();
 
     const command = formatCompletionReloadCommand(
@@ -175,33 +171,6 @@ describe("doctorShellCompletion", () => {
     expectCompletionNote(command);
     expectCompletionNote("session only");
     expectCompletionNote(failedPath);
-  });
-
-  it("offers session recovery when profile encoding blocks install", async () => {
-    await setupDoctorCompletionTest(false);
-    const encodingCause = Object.assign(
-      new Error("Shell profile must be valid UTF-8: /tmp/.bash_profile"),
-      { name: "InvalidUtf8CompletionProfileError", profilePath: "/tmp/.bash_profile" },
-    );
-    const recovery = new Error(
-      "Shell profile must be valid UTF-8: /tmp/.bash_profile. The file was left untouched. For this session, load the prepared cache with: source /tmp/openclaw.bash. Persistent installation requires backing up the profile and correcting its encoding first.",
-      { cause: encodingCause },
-    );
-    installCompletionMock.mockRejectedValue(
-      new Error(`Failed to install completion: ${recovery.message}`, { cause: recovery }),
-    );
-    const noteSpy = vi.spyOn(noteModule, "note");
-
-    await expect(doctorShellCompletion(mockPrompter())).resolves.not.toThrow();
-
-    expect(noteSpy).toHaveBeenCalledWith(
-      expect.stringMatching(/not valid UTF-8[\s\S]*left untouched[\s\S]*session only/),
-      "Shell completion",
-    );
-    expect(noteSpy).toHaveBeenCalledWith(
-      expect.stringContaining("/tmp/.bash_profile"),
-      "Shell completion",
-    );
   });
 
   it("re-throws non-permission errors from installCompletion", async () => {
