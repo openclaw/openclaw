@@ -3,8 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
+import { createPageState } from "../pages/chat/chat-state-page.ts";
+import { applyChatAgentOwnerTransition } from "../pages/chat/chat-state-refresh.ts";
 import { loadChatRoute } from "../pages/chat/route-loader.ts";
-import * as snapshots from "../pages/chat/session-snapshot-invalidation.runtime.ts";
+import * as snapshots from "../pages/chat/session-snapshot-invalidation.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { clearBootRecords, type BootRecord } from "./boot-record.ts";
@@ -76,7 +78,13 @@ describe("warm boot profile validation", () => {
       authMethod: "trusted-proxy",
       credential: "",
       recoveryScope: "account-a",
-      agents: makeBootRoster({ mainKey: "workspace" }),
+      agents: makeBootRoster({
+        mainKey: "workspace",
+        agents: [
+          { id: "main", name: "Main roster label", identity: { name: "Harbor", emoji: "⚓" } },
+          { id: "other", name: "Observatory" },
+        ],
+      }),
     });
     const runtime = bootstrapApplication();
     expect(runtime.warmBoot).toBe(true);
@@ -88,6 +96,22 @@ describe("warm boot profile validation", () => {
     });
     const request = vi.spyOn(client, "request");
     gateway.snapshot.client = client;
+    const create = (sessionKey: string) =>
+      createPageState(
+        runtime.context,
+        { afterCommit: () => () => {} },
+        { sessionKey, dispatchEvent: () => true },
+      );
+    expect(create("agent:main:topic")).toMatchObject({
+      assistantName: "Harbor",
+      assistantAvatar: "⚓",
+    });
+    expect(create("agent:other:topic").assistantName).toBe("Observatory");
+    expect(create("agent:unknown:topic").assistantName).not.toBe("Harbor");
+    const global = create("global");
+    applyChatAgentOwnerTransition(global, "other");
+    expect(global.assistantName).toBe("Observatory");
+    expect(global.assistantAvatar).toBeNull();
     expect(agents.state.agentsList).toBeNull();
     expectDefaults(runtime);
     const signal = new AbortController().signal;
@@ -98,15 +122,24 @@ describe("warm boot profile validation", () => {
     expect(agents.state.agentsList).toBeNull();
     gateway.snapshot.phase = "connected";
     expect(runtime.context.offlineSessionDefaults).toBeNull();
+    expect(runtime.context.agentIdentity.get("main")).toBeNull();
     gateway.snapshot.phase = "reconnecting";
     gateway.snapshot.client = new GatewayBrowserClient({
       url: loadSettings().gatewayUrl,
       offlineRecoveryScope: "another-account",
     });
     expect(runtime.context.offlineSessionDefaults).toBeNull();
+    expect(create("agent:main:topic").assistantName).not.toBe("Harbor");
     gateway.snapshot.client = client;
+    expect(create("agent:main:topic").assistantName).toBe("Harbor");
+    const revision = vi
+      .spyOn(gateway, "connectionRevision", "get")
+      .mockReturnValue(gateway.connectionRevision + 1);
+    expect(create("agent:main:topic").assistantName).not.toBe("Harbor");
+    revision.mockRestore();
     client.retireOfflineRecoveryScope();
     expect(runtime.context.offlineSessionDefaults).toBeNull();
+    expect(create("agent:main:topic").assistantName).not.toBe("Harbor");
   });
 
   it("does not revive warm admission after pairing rejection followed by network loss", () => {
@@ -139,7 +172,10 @@ describe("warm boot profile validation", () => {
       recoveryScope: "test-recovery-scope",
       agents: makeBootRoster({
         defaultId: "private",
-        agents: [{ id: "private", name: "Private agent" }, { id: "shared" }],
+        agents: [
+          { id: "private", name: "Private agent" },
+          { id: "shared", name: "Old shared" },
+        ],
       }),
       groups: [{ name: "Personal", position: 0 }],
       sectionOrder: ["Personal"],
@@ -169,15 +205,17 @@ describe("warm boot profile validation", () => {
       ...record.agents,
       mainKey: "workspace",
       scope: "global",
-      agents: [{ id: "shared" }],
+      agents: [{ id: "shared", name: "Renamed shared" }],
     });
     await pending;
-    expect(agents.state.agentsList?.agents).toEqual([{ id: "shared" }]);
+    expect(agents.state.agentsList?.agents).toEqual([{ id: "shared", name: "Renamed shared" }]);
     const confirmed = agents.state.agentsList;
 
     publish("reconnecting");
     expect(agents.state.agentsList).toBe(confirmed);
     expectDefaults(runtime, "global");
+    expect(runtime.context.agentIdentity.get("shared")?.name).toBe("Renamed shared");
+    expect(runtime.context.agentIdentity.get("private")).toBeNull();
     discover.mockRejectedValue(new Error("roster unavailable"));
     publish("connected");
     await agents.ensureList();

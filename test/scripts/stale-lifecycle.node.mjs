@@ -380,8 +380,7 @@ describe("Barnacle unified lifecycle", () => {
     "enhancement",
     "pinned",
     "clawsweeper:queueable-fix",
-    "clawsweeper:source-repro",
-    "clawsweeper:fix-shape-clear",
+    "no-stale",
     "impact:security",
     "clawsweeper:needs-security-review",
   ]) {
@@ -398,6 +397,121 @@ describe("Barnacle unified lifecycle", () => {
           assert.deepEqual(h.writes, []);
         }
       });
+    }
+  }
+
+  for (const label of ["clawsweeper:source-repro", "clawsweeper:fix-shape-clear"]) {
+    for (const [kind, inactiveDays, graceDays] of [
+      ["issue", 7, 7],
+      ["bug", 30, 14],
+      ["pull-request", 7, 7],
+    ]) {
+      it(`${kind} review evidence ${label} retains inactivity and full notice grace`, async () => {
+        const day = 86_400_000;
+        const seed = kind === "pull-request" ? snapshot() : issueSnapshot({ bug: kind === "bug" });
+        seed.pr.created_at = new Date(NOW - inactiveDays * day).toISOString();
+        seed.pr.labels = [...(kind === "bug" ? [{ name: "bug" }] : []), { name: label }];
+        seed.workflowRuns = seed.workflowRuns.map((run) => ({
+          ...run,
+          created_at: seed.pr.created_at,
+        }));
+        seed.comments = [];
+        const h = harness(seed);
+        let clock = NOW - 1;
+        const create = h.options.github.rest.issues.createComment;
+        h.options.github.rest.issues.createComment = async (params) => {
+          await create(params);
+          const receipt = h.state.comments.at(-1);
+          receipt.created_at = receipt.updated_at = new Date(clock).toISOString();
+          return { data: structuredClone(receipt) };
+        };
+        const run = () => runStaleLifecycle({ ...h.options, now: () => clock, dryRun: false });
+        await run();
+        assert.deepEqual(h.writes, []);
+        clock = NOW;
+        await run();
+        const warning = structuredClone(h.state.comments[0]);
+        assert.deepEqual(h.writes, ["warning", "label"]);
+        clock = NOW + graceDays * day - 1;
+        h.state.pr.updated_at = new Date(clock).toISOString();
+        const reviewer = { id: 274271284, type: "Bot", login: "clawsweeper[bot]" };
+        h.state.comments.push(
+          comment(9000, "Automated review refreshed", h.state.pr.updated_at, reviewer),
+        );
+        h.state.timeline.push({
+          event: "labeled",
+          actor: reviewer,
+          created_at: h.state.pr.updated_at,
+        });
+        const grace = await run();
+        assert.equal(grace.decisions[0].reason, "warning-grace");
+        assert.equal(grace.decisions[0].warning, warning.id);
+        assert.deepEqual(h.state.comments[0], warning);
+        assert.deepEqual(h.writes, ["warning", "label"]);
+        clock++;
+        const closed = await run();
+        assert.equal(closed.closed, 1);
+        assert.equal(h.state.pr.state, "closed");
+        if (kind !== "pull-request") {
+          assert.equal(h.state.pr.state_reason, "not_planned");
+          assert.match(h.state.comments.at(-1).body, /not been confirmed fixed/);
+        }
+        assert.deepEqual(h.writes, ["warning", "label", "close-comment", "close"]);
+      });
+    }
+
+    for (const kind of ["issue", "pull-request"]) {
+      it(`includes ${kind} advisory-only ${label} in the normal scan`, async () => {
+        const seed = kind === "issue" ? issueSnapshot() : snapshot();
+        seed.pr.labels = [{ name: label }];
+        seed.comments = [];
+        const h = harness(seed);
+        h.options.github.rest.issues.listForRepo = async () => ({ data: [h.state.pr] });
+        const result = await runStaleLifecycle({ ...h.options, targets: [] });
+        assert.equal(result.considered, 1);
+        assert.equal(result.decisions[0].action, "warn");
+        assert.deepEqual(h.writes, []);
+      });
+
+      for (const hold of ["none", "present", "arriving"]) {
+        it(`${kind} reason response with ${label} respects a ${hold} explicit hold`, async () => {
+          const seed = kind === "issue" ? issueSnapshot() : snapshot();
+          seed.pr.title = "Fix a gateway delivery regression";
+          seed.pr.body =
+            "## What Problem This Solves\n\nA gateway reply was lost.\n\n## Evidence\n\nRegression coverage reproduces the lost reply.";
+          seed.pr.labels = [{ name: label }, { name: "r: support" }];
+          if (hold === "present") seed.pr.labels.push({ name: "no-stale" });
+          seed.comments = [];
+          const h = harness(seed);
+          h.options.github.paginate = async () => [
+            { filename: "src/gateway/delivery.ts", status: "modified" },
+          ];
+          let reads = 0;
+          const list = h.options.github.rest.issues.listComments;
+          h.options.github.rest.issues.listComments = async (params) => {
+            const response = await list(params);
+            if (++reads === 2 && hold === "arriving") {
+              h.state.pr.labels.push({ name: "no-stale" });
+            }
+            return response;
+          };
+          await runBarnacleAutoResponse({
+            github: h.options.github,
+            context: {
+              repo: h.options.context.repo,
+              payload: {
+                action: "labeled",
+                label: { name: "r: support" },
+                [kind === "issue" ? "issue" : "pull_request"]: seed.pr,
+              },
+            },
+            expectedAppId: 2729701,
+          });
+          assert.deepEqual(h.writes, hold === "none" ? ["warning", "close"] : []);
+          assert.equal(h.state.pr.state, hold === "none" ? "closed" : "open");
+          if (hold === "arriving") assert.equal(reads, 2);
+        });
+      }
     }
   }
 

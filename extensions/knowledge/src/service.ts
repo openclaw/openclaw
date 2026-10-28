@@ -57,6 +57,7 @@ const WRITE_TOOLS = new Set([
   "knowledge_save_page",
   "knowledge_correct",
   "knowledge_withdraw",
+  "knowledge_supersede",
   "knowledge_merge",
   "knowledge_unmerge",
   "knowledge_recall",
@@ -144,13 +145,19 @@ export function createKnowledgeService(
     async start(ctx) {
       stores.start();
       if (ctx?.scheduler) {
-        await maintenance.start(ctx.scheduler, ctx.getCron);
+        await maintenance.start(ctx.scheduler);
       }
     },
+    // A maintenance pass writes through the registry, so the registry closes only
+    // after the pass has settled; the stores are fenced immediately.
     stop() {
-      stores.stop();
+      return stores.stop(maintenance.stop());
     },
   });
+  // Instance disposal runs after the host drains admitted calls. Knowledge ends
+  // for good and resolves only once its workers have exited and maintenance has
+  // stopped, so a replacement generation never opens a store this one holds.
+  api.lifecycle?.onDispose?.(() => stores.dispose(maintenance.stop()));
 
   /** Handlers bound to one operator viewing selection. Tools always resolve
    * their store from the host audience; `agent` only applies to operators. */
@@ -348,6 +355,7 @@ export function createKnowledgeService(
       create_relationship: authored("createRelationship"),
       correct: agentChange("correct"),
       withdraw: agentChange("withdraw"),
+      supersede: agentChange("supersede"),
       merge: agentChange("merge"),
       unmerge: agentChange("unmerge"),
       recall: (input, context) => {

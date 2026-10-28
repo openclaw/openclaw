@@ -44,6 +44,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     'Provider agent runtime id: "openclaw", "auto", a registered plugin harness id such as "codex", or a supported CLI backend alias such as "claude-cli". OpenAI on the official endpoint defaults to the Codex harness when omitted.',
   "models.providers.*.localService":
     "Optional on-demand local model server process for this provider. OpenClaw checks healthUrl, starts the command when needed, waits for readiness, and then sends the model request.",
+  "models.providers.*.remote":
+    "Watchdog-only hosted timing override for local relays in front of hosted APIs. When true, the LLM idle and first-event watchdogs use hosted timing even with a local baseUrl, provider ID, localService, or local auth marker. Absent or false preserves locality detection. Explicit timeoutSeconds and run or agent budgets keep their precedence.",
   "models.providers.*.localService.command":
     "Absolute executable path for the local model server process. Keep this path explicit so provider startup is predictable and does not depend on shell PATH lookup.",
   "models.providers.*.localService.args":

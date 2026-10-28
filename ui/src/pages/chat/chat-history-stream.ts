@@ -1,11 +1,9 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import {
-  isHiddenAssistantStreamText,
-  shouldHideAssistantChatMessage,
-} from "../../lib/chat/message-visibility.ts";
+import { isHiddenAssistantStreamText } from "../../lib/chat/message-visibility.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
@@ -44,7 +42,7 @@ export function materializeVisibleAssistantStreamMessages(
   return materializeVisibleStreamState(messages, state, {
     ...opts,
     persistCommentary: opts.persistCommentary ?? persistsChatCommentary(state),
-    isHiddenAssistantMessage: shouldHideAssistantChatMessage,
+    isHiddenAssistantMessage: isAssistantHeartbeatAckForDisplay,
     isHiddenStreamText: isHiddenAssistantStreamText,
   });
 }

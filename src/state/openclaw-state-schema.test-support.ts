@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { expect } from "vitest";
 import { captureFreshDoctorMigrationTables } from "../commands/doctor-migration-backup.js";
 import { CLIENT_CREDENTIAL_LEGACY_TABLES_SQL } from "../infra/client-credential-schema.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
@@ -6,6 +7,7 @@ import { runWithDoctorMigrationBackup } from "../infra/update-doctor-migration-a
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 import { FIRST_USE_STATE_TABLES } from "./openclaw-state-db-contract.js";
+import { repairOpenClawStateDatabaseSchema } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { createSqliteSchemaShapeFromSql } from "./sqlite-schema-shape.test-support.js";
 
@@ -52,4 +54,16 @@ export function createInitialStateSchemaShape(
     delete shape.agent_deletion_journal;
   }
   return shape;
+}
+
+export async function expectStateSchemaRepair(
+  options: NonNullable<Parameters<typeof repairOpenClawStateDatabaseSchema>[0]>,
+  changes: unknown[],
+  warnings: unknown[] = [],
+) {
+  expect(
+    await withStateMigrationBackupForTest(options, () =>
+      repairOpenClawStateDatabaseSchema(options),
+    ),
+  ).toEqual({ changes, warnings });
 }

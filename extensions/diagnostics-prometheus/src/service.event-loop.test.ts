@@ -229,6 +229,7 @@ it("retains cumulative worker work, messages, selections and GC across retiremen
           direction: "from_worker" as const,
           messages: 4,
           payloadBytes: 1234,
+          payloadBytesByRequestClass: { "audit.writer.process": 1000, other: 234 },
           unmeasuredMessages: 2,
         },
       ],
@@ -272,7 +273,8 @@ openclaw_worker_gc_duration_seconds_total{kind="scavenge",${labels}} ${current.g
   }
   expectMetrics(metrics.render())(`openclaw_worker_count 0
 openclaw_worker_messages_total{direction="from_worker",kind="sqlite_reply"} 4
-openclaw_worker_message_payload_bytes_total{direction="from_worker",kind="sqlite_reply"} 1234
+openclaw_worker_message_payload_bytes_total{direction="from_worker",kind="sqlite_reply",request_class="audit.writer.process"} 1000
+openclaw_worker_message_payload_bytes_total{direction="from_worker",kind="sqlite_reply",request_class="other"} 234
 openclaw_worker_message_unmeasured_total{direction="from_worker",kind="sqlite_reply"} 2
 openclaw_session_row_selections_total{kind="parent",task="control-ui-pr"} 4
 openclaw_session_row_selection_rows_total{kind="parent",task="control-ui-pr"} 12

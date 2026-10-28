@@ -217,16 +217,12 @@ beforeEach(async () => {
   await fs.writeFile(path.join(extractedRoot, "SOUL.md"), "# Research brief\n");
   await fs.writeFile(path.join(extractedRoot, "USER.md"), "# Reader preferences\n");
   await fs.writeFile(path.join(extractedRoot, "BOOTSTRAP.md"), "# First-run setup\n");
-  await fs.writeFile(path.join(extractedRoot, "brief.md"), "# Brief template\n");
   await fs.writeFile(archivePath, archiveBytes);
   const contentsManifest = {
     ...emptyManifest,
     workspace: {
       bootstrapFiles: { "SOUL.md": { source: "SOUL.md" } },
-      files: [
-        { source: "USER.md", path: "USER.md" },
-        { source: "brief.md", path: "brief.md" },
-      ],
+      files: [{ source: "USER.md", path: "USER.md" }],
     },
     packages: [
       { kind: "skill", source: "clawhub", ref: "@openclaw/citation-check", version: "1.1.0" },
@@ -271,92 +267,77 @@ afterEach(async () => {
 });
 
 describe("public ClawHub Claw catalog", () => {
-  it.each(["featured", "category", "search"] as const)(
-    "preserves %s ordering across official and community Claws",
+  it.each(["featured", "category", "search", "blank", "limited"] as const)(
+    "filters publishers and preserves %s ordering through the public API",
     async (mode) => {
-      const featured = mode === "featured";
-      const official = { ...officialPackage(), stats: { installs: featured ? 20 : 1 } };
-      const community = { ...communityPackage(), stats: { installs: featured ? 1 : 20 } };
-      mocks.list
-        .mockResolvedValueOnce(
-          featured ? listPage([community, official]) : listPage([official], "next"),
-        )
-        .mockResolvedValueOnce(listPage([community]));
-      mocks.search.mockResolvedValue([
-        { score: 10, package: official },
-        { score: 1, package: community },
-      ]);
+      const registry = await vi.importActual<typeof import("../infra/clawhub-packages.js")>(
+        "../infra/clawhub-packages.js",
+      );
+      mocks.list.mockImplementation(registry.listClawHubPackages);
+      mocks.search.mockImplementation(registry.searchClawHubPackages);
+      const official = {
+        ...officialPackage(),
+        ownerOfficial: false,
+        stats: { installs: 20 },
+      };
+      const community = { ...communityPackage(), stats: { installs: 1 } };
+      vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+        const url = new URL(
+          typeof input === "string" ? input : input instanceof URL ? input : input.url,
+        );
+        const nextPage = mode === "category" && !url.searchParams.has("cursor");
+        const valid =
+          mode === "category" ? [nextPage ? community : official] : [community, official];
+        const items =
+          url.searchParams.get("isOfficial") === "true"
+            ? [official]
+            : [
+                ...valid,
+                officialPackage("@other/impostor"),
+                { ...officialPackage(), ownerHandle: "someone-else" },
+                { ...officialPackage(), name: 42 },
+                { ...communityPackage(), channel: "private" },
+              ];
+        return Response.json(
+          url.pathname.endsWith("/search")
+            ? { results: items.map((pkg, index) => ({ score: 10 - index, package: pkg })) }
+            : { items, nextCursor: nextPage || mode === "limited" ? "next" : null },
+        );
+      });
       const entries =
-        mode === "search"
-          ? await searchClawHubClaws({ query: "briefing", category: "research" })
-          : await listClawHubClaws(featured ? { featured: true } : { category: "research" });
-      expect(entries.map(({ packageName: name, installs }) => [name, installs])).toEqual([
-        ["@alice/research-briefing", featured ? 1 : 20],
-        [packageName, featured ? 20 : 1],
-      ]);
+        mode !== "featured" && mode !== "category"
+          ? await searchClawHubClaws({
+              query: mode === "search" ? "research" : " ",
+              ...(mode === "limited" ? { limit: 1 } : {}),
+              ...(mode === "search" ? { category: "research" } : {}),
+            })
+          : await listClawHubClaws(
+              mode === "featured" ? { featured: true } : { category: "research" },
+            );
+      const expected = [
+        [personalPackageName, "community", false, "alice", 1],
+        [packageName, "official", false, "openclaw", 20],
+      ];
+      expect(
+        entries.map((entry) => [
+          entry.packageName,
+          entry.channel,
+          entry.official,
+          entry.ownerHandle,
+          entry.installs,
+        ]),
+      ).toEqual(
+        mode === "limited"
+          ? expected.slice(0, 1)
+          : mode === "search" || mode === "category"
+            ? expected.toReversed()
+            : expected,
+      );
+      if (mode === "limited") {
+        expect(mocks.list).toHaveBeenCalledOnce();
+      }
     },
   );
-
-  it("filters malformed or private search results", async () => {
-    mocks.search.mockResolvedValue([
-      { score: 1, package: officialPackage() },
-      { score: 1, package: officialPackage("@other/impostor") },
-      { score: 1, package: { ...officialPackage(), ownerHandle: "someone-else" } },
-      { score: 1, package: { ...officialPackage(), name: 42 } },
-      { score: 1, package: { ...communityPackage(), channel: "private" } },
-    ]);
-    const result = await searchClawHubClaws({ query: "research" });
-    expect(result.map((item) => item.packageName)).toEqual([packageName]);
-  });
-
-  it("honors the starter catalog limit for a blank query", async () => {
-    mocks.list.mockResolvedValue(
-      listPage([officialPackage("@openclaw/first"), officialPackage("@openclaw/second")], "page 2"),
-    );
-
-    const entries = await searchClawHubClaws({ query: " ", limit: 1 });
-
-    expect(entries.map(({ packageName: name }) => name)).toEqual(["@openclaw/first"]);
-    expect(mocks.list).toHaveBeenCalledOnce();
-  });
-
-  it("discovers personal publishers through the public list and search API", async () => {
-    const registry = await vi.importActual<typeof import("../infra/clawhub-packages.js")>(
-      "../infra/clawhub-packages.js",
-    );
-    mocks.list.mockImplementation(registry.listClawHubPackages);
-    mocks.search.mockImplementation(registry.searchClawHubPackages);
-    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
-      const url = new URL(
-        typeof input === "string" ? input : input instanceof URL ? input : input.url,
-      );
-      const items =
-        url.searchParams.get("isOfficial") === "true"
-          ? [officialPackage()]
-          : [{ ...officialPackage(), ownerOfficial: false }, communityPackage()];
-      return Response.json(
-        url.pathname.endsWith("/search")
-          ? { results: items.map((pkg) => ({ score: 1, package: pkg })) }
-          : { items, nextCursor: null },
-      );
-    });
-    vi.stubGlobal("fetch", fetchImpl);
-
-    for (const query of ["", "research"]) {
-      const entries = await searchClawHubClaws({ query });
-      expect(
-        entries.map(({ packageName: name, channel, official, ownerHandle }) => [
-          name,
-          channel,
-          official,
-          ownerHandle,
-        ]),
-      ).toEqual([
-        [packageName, "official", false, "openclaw"],
-        ["@alice/research-briefing", "community", false, "alice"],
-      ]);
-    }
-  });
 
   it("projects a personal publisher release from its verified archive", async () => {
     await selectPackage(communityPackage());
@@ -372,7 +353,7 @@ describe("public ClawHub Claw catalog", () => {
       channel: "community",
       official: false,
       ownerHandle: "alice",
-      workspaceFiles: 4,
+      workspaceFiles: 3,
       skills: 1,
       plugins: 1,
       mcpServers: 1,

@@ -37,6 +37,8 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     // PostgreSQL-only exact-path index; SQLite advances metadata only.
     36: [],
     37: ["session_transcript_cold_archive_chunks"],
+    // PostgreSQL-only full-text token split; SQLite advances metadata only.
+    38: [],
   },
   state: {
     [CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION]: [
@@ -66,5 +68,12 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     33: [],
     // Default cron identity is one machine-state binding; existing partition rows stay untouched.
     34: ["config_machine_state"],
+    35: [
+      "local_workspace_projections",
+      // Online conversion later removes these retained pre-v35 rows.
+      "local_workspace_manifest_nodes",
+      "local_workspace_tree_packs",
+      "local_workspace_source_path_sets",
+    ],
   },
 };

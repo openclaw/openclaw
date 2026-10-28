@@ -98,6 +98,40 @@ describe("failover classification", () => {
       ).toEqual(reason ? { kind: "reason", reason } : null),
   );
 
+  it.each([400, 422])("leaves placeholder-only HTTP %i failures unclassified", (status) => {
+    for (const body of [
+      "[Malformed diagnostic JSON redacted]",
+      "[Oversized diagnostic JSON redacted]",
+      "[Unserializable]",
+    ]) {
+      expect(
+        classifyFailoverSignal({ status, message: `${status}: ${body}` }, noPlugin),
+      ).toBeNull();
+    }
+    expect(
+      classifyFailoverSignal({ status, message: `${status} status code (no body)` }, noPlugin),
+    ).toBeNull();
+    expect(classifyFailoverSignal(validationSignal(status), noPlugin)).toEqual({
+      kind: "reason",
+      reason: "format",
+    });
+    expect(
+      classifyFailoverSignal(
+        { status, message: "[Malformed diagnostic JSON redacted] Unsupported parameter: logprobs" },
+        noPlugin,
+      ),
+    ).toEqual({ kind: "reason", reason: "format" });
+  });
+
+  it("preserves other HTTP status semantics for redacted bodies", () => {
+    expect(
+      classifyFailoverSignal(
+        { status: 500, message: "[Malformed diagnostic JSON redacted]" },
+        noPlugin,
+      ),
+    ).toEqual({ kind: "reason", reason: "server_error" });
+  });
+
   it.each([
     {
       status: 400,

@@ -1,9 +1,11 @@
 {
   "id": "knowledge",
   "kind": "memory",
+  "categories": ["memory"],
   "name": "Knowledge",
   "description": "Evidence-backed knowledge, inspectable in OpenClaw.",
   "version": "0.1.0",
+  "reload": { "turnHandover": true },
   "configSchema": {
     "type": "object",
     "properties": {
@@ -59,18 +61,15 @@
             "minLength": 1,
             "maxLength": 100,
             "description": "IANA time zone for the schedule. Default: the Gateway host's time zone."
-          },
-          "reviewJobId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100,
-            "description": "Automation run after each maintenance pass that leaves private claims reachable from no page. Its agent turn follows the knowledge-unlinked-claims skill. Disable the automation to pause the review."
           }
         },
         "additionalProperties": false
       }
     },
     "additionalProperties": false
+  },
+  "doctorContract": {
+    "configRepair": true
   },
   "activation": {
     "onStartup": true
@@ -118,10 +117,50 @@
       "knowledge_save_page",
       "knowledge_source_check",
       "knowledge_status",
+      "knowledge_supersede",
       "knowledge_timeline",
       "knowledge_unmerge",
       "knowledge_verify",
       "knowledge_withdraw"
     ]
+  },
+  "toolMetadata": {
+    "knowledge_annotate": { "profiles": ["coding"] },
+    "knowledge_attach": { "profiles": ["coding"] },
+    "knowledge_attach_file": { "profiles": ["coding"] },
+    "knowledge_attachment": { "profiles": ["coding"] },
+    "knowledge_chronicle_day": { "profiles": ["coding"] },
+    "knowledge_chronicle_last_seen": { "profiles": ["coding"] },
+    "knowledge_chronicle_since": { "profiles": ["coding"] },
+    "knowledge_connections": { "profiles": ["coding"] },
+    "knowledge_correct": { "profiles": ["coding"] },
+    "knowledge_create_claim": { "profiles": ["coding"] },
+    "knowledge_create_relationship": { "profiles": ["coding"] },
+    "knowledge_diagnostics": { "profiles": ["coding"] },
+    "knowledge_edit_body": { "profiles": ["coding"] },
+    "knowledge_evidence_read": { "profiles": ["coding"] },
+    "knowledge_grep": { "profiles": ["coding"] },
+    "knowledge_history": { "profiles": ["coding"] },
+    "knowledge_lookup": { "profiles": ["coding"] },
+    "knowledge_merge": { "profiles": ["coding"] },
+    "knowledge_mutation": { "profiles": ["coding"] },
+    "knowledge_ontology": { "profiles": ["coding"] },
+    "knowledge_publish_batch": { "profiles": ["coding"] },
+    "knowledge_recall": { "profiles": ["coding"] },
+    "knowledge_reconcile_evidence": { "profiles": ["coding"] },
+    "knowledge_record": { "profiles": ["coding"] },
+    "knowledge_records": { "profiles": ["coding"] },
+    "knowledge_relink": { "profiles": ["coding"] },
+    "knowledge_remember": { "profiles": ["coding"] },
+    "knowledge_resume": { "profiles": ["coding"] },
+    "knowledge_revision": { "profiles": ["coding"] },
+    "knowledge_save_page": { "profiles": ["coding"] },
+    "knowledge_source_check": { "profiles": ["coding"] },
+    "knowledge_status": { "profiles": ["coding"] },
+    "knowledge_supersede": { "profiles": ["coding"] },
+    "knowledge_timeline": { "profiles": ["coding"] },
+    "knowledge_unmerge": { "profiles": ["coding"] },
+    "knowledge_verify": { "profiles": ["coding"] },
+    "knowledge_withdraw": { "profiles": ["coding"] }
   }
 }

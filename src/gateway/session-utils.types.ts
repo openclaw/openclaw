@@ -40,7 +40,11 @@ export type GatewaySessionsDefaults = {
   modelSelectionTarget?: StickyModelSelectionTarget;
 };
 
-type SubagentRunState = "active" | "interrupted" | "historical";
+/**
+ * The child's current registry run. `paused` is a yielded run awaiting a continuation;
+ * its `status` stays the terminal-looking value older clients already render.
+ */
+type SubagentRunState = "active" | "paused" | "interrupted" | "historical";
 
 export type GatewaySessionRow = Omit<SessionRow, "archivedBy" | "updatedAt" | "worktree"> & {
   worktree?: SessionEntry["worktree"];

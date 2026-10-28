@@ -50,7 +50,7 @@ describe("grouped chat rendering", () => {
     render(renderTestMessageGroup(group, opts));
   }
 
-  it("preserves reference links and one duplicate badge in recovered media", async () => {
+  it("preserves reference links in recovered media", async () => {
     const fullText =
       "[Before][proof]\n\nMEDIA:https://example.com/comparison.png\n\n[After][proof]\n\n[proof]: https://example.com/proof";
     const fullMessage = createAssistantMessage(fullText, { timestamp: 1000 });
@@ -59,7 +59,7 @@ describe("grouped chat rendering", () => {
       __openclaw: { id: "media-recovery", seq: 1, truncated: true },
     });
     markdownRenderMock.withImplementation(renderMarkdownHtml, () => {
-      renderAssistantMessageEntries([{ key: "media-order", message, duplicateCount: 2 }], {
+      renderAssistantMessageEntries([{ key: "media-order", message }], {
         sessionKey: "agent:main:main",
         loadFullAssistantMessage: async () => null,
         getAssistantMessageExpansion: () => ({
@@ -83,16 +83,14 @@ describe("grouped chat rendering", () => {
       "https://example.com/proof",
       "https://example.com/proof",
     ]);
-    expectCount(".chat-duplicate-count", 1);
     expect(harness.view.textContent).not.toContain("Loading preview");
   });
 
-  it("keeps list structure and its duplicate suffix across an assistant image", async () => {
+  it("keeps list structure across an assistant image", async () => {
     markdownRenderMock.withImplementation(renderMarkdownHtml, () => {
       renderAssistantMessageEntries([
         {
           key: "list-image",
-          duplicateCount: 2,
           message: createAssistantMessage(
             "1. First\nMEDIA:https://example.com/first.png\n1. Second",
           ),
@@ -105,8 +103,7 @@ describe("grouped chat rendering", () => {
     await waitForSolid(() =>
       expect(list.querySelector("li:first-child .chat-message-image")).not.toBeNull(),
     );
-    expect(list.querySelector("li:last-child")?.textContent).toBe("Second\u00a0×2");
-    expect(list.querySelector("li:last-child > .chat-duplicate-count")?.textContent).toBe("×2");
+    expect(list.querySelector("li:last-child")?.textContent).toBe("Second");
   });
 
   it("suppresses a whole thinking region spanning assistant media", async () => {
@@ -170,27 +167,6 @@ describe("grouped chat rendering", () => {
     );
     expect(element(".chat-text")?.getAttribute("dir")).toBe("rtl");
     expect(elementText(".chat-text")?.trim()).toBe("שלום");
-  });
-
-  it.each([
-    ["compact details", "<details><summary>More</summary>body</details>", "details"],
-    ["table", "| Name | Value |\n| --- | --- |\n| one | two |", ".markdown-table"],
-  ])("keeps a duplicate marker outside terminal %s content", (_label, markdownText, terminal) => {
-    markdownRenderMock.mockImplementationOnce(renderMarkdownHtml);
-    renderAssistantMessageEntries([
-      {
-        key: "assistant-duplicate",
-        message: createAssistantMessage(markdownText, { timestamp: 1 }),
-        duplicateCount: 3,
-      },
-    ]);
-
-    const chatText = requireElement(".chat-text", HTMLDivElement);
-    const terminalBlock = requireElement(terminal, HTMLElement, chatText);
-    expect(terminalBlock.querySelector(".chat-duplicate-count")).toBeNull();
-    expect(chatText.querySelector(":scope > .chat-duplicate-count")?.textContent).toBe("×3");
-    expect(chatText.querySelector("summary")?.textContent ?? "").not.toContain("×3");
-    expect(chatText.querySelector("td:last-child")?.textContent ?? "").not.toContain("×3");
   });
 
   function renderAssistantDisclosureActionFixture(

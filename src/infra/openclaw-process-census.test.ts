@@ -481,6 +481,19 @@ it.each([
 
 const references = { runId: "update-run-123", artifactPaths: ["/tmp/retained runtime"] };
 const denied = () => Object.assign(new Error("denied"), { code: "EACCES" });
+function expectReferences(
+  matchingPids: number[],
+  unverifiedPids: number[] = [],
+  handoff: typeof references & { sharedRoots?: string[]; familyDeadline?: number } = references,
+) {
+  expect(inspectOtherOpenClawProcesses(handoff)).toEqual({
+    matchingPids,
+    unverifiedPids,
+    ...(unverifiedPids.length
+      ? { warnings: unverifiedPids.map((pid) => expect.stringContaining(`PID ${pid}`)) }
+      : {}),
+  });
+}
 
 it.each([
   ["/usr/lib/systemd/systemd", "--user"],
@@ -494,24 +507,14 @@ it.each([
     artifactPaths: ["/tmp/openclaw-update-runtime-Ab1234"],
   };
   expectPids([]);
-  expect(inspectOtherOpenClawProcesses(handoffRefs)).toEqual({
-    matchingPids: [],
-    unverifiedPids: [],
-  });
+  expectReferences([], [], handoffRefs);
   rows.get(peer + 1)!.cwd = handoffRefs.artifactPaths[0];
   expectPids([peer + 1]);
-  expect(inspectOtherOpenClawProcesses(handoffRefs)).toEqual({
-    matchingPids: [peer + 1],
-    unverifiedPids: [],
-  });
+  expectReferences([peer + 1], [], handoffRefs);
   rows.get(peer + 1)!.cwd = denied();
   rows.get(peer + 1)!.ppid = 1;
   expectPids([]);
-  expect(inspectOtherOpenClawProcesses(handoffRefs)).toEqual({
-    matchingPids: [],
-    unverifiedPids: [peer + 1],
-    warnings: [expect.stringContaining(`PID ${peer + 1}`)],
-  });
+  expectReferences([], [peer + 1], handoffRefs);
 });
 
 it.each([0, 1000])(
@@ -539,10 +542,7 @@ it("finds orphaned handoff references while excluding only its verified updater 
     "--eval",
     'import("file:///tmp/retained%20runtime/tree/worker.js")',
   ]);
-  expect(inspectOtherOpenClawProcesses(references)).toEqual({
-    matchingPids: [peer, peer + 1, peer + 2, peer + 5],
-    unverifiedPids: [],
-  });
+  expectReferences([peer, peer + 1, peer + 2, peer + 5]);
   processRow(launcher, ["openclaw-update", references.runId]);
   expect(inspectOtherOpenClawProcesses(references).matchingPids).toContain(launcher);
 });
@@ -576,11 +576,7 @@ it.each(["linux", "darwin"] as const)(
           : { argv: rows.get(pid)!.argv },
       );
     }
-    expect(inspectOtherOpenClawProcesses(references)).toEqual({
-      matchingPids: [peer + 2, peer + 3],
-      unverifiedPids: [peer],
-      warnings: [expect.stringContaining(`PID ${peer}`)],
-    });
+    expectReferences([peer + 2, peer + 3], [peer]);
   },
 );
 
@@ -607,11 +603,7 @@ it.each([
     read.mockImplementation((file: string) =>
       file === `/proc/${peer}/status` ? `Uid:\t${uids}\n` : readFile(file),
     );
-    expect(inspectOtherOpenClawProcesses(references)).toEqual({
-      matchingPids: [],
-      unverifiedPids: foreign ? [] : [peer],
-      ...(!foreign ? { warnings: [expect.stringContaining(`PID ${peer}`)] } : {}),
-    });
+    expectReferences([], foreign ? [] : [peer]);
   },
 );
 
@@ -679,11 +671,7 @@ it("does not report the inspector's own descendants as handoff work", () => {
       [self, 0],
     ],
   );
-  expect(inspectOtherOpenClawProcesses(references)).toEqual({
-    matchingPids: [peer + 2],
-    unverifiedPids: [peer + 3],
-    warnings: [expect.stringContaining(`PID ${peer + 3}`)],
-  });
+  expectReferences([peer + 2], [peer + 3]);
 });
 
 it("reports shared-root work unless its whole ancestry began after the family deadline", () => {
@@ -724,10 +712,7 @@ it("reports shared-root work unless its whole ancestry began after the family de
     sharedRoots: [`${installation}/`],
   };
 
-  expect(inspectOtherOpenClawProcesses({ ...handoff, familyDeadline })).toEqual({
-    matchingPids: [peer + 1, peer + 2, peer + 3, peer + 5],
-    unverifiedPids: [],
-  });
+  expectReferences([peer + 1, peer + 2, peer + 3, peer + 5], [], { ...handoff, familyDeadline });
   // Without a recorded deadline, or with an incomplete ancestry, every holder remains.
   const holders = [peer, peer + 1, peer + 2, peer + 3, peer + 4, peer + 5];
   expect(inspectOtherOpenClawProcesses(handoff).matchingPids).toEqual(holders);

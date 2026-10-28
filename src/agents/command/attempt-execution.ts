@@ -79,7 +79,6 @@ import type { AgentAttemptParams } from "./attempt-execution.types.js";
 import { buildCommonCommandRunParams } from "./attempt-run-params.js";
 import { assertSandboxedDelegatedChildNotCli } from "./attempt-sandbox-cli-admission.js";
 import { buildCommandAttemptToolContext } from "./attempt-tool-context.js";
-import { readSessionRunSettings } from "./session-run-settings.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 
@@ -346,9 +345,10 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
         classifyResult: params.classifyResult,
       },
       async ({ sessionEntry, cliSessionBinding, assertSettlementCurrent, settleResult }) => {
-        if ((params.cyberAccessProgram ?? sessionEntry?.cyberAccessProgram) !== undefined) {
+        const accessProgram = params.cyberAccessProgram ?? sessionEntry?.cyberAccessProgram;
+        if (accessProgram !== undefined && accessProgram !== "standard") {
           throw new Error(
-            "Explicit access programs are unsupported by this CLI runtime. Reset Access to the model default or use the OpenClaw or native Codex runtime.",
+            "Daybreak access is unsupported by this CLI runtime. Select Standard or use the OpenClaw or native Codex runtime.",
           );
         }
         params.sessionEntry = sessionEntry;
@@ -629,7 +629,10 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     messageTo: params.opts.replyTo ?? params.opts.to,
     messageThreadId: params.opts.threadId,
     hasRepliedRef: params.runContext.hasRepliedRef,
-    ...readSessionRunSettings(params.sessionEntry),
+    /** Session-scoped settings every embedded turn of the session runs with. */
+    permissionMode: params.sessionEntry?.permissionMode,
+    sessionRoot: params.sessionEntry?.sessionRoot,
+    blindPrompt: params.sessionEntry?.blindPrompt,
     ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
     agentHarnessId: isRawModelRun ? undefined : resolveSessionPinnedHarnessId(params.sessionEntry),
     modelSelectionLocked: !isRawModelRun && params.sessionEntry?.modelSelectionLocked === true,
@@ -653,6 +656,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     isFinalFallbackAttempt: params.isFinalFallbackAttempt,
     verboseLevel: params.resolvedVerboseLevel,
     execSession: params.sessionEntry,
+    sessionPromptDelivery: params.sessionEntry?.delivery,
     execApprovalContinuationPromptRange: embeddedExecApprovalContinuationPromptRange,
     execApprovalContinuationTranscriptPromptRange: continuationTranscriptPromptRange,
     // Hidden internal runs lack an event consumer; visible lanes still feed UI and parent relays.

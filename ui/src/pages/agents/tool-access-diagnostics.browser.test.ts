@@ -1,7 +1,7 @@
 import { assert, expect, it } from "vitest";
 import { installBrowserHistoryIsolation } from "../../test-helpers/browser-history.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
-import { createBaseParams } from "./panels-tools-skills.test-support.ts";
+import { createBaseParams, openToolGroups } from "./panels-tools-skills.test-support.ts";
 import { AgentTools } from "./panels-tools-skills.tsx";
 
 installBrowserHistoryIsolation();
@@ -33,6 +33,7 @@ it.each([false, true])("only verifies saved policy (configDirty=%s)", (configDir
   });
   const { container } = mountSolid(AgentTools, params);
 
+  openToolGroups(container);
   const card = container.querySelector<HTMLDetailsElement>("#agent-tool-exec");
   assert(card);
   expect(card.open).toBe(false);
@@ -75,6 +76,7 @@ it("keeps session-denied MCP entries out of the tool preview", () => {
       },
     }),
   );
+  openToolGroups(container);
   const card = container.querySelector("#agent-tool-terminal__run");
   expect(card?.querySelector("summary")?.textContent).toContain("Off");
   expect(card?.textContent).toContain("Denied by this session’s tool restrictions.");

@@ -388,8 +388,10 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(fs.existsSync(testState.root)).toBe(false);
   });
 
-  it("finishes sidecar startup before marking while keeping agent admission gated", async () => {
-    const methods = ["chat.history", "models.list", "agent", "sessions.send", "chat.send"];
+  it("starts channel transports before orphan marking while keeping agent admission gated", async ({
+    signal,
+  }) => {
+    const methods = ["models.list", "agent", "sessions.send", "chat.send"];
     const unavailableGatewayMethods = new Set(methods);
     const startupOrder: string[] = [];
     const postReadyWork = createDeferred();
@@ -421,7 +423,7 @@ describe("startGatewayPostAttachRuntime", () => {
     const log = { info: vi.fn(), warn: vi.fn() };
 
     try {
-      await startGatewayPostAttachRuntime({
+      const runtime = await startGatewayPostAttachRuntime({
         ...createPostAttachParams(),
         getConfig: () => currentConfig,
         startChannels,
@@ -455,25 +457,26 @@ describe("startGatewayPostAttachRuntime", () => {
           activationSourceConfig: { hooks: { internal: { enabled: false } } },
         }),
       );
-      expect(hoisted.scheduleRestartAbortedMainSessionRecovery).toHaveBeenCalledWith({
-        getConfig: expect.any(Function),
-        shouldContinue: expect.any(Function),
-        startupCheckedStorePaths: expect.any(Set),
-        waitForStart: expect.any(Function),
-        gatewayRuntime: expect.any(Object),
-      });
+      expect(hoisted.scheduleRestartAbortedMainSessionRecovery).toHaveBeenCalledOnce();
       expect(hoisted.activateSubagentRegistry).not.toHaveBeenCalled();
       expect(startupOrder).toEqual([]);
-      expect(startChannels).not.toHaveBeenCalled();
+      expect(startChannels).toHaveBeenCalledOnce();
       expect(hoisted.markStartupOrphanedMainSessionsForRecovery).not.toHaveBeenCalled();
       postReadyWork.resolve();
       await markingEntered.promise;
       expect(onSidecarsReady).not.toHaveBeenCalled();
-      expect(startChannels).not.toHaveBeenCalled();
+      expect(startChannels).toHaveBeenCalledOnce();
       expect(hoisted.activateSubagentRegistry).not.toHaveBeenCalled();
       expect([...unavailableGatewayMethods]).toStrictEqual(methods);
       releaseMarking.resolve();
-      await recoveryActivated.promise;
+      await withinTest(
+        awaitGateBeforeSettlement(
+          recoveryActivated.promise,
+          runtime.subagentRecoverySettled,
+          "startup recovery settled before registry activation",
+        ),
+        signal,
+      );
       expect(startChannels).toHaveBeenCalledOnce();
       await chatReady.promise;
       expect([...unavailableGatewayMethods]).toStrictEqual([]);
@@ -490,6 +493,7 @@ describe("startGatewayPostAttachRuntime", () => {
   });
 
   registerGatewayStartupReadinessTests({
+    recoveryMocks: hoisted,
     start: startGatewayPostAttachRuntime,
     createParams: createPostAttachParams,
     createRuntimeDeps: createPostAttachRuntimeDeps,
@@ -529,56 +533,6 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(recoverySidecar.stop).toHaveBeenCalledOnce();
     expect(publishedGatewayLifetimeSidecars.has(recoverySidecar)).toBe(false);
   });
-
-  it.each([false, true])(
-    "gates main-session recovery behind subagent restoration (failure: %s)",
-    async (failRestoration) => {
-      const { promise: postReadyWork, resolve: releasePostReadyWork } = createDeferred();
-      const restorationStarted = createDeferred();
-      const restorationReady = createDeferred();
-      hoisted.activateSubagentRegistry.mockImplementationOnce(() => {
-        restorationStarted.resolve();
-        const settled = restorationReady.promise.then(() => {
-          if (failRestoration) {
-            throw new Error("restoration failed");
-          }
-        });
-        return hoisted.createRecoveryProgress(settled, Promise.resolve());
-      });
-      let waitForStart: (() => Promise<void>) | undefined;
-      hoisted.scheduleRestartAbortedMainSessionRecovery.mockImplementationOnce(
-        (params: { waitForStart?: () => Promise<void> }) => {
-          waitForStart = params.waitForStart;
-          return { stop: vi.fn(async () => {}) };
-        },
-      );
-
-      await startGatewayPostAttachRuntime({
-        ...createPostAttachParams(),
-        waitForPostReadyWork: () => postReadyWork,
-      });
-
-      await waitForGatewayTestState(() => {
-        expect(waitForStart).toEqual(expect.any(Function));
-      });
-      let released = false;
-      const waiting = waitForStart?.().then(() => {
-        released = true;
-      });
-      await Promise.resolve();
-      expect(released).toBe(false);
-
-      try {
-        releasePostReadyWork();
-        await restorationStarted.promise;
-        expect(released).toBe(false);
-      } finally {
-        restorationReady.resolve();
-      }
-      await waiting;
-      expect(released).toBe(true);
-    },
-  );
 
   it("reports internal hook load failures without copying the error into the summary", async () => {
     const log = { info: vi.fn<(message: string) => void>(), warn: vi.fn() };

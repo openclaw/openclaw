@@ -18,8 +18,6 @@ export const StoresSection = Type.Record(Type.String({ pattern: STORE_KEY }), Na
 });
 export type StoresSection = Static<typeof StoresSection>;
 
-const REVIEW_JOB_DESCRIPTION =
-  "Automation run after each maintenance pass that leaves private claims reachable from no page. Its agent turn follows the knowledge-unlinked-claims skill. Disable the automation to pause the review.";
 /** Authored plugin configuration. Membership is the only per-agent setting;
  * everything else is a plugin-wide gate. */
 export const PluginConfig = Type.Object(
@@ -51,13 +49,6 @@ export const PluginConfig = Type.Object(
                 "IANA time zone for the schedule. Default: the Gateway host's time zone.",
             }),
           ),
-          reviewJobId: Type.Optional(
-            Type.String({
-              minLength: 1,
-              maxLength: 100,
-              description: REVIEW_JOB_DESCRIPTION,
-            }),
-          ),
         },
         { additionalProperties: false },
       ),
@@ -72,7 +63,6 @@ type MaintenanceSettings = {
   enabled: boolean;
   schedule: string;
   timezone: string;
-  reviewJobId?: string;
 };
 export type Policy = {
   operatorRead: boolean;
@@ -98,7 +88,6 @@ export function parsePolicy(config: Record<string, unknown> | undefined): Policy
       enabled: maintenance.enabled ?? true,
       schedule: maintenance.schedule ?? DEFAULT_MAINTENANCE_SCHEDULE,
       timezone: maintenance.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
-      ...(maintenance.reviewJobId ? { reviewJobId: maintenance.reviewJobId } : {}),
     },
   };
 }

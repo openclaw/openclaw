@@ -40,6 +40,10 @@ import { openTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import { withLegacyPublicationDraft } from "./openclaw-state-db-schema-v28-publication.js";
 import { withLegacyLocalWorkspaceManifests } from "./openclaw-state-db-schema-v31-workspace-manifests.js";
 import {
+  withLegacyLocalWorkspaceCas,
+  WORKSPACE_CAS_TABLES,
+} from "./openclaw-state-db-schema-v35-workspace-cas.js";
+import {
   admitStateSchemaFacts,
   PostgresSchemaAdmissionUnavailableError,
 } from "./openclaw-state-db-schema-version.js";
@@ -178,9 +182,22 @@ function statePostgresVersionSql(version: number): string {
 }
 
 function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
-  const statePostgresSchemaV32 = {
-    postgres: withLegacyPostgresIndexOrdering(statePostgresSchema.postgres, "schema-nullability"),
+  const statePostgresSchemaV33 = {
+    postgres: withLegacyLocalWorkspaceCas(statePostgresSchema.postgres),
     postgresFragments: statePostgresSchema.postgresFragments.map((fragment) => ({
+      ...fragment,
+      tables: fragment.tables.filter(
+        (table) => !WORKSPACE_CAS_TABLES.some((name) => name === table),
+      ),
+      sql: withLegacyLocalWorkspaceCas(fragment.sql),
+    })),
+  };
+  const statePostgresSchemaV32 = {
+    postgres: withLegacyPostgresIndexOrdering(
+      statePostgresSchemaV33.postgres,
+      "schema-nullability",
+    ),
+    postgresFragments: statePostgresSchemaV33.postgresFragments.map((fragment) => ({
       ...fragment,
       sql: withLegacyPostgresIndexOrdering(fragment.sql, "schema-nullability"),
     })),
@@ -308,19 +325,28 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
     {
       version: 33,
       fromSchema: statePostgresSchemaV32,
-      schema: statePostgresSchema,
+      schema: statePostgresSchemaV33,
       sql: `${postgresIndexOrderingMigration(
-        [runtime.eagerSql, ...runtime.fragments.map((fragment) => fragment.sql)].join("\n"),
+        [
+          statePostgresSchemaV33.postgres,
+          ...statePostgresSchemaV33.postgresFragments.map((fragment) => fragment.sql),
+        ].join("\n"),
         "schema-nullability",
       )}
         ${statePostgresVersionSql(33)}`,
     },
     {
       version: 34,
-      fromSchema: statePostgresSchema,
-      schema: statePostgresSchema,
+      fromSchema: statePostgresSchemaV33,
+      schema: statePostgresSchemaV33,
       // The state owner's beforeMigrate hook binds identity before this atomic version advance.
       sql: statePostgresVersionSql(34),
+    },
+    {
+      version: 35,
+      fromSchema: statePostgresSchemaV33,
+      schema: statePostgresSchema,
+      sql: `${runtime.workspaceCasV35Sql}\n${statePostgresVersionSql(35)}`,
     },
   ];
 }
@@ -360,8 +386,13 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
     }
     throw new Error(`No PostgreSQL state fragment owns ${table}`);
   }
+  const fragmentTables = fragment.tables.filter(
+    (name) =>
+      facts.version >= 35 ||
+      !WORKSPACE_CAS_TABLES.some((migrationTable) => migrationTable === name),
+  );
   if (
-    fragment.tables.every((name) =>
+    fragmentTables.every((name) =>
       facts.catalog.some((fact) => fact.kind === "table" && fact.table === name),
     )
   ) {
@@ -383,15 +414,16 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
     throw new Error("PostgreSQL state fragments require the owner's transaction");
   }
   invalidateLocalSqliteSchemaAdmissions(db);
+  const fragmentSql = facts.version < 35 ? withLegacyLocalWorkspaceCas(fragment.sql) : fragment.sql;
   // Lazy fragments can be created before Doctor upgrades a predecessor's index ordering.
   // sqlite-allow-raw: The schema owner installs a verified fragment under its transaction.
   db.exec(
     facts.version < 33
       ? withLegacyPostgresIndexOrdering(
-          fragment.sql,
+          fragmentSql,
           facts.version < 32 ? "sqlite" : "schema-nullability",
         )
-      : fragment.sql,
+      : fragmentSql,
   );
   admitPostgresPhysicalFacts({
     db,

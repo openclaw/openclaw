@@ -772,7 +772,7 @@ it("prepares a goal message with the same intent that commits with the goal", as
   });
 });
 
-it.each(["commit", "captured-root", "native-replay"])(
+it.each(["commit", "warm-worker", "captured-root", "native-replay"])(
   "keeps real first-Goal admission grants free of host session SQL (%s)",
   async (mode) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -787,6 +787,21 @@ it.each(["commit", "captured-root", "native-replay"])(
       }
       const key = "agent:main:compound-goal-guard";
       const target = await loadGatewaySessionEntryAsync(key, { agentId: "main" });
+      if (mode === "warm-worker") {
+        const warmKey = "agent:main:ordinary-turn";
+        const sessionId = "ordinary-session";
+        await appendExpectedSessionTranscriptTurn(
+          { agentId: target.agentId, storePath: target.storePath, sessionKey: warmKey, sessionId },
+          {
+            expectedSessionId: sessionId,
+            selectedSessionId: null,
+            initialSessionEntry: { sessionId, updatedAt: Date.now() },
+            sessionFile: warmKey,
+            keyFormat: "agent-qualified",
+            messages: [{ message: { role: "user", content: "ordinary turn before first Goal" } }],
+          },
+        );
+      }
       const initialSessionEntry = { sessionId: "guarded-first-goal", updatedAt: Date.now() };
       const guard = createChatSendGoalCommitGuard({
         client: null,

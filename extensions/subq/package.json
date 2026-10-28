@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/subq",
-  "version": "2026.10.7",
+  "version": "2026.10.8",
   "description": "OpenClaw SubQ Snap decision provider",
   "repository": {
     "type": "git",
@@ -21,11 +21,11 @@
       "minHostVersion": ">=2026.10.3"
     },
     "compat": {
-      "pluginApi": ">=2026.10.7"
+      "pluginApi": ">=2026.10.8"
     },
     "build": {
       "bundledDist": false,
-      "openclawVersion": "2026.10.7"
+      "openclawVersion": "2026.10.8"
     },
     "release": {
       "publishToClawHub": true,

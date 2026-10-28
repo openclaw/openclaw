@@ -60,7 +60,13 @@ icon. Unknown publisher metadata does not enable branding.
 
 A tool stops showing **Running** when its completion arrives, even while the
 parent turn continues. If that completion does not establish success or failure,
-the row shows **Outcome unknown**. Partial output alone does not finish a tool.
+the row keeps the tool's known purpose and shows **Outcome unknown** separately.
+Reloading history preserves the recorded purpose. A saved call without a loaded
+result shows **No result available** rather than counting as an unknown outcome.
+Live execution facts and the active run’s replay snapshot establish **Running**;
+the run being active alone does not. Refreshing the same session retains those
+facts until history records an outcome. Partial output alone does not finish a
+tool.
 
 While a turn is still working and has subagents running, its working indicator
 ends with their count, such as **3 subagents running**, and counts down as they
@@ -77,31 +83,45 @@ that subagent in the **Subagents** panel, or its session when the panel does not
 list it. The rows reuse the chat's loaded subagent list; they do not load each
 child's transcript.
 
-When a turn hands off with `sessions_yield` and its subagents are still active,
-their live rows stay under that reply without a separate **Waiting on…** line.
-One muted timer at the far right of those rows shows the total time since your
-message, including subagent waits—not the sum of worker runtimes. It stays on
-the same clock across handoffs and resumes. If the loaded history cannot identify
-the complete request, the timer is omitted instead of estimating a total.
-Child activity also stays visible when a turn ends without a handoff. Until the
-subagent list is available, or when only ordinary child sessions remain, the
-existing working indicator remains as a fallback. Its wait clock measures the
+When a turn hands off with `sessions_yield`, an acknowledgment it recorded is
+the agent speaking: it appears as ordinary assistant text at the end of that
+reply, with Markdown, and stays there after the agent resumes. Put answers in
+normal assistant text; the acknowledgment is meant as a brief waiting status.
+
+While the handoff waits on child sessions, its working line names them in place
+of the working text. With one child it reads **Waiting on** and that child's
+name, then the time since your message. With several it reads, for example,
+**Waiting on 3 sessions · 1 needs your input · 9m**, and a list below it shows
+each child with its status in words: **Needs your input**, **Running**,
+**Failed**, **Stopped**, or **Done**. Children that asked for your attention come
+first. The list is open while the agent waits; select the line to close or reopen
+it. It names subagents and child sessions alike, including children that finished
+during the wait. Each name, here and in the **Resumed** list, links to that
+child's session; Cmd-, Ctrl-, or middle-click opens it in a new tab. A child the
+chat's own subagent list does not include, or a pane that cannot open sessions,
+shows the name as plain text. **Needs your input** is the child's own attention request, the
+same one the sidebar shows; a child paused for a continuation without one reads
+as finished. The time stays on the same clock across handoffs and resumes.
+Until the subagent list is available, the existing working indicator remains as
+a fallback. Its wait clock measures the
 current idle interval from the parent’s latest recorded run end, even if the
 handoff is outside loaded history. A later parent update starts a new idle
 interval; this is not the original request duration or a child’s runtime. Child
 activity without a completed parent turn does not invent a parent wait.
 The parent’s own working indicator remains visible while the parent is actively
-working. There is no additional waiting-status line above the composer. Once
-everything it waited on has finished, the activity rows disappear until the agent resumes. Tool rows you opened stay open through the handoff. A
-successful `sessions_yield` waiting for an incoming message shows its public
-acknowledgment, or **Waiting for a message** when none was recorded. Child handoffs
-keep their existing activity rows. Private continuation context stays hidden.
+working. There is no additional waiting-status line above the composer. Tool rows
+you opened stay open through the handoff. A `sessions_yield` waiting for an
+incoming message without an acknowledgment shows the centered status **Waiting
+for a message** until it resumes. Private continuation context stays hidden.
 Turns with only tool calls use the usual activity rows; entries with nothing
 displayable do not leave an empty assistant reply.
 
-When the last subagent finishes, its activity row disappears and the block stays as it
-is, without a working indicator, until the turn resumes. Its answer then
-continues in that same block, with one footer at the end. Tool activity that
+When everything it waited on has finished, the block stays as it is, without a
+working indicator, until the turn resumes. Its answer then continues in that
+same block, with one footer at the end. Below a spoken acknowledgment, a thin
+**Resumed · 9m 32s later · 3 sessions** rule marks where it picked up again;
+select it to see the children it waited on and their current status. Until the
+chat's own subagent list has loaded, the rule shows the wait time alone. Tool activity that
 resumes with nothing written in between joins the activity row from before the
 handoff. In dashboard sessions, tool activity recorded after the resumed
 answer, such as the step that sent it, joins the activity before that answer,
@@ -132,18 +152,19 @@ operation.
 
 The running count, the wait's count and name, and a launch row's state and link
 come from the session's subagent list. Until the pane has loaded it, the working
-indicator shows no count and a wait reads **Waiting on subagents**; a launch
+indicator shows no count and a wait names no children; a launch
 row whose subagent is not in the list shows its name alone. The pane does not
 load that list when
 [Swarm is turned off](/tools/swarm) with `tools.swarm: false`.
 
-The count and the names lead to the **Subagents** panel only for subagents that
+The running count and launch-row names lead to the **Subagents** panel only for subagents that
 panel lists, including swarm workers, and only in a pane that has the panel. A
 subagent on the ACP runtime is not in that list, so its name opens its session
 instead, and a count that includes one is plain text. A pane without a side
 panel of its own, such as the transcript the **Subagents** panel shows or a
-session embedded in Home, opens the subagent's session as well. **Waiting on 2
-sessions** is always plain text.
+session embedded in Home, opens the subagent's session as well. Names on a
+handoff's waiting line link to the child's session instead, and with several
+children **Waiting on 2 sessions** opens and closes its list.
 
 When your role or session policy blocks messages, the composer is disabled and
 shows the reason before you try to send. This includes sandbox requirements,
@@ -166,6 +187,28 @@ When the macOS app embeds a single conversation beside its native sidebar, the c
 In the macOS Web experience and Tauri desktop app on macOS, Linux, and Windows, the navigation panel header and content header share the 52px titlebar row, with back/forward before the conversation title and search in the persistent rail.
 Collapsing the panel leaves only expand-sidebar beside the rail, which keeps New session and search; the content header still starts with back/forward.
 Drag an empty area of the titlebar row to move the window; its buttons keep their normal actions.
+
+## Desktop message input
+
+Choose **Settings → Appearance → Chat → Send shortcut** to control how you submit
+a message from the chat composer on Windows, macOS, or Linux:
+
+| Send shortcut      | Submit a message                                | Add a line break     |
+| ------------------ | ----------------------------------------------- | -------------------- |
+| **Enter**          | Enter                                           | Shift+Enter          |
+| **Cmd/Ctrl+Enter** | Cmd+Enter on macOS; Ctrl+Enter on Windows/Linux | Enter or Shift+Enter |
+
+These shortcuts apply to an ordinary draft when no suggestion menu is handling
+the key. If the agent is already working, submission follows the conversation's
+follow-up mode. With **Enter** selected, Cmd/Ctrl+Enter can switch between queuing
+and steering for that message; see [Stop and abort](/web/control-ui/chat#stop-and-abort).
+
+When using a Chinese, Japanese, or Korean input method, Enter that confirms a
+composition stays with the input method instead of sending the draft. For example,
+type `zhongwen` with a Chinese Pinyin input method and confirm `中文`: the text
+should remain in the composer. Finish composing, then use the configured send
+shortcut or the send button to submit. Choose **Cmd/Ctrl+Enter** if you prefer
+plain Enter to add a line after composition has finished.
 
 ## Mobile message input
 
@@ -261,7 +304,7 @@ send or suggest in that session. See
 
 While you watch a running session, the Gateway shows the model's latest safe preamble immediately as the session headline. When a utility model is available, it can replace that headline with a richer compact status digest after enough activity accumulates. Open **Side chat** from **Panels** to ask about that session. Side chat uses the shared panel layout on desktop and the shared sheet on mobile.
 
-Side chat answers questions about the selected session and its project without entering or interrupting the main agent run. On the first question, the Gateway lazily loads a bounded visible snapshot of the selected session before starting the utility model. If history is temporarily unavailable, the question stays visible with **Retry** instead of being treated as an empty session. Side chat uses read-only access to the target session's history/search and agent workspace. Its bounded thread is held in Gateway memory, is restored when you switch sessions in the Control UI, and is cleared when you close its desktop side-panel tab, use **Clear side chat** in the main panel or on mobile, reset or delete the session, restart the Gateway, or reach idle expiry. It never enters `chat.history`, and private reference context is not stored as operator dialogue. Open it with Shift-Command-S on Apple platforms or Ctrl-Shift-S elsewhere, or type `/btw` or `/side` in the main Control UI composer and press Enter to open Side chat and focus its question box. Selecting `/btw` from the slash menu does the same. Add a question after either command to send it to Side chat; focus moves to its question box when the request finishes. Other clients keep their existing BTW behavior.
+Side chat answers questions about the selected session and its project without entering or interrupting the main agent run. On the first question, the Gateway lazily loads a bounded visible snapshot of the selected session before starting the utility model. If history is temporarily unavailable, the question stays visible with **Retry** instead of being treated as an empty session. Side chat uses read-only access to the target session's history/search and agent workspace. Each person has their own Side chat thread for a session: other people viewing the same session cannot see your questions or answers, and clearing your thread does not affect theirs. Connections without a personal identity, such as those using a shared Gateway token, act as one person and share one thread. Your bounded thread is held in Gateway memory, is restored when you switch sessions in the Control UI, and is cleared when you close its desktop side-panel tab, use **Clear side chat** in the main panel or on mobile, restart the Gateway, or reach idle expiry. Resetting or deleting the session clears every person's thread. It never enters `chat.history`, and private reference context is not stored as operator dialogue. Open it with Shift-Command-S on Apple platforms or Ctrl-Shift-S elsewhere, or type `/btw` or `/side` in the main Control UI composer and press Enter to open Side chat and focus its question box. Selecting `/btw` from the slash menu does the same. Add a question after either command to send it to Side chat; focus moves to its question box when the request finishes. Other clients keep their existing BTW behavior.
 
 When the agent's primary model runs on a CLI runtime such as `claude-cli`, no utility model is set explicitly, and direct provider authentication is unavailable, Side chat answers through that same CLI runtime. Subscription-only installs need no provider API key. On that route each answer is a tool-free, one-shot side question that uses the bounded session snapshot and observer notes instead of the read-only session tools, and image questions are not supported. Installs with working direct provider authentication keep the direct route, including read-only tools and image support.
 
@@ -275,9 +318,9 @@ Side chat cancels a question after 60 seconds. Once the canceled model run has f
 
 The Control UI keeps the latest 24 Side chat turns, including failed questions. Sending a follow-up keeps earlier failures in order; **Retry** resends that question in place. Failed questions stay in the current pane through a reconnect, but are not persisted across a page reload.
 
-The question box wraps and grows like the main composer. On desktop, Enter (or your configured send shortcut) asks the question, and Shift+Enter adds a line. On mobile, Return adds a line and the Ask button sends. Its toolbar matches the main composer where the control applies to a read-only question: **+** attaches images, `:shortcode:` suggests emoji, the microphone dictates, and the model and effort pickers choose the model, reasoning level, and speed for Side chat's own answers. **Default** is the agent's utility model with its fallbacks; a chosen model answers alone, must be allowed for the agent and your operator role, and never changes the main session's model. Side chat choices apply to that agent's sessions for as long as the page stays open. Slash commands, permissions, and Talk stay in the main composer. Highlighting text in a chat message offers **Ask in side chat**. Add an optional comment in the selection editor, then save it to stage an editable comment in Side chat. An empty question box starts with a short quote; an existing Side chat draft and the main composer stay unchanged. The full selection and comment accompany that question as bounded, temporary context. After the answer, the restored thread keeps the question text, including its quote, but not the attached context. Reselect the passage for a later question.
+The question box wraps and grows like the main composer. On desktop, Enter (or your configured send shortcut) asks the question, and Shift+Enter adds a line. On mobile, Return adds a line and the Ask button sends. Its toolbar matches the main composer where the control applies to a read-only question: **+** attaches images, `:shortcode:` suggests emoji, the microphone dictates, and the model and effort pickers choose the model, reasoning level, and speed for Side chat's own answers. **Default** is the agent's utility model with its fallbacks; a chosen model answers alone, must be allowed for the agent and your operator role, and never changes the main session's model. Side chat choices apply to that agent's sessions for as long as the page stays open. Slash commands, permissions, and Talk stay in the main composer. Highlighting text in a chat message offers **Ask in side chat**. Add an optional comment in the selection editor, then save it to stage an editable comment in Side chat. The question box and main composer stay unchanged. You can send the saved selection and comment on their own, or add a question. The full selection and comment accompany that question as bounded, temporary context. After the answer, the restored thread keeps the question text, but not the attached context. Reselect the passage for a later question.
 
-If the selection alone exceeds the context limit, Side chat opens without adding the selection and shows a notification. An empty question box still gets a short quote; an existing draft stays intact. If a comment or the combined selections exceed the limit, the editor stays open so you can shorten the comment or adjust the pending selections.
+If the selection alone exceeds the context limit, the editor stays open so you can shorten the selection. An existing draft stays intact. If a comment or the combined selections exceed the limit, the editor stays open so you can shorten the comment or adjust the pending selections.
 
 Drop an image onto Side chat or paste one into its question box. You can send it
 with a written question or on its own. Side chat accepts image attachments, not
@@ -290,6 +333,10 @@ Images are available only for the current question and are not retained in the
 restored text thread. Reattach an image when asking a later question about it.
 A failed question keeps its image for **Retry** while the current pane is retained;
 reloading the page discards that failed input.
+
+Double-click selections stay inside the message where they started, including
+when you drag on the second click. Ordinary drag selection and Select All can
+still span multiple messages.
 
 Highlight text and choose **Add to chat** to attach a comment to the main
 composer. The optional comment field starts on one line, grows to five lines,
@@ -414,9 +461,9 @@ These controls are sparse session overrides, like the model and thinking setting
 
 When `tools.web.search.enabled` is `false`, **Web search** stays off in Chat and New Session. The disabled control explains the global setting. If a session has an older enable override, selecting the control clears that override while search stays off. An explicit session disable remains saved.
 
-Choose **Media** in Chat or New Session to select existing images and videos together where the browser supports mixed selection. Image-only composers keep their existing image-only picker and reject video attachments; on iPhone and iPad Safari its label remains **Attach…** rather than **Photo**. Selecting media stages it in the draft; it does not send the message.
+Choose **Media** in Chat or New Session to select existing images and videos together where the browser supports mixed selection. On iPhone and iPad Safari, choose the single **Add attachment…** row instead; Safari’s native source menu offers library, camera, and file access. Image-only composers keep their image-only picker and reject video attachments. Selecting media stages it in the draft; it does not send the message.
 
-Camera and general-file behavior are unchanged: Android Chrome, Edge, Firefox, and Samsung Internet send **Camera** straight to the device capture input, without opening a web-camera preview first. Desktop browsers keep the preview, capture, and retake flow; iPhone and iPad Safari show **Media** beside the existing **Attach…** action, which retains native capture and general file access. Embedded native hosts keep their existing capture behavior. Canceling capture leaves the message draft unchanged.
+Camera and general-file behavior are unchanged: Android Chrome, Edge, Firefox, and Samsung Internet send **Camera** straight to the device capture input, without opening a web-camera preview first. Desktop browsers keep the preview, capture, and retake flow. iPhone and iPad Safari use their native source menu without a duplicate **Media** choice. Embedded native hosts keep their existing capture behavior. Canceling capture leaves the message draft unchanged.
 
 Video files selected in Chat or New Session show a small local frame preview with a play badge beside the filename. The slot keeps its size while loading. If the browser cannot decode the video promptly, the play icon remains. Removing the attachment releases its preview; generating the preview does not upload the video.
 
@@ -803,7 +850,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - `chat.history` responses are size-bounded for UI safety. When transcript entries are too large, Gateway may truncate long text fields, omit heavy metadata blocks, and replace oversized messages with a placeholder (`[chat.history omitted: message too large]`).
     - Long tool output uses 2,000-character text previews in history. Complete structured results keep their existing display limit so source cards and embedded views remain available. Choose **Show full output** to load the captured result on demand; copying or downloading from that view uses the full result. User and assistant text keep their separate display limits.
     - When a visible assistant message was truncated in `chat.history`, the Control UI automatically fetches the full display-normalized transcript entry through `chat.message.get` by `sessionKey`, active `agentId` when needed, and transcript `messageId`. The preview remains visible while the entry loads; recovered text replaces it inline.
-    - Image previews reserve their space while loading. New uploaded images retain their pixel dimensions in saved messages; older images without dimensions fit inside a stable 3:2 preview instead of shifting the surrounding conversation when they load. Open an image to view its full size.
+    - Image previews reserve their space while loading. New uploaded images retain their pixel dimensions in saved messages. Previews without dimensions use a temporary 3:2 placeholder, then adopt the decoded image’s aspect ratio without letterboxing; uploaded dimensions also update an already-visible preview. Single images retain that ratio when returning from Settings or reloading the conversation. Open an image to view its full size.
     - Assistant/generated images are persisted as managed media references. New clients resolve their stable artifact ids through authenticated `artifacts.download` and receive short-lived, exact-resource media URLs, so reloads do not depend on raw base64 payloads or reusable credentials in image URLs. The chat uses bounded thumbnails for still images. GIF attachments load their original bytes inline so they animate without opening the image viewer. Opening uses a screen-sized rendition; Download and Copy explicitly request the full image. These actions share the browser's bounded in-memory image cache, avoiding repeated downloads while a rendition remains cached.
     - The Gateway prepares `chat.history` for display, stripping inline directive tags (for example `[[reply_to_*]]` and `[[audio_as_voice]]`), plain-text tool-call XML payloads (`<tool_call>`, `<function_call>`, `<tool_calls>`, `<function_calls>`, and truncated blocks), and leaked ASCII/full-width model control tokens. Stored assistant visibility honors display, phase, and final-source facts first, then omits raw assistant text that trims to uppercase `NO_REPLY`; lowercase and wrapped forms remain visible. User text is never classified as silence. Heartbeat acknowledgments retain their separate display rules. The Control UI renders prepared history and live output without parsing silence tokens.
     - When a native tool call follows an unphased text group containing only an unfinished tool marker (such as `<` or `<tool_`), live chat and history hide that group. A marker fragment without a following native call remains a terminal literal. Prose and inline or fenced examples keep their existing rendering. Stored message text and tool arguments do not change.
@@ -845,7 +892,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - The active split pane drives the sidebar selection and URL. Selecting another pane or closing the active pane uses the surviving conversation's Chat or Dashboard preference; it does not copy the previous pane's view. Closing a pane that holds keyboard focus returns focus to the surviving pane's header, which is labeled with the session title for assistive technology. On desktop, every split pane has an always-visible **Close pane** (×) button at the right edge of its header, including inactive panes. It closes only that view, without deleting the session or stopping its work, and disappears when one pane remains. The session menu’s **View → Close pane** action remains available. Dividers resize columns and stacked panes, and the browser stores the layout locally across reloads.
     - On narrow screens, split view keeps the layout but renders only the active pane at the full available width and height, including its header with the close control. Widening the window restores the saved column and row proportions without losing drafts.
     - If you send a message while a model picker change for the same session is still saving, the composer waits for that session patch before calling `chat.send` so the send uses the selected model.
-    - On the New Session page, submitting opens the created conversation automatically. On desktop, **Cmd+Enter** on macOS or **Ctrl+Enter** elsewhere is ordinary submit with either send preference. Use **Cmd/Ctrl+Shift+Enter** to explicitly start in the background without leaving the page; a completion notice offers to open that session. The selected local, cloud-profile, or paired-device placement is preserved. Explicit Draft visibility keeps its create-only behavior.
+    - On the New Session page, submitting opens the created conversation automatically. On desktop, **Cmd+Enter** on macOS or **Ctrl+Enter** elsewhere is ordinary submit with either send preference. Use **Cmd/Ctrl+Shift+Enter** to explicitly start in the background without leaving the page; a completion notice offers to open that session. The selected local, cloud-profile, or paired-device placement is preserved. Explicit Draft visibility uses ordinary submission, which opens the conversation instead of starting it in the background. Your opening message is still sent to the agent.
     - Typing `/new` creates and switches to the same fresh dashboard session as New Chat, except when `session.dmScope: "main"` is configured and the current parent is the agent's main session; then it resets the main session in place. Typing `/reset` keeps the Gateway's explicit in-place reset for the current session.
     - The chat model picker requests the Gateway's configured model view. If `agents.defaults.modelPolicy.allow` is non-empty, that policy drives the picker, including `provider/*` entries that keep provider-scoped catalogs dynamic. Otherwise the picker shows configured entries plus providers with usable auth; aliases and settings under `agents.defaults.models` do not restrict it. The full catalog stays available through the debug `models.list` RPC with `view: "all"`.
     - Expand the **Account** category in the model menu to choose a saved account for the selected provider in Chat or **New Session**, even when **Automatic** has no eligible models. A New Session choice previews eligible models and is attached when the session is created; it does not change the personal new-chat default or saved model preference. See [Per-person model accounts](/concepts/multi-user#per-person-model-accounts).
@@ -874,7 +921,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - Click **Stop**. Runs with an exact local run ID call `chat.abort`; when selected-session state reports active work but the Control UI has no local run ID, it calls `sessions.abort` instead. Participant display updates do not interrupt Stop while the request is being prepared. For non-global sessions, that selected-session path also discards queued follow-ups so they cannot restart work after the stop.
     - Exact-run Stop cancels that parent's associated sub-agents and Swarm collectors, including their descendants. Successful cancellation prevents selected queued children from starting while running siblings stop; it leaves unrelated parent turns and session-wide queues alone.
     - If Stop reports incomplete descendant cancellation, inspect the remaining native subagent runs with `/subagents list` and ask the agent to retry their cancellation with `subagents`. Do not treat the parent's stopped state as confirmation that every child stopped or that runtime cleanup was instantaneous. See [Sub-agent stopping](/tools/subagents#stopping) for scope details.
-    - While a run is active, normal follow-ups use the Gateway's effective `messages.queue` mode. `steer` injects into the running turn; other modes keep the browser's durable queued delivery. If the Gateway queues an input instead of steering it, the message appears above the composer until consumed or canceled. Reconnecting also recovers queued inputs from older history pages without changing the page you are viewing. Once the Gateway accepts input for an existing session, its database owns the approved input until it reaches the transcript. Collected messages are retired together with their combined transcript entry. Unconsumed input survives a Gateway restart as interrupted input requiring an explicit resend. Interrupted and cancelled inputs show **Dismiss** to hide that input for every device, and the footer offers **Dismiss all** for the interrupted and cancelled inputs on the page you are viewing; use **Show earlier messages** to reach older ones. A dismissed input is recorded as cancelled, so it does not resume after a restart and no browser resends its saved copy. Dismissing never touches queued or running inputs and needs permission to send in the conversation. Click **Steer** on a browser-owned queued message to inject it manually; removing a server-owned queued message requests its cancellation. A message you steer moves once from the queue to the bottom of the transcript when delivery starts. It stays there while acknowledgment and history catch up, until its saved copy replaces it. Accepted messages keep their saved transcript positions: earlier saved output stays above the steer and later output appears below it. This order survives history refreshes, reconnects, and reloading a finished run. Unsaved assistant text remains a single live tail after saved rows until its own transcript entries arrive.
+    - While a run is active, normal follow-ups use the Gateway's effective `messages.queue` mode. `steer` injects into the running turn; other modes keep the browser's durable queued delivery. If the Gateway queues an input instead of steering it, the message appears above the composer until consumed or canceled. Reconnecting also recovers queued inputs from older history pages without changing the page you are viewing. Once the Gateway accepts input for an existing session, its database owns the approved input until it reaches the transcript. Collected messages are retired together with their combined transcript entry. Unconsumed input survives a Gateway restart as interrupted input requiring an explicit resend. Interrupted and cancelled inputs show **Dismiss** to hide that input for every device, and the footer offers **Dismiss all** for the interrupted and cancelled inputs on the page you are viewing; use **Show earlier unsent messages** to reach older ones. A dismissed input is recorded as cancelled, so it does not resume after a restart and no browser resends its saved copy. Dismissing never touches queued or running inputs and needs permission to send in the conversation. Click **Steer** on a browser-owned queued message to inject it manually; removing a server-owned queued message requests its cancellation. A message you steer moves once from the queue to the bottom of the transcript when delivery starts. It stays there while acknowledgment and history catch up, until its saved copy replaces it. Accepted messages keep their saved transcript positions: earlier saved output stays above the steer and later output appears below it. This order survives history refreshes, reconnects, and reloading a finished run. Unsaved assistant text remains a single live tail after saved rows until its own transcript entries arrive.
     - Type `/steer <message>` to steer explicitly. Once consumed, the message belongs in the transcript, with no separate command chip waiting for the entire run to finish. If the Gateway defers the input, its queued message remains above the composer until consumed or canceled.
     - On desktop, with **Settings → Appearance → Send shortcut** set to **Enter**, **Cmd/Ctrl+Enter** submits the opposite follow-up action while connected to an active run: queue when Enter steers, or steer when Enter queues (including inherited `collect` and `followup` modes). The send button tooltip shows both actions for the current follow-up setting. This affects only that message, not your saved preference. With the **Cmd/Ctrl+Enter** send shortcut selected, modified Enter remains the normal send action and plain Enter inserts a newline. Interrupt mode keeps its normal behavior.
     - Reorder the queue from the handle on the left of a queued message: drag it, or focus it and press the up and down arrow keys. The position is stored with the message, so it survives a reload and decides delivery order, not just what the list looks like. Rows already handed to a run — sending, steering, running a command, awaiting settings, or awaiting acknowledgment — hold their place and split the queue: a message moves only among the rows between two of them, so it can never reach the Gateway ahead of work already handed over.
@@ -1105,7 +1152,8 @@ in the top-right corner still lets you switch between the diagram and source
 or choose **Expand diagram**.
 The copy button appears on hover or keyboard focus and stays visible on touch
 screens. It copies the original Mermaid text.
-Diagram colors and fonts follow the current UI theme.
+Diagram colors and fonts follow the current UI theme. Mermaid source is rendered
+by Pele in the Control UI and native apps; its layout can differ from Mermaid.js.
 
 An unfinished streaming fence stays readable as code. Rendering starts when the
 closing fence arrives or the response finishes. Invalid or overly complex
@@ -1115,7 +1163,7 @@ images, or add custom CSS to the Control UI.
 
 Renderer loading or timeout errors instead suggest reloading the dashboard and
 checking proxy authentication. The renderer runs in an isolated frame, so its
-`assets/mermaid.min-*.js` and `assets/frame-*.js` requests do not send `SameSite=Lax`
+`assets/pele.min-*.js` and `assets/frame-*.js` requests do not send `SameSite=Lax`
 or `SameSite=Strict` cookies. Behind a cookie-authenticated reverse proxy, those
 static asset URLs must be reachable without those cookies, including under any
 configured `gateway.controlUi.basePath`. Check the browser Network panel for
@@ -1308,11 +1356,15 @@ other runs are not included. Source cards require run identity in the transcript
 and follow tool-activity visibility. They are hidden while a run is active or
 transcript search is filtering messages.
 
-In completed dashboard turns, commentary, reasoning-only messages, and tool activity
-share one **Worked for…** disclosure above the answers. Expanding it shows the
-activity in its original order; explicit answer segments and visual results stay
-visible below it. Browser tab previews keep their execution order relative to those
-visible results, so a page opened after an inline widget appears after that widget.
+In completed dashboard turns, all assistant text and visual results stay visible
+in their original positions. Contiguous tool activity and reasoning-only parts
+fold into separate **Worked** disclosures between those visible parts in both
+flat and bubble mode. Expanding a disclosure shows that stretch of activity in its
+original order, and loading older history preserves which disclosures are open.
+Messages with saved attachments stay intact so each attachment appears once.
+Each disclosure is untimed; the final recap keeps the duration for the whole turn,
+including after reopening a completed chat when its saved timing matches the visible reply.
+Browser tab previews keep their execution order relative to visible results, so a page opened after an inline widget appears after that widget.
 Failed tool results after the last answer stay visible outside
 the disclosure until a later answer follows them. This is display grouping, not a
 change to stored history. Live turns, search results, and turns without an answer
@@ -1322,7 +1374,7 @@ resumes the closing line reports the request. User messages,
 forwarded inputs, and structural markers remain boundaries for grouping.
 Selecting the author's name on a reply's **Replying to** line scrolls to the
 original message and briefly highlights it, first opening its containing
-**Worked for…** group when the original sits inside one.
+**Worked** group when the original sits inside one.
 
 On wide desktop panes, the conversation position rail provides keyboard shortcuts
 to messages. In right-to-left interface languages, the rail uses the right gutter

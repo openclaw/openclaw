@@ -5,9 +5,9 @@ import {
 } from "../config/sessions/restart-recovery-state.js";
 import type { HarnessCompletionRecovery } from "../config/sessions/restart-recovery-types.js";
 import { readSessionSubmittedInput } from "../config/sessions/session-accessor.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import {
   captureSessionActorStorageOwner,
-  withSessionActorStorage,
   type SessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
 import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";

@@ -515,7 +515,11 @@ export function renderSessionLeadingState(props: {
       stackedParticipants() === 1 ? session().participants?.[0]?.identity : undefined,
     ].filter((identity): identity is SessionParticipantIdentity => identity !== undefined);
   });
-  const hasContent = createMemo(() => hasIcon() || Boolean(channelAvatarUrl()) || hasOwner());
+  const hasContent = createMemo(
+    () =>
+      (attentionIcon() || props.icon !== false) &&
+      (hasIcon() || Boolean(channelAvatarUrl()) || hasOwner()),
+  );
   const showGlyph = createMemo(
     () =>
       hasIcon() ||
@@ -561,9 +565,7 @@ export function renderSessionLeadingState(props: {
       }
     >
       <SessionGlyph
-        content={
-          hasContent() ? (!attentionIcon() && props.icon === false ? false : content) : undefined
-        }
+        content={hasContent() ? content : undefined}
         running={showRun()}
         queued={ownRunQueued() && !subagentsWorking()}
         runningLabel={runningLabel()}

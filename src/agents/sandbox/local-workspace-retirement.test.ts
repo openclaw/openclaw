@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as bridgeApi from "../../plugin-sdk/browser-bridge.js";
+import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { BROWSER_BRIDGES, type CachedBrowserBridge } from "./browser-bridges.js";
 import * as engine from "./container-engine.js";
@@ -47,13 +48,13 @@ afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
-const quiesce = (assertCurrent = () => {}, env?: NodeJS.ProcessEnv) =>
+const quiesce = (options: Partial<Parameters<typeof quiesceLocalWorkspace>[0]> = {}) =>
   quiesceLocalWorkspace({
-    env,
     workspaceDir: entry.workspaceDir,
     retained: [],
     persist: () => {},
-    assertCurrent,
+    assertCurrent: () => {},
+    ...options,
   });
 
 async function setup(
@@ -71,8 +72,9 @@ async function setup(
     BROWSER_BRIDGES.set(entry.sessionKey, capturedBridge);
   }
   const physical = new Set([oldId]);
+  const paused = new Set<string>();
   let named = oldId;
-  const hooks = { afterRemove: async () => {} };
+  const hooks = { beforeRemove: async () => {}, afterRemove: async () => {} };
   const command = vi.spyOn(engine, "execContainer").mockImplementation(async (_engine, args) => {
     const target = args.at(-1) === entry.containerName ? named : args.at(-1)!;
     if (args[0] === "inspect") {
@@ -83,11 +85,18 @@ async function setup(
         args.includes("{{.Id}}")
           ? target
           : args.includes("{{.State.Paused}}")
-            ? "false"
-            : target + " " + running + " false",
+            ? String(paused.has(target))
+            : `${target} ${running} ${paused.has(target)}`,
       );
     }
+    if (args[0] === "pause") {
+      paused.add(target);
+    }
+    if (args[0] === "unpause") {
+      paused.delete(target);
+    }
     if (args[0] === "rm") {
+      await hooks.beforeRemove();
       physical.delete(target);
       await hooks.afterRemove();
     }
@@ -95,7 +104,10 @@ async function setup(
   });
   const authority = new AbortController();
   const selectedEnv = await prepareScope?.();
-  const custody = await quiesce(() => authority.signal.throwIfAborted(), selectedEnv);
+  const persist = vi.fn();
+  const prepare = () =>
+    quiesce({ assertCurrent: () => authority.signal.throwIfAborted(), env: selectedEnv, persist });
+  const custody = await prepare();
   const replacePhysical = () => {
     physical.delete(oldId);
     physical.add(newId);
@@ -103,6 +115,8 @@ async function setup(
   };
   return {
     custody,
+    prepare,
+    persist,
     physical,
     command,
     capturedBridge,
@@ -121,6 +135,22 @@ async function setup(
 }
 
 const kinds = ["container", "browser"] as const;
+it.each(kinds)("reuses published %s generation facts through pause and resume", async (kind) => {
+  const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+  const h = await setup(kind);
+  h.command.mockImplementation(async (_engine, args) =>
+    success(args.includes("{{.State.Paused}}") ? "true" : ""),
+  );
+  await h.custody.resume();
+  expect(h.command.mock.calls.filter(([, args]) => args[0] === "pause")).toHaveLength(1);
+  expect(h.command.mock.calls.filter(([, args]) => args[0] === "unpause")).toHaveLength(1);
+  expect(
+    reads.mock.calls
+      .map(([, command]) => command.type)
+      .filter((type) => type.startsWith("sandboxRegistry.")),
+  ).toEqual(["sandboxRegistry.list", "sandboxRegistry.browsers"]);
+});
+
 it.each(
   kinds.flatMap((kind) => ["running", "stopped", "absent"].map((state) => [kind, state] as const)),
 )("retires %s %s allocations without name fallback", async (kind, state) => {
@@ -128,17 +158,42 @@ it.each(
   let custody = h.custody;
   if (state === "absent") {
     h.physical.clear();
-    custody = await quiesce();
+    custody = await h.prepare();
     h.command.mockClear();
   }
   await custody.retire();
+  if (state === "running") {
+    expect(h.persist).toHaveBeenLastCalledWith([]);
+  }
+  h.revoke();
   await custody.resume();
   expect(h.physical.size).toBe(0);
   expect(h.removals()).toEqual(state === "absent" ? [] : [oldId]);
   expect(h.command.mock.calls.some(([, args]) => args[0] === "pause")).toBe(state === "running");
+  expect(h.command.mock.calls.some(([, args]) => args[0] === "unpause")).toBe(false);
   expect(await h.rows()).toEqual([]);
   expect(BROWSER_BRIDGES.size).toBe(0);
 });
+it.each(["before", "after"] as const)(
+  "recovers owned pause receipts when retirement fails %s physical removal",
+  async (phase) => {
+    const h = await setup("container");
+    h.hooks[phase === "before" ? "beforeRemove" : "afterRemove"] = async () => {
+      throw new Error("retirement interrupted");
+    };
+    await expect(h.custody.retire()).rejects.toThrow("retirement interrupted");
+    expect(h.persist).toHaveBeenLastCalledWith([{ name: entry.containerName, id: oldId }]);
+    expect(await h.rows()).toHaveLength(1);
+    await h.custody.resume();
+    expect(h.persist).toHaveBeenLastCalledWith([]);
+    expect(h.physical.has(oldId)).toBe(phase === "before");
+    expect(
+      h.command.mock.calls
+        .filter(([, args]) => args[0] === "unpause")
+        .map(([, args]) => args.at(-1)),
+    ).toEqual(phase === "before" ? [oldId] : []);
+  },
+);
 it.each(
   kinds.flatMap((kind) => ["replacement", "revocation"].map((change) => [kind, change] as const)),
 )("preserves %s metadata after %s during removal", async (kind, change) => {

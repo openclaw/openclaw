@@ -431,7 +431,8 @@ function projectDiagnosticText(value: string): string {
     try {
       const state = { changed: false, nodesRemaining: 64 };
       const parsed = JSON.parse(fragment.json);
-      const projected = projectDiagnosticValue(parsed, {}, new WeakSet(), false, state);
+      // JSON.parse owns this fresh data-only graph; no provider getters or native brands remain.
+      const projected = projectValue(true, parsed, {}, new WeakSet(), false, state);
       redacted += state.changed ? stableStringify(projected) : fragment.json;
     } catch {
       return "[Malformed diagnostic JSON redacted]";

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/matrix",
-  "version": "2026.10.7",
+  "version": "2026.10.8",
   "description": "OpenClaw Matrix channel plugin for rooms and direct messages.",
   "repository": {
     "type": "git",
@@ -14,8 +14,8 @@
     "fake-indexeddb": "6.2.6",
     "markdown-it": "15.0.3",
     "matrix-js-sdk": "43.0.0",
-    "music-metadata": "12.2.1",
-    "typebox": "1.4.1",
+    "music-metadata": "12.2.3",
+    "typebox": "1.4.2",
     "zod": "4.6.7"
   },
   "devDependencies": {
@@ -23,7 +23,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.10.7"
+    "openclaw": ">=2026.10.8"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -174,11 +174,11 @@
       "allowInvalidConfigRecovery": true
     },
     "compat": {
-      "pluginApi": ">=2026.10.7"
+      "pluginApi": ">=2026.10.8"
     },
     "build": {
       "bundledDist": false,
-      "openclawVersion": "2026.10.7"
+      "openclawVersion": "2026.10.8"
     },
     "release": {
       "publishToClawHub": true,

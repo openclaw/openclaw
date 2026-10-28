@@ -1,6 +1,14 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sessionActorReplicaTargetKey } from "../config/sessions/session-actor-replica-index.js";
+import type { SessionTranscriptMaintenanceFacts } from "../config/sessions/session-transcript-hydration.types.js";
 import { sameSessionTranscriptTargetBinding } from "../config/sessions/transcript-target-binding.js";
-import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
+import {
+  captureOwnedTranscriptWriteAssertion,
+  getOwnedSessionTranscriptActor,
+} from "../config/sessions/transcript-write-context.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { registerOpenClawAgentDatabaseSyncResource } from "../state/openclaw-agent-db-resources.js";
 import { stringifyCodeModeJsonSafe } from "./code-mode-json.js";
 import type { PendingBridgeRequest } from "./code-mode-worker-types.js";
 import type { SessionManager } from "./sessions/session-manager.js";
@@ -24,6 +32,121 @@ type SessionStore = {
 
 // The catalog owns the projection, while the transcript alone owns durable state.
 const stores = new WeakMap<ToolSearchCatalogRef, SessionStore>();
+
+type ReplaySnapshot = {
+  generation: string;
+  ids: string[];
+  projection: Projection;
+  sessionKey: string;
+  bytes: number;
+  unregister: () => void;
+};
+const replaySnapshots = resolveGlobalSingleton<{
+  entries: Map<string, ReplaySnapshot>;
+  unsubscribe: (() => void) | undefined;
+}>(
+  Symbol.for("openclaw.codeModeReplaySnapshots"),
+  () => ({
+    entries: new Map<string, ReplaySnapshot>(),
+    unsubscribe: undefined,
+  }),
+  (cache) => {
+    cache.unsubscribe?.();
+    cache.unsubscribe = undefined;
+    for (const snapshot of cache.entries.values()) {
+      snapshot.unregister();
+    }
+    cache.entries.clear();
+  },
+);
+
+function discardReplaySnapshot(key: string) {
+  replaySnapshots.entries.get(key)?.unregister();
+  replaySnapshots.entries.delete(key);
+}
+
+function replayAdmitted(
+  entries: NonNullable<SessionTranscriptMaintenanceFacts["events"]>,
+  generation: string | null | undefined,
+  target: Parameters<typeof getOwnedSessionTranscriptActor>[0],
+): Projection {
+  const binding = getOwnedSessionTranscriptActor(target);
+  if (!binding || !generation) {
+    return replay(entries);
+  }
+  const key = JSON.stringify([
+    sessionActorReplicaTargetKey(binding.actor.target),
+    target.sessionId,
+  ]);
+  const cached = replaySnapshots.entries.get(key);
+  // Custom-entry rewrites rotate generation; appends preserve earlier IDs and bytes.
+  if (
+    cached?.generation === generation &&
+    cached.ids.length === entries.length &&
+    entries.every((entry, index) => isRecord(entry) && entry.id === cached.ids[index])
+  ) {
+    replaySnapshots.entries.delete(key);
+    replaySnapshots.entries.set(key, cached);
+    return cached.projection;
+  }
+  discardReplaySnapshot(key);
+  const projection = replay(entries);
+  // Bound metadata as well as JSON. Large histories keep the uncached replay path.
+  if (entries.length > 4096 || projection.size > 1024) {
+    return projection;
+  }
+  const ids: string[] = [];
+  let bytes = key.length * 2 + 256;
+  for (const entry of entries) {
+    if (!isRecord(entry) || typeof entry.id !== "string") {
+      return projection;
+    }
+    ids.push(entry.id);
+    bytes += entry.id.length * 2 + 32;
+  }
+  for (const [name, value] of projection) {
+    bytes += (name.length + value.json.length) * 2 + 128;
+  }
+  const maxBytes = 8 * 1024 * 1024;
+  if (bytes > maxBytes) {
+    return projection;
+  }
+  replaySnapshots.unsubscribe ??= sessionChanges.subscribeFacts((change) => {
+    if ("all" in change || change.facts?.kind === "removed") {
+      for (const [scope, snapshot] of replaySnapshots.entries) {
+        if ("all" in change || snapshot.sessionKey === change.sessionKey) {
+          discardReplaySnapshot(scope);
+        }
+      }
+    }
+  });
+  const unregister = registerOpenClawAgentDatabaseSyncResource({
+    agentId: binding.database.agentId,
+    path: binding.database.path,
+    revoke: () => discardReplaySnapshot(key),
+    close: () => discardReplaySnapshot(key),
+  });
+  replaySnapshots.entries.set(key, {
+    generation,
+    ids,
+    projection,
+    sessionKey: binding.actor.target.sessionKey,
+    bytes,
+    unregister,
+  });
+  let retainedBytes = 0;
+  for (const snapshot of replaySnapshots.entries.values()) {
+    retainedBytes += snapshot.bytes;
+  }
+  for (const [scope, snapshot] of replaySnapshots.entries) {
+    if (replaySnapshots.entries.size <= 16 && retainedBytes <= maxBytes) {
+      break;
+    }
+    retainedBytes -= snapshot.bytes;
+    discardReplaySnapshot(scope);
+  }
+  return projection;
+}
 
 export function disposeCodeModeSessionStore(owner: ToolSearchCatalogRef): void {
   const store = stores.get(owner);
@@ -71,7 +194,9 @@ function encode(value: unknown, networkContent: boolean): StoredValue {
   const json = stringifyCodeModeJsonSafe(value);
   const bytes = Buffer.byteLength(json, "utf8");
   if (bytes > MAX_VALUE_BYTES) {
-    throw new RangeError("Code Mode store value exceeds 256 KiB of serialized JSON.");
+    throw new RangeError(
+      `Code Mode store value exceeds 256 KiB of serialized JSON (${bytes} bytes). Store unchanged; catch RangeError and save a summary or smaller value. Use results.save(value) for larger data needed only in this reply.`,
+    );
   }
   return { json, bytes, networkContent };
 }
@@ -91,7 +216,7 @@ function applyWrites(projection: Projection, writes: ReadonlyMap<string, StoredV
   }
   if (bytes > MAX_TOTAL_BYTES) {
     throw new RangeError(
-      "Code Mode store exceeds 1 MiB of serialized JSON; delete keys or store less data.",
+      "Code Mode store exceeds 1 MiB of serialized JSON. Store unchanged; catch RangeError and delete unneeded keys or save a summary before retrying the write.",
     );
   }
   return next;
@@ -226,7 +351,7 @@ export function createCodeModeSessionStoreAccess(ctx: ToolSearchToolContext, sig
           const reader = prepareSessionManagerHydration(target, { signal: replaySignal, manager });
           const assertOwned = captureOwnedTranscriptWriteAssertion(reader.target);
           assertOwned();
-          const { events } = await reader
+          const { events, version } = await reader
             .readMaintenance({
               operation: "custom-branch",
               leafEntryId: leaf,
@@ -240,7 +365,7 @@ export function createCodeModeSessionStoreAccess(ctx: ToolSearchToolContext, sig
               "Code Mode session store could not match the active transcript branch; retry in a new reply.",
             );
           }
-          return replay(events);
+          return replayAdmitted(events, version?.generation, reader.target);
         });
       }
       return replay(manager.getBranch());

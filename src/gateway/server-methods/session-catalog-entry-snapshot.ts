@@ -40,6 +40,7 @@ type SessionCatalogRequestEntrySnapshot = {
   freeze: () => void;
   captureHostInstances: (host: SessionCatalogHost, instances: SessionCatalogInstances) => void;
   entryForSession: (sessionKey: string) => SessionEntry | undefined;
+  isMember: (sessionKey: string, profileId: string) => boolean;
   projectHostSessions: (
     host: SessionCatalogHost,
     instances: SessionCatalogInstances,
@@ -277,6 +278,15 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       }
     },
     entryForSession,
+    isMember: (sessionKey, profileId) => {
+      const target = params.projection.sharingTarget({
+        key: sessionKey,
+        agentId: entryAgentId(sessionKey),
+      });
+      return Boolean(
+        target && params.projection.hasMembership(target.storePath, target.storeKey, profileId),
+      );
+    },
     projectHostSessions: (host, instances, audience) => {
       const source = JSON.stringify(host);
       const revision = params.projection.sharingRevision;

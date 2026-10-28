@@ -59,6 +59,7 @@
 
 .sw-list__head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
@@ -247,16 +248,18 @@
 }
 
 .sw-detail__actions {
+  display: flex;
   flex: none;
+  gap: var(--space-2);
 }
 
-.sw-detail__actions .btn.danger {
+.sw-detail__actions .btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
 }
 
-.sw-detail__actions .btn.danger svg {
+.sw-detail__actions .btn svg {
   width: 14px;
   height: 14px;
 }

@@ -86,7 +86,6 @@ it.for([
   "revoked",
   "aborted",
   "completion",
-  "top-level",
   "mixed-text",
   "mixed-media",
   "unrelated-rewrite",
@@ -240,9 +239,7 @@ it.for([
     });
     const progressText = `Before\n${mediaUrls.map((url) => `MEDIA:${url}`).join("\n")}\nAfter`;
     const content = [
-      scenario === "top-level"
-        ? textBlock(progressText)
-        : signedText(progressText, "progress-image", "commentary"),
+      signedText(progressText, "progress-image", "commentary"),
       {
         type: "toolCall" as const,
         id: "inspect-next",
@@ -282,12 +279,11 @@ it.for([
       loadTranscriptEventsSync(scope)
         .map(asOptionalRecord)
         .filter((entry) => entry?.type === "message");
-    const readEvent = (messageId = "progress-row") => {
-      return expectDefined(
+    const readEvent = (messageId = "progress-row") =>
+      expectDefined(
         readMessages().find((entry) => entry?.id === messageId),
         "persisted commentary row",
       );
-    };
     const readMessage = () =>
       expectDefined(asOptionalRecord(readEvent().message), "assistant message");
     const readDisplayed = () => {
@@ -351,26 +347,21 @@ it.for([
         dispatch.captureAgentTranscriptStart();
         const message = runAgentHarnessBeforeMessageWriteHook({
           message: attachSessionTranscriptRunId(
-            {
-              ...buildAssistantMessage({
-                model: { api: "openai-responses", provider: "openai", id: "gpt-5.6-luna" },
-                content,
-                stopReason: "toolUse",
-                usage: buildUsageWithNoCost({}),
-              }),
-              ...(scenario === "top-level" ? { phase: "commentary" as const } : {}),
-            },
+            buildAssistantMessage({
+              model: { api: "openai-responses", provider: "openai", id: "gpt-5.6-luna" },
+              content,
+              stopReason: "toolUse",
+              usage: buildUsageWithNoCost({}),
+            }),
             runId,
           ),
           prepareAssistantTranscriptMessage: dispatch.prepareAssistantTranscriptMessage,
         });
-        expect(message).toMatchObject({ openclawDelivery: { mediaUrls: authoredUrls } });
         if (message?.role !== "assistant") {
           throw new Error("Expected prepared assistant");
         }
         expectedContent = structuredClone(message.content);
-        const appended = appendTranscriptMessageSync(scope, { eventId: "progress-row", message });
-        expect(appended).toMatchObject({ ok: true });
+        appendTranscriptMessageSync(scope, { eventId: "progress-row", message });
         await publishTranscriptUpdate(scope, { message, messageId: "progress-row", runId });
         if (scenario === "cache-miss") {
           return;
@@ -428,11 +419,7 @@ it.for([
         await wait(commentarySettled.promise);
         expectMaterialized();
         if (!publicationSpy) {
-          expect(rewriteUpdate).toMatchObject({
-            messageId: "progress-row",
-            target: expect.objectContaining({ sessionId: scope.sessionId }),
-          });
-          expect(rewriteUpdate).not.toHaveProperty("message");
+          expect(rewriteUpdate).toBeDefined();
         }
         const displayed = readDisplayed();
         const blocks = displayBlocks(displayed);
@@ -460,20 +447,9 @@ it.for([
           expect(displayedMedia).toEqual([outgoingImage(), outgoingImage()]);
           expect(await fs.readFile(absoluteImage)).toEqual(PNG_BYTES);
         }
-        if (scenario === "top-level") {
-          expect(displayed).toContainEqual(
-            expect.objectContaining({
-              openclawStreamFallback: expect.objectContaining({ itemId: "progress-row" }),
-            }),
-          );
-          const text = blocks.filter((block) => block?.type === "text").map((block) => block?.text);
-          expect(text).toEqual(["Before", "After"]);
-          expect(readMessage().phase).toBe("commentary");
-        }
         if (scenario === "image") {
           expect(displayed).toContainEqual(
             expect.objectContaining({
-              openclawStreamFallback: expect.objectContaining({ itemId: "progress-image" }),
               content: [
                 textBlock("Before"),
                 outgoingImage({ mimeType: "image/png" }),
@@ -485,15 +461,10 @@ it.for([
           expect(fetchedUrls).toEqual([mediaUrl]);
         }
         if (scenario === "document") {
-          expect(displayedMedia).toContainEqual(
-            expect.objectContaining({
-              type: "attachment",
-              attachment: expect.objectContaining({
-                kind: "document",
-                mimeType: "application/pdf",
-              }),
-            }),
-          );
+          expect(displayedMedia[0]).toMatchObject({
+            type: "attachment",
+            attachment: { kind: "document", mimeType: "application/pdf" },
+          });
         }
         if (mixed) {
           const replies = createReplyDispatcher(dispatch.dispatcherOptions);

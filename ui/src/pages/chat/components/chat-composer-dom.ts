@@ -12,6 +12,8 @@ type ComposerTextareaResizeObserverState = {
   height: number;
   nativeInputPending: boolean;
   hasScrollbarGutter: boolean;
+  // Width a forced scrollbar takes from this textarea; null until first overflow.
+  scrollbarWidth: number | null;
   editing: boolean;
   getTranscriptElement: () => HTMLElement | null;
 };
@@ -162,6 +164,38 @@ function scheduleNativeTextareaOverflow(el: HTMLTextAreaElement) {
   });
 }
 
+// Scrollable drafts trade end padding for a native gutter of the same width,
+// keeping text width constant. WebKit reserves `scrollbar-gutter: stable` only
+// while a scrollbar is shown, and overlay scrollbars reserve nothing, so the
+// trade would widen the text, remove the overflow and undo itself every frame.
+// A forced scrollbar makes the gutter real; overlay platforms keep the padding.
+function setTextareaScrollbarGutter(
+  el: HTMLTextAreaElement,
+  scrollable: boolean,
+  state: ComposerTextareaResizeObserverState | undefined,
+) {
+  const reserveGutter = scrollable && state?.scrollbarWidth !== 0;
+  const overflow = reserveGutter ? "scroll" : scrollable ? "auto" : "hidden";
+  if (el.style.overflowY !== overflow) {
+    el.style.overflowY = overflow;
+  }
+  el.toggleAttribute("data-composer-scrollable", reserveGutter);
+  if (!reserveGutter || !state || state.scrollbarWidth !== null) {
+    return;
+  }
+  // The scrollbar width is fixed per platform and stylesheet: measure it once.
+  const style = getComputedStyle(el);
+  state.scrollbarWidth =
+    el.offsetWidth -
+    el.clientWidth -
+    Number.parseFloat(style.borderLeftWidth) -
+    Number.parseFloat(style.borderRightWidth);
+  if (state.scrollbarWidth === 0) {
+    el.style.overflowY = "auto";
+    el.removeAttribute("data-composer-scrollable");
+  }
+}
+
 function updateTextareaOverflow(
   el: HTMLTextAreaElement,
   deferNativeEditing = true,
@@ -186,13 +220,10 @@ function updateTextareaOverflow(
     scrollable && clientHeight >= 64 && !composerTextareaResizeObservers.get(el)?.editing;
   const fadeTop = canFade && el.scrollTop > 1;
   const fadeBottom = canFade && el.scrollTop + clientHeight < scrollHeight - 1;
-  const overflow = scrollable ? "auto" : "hidden";
-  if (el.style.overflowY !== overflow) {
-    el.style.overflowY = overflow;
-  }
+  const state = composerTextareaResizeObservers.get(el);
+  setTextareaScrollbarGutter(el, scrollable, state);
   el.toggleAttribute("data-scroll-fade-top", fadeTop);
   el.toggleAttribute("data-scroll-fade-bottom", fadeBottom);
-  const state = composerTextareaResizeObservers.get(el);
   if (state) {
     state.hasScrollbarGutter = false;
     if (scrollable && hasNativeTextareaContentSizing(el)) {
@@ -226,6 +257,7 @@ export function adjustTextareaHeight(
   if (el.closest('[data-composer-layout="single-line"]')) {
     el.style.height = "";
     el.style.overflowY = "";
+    el.removeAttribute("data-composer-scrollable");
     el.removeAttribute("data-scroll-fade-top");
     el.removeAttribute("data-scroll-fade-bottom");
     return;
@@ -338,6 +370,7 @@ export function observeTextareaOverflow(
     height: el.clientHeight,
     nativeInputPending: false,
     hasScrollbarGutter: false,
+    scrollbarWidth: null,
     editing: false,
     getTranscriptElement,
   };
@@ -447,11 +480,13 @@ export function focusComposerFromChrome(
     .composedPath()
     .some((node) => node instanceof Element && node.matches(COMPOSER_CHROME_INTERACTIVE_SELECTOR));
   if (event.type === "pointerdown" || event.type === "mousedown") {
+    const touch = event instanceof PointerEvent && event.pointerType === "touch";
     // Blank padding otherwise moves focus to the page before click restores it,
     // collapsing and reopening the mobile composer during the same gesture.
+    // WebKit also cancels touch activation when the trigger's pointerdown is cancelled.
     if (
       event.button === 0 &&
-      (target.closest("summary, .oc-menu-trigger") || (connected && !interactive))
+      ((!touch && target.closest("summary, .oc-menu-trigger")) || (connected && !interactive))
     ) {
       event.preventDefault();
     }

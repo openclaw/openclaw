@@ -135,13 +135,17 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each(
-  (["linux", "win32"] as const).flatMap((platform) =>
-    [false, true].map((dataAtRisk) => ({ platform, dataAtRisk })),
+it.each([
+  ...(["linux", "win32"] as const).flatMap((platform) =>
+    [false, true].map((dataAtRisk) => ({ platform, dataAtRisk, failure: "doctor" as const })),
   ),
-)(
-  "recovers a Gateway after an exited Doctor on $platform unless data is at risk ($dataAtRisk)",
-  async ({ platform, dataAtRisk }) => {
+  // Readiness lint (#184727) and the target finalizer's pre-plugin Doctor (#171435)
+  // fail after the same Doctor park; only final recovery restarts the latter.
+  { platform: "linux" as const, dataAtRisk: false, failure: "lint" as const },
+  { platform: "linux" as const, dataAtRisk: false, failure: "fresh-finalizer" as const },
+])(
+  "recovers a Gateway after a failed $failure on $platform unless data is at risk ($dataAtRisk)",
+  async ({ platform, dataAtRisk, failure }) => {
     const [
       { createMockGatewayService },
       { withUpdateCommandExecutor },
@@ -281,19 +285,32 @@ it.each(
         resultWithPostUpdate: {
           ...result,
           status: "error",
-          reason: "post-update-plugins",
-          ...(dataAtRisk
+          reason: failure === "fresh-finalizer" ? "post-core-update-failed" : "post-update-plugins",
+          ...(dataAtRisk || failure === "fresh-finalizer"
             ? {
                 recovery: {
                   serviceRestartSafe: false,
                   reason: "runtime-verification-failed",
-                  dataAtRisk: "unreadable-state",
+                  ...(dataAtRisk ? { dataAtRisk: "unreadable-state" as const } : {}),
                 },
               }
             : {}),
           steps: [
             ...result.steps,
-            stepWith("post-plugin doctor", { exitCode: 1, failureFacts: facts }),
+            ...(failure === "doctor"
+              ? [stepWith("post-plugin doctor", { exitCode: 1, failureFacts: facts })]
+              : failure === "lint"
+                ? [
+                    stepWith("post-plugin doctor", { exitCode: 0 }),
+                    stepWith("post-update verification", { exitCode: 1, failureFacts: facts }),
+                  ]
+                : [
+                    stepWith("post-update verification", {
+                      command: "openclaw update",
+                      exitCode: 1,
+                      failureFacts: facts,
+                    }),
+                  ]),
           ],
         },
       };
@@ -367,9 +384,10 @@ it.each(
       expect(mocks.task).not.toHaveBeenCalled();
     }
     const recorded = updateLedger.getUpdateRun(run.runId, { env: run.env });
-    expect(
-      recorded?.steps.find((step) => step.step === "post-plugin doctor")?.failureFacts,
-    ).toEqual(expect.arrayContaining(facts));
+    const failedStep = failure === "doctor" ? "post-plugin doctor" : "post-update verification";
+    expect(recorded?.steps.find((step) => step.step === failedStep)?.failureFacts).toEqual(
+      expect.arrayContaining(facts),
+    );
   },
 );
 

@@ -3,9 +3,8 @@ import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { isNewerBuzzRevision } from "./event-order.js";
-import { catchUpBuzzRoomHistory } from "./history-catchup.js";
 import { BUZZ_INBOUND_MESSAGE_KINDS, isBuzzInboundMessageKind } from "./message-event.js";
-import { openBuzzRelaySubscription } from "./relay-subscription.js";
+import { openBuzzRelaySubscription, queryBuzzRelaySnapshot } from "./relay-subscription.js";
 import {
   BUZZ_REPLAY_DISPATCH_MAX_PENDING,
   type BuzzReplayDispatchReservation,
@@ -19,6 +18,10 @@ import {
   parseBuzzRoomMembershipChangeEvent,
   type BuzzRoomMembership,
 } from "./room-membership.js";
+
+const HISTORY_PAGE_COMPLETE_REASON = "buzz room history page loaded";
+
+type BuzzRoomHistoryCatchUp = "complete" | "aborted" | "timestamp-over-limit";
 
 const MEMBERSHIP_READY_TIMEOUT_MS = 10_000;
 const BUZZ_ROOM_METADATA_EDIT_KIND = 9_002;
@@ -432,16 +435,167 @@ export async function createBuzzRoomMembershipTracker(params: {
           ) {
             continue;
           }
-          const outcome = await catchUpBuzzRoomHistory({
-            relay: params.relay,
-            channelId,
-            since: params.messageSince(channelId),
-            until,
-            limit: params.messageLimit,
-            reserveCapacity: params.reserveDispatchCapacity,
-            onEvent: handleRoomEvent,
-            signal: params.signal,
-          });
+          const relay = params.relay;
+          const since = params.messageSince(channelId);
+          const historyStartUntil = until;
+          const limit = params.messageLimit;
+          const reserveCapacity = params.reserveDispatchCapacity;
+          const onEvent = handleRoomEvent;
+          const signal = params.signal;
+          const outcome = await (async (): Promise<BuzzRoomHistoryCatchUp> => {
+            async function queryBuzzRoomHistoryPage(range: {
+              since: number;
+              until: number;
+              requestLimit?: number;
+              maxEvents: number;
+              skipEventIds?: ReadonlySet<string>;
+            }) {
+              const events: Event[] = [];
+              let overLimit = false;
+              return await queryBuzzRelaySnapshot({
+                relay,
+                filters: [
+                  {
+                    kinds: [...BUZZ_INBOUND_MESSAGE_KINDS],
+                    "#h": [channelId],
+                    since: range.since,
+                    until: range.until,
+                    ...(range.requestLimit === undefined ? {} : { limit: range.requestLimit }),
+                  },
+                ],
+                signal,
+                timeoutMessage: `Timed out loading Buzz room history for ${channelId}`,
+                abortMessage: "Buzz room history query aborted",
+                failureMessage: "Buzz room history query failed",
+                closeReason: HISTORY_PAGE_COMPLETE_REASON,
+                closeMessage: (reason) =>
+                  `Buzz room history query closed for ${channelId}: ${reason}`,
+                onEvent: (event) => {
+                  if (range.skipEventIds?.has(event.id)) {
+                    return;
+                  }
+                  if (events.length < range.maxEvents) {
+                    events.push(event);
+                  } else {
+                    overLimit = true;
+                  }
+                },
+                result: () => ({ events, overLimit }),
+              });
+            }
+
+            type BuzzRoomHistoryPage = Awaited<ReturnType<typeof queryBuzzRoomHistoryPage>>;
+
+            async function drainBuzzRoomHistoryRange(range: {
+              since: number;
+              until: number;
+              skipEventIds: ReadonlySet<string>;
+            }): Promise<BuzzRoomHistoryCatchUp> {
+              if (signal?.aborted) {
+                return "aborted";
+              }
+              const historyPage = await queryBuzzRoomHistoryPage({
+                since: range.since,
+                until: range.until,
+                maxEvents: BUZZ_REPLAY_DISPATCH_MAX_PENDING,
+                skipEventIds: range.skipEventIds,
+              });
+              if (!historyPage.overLimit || range.since === range.until) {
+                if (historyPage.events.length === 0) {
+                  return "complete";
+                }
+                const reservation = await reserveCapacity(historyPage.events.length);
+                if (!reservation) {
+                  return "aborted";
+                }
+                try {
+                  for (const event of historyPage.events) {
+                    onEvent(event, reservation);
+                  }
+                } finally {
+                  reservation.release();
+                }
+                return historyPage.overLimit ? "timestamp-over-limit" : "complete";
+              }
+
+              // NIP-01 has only a second-resolution time cursor. Split an overfull range
+              // until every query fits; only a single overfull second is irreducible.
+              const midpoint = Math.floor((range.since + range.until) / 2);
+              const newer = await drainBuzzRoomHistoryRange({
+                ...range,
+                since: midpoint + 1,
+              });
+              if (newer !== "complete") {
+                return newer;
+              }
+              return await drainBuzzRoomHistoryRange({
+                ...range,
+                until: midpoint,
+              });
+            }
+
+            let historyUntil = historyStartUntil;
+            while (true) {
+              if (signal?.aborted) {
+                return "aborted";
+              }
+              const reservation = await reserveCapacity(limit);
+              if (!reservation) {
+                return "aborted";
+              }
+              let historyPage: BuzzRoomHistoryPage;
+              try {
+                if (signal?.aborted) {
+                  return "aborted";
+                }
+                historyPage = await queryBuzzRoomHistoryPage({
+                  since,
+                  until: historyUntil,
+                  requestLimit: limit,
+                  maxEvents: limit,
+                });
+                if (historyPage.events.length === 0) {
+                  return "complete";
+                }
+                for (const event of historyPage.events) {
+                  onEvent(event, reservation);
+                }
+              } finally {
+                reservation.release();
+              }
+              let oldest = historyUntil;
+              for (const event of historyPage.events) {
+                oldest = Math.min(oldest, event.created_at);
+              }
+              const skipEventIds = new Set(historyPage.events.map((event) => event.id));
+              if (historyPage.overLimit) {
+                return await drainBuzzRoomHistoryRange({
+                  since,
+                  until: historyUntil,
+                  skipEventIds,
+                });
+              }
+              if (historyPage.events.length < limit) {
+                return "complete";
+              }
+              if (oldest >= historyUntil) {
+                const historyOutcome = await drainBuzzRoomHistoryRange({
+                  since: historyUntil,
+                  until: historyUntil,
+                  skipEventIds,
+                });
+                if (historyOutcome !== "complete") {
+                  return historyOutcome;
+                }
+                if (historyUntil <= since) {
+                  return "complete";
+                }
+                historyUntil -= 1;
+                continue;
+              }
+              historyUntil = oldest;
+            }
+          })();
           if (outcome === "timestamp-over-limit") {
             params.onHistoryError?.(
               new Error(

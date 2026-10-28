@@ -166,6 +166,59 @@ const writeMessages = async (...entries: unknown[]) => {
   return file;
 };
 
+it("counts a stored request the provider never ran as zero usage, not a lower bound", async () => {
+  const failed = (timestamp: string, content: unknown[], extra: Record<string, unknown> = {}) =>
+    assistant(
+      timestamp,
+      {
+        input: 0,
+        output: 0,
+        totalTokens: 0,
+        cost: { total: 0 },
+        usageReport: { state: "unavailable" },
+      },
+      {
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-5.5",
+        content,
+        stopReason: "error",
+        errorMessage: "Connection error.",
+        ...extra,
+      },
+    );
+  // Written before transports recorded unbilled failures as zero usage.
+  const sessionFile = await writeMessages(
+    modelMessage("2026-02-05T12:00:00.000Z", 10),
+    failed("2026-02-05T12:01:00.000Z", []),
+  );
+  const summary = await readSummary({ sessionFile });
+  expect(summary).toMatchObject({
+    totalTokens: 10,
+    missingCostEntries: 0,
+    messageCounts: { assistant: 2, errors: 1 },
+  });
+  expect(summary?.usageReport).toBeUndefined();
+  // Accepted then dropped, failed after output, or tool calls dropped by transport cleanup.
+  for (const [sessionId, entry] of [
+    ["dropped-after-acceptance", failed("2026-02-05T12:02:00.000Z", [], { responseId: "resp_1" })],
+    ["failed-after-output", failed("2026-02-05T12:03:00.000Z", [textBlock("partial answer")])],
+    [
+      "tool-call-dropped",
+      failed("2026-02-05T12:04:00.000Z", [], {
+        api: "anthropic-messages",
+        responseId: "msg_1",
+        errorBody: { type: "overloaded_error" },
+      }),
+    ],
+  ] as const) {
+    const file = await writeTranscript(sessionId, entry);
+    expect((await readSummary({ sessionFile: file }))?.usageReport).toEqual({
+      state: "unavailable",
+    });
+  }
+});
+
 it("prices and aggregates usage with each row's agent-local registry", async () => {
   const provider = "demo-agent-scope";
   const model = "demo-model";
@@ -391,19 +444,11 @@ it("preserves rollups and aborts when the transcript directory cannot be read", 
 });
 
 it("includes sessions outside the refreshed range in the first aggregate read", async () => {
-  const oldSessionFile = await writeTranscript(
-    "sess-cache-cold-sync-old",
-    assistant("2026-02-05T12:00:00.000Z", billed(100, 100, 200, 0.2)),
-  );
-  await writeTranscript(
-    "sess-cache-cold-sync-current",
-    assistant("2026-02-05T12:00:00.000Z", billed(10, 20, 30, 0.03)),
-  );
-  await fs.utimes(
-    oldSessionFile,
-    new Date("2025-12-05T12:00:00.000Z"),
-    new Date("2025-12-05T12:00:00.000Z"),
-  );
+  const timestamp = "2026-02-05T12:00:00.000Z";
+  const oldSessionFile = await writeTranscript("cache-old", modelMessage(timestamp, 200));
+  await writeTranscript("cache-current", modelMessage(timestamp, 30));
+  const old = new Date("2025-12-05T12:00:00.000Z");
+  await fs.utimes(oldSessionFile, old, old);
 
   await refreshCostUsageCacheForAgent({
     config: defaultConfig,
@@ -419,19 +464,12 @@ it("includes sessions outside the refreshed range in the first aggregate read", 
 });
 
 it("waits for a busy refresh before loading a direct session summary", async () => {
-  const sessionFile = await writeTranscript(
-    "cost-session-busy-refresh",
-    assistant("2026-02-01T10:00:00.000Z", billed(7, 5, 12, 0.012)),
-    root,
-  );
-
+  const sessionFile = await writeMessages(modelMessage("2026-02-01T10:00:00.000Z", 12));
   const lock = prepareSessionCostUsageRefreshLock("main");
-  let released: Promise<void> | undefined;
+  expect(await lock.acquire()).toBe(true);
+  const released = delay(40).then(lock.release);
   try {
-    expect(await lock.acquire()).toBe(true);
-    released = delay(40).then(lock.release);
-    const [summary] = await Promise.all([readSummary({ sessionFile }), released]);
-    expect(summary?.totalTokens).toBe(12);
+    expect((await readSummary({ sessionFile }))?.totalTokens).toBe(12);
   } finally {
     await released;
     await lock.release();

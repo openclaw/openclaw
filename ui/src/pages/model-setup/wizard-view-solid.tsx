@@ -24,6 +24,7 @@ export type WizardViewProps = {
   doneAction?: { label: string; disabled?: boolean; onClick: () => void };
   cancellationNotice?: string | null;
   cancellationFeedback?: JSX.Element;
+  signInIcon?: JSX.Element;
   value: unknown;
   onValueChange: (value: unknown) => void;
   onAnswer: (value: unknown, includeValue?: boolean) => void;
@@ -188,6 +189,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                         presentation="model-setup"
                         step={state().step}
                         externalAuthInput={state().externalAuthInput}
+                        signInIcon={props.signInIcon}
                         brandId={props.state.authBrandId}
                         providerLabel={props.state.authLabel}
                         value={props.value}

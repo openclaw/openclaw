@@ -36,7 +36,7 @@ import {
 } from "./control-ui-e2e-build-publication.ts";
 import type {
   ControlUiMockGateway,
-  ControlUiMockPresenceUser,
+  ControlUiMockGatewayInstallOptions,
   ControlUiMockRequestHandler,
   MockGatewayControls,
   MockGatewayRequest,
@@ -61,10 +61,14 @@ import {
 import { getSharedControlUiE2ePreview } from "./control-ui-e2e-shared-preview.ts";
 import { normalizeControlUiMockAuth, type ControlUiMockAuth } from "./control-ui-mock-auth.ts";
 import { createControlUiMockDeferredRequests } from "./control-ui-mock-deferred-requests.ts";
-import { createControlUiMockPresence } from "./control-ui-mock-presence.ts";
+import {
+  createControlUiMockPresence,
+  type ControlUiMockPresenceScenario,
+} from "./control-ui-mock-presence.ts";
 import { createControlUiMockReactions } from "./control-ui-mock-reactions.ts";
 import { createControlUiMockResponses } from "./control-ui-mock-responses.ts";
 import { createControlUiMockSessionSubscriptions } from "./control-ui-mock-session-subscriptions.ts";
+import { parseControlUiMockRequestFrame } from "./control-ui-mock-wire.ts";
 import { createControlUiPaneRuntimeTestAdapterScript } from "./control-ui-pane-runtime.test-support.ts";
 import type { NativeControlUiPluginFixture } from "./control-ui-plugin-fixture.ts";
 import {
@@ -194,7 +198,8 @@ const json5BrowserSource = readFileSync(require.resolve("json5/dist/index.min.js
 export { installControlUiMockBootstrapDocument } from "./control-ui-bootstrap-fixture.ts";
 export { defaultControlUiFeatureMethods } from "./control-ui-e2e-defaults.ts";
 
-export type ControlUiMockGatewayScenario = ControlUiMockAuth & {
+export interface ControlUiMockGatewayScenario
+  extends ControlUiMockAuth, ControlUiMockPresenceScenario {
   bootstrapPreferences?: ControlUiBootstrapConfig["preferences"];
   /** Auto-wait for sidebar rosters unless startup is held or connect fails; true overrides those skips, false disables the wait. */
   awaitInitialRoster?: boolean;
@@ -279,10 +284,6 @@ export type ControlUiMockGatewayScenario = ControlUiMockAuth & {
     events?: unknown[];
     plan?: unknown;
   } | null;
-  /** Online users included in the connect snapshot's presence list. The entry
-   * flagged `self` adopts the connecting client's instanceId so presence
-   * surfaces (footer facepile, who's-online roster) resolve "you". */
-  presenceUsers?: ControlUiMockPresenceUser[];
   /** Subscription-scoped Gateway events replayed on a fixed browser-side cycle. */
   repeatingSessionEvents?: {
     events: Array<{ event: "agent" | "session.observer" | "session.tool"; payload: unknown }>;
@@ -295,10 +296,6 @@ export type ControlUiMockGatewayScenario = ControlUiMockAuth & {
   /** Partition sessions.list fixtures by archived state after applying patches. */
   sessionArchiveFiltering?: boolean;
   models?: ModelCatalogEntry[];
-  /** Operator scopes returned by the mocked connect handshake. */
-  operatorScopes?: string[];
-  /** Role-limited access to other people's sessions, as a configured Gateway role reports it. */
-  operatorSessionCap?: "write" | "suggest" | "view" | "none" | null;
   /** Selected fixture and event default; use controlUiSessionUrl to select it in the UI. */
   sessionKey?: string;
   sessionScope?: AgentsListResult["scope"];
@@ -311,7 +308,7 @@ export type ControlUiMockGatewayScenario = ControlUiMockAuth & {
   cliAgentsEnabled?: boolean;
   workspace?: string;
   workspaceGit?: boolean;
-};
+}
 
 type NormalizedControlUiMockGatewayScenario = Required<
   Omit<
@@ -840,15 +837,8 @@ function normalizeScenario(
     webSocketPassthroughPrefixes: scenario.webSocketPassthroughPrefixes ?? [],
     inFlightRun: scenario.inFlightRun ?? null,
     presenceUsers: scenario.presenceUsers ?? [],
+    emitPresenceOnConnect: scenario.emitPresenceOnConnect ?? true,
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
-    operatorSessionCap: scenario.operatorSessionCap ?? null,
-    operatorScopes: scenario.operatorScopes ?? [
-      "operator.admin",
-      "operator.read",
-      "operator.write",
-      "operator.approvals",
-      "operator.pairing",
-    ],
     repeatingSessionEvents: scenario.repeatingSessionEvents ?? { events: [] },
     sessionInfo: scenario.sessionInfo ?? null,
     sessions:
@@ -896,7 +886,7 @@ function serializeControlUiMockGatewayInitScript(
     protocolVersion: PROTOCOL_VERSION,
     scenario,
   };
-  return `${createControlUiPaneRuntimeTestAdapterScript()}\n${json5BrowserSource}\n;(() => { const __name = (target) => target; (${installControlUiMockGateway.toString()})(${JSON.stringify(input)}, globalThis.JSON5.parse, ${createControlUiSessionFixtures.toString()}, ${createControlUiAttachmentFacts.toString()}, ${createControlUiMockResponses.toString()}, ${createControlUiMockDeferredRequests.toString()}, ${createControlUiMockSessionSubscriptions.toString()}, ${createControlUiMockPresence.toString()}, ${createControlUiMockReactions.toString()}); })();`;
+  return `${createControlUiPaneRuntimeTestAdapterScript()}\n${json5BrowserSource}\n;(() => { const __name = (target) => target; (${installControlUiMockGateway.toString()})(${JSON.stringify(input)}, globalThis.JSON5.parse, ${createControlUiSessionFixtures.toString()}, ${createControlUiAttachmentFacts.toString()}, ${createControlUiMockResponses.toString()}, ${createControlUiMockDeferredRequests.toString()}, ${createControlUiMockSessionSubscriptions.toString()}, ${createControlUiMockPresence.toString()}, ${createControlUiMockReactions.toString()}, ${parseControlUiMockRequestFrame.toString()}); })();`;
 }
 
 function installControlUiMockGateway(
@@ -912,14 +902,9 @@ function installControlUiMockGateway(
   createSubscriptions: typeof createControlUiMockSessionSubscriptions,
   createPresence: typeof createControlUiMockPresence,
   createReactions: typeof createControlUiMockReactions,
+  parseFrame: typeof parseControlUiMockRequestFrame,
 ) {
   const NativeWebSocket = window.WebSocket;
-  type BrowserFrame = {
-    id?: unknown;
-    method?: unknown;
-    params?: unknown;
-    type?: unknown;
-  };
   type DeferredResponse = {
     id: string;
     method: string;
@@ -1674,6 +1659,7 @@ function installControlUiMockGateway(
                   recoveryScope: "e2e-recovery-scope",
                   role: "operator",
                   scopes: scenario.operatorScopes,
+                  roleAllowsAdmin: scenario.roleAllowsAdmin,
                   ...(scenario.operatorSessionCap
                     ? { sessionCap: scenario.operatorSessionCap }
                     : {}),
@@ -2216,18 +2202,6 @@ function installControlUiMockGateway(
     });
   }
 
-  function parseFrame(raw: string | ArrayBufferLike | Blob | ArrayBufferView): BrowserFrame | null {
-    if (typeof raw !== "string") {
-      return null;
-    }
-    try {
-      const parsed = JSON.parse(raw) as BrowserFrame;
-      return parsed && typeof parsed === "object" ? parsed : null;
-    } catch {
-      return null;
-    }
-  }
-
   class MockWebSocket extends EventTarget {
     static readonly CLOSED = 3;
     static readonly CLOSING = 2;
@@ -2393,6 +2367,7 @@ function installControlUiMockGateway(
         return;
       }
       this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(frame) }));
+      presence.afterHello(frame, (payload) => emitGatewayEvent(this, "presence", payload));
     }
   }
 
@@ -2649,9 +2624,7 @@ export async function prepareControlUiMockGatewayScenario(
 export async function installMockGateway(
   page: Page,
   scenario: ControlUiMockGatewayScenario = {},
-  options: {
-    requestHandlers?: Record<string, (params: unknown) => unknown>;
-  } = {},
+  options: ControlUiMockGatewayInstallOptions = {},
 ): Promise<MockGatewayControls> {
   const prepared = await prepareControlUiMockGatewayScenario(scenario);
   if (prepared.assets.size) {
@@ -2673,7 +2646,7 @@ export async function installMockGateway(
   await installMockGatewayScript(
     page,
     serializeControlUiMockGatewayInitScript(normalizedScenario),
-    options.requestHandlers,
+    options,
   );
   const rosterGates = new Set([
     "connect",

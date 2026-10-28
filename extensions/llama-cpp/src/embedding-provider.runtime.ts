@@ -15,10 +15,7 @@ import {
   resolveLlamaCppModelCacheDir,
 } from "./defaults.js";
 import { resolveManagedLlamaCppProviderConfig } from "./managed-provider-config.js";
-import {
-  inspectLlamaServerRuntime,
-  type LlamaServerRuntimeFacts,
-} from "./managed-server-inspection.js";
+import { inspectLlamaServerRuntime } from "./managed-server-inspection.js";
 import {
   ensureLlamaCppModel,
   prepareManagedLlamaServer,
@@ -121,7 +118,7 @@ export async function createLlamaCppEmbeddingProvider(
       dimensions === undefined ? vector : vector.slice(0, dimensions),
     );
   };
-  let runtimeFacts: LlamaServerRuntimeFacts | undefined;
+  let runtimeFacts: Awaited<ReturnType<typeof inspectLlamaServerRuntime>> | undefined;
   const refreshFacts = async (loadError?: string) => {
     runtimeFacts = await inspectLlamaServerRuntime({
       baseUrl,

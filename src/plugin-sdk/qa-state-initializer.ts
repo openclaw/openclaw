@@ -7,7 +7,6 @@ export async function initializeQaRuntimeState(): Promise<void> {
     { listAgentIds },
     { openOpenClawStateDatabase },
     { withOpenClawAgentDatabaseAsync },
-    { applyMessageQueueDefaults },
     { applyPluginAutoEnable },
     { migrateLegacyConfigMachineState },
     { initializeFreshDaemonRuntimePinMigration },
@@ -19,13 +18,13 @@ export async function initializeQaRuntimeState(): Promise<void> {
     { maybeMigrateModelCatalogCredentials },
     { createDoctorPrompter },
     { defaultRuntime },
+    { migrateLegacyMainSessionKeys },
   ] = await Promise.all([
     import("../config/io.js"),
     import("../config/mutate.js"),
     import("../agents/agent-roster.js"),
     import("../state/openclaw-state-db.js"),
     import("../state/openclaw-agent-db.js"),
-    import("../config/defaults.js"),
     import("../config/plugin-auto-enable.js"),
     import("../infra/state-migrations.config-machine-state.js"),
     import("../infra/state-migrations.daemon-runtime-pins.js"),
@@ -37,6 +36,7 @@ export async function initializeQaRuntimeState(): Promise<void> {
     import("../commands/doctor-model-catalog-credentials.js"),
     import("../commands/doctor-prompter.js"),
     import("../runtime.js"),
+    import("../config/sessions/legacy-main-session-migration.js"),
   ]);
   const io = createConfigIO({ env, observe: false });
   const snapshot = await io.readConfigFileSnapshot();
@@ -72,7 +72,7 @@ export async function initializeQaRuntimeState(): Promise<void> {
     throw new Error(migration.warnings.join("\n"));
   }
   const config = applyPluginAutoEnable({
-    config: applyMessageQueueDefaults(migration.config),
+    config: migration.config,
     env,
   }).config;
   const credentials = await maybeMigrateModelCatalogCredentials({
@@ -97,6 +97,17 @@ export async function initializeQaRuntimeState(): Promise<void> {
   await createConfigIO({ env }).readConfigFileSnapshot();
   for (const agentId of listAgentIds(config)) {
     await withOpenClawAgentDatabaseAsync({ agentId, env }, () => undefined);
+  }
+  const legacySessions = await migrateLegacyMainSessionKeys({
+    cfg: config,
+    env,
+    mode: "doctor-fix",
+  });
+  if (legacySessions.warnings.length) {
+    throw new Error(legacySessions.warnings.join("\n"));
+  }
+  if (legacySessions.armed && (!legacySessions.complete || !legacySessions.ledgerComplete)) {
+    throw new Error("QA initializer requires completed legacy session migration");
   }
   await refreshPluginRegistry({ config, env, reason: "manual" });
 }

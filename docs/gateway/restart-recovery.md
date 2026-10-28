@@ -68,8 +68,9 @@ internal inputs: recovery does not inherit a sender's channel delivery rights,
 and a follow-up without an authenticated operator source cannot reconstruct
 authority from its transcript.
 
-Automatic goal continuations retain that same authenticated operator source,
-including continuations after subagent announcements or requester-settle yields.
+Automatic goal continuations and tool-result handoffs retain that same authenticated
+operator source, including continuations after subagent announcements or
+requester-settle yields.
 If interrupted mid-tool, they resume through normal startup recovery under current
 permissions. The saved goal and its transcript do not grant authority on their own.
 
@@ -94,6 +95,13 @@ The next visible message preserves an interrupted turn's recovery claim even
 when its saved status is failed, timed out, or killed. Recovery resumes the
 interrupted work before the new message takes foreground ownership.
 
+For non-Stop `chat.send` requests carrying a main-session recovery cycle, the Gateway logs
+one structured `chat.send recovery admission` event. It records the admission
+outcome (`rejected`, `admitted`, or `retried`), a session ID hash, the request and
+recovery run IDs, and `chargedAttempts` observed before admitting the request.
+It contains no message content. Rejected stale-session, permission, tool-setting,
+or changed-input requests leave that recovery custody unchanged.
+
 This page describes what survives a restart, how interrupted work is detected,
 and what the automatic resume looks like.
 
@@ -103,13 +111,22 @@ agents continue loading. Startup preparation failures still report an error.
 
 Startup orphan marking runs after plugin loading and startup completion. It uses
 the existing active-session index to exclude archived rows before inspecting
-recovery metadata, without reading full transcripts. Client connections, channels,
-startup-gated RPCs, startup hooks, and saved-input replay still wait for marking; chat readiness stays
-gated until saved-input recovery finishes. Marking failures produce a warning
-without aborting startup,
-and the existing recovery sweep retries failed stores. Main-session recovery and
-queued deliveries still wait for subagent source restoration before resuming
-interrupted work.
+recovery metadata, without reading full transcripts. Authenticated clients can
+connect and read available sessions once the request runtime is ready, while
+orphan marking and database preparation continue. Pending database preparation
+remains recorded in agent admission and health diagnostics; affected session reads
+report a retryable recovery condition. The Control UI keeps the selected chat in
+its existing **Restoring** state while those reads retry; sessions in an unreadable
+database appear after that database becomes available. Channel transports can start independently,
+but incoming turns still wait for their agent's database and saved-input recovery.
+Startup-gated RPCs, startup hooks, and saved-input replay wait for marking; chat
+readiness stays gated until saved-input recovery finishes. Health probes continue
+to report pending recovery even while client connections are available. Marking
+failures produce a warning without aborting startup, and the existing recovery
+sweep retries failed stores. Main-session recovery waits for the initial input
+restoration pass, then resumes healthy agents independently. A pending agent or
+cross-agent recovery group still waits for its own saved-input and subagent source
+restoration before interrupted work resumes.
 
 ## What survives a restart
 
@@ -363,6 +380,11 @@ a restart, or a gateway update) does not kill in-flight work immediately. The
 gateway stops accepting new work, then waits for active agent turns and
 background tasks to finish, up to a drain budget (5 minutes by default). Most
 restarts therefore interrupt nothing at all.
+
+A plain stop (`SIGTERM` or `SIGINT`, such as a service stop) that arrives while
+a restart drains turns that restart into a stop: the Gateway exits after the
+drain instead of starting again. Managed update handoffs keep their own stop
+handling.
 
 A confirmed unavailable child Node runtime follows this same graceful drain when
 the effective native service command's Node can still start. The lifecycle owner
@@ -1157,25 +1179,21 @@ A failed child-completion group does not stop startup recovery for unrelated
 groups. The original group keeps its ownership checks and retries with bounded
 backoff; already-started restored runs are not launched again by those retries.
 
-When a recovered turn starts with an eligible channel delivery route, OpenClaw
-sends a resumption notice to that conversation, retaining its account and topic.
-The final reply uses the same delivery route. Transcript-only turns stay private,
-and a turn that has already finished does not receive a late resumption notice.
-Channel-less turns started through the `agent` RPC remain channel-less after
-recovery. Control UI and `chat.send` / `sessions.send` WebChat turns retain their
-WebChat context. In-flight claims from older builds that did not record the
-original channel retain the previous WebChat fallback for session keys without
-an external channel route; no migration is needed.
-A failed notice does not restart or replay the recovered work. Main-session
-resumption notices are best-effort and live-only: automatic-delivery permission and the recovery
-owner are rechecked immediately before the channel send. They are not replayed
-from the outbound queue; terminal-failure notice retries and normal final-reply
-delivery are unchanged.
+Channel recovery stays silent while a turn waits or resumes. It does not send a
+separate resumption notice. The final reply uses the original delivery route,
+retaining its account and topic. Terminal-failure notices keep their existing
+retry and deduplication behavior. When a replacement session is needed, the
+notice explains how to start one and asks the user to describe the unfinished work.
+Transcript-only turns stay private. Channel-less turns started through the
+`agent` RPC remain channel-less after recovery. Control UI and `chat.send` /
+`sessions.send` WebChat turns retain their WebChat context. In-flight claims from
+older builds that did not record the original channel retain the previous WebChat
+fallback for session keys without an external channel route; no migration is needed.
 
 Telegram renews its typing indicator while the recovered turn runs. Typing stops
 when the turn settles, its recovery owner changes, or the gateway closes, and
 respects `typingMode: "never"`. Other channels can opt in through the guarded
-typing hook; unsupported channels still receive the resumption notice.
+typing hook.
 
 Channel plugins opt in with `heartbeat.sendTypingGuarded(...)`. Alongside the
 recovery delivery target, core supplies an `AbortSignal` and an

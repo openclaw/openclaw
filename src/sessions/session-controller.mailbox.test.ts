@@ -268,12 +268,14 @@ describe("controller mailbox scheduling", () => {
     }
   });
 
-  it.each(["ready", "task"] as const)(
+  it.each(["ready", "task", "unbound-task"] as const)(
     "releases the consumed %s callback before a source retry",
     async (kind) => {
       const input = reserveSource();
       const run = source("retry after preflight refusal");
-      bindSessionControllerSource(input, run);
+      if (kind !== "unbound-task") {
+        bindSessionControllerSource(input, run);
+      }
       const request = () =>
         kind === "ready"
           ? claimSessionControllerInput(run)

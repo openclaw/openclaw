@@ -11,9 +11,7 @@ import { resolveReusableWorkspaceSkillSnapshot } from "./session-snapshot.js";
 import { resolveSkillSnapshotExecutionFileHost } from "./skill-snapshot-provenance.js";
 
 // Start the suite cold so these hoisted mocks also apply after another file loaded the owner.
-vi.hoisted(() => {
-  vi.resetModules();
-});
+vi.hoisted(() => vi.resetModules());
 
 let workspaceSequence = 0;
 let workspaceDir: string;
@@ -43,18 +41,16 @@ const {
   getSkillsSnapshotVersionMock,
   shouldRefreshSnapshotForVersionMock,
 } = vi.hoisted(() => ({
-  buildWorkspaceSkillSnapshotMock: vi.fn<
-    (workspaceDir: string, opts: SnapshotBuildOptions) => SnapshotFixture | Promise<SnapshotFixture>
-  >(() => ({
-    prompt: "",
-    skills: [] as unknown[],
-    resolvedSkills: [] as unknown[],
-  })),
+  buildWorkspaceSkillSnapshotMock:
+    vi.fn<
+      (
+        workspaceDir: string,
+        opts: SnapshotBuildOptions,
+      ) => SnapshotFixture | Promise<SnapshotFixture>
+    >(),
   ensureSkillsWatcherMock: vi.fn(),
-  getSkillsSnapshotVersionMock: vi.fn(() => 1),
-  shouldRefreshSnapshotForVersionMock: vi.fn((cached = 0, next = 0) =>
-    next === 0 ? cached > 0 : cached < next,
-  ),
+  getSkillsSnapshotVersionMock: vi.fn<() => number>(),
+  shouldRefreshSnapshotForVersionMock: vi.fn<(cached?: number, next?: number) => boolean>(),
 }));
 
 vi.mock("../loading/workspace-skill-prompt.js", () => ({
@@ -152,14 +148,17 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     async (changed) => {
       const snapshot = strippedSnapshot();
       const params = { workspaceDir, config: {}, existingSnapshot: snapshot };
-      await resolveReusableWorkspaceSkillSnapshot(params);
+      const first = await resolveReusableWorkspaceSkillSnapshot(params);
       expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
-      await resolveReusableWorkspaceSkillSnapshot({
+      const second = await resolveReusableWorkspaceSkillSnapshot({
         ...params,
         skillFilter: changed ? ["new-filter"] : undefined,
         existingSnapshot: { ...snapshot, skillFilter: changed ? ["old-filter"] : undefined },
       });
       expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(changed ? 2 : 1);
+      if (!changed) {
+        expect(second.snapshot.resolvedSkills).toBe(first.snapshot.resolvedSkills);
+      }
     },
   );
 

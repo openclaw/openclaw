@@ -9,7 +9,7 @@ import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
 import { resolveTurnRecap, shouldRenderQueuedSendInThread } from "../chat-progress.ts";
 import { projectChatReasoning } from "../chat-reasoning.ts";
-import { projectSubagentStatus } from "../chat-subagent-wait.ts";
+import { groupReadsHandoffRoster, projectSubagentStatus } from "../chat-subagent-wait.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import {
@@ -47,7 +47,7 @@ import {
   GuardedTranscriptItem,
   guardChatRenderItems,
   trackTranscriptRenderDependencies,
-  transcriptReplyDependencies,
+  transcriptContextDependencies,
 } from "./chat-transcript-render-guard.ts";
 import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
 import type { ChatTranscriptSession, TranscriptHeader } from "./chat-transcript-session.ts";
@@ -133,7 +133,7 @@ export function projectChatTranscript(
       searchFiltering && props.loadFullAssistantMessage
         ? {
             messages: expandedAssistantMessages,
-            revision: getExpansionStateVersion(expandedAssistantMessages),
+            revision: recovery.revision,
             agentId: props.fullMessageAgentId,
           }
         : undefined,
@@ -165,7 +165,6 @@ export function projectChatTranscript(
     runWorking: Boolean(props.runWorking),
     searchActive: searchFiltering,
     bubbleMode: props.chatBubbleMode === true,
-    session: props.transcriptMetadata ?? activeSession,
   });
   const { collapsedItems, transcriptItems, continuations } = transcriptChain;
   const replyNavigationId = props.replyMessageAccess?.navigationId;
@@ -211,8 +210,8 @@ export function projectChatTranscript(
     !props.loading &&
     !hasLiveContent &&
     (!props.historyPagination?.hasMore || search.open);
-  transcript.setContentReady(!props.loading);
   const { isDirectThread, avatarPlacement } = resolveTranscriptAvatarPlacement(props, chatItems);
+  transcript.layout.configureRows(props, avatarPlacement, searchFiltering || recovery.revision > 0);
   const showLoadingSkeleton = props.loading && transcriptItems.length === 0 && !hasTypingActors;
   const presented =
     typeof props.presented === "object" ? props.presented.isPresented() : (props.presented ?? true);
@@ -221,22 +220,6 @@ export function projectChatTranscript(
     activeSession?.contextTokens ??
     props.sessions?.defaults?.contextTokens ??
     null;
-  const resolvedRecap = resolveTurnRecap(state, {
-    sessionKey: props.sessionKey,
-    agentId: props.currentAgentId,
-    gatewayClient: props.gatewayClient,
-    indicator: workingIndicator,
-    startingNewTurn: props.queue.some(
-      (item) =>
-        (item.sendState === "submitting" ||
-          item.sendState === "sending" ||
-          item.sendState === "waiting-model") &&
-        shouldRenderQueuedSendInThread(item),
-    ),
-    activeRunId: props.runActive ? props.runId : undefined,
-    row: activeSession,
-    usageByRun: props.runUsageById,
-  });
   // Default disclosure belongs only to a settled assistant at the transcript
   // tail; any newer visible row returns the prior answer to hover/tap behavior.
   const lastTranscriptItem =
@@ -252,6 +235,23 @@ export function projectChatTranscript(
           assistantGroupCanOwnActiveRunStatus(lastTranscriptItem)
         ? lastTranscriptItem
         : null;
+  const resolvedRecap = resolveTurnRecap(state, {
+    sessionKey: props.sessionKey,
+    agentId: props.currentAgentId,
+    gatewayClient: props.gatewayClient,
+    indicator: workingIndicator,
+    startingNewTurn: props.queue.some(
+      (item) =>
+        (item.sendState === "submitting" ||
+          item.sendState === "sending" ||
+          item.sendState === "waiting-model") &&
+        shouldRenderQueuedSendInThread(item),
+    ),
+    activeRunId: props.runActive ? props.runId : undefined,
+    row: props.transcriptMetadata ?? activeSession,
+    completedRunId: tailStatusOwner?.runId,
+    usageByRun: props.runUsageById,
+  });
   // An unwatched background run must not inherit the visible turn's recap.
   const turnRecap =
     resolvedRecap && (!tailStatusOwner?.runId || tailStatusOwner.runId === resolvedRecap.runId)
@@ -281,6 +281,7 @@ export function projectChatTranscript(
     replyNavigationId: props.replyMessageAccess?.navigationId,
     onOpenSidebar: props.onOpenSidebar,
     sessionKey: props.sessionKey,
+    handoffSessionLinks: subagents.links,
     boardProvider: props.boardProvider,
     widgetLayout: props.widgetLayout,
     agentId: assistantAgentId,
@@ -452,7 +453,7 @@ export function projectChatTranscript(
     expandedUserMessages,
     getExpansionStateVersion(expandedUserMessages),
     expandedAssistantMessages,
-    getExpansionStateVersion(expandedAssistantMessages),
+    recovery.revision,
     // The host minute poll requests an update; this key crosses row guard() memoization.
     Math.floor(Date.now() / 60_000),
     props.latestBrowserTabs,
@@ -527,21 +528,21 @@ export function projectChatTranscript(
       const hasTools = groups.some((group) =>
         group.messages.some(({ message }) => extractToolCardsCached(message).length > 0),
       );
+      // Launch rows and resume rules read the child roster.
+      const readsRoster = hasTools || groups.some(groupReadsHandoffRoster);
       const hasQuestions =
         asyncQuestions &&
         groups.some((group) => group.messages.some(({ message }) => readAsyncQuestions(message)));
       return [
         liveStatusSignature(item),
         item.key === liveItem?.key ? resolveLiveStream : undefined,
-        ...transcriptReplyDependencies(item, loadedReplySources),
+        ...transcriptContextDependencies(item, loadedReplySources, props),
         // Durable drafts can restore the same map under a new callback generation.
         hasQuestions ? asyncQuestions.drafts : undefined,
         hasQuestions ? asyncQuestionGeneration : undefined,
-        // Tool plugins own foreground activity; launch cards also read the child roster.
+        // Tool plugins own foreground activity.
         hasTools ? presented : undefined,
-        hasTools ? subagents.rowsKey : undefined,
-        item.kind === "notice" ? props.onRetryRun : undefined,
-        item.kind === "notice" ? props.failureActionsRunId : undefined,
+        readsRoster ? subagents.rowsKey : undefined,
       ];
     },
     (item) => {
@@ -606,6 +607,7 @@ export function projectChatTranscript(
         return {
           kind: "notice",
           item,
+          modelCatalog: props.modelCatalog,
           onPermissionRetry: props.onPermissionRetry,
           recovery: props,
         };
@@ -666,7 +668,6 @@ export function projectChatTranscript(
             runWorking: Boolean(props.runWorking),
             searchActive: false,
             bubbleMode: props.chatBubbleMode === true,
-            session: activeSession,
           },
         )
       : transcriptChain;

@@ -8,14 +8,11 @@ import {
   hashCliImageTurnEntryId,
   readCliImageTurnContext,
 } from "../agents/cli-image-turn-correlation.js";
+import { stripCliSessionDriftNote } from "../agents/cli-session-drift.js";
 import { isOpenClawCliImageCachePath } from "../agents/embedded-agent-runner/run/images.media-refs.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
-import {
-  readRoutedPromptView,
-  stripCliPromptDecorations,
-} from "./cli-session-history.prompt-text.js";
 
 export const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
 
@@ -48,9 +45,7 @@ function extractComparableText(
   hasCliImageMentions: boolean;
   cliImageTurnKey?: string;
   text?: string;
-  undecoratedText?: string;
-  scopedKey?: string;
-  cleanedRoutedKey?: string;
+  driftNoteText?: string;
 } {
   const parts: string[] = [];
   const text = readStringValue(record.text);
@@ -86,31 +81,19 @@ function extractComparableText(
     ? stripTrailingCliImageMentions(joined)
     : { text: joined, stripped: false };
   const normalizeText = (value: string) => {
-    const visible = stripInlineDirectiveTagsForDisplay(value).text;
+    const visible = stripInlineDirectiveTagsForDisplay(
+      role === "user" ? stripInboundMetadata(value) : value,
+    ).text;
     return visible.replace(/\s+/g, " ").trim();
   };
   const normalized = normalizeText(stripResult.text);
-  const withoutDecorations = isClaudeImport ? stripCliPromptDecorations(rawText) : rawText;
-  const cleanText = normalizeText(
-    role === "user"
-      ? stripInboundMetadata(
-          isClaudeImport
-            ? stripTrailingCliImageMentions(withoutDecorations.trim()).text
-            : withoutDecorations,
-        )
-      : withoutDecorations,
-  );
-  const undecoratedText = cleanText !== normalized ? cleanText : undefined;
-  const routed =
-    role === "user" ? readRoutedPromptView(record.provenance, joined, isClaudeImport) : undefined;
-  const routedBody =
-    routed &&
-    normalizeText(
-      stripInboundMetadata(
-        isClaudeImport ? stripTrailingCliImageMentions(routed.body.trim()).text : routed.body,
-      ),
-    );
-  const originalRoutedBody = routed && normalizeText(routed.originalBody);
+  // Claude CLI turns written before inbound context moved to the prompt hook
+  // carry the session drift note in the native prompt.
+  const withoutDriftNote = isClaudeImport ? stripCliSessionDriftNote(rawText) : rawText;
+  const driftNoteText =
+    withoutDriftNote !== rawText
+      ? normalizeText(stripTrailingCliImageMentions(withoutDriftNote.trim()).text)
+      : undefined;
   const storedImageTurnKey = normalizeOptionalString(meta?.cliImageTurnKey);
   return {
     hasCliImageMentions: stripResult.stripped,
@@ -118,14 +101,7 @@ function extractComparableText(
       ? { cliImageTurnKey: storedImageTurnKey ?? readCliImageTurnContext(joined) }
       : {}),
     ...(normalized ? { text: normalized } : {}),
-    ...(undecoratedText && !routed ? { undecoratedText } : {}),
-    ...(routed && routedBody && routedBody !== originalRoutedBody
-      ? { cleanedRoutedKey: JSON.stringify([routed.sender, routedBody]) }
-      : {}),
-    // Null scope compares ordinary text; routed bodies retain their sender boundary.
-    ...(role === "user" && (routedBody || cleanText)
-      ? { scopedKey: JSON.stringify([routed?.sender ?? null, originalRoutedBody ?? cleanText]) }
-      : {}),
+    ...(driftNoteText ? { driftNoteText } : {}),
   };
 }
 
@@ -153,8 +129,7 @@ export type HistoryRow = {
   bytes: number;
   role: string | null;
   text: string | null;
-  undecorated_text: string | null;
-  routed_key: string | null;
+  drift_text: string | null;
   timestamp: number | null;
   external_key: string | null;
   image_key: string | null;
@@ -183,15 +158,9 @@ export function createCliHistoryRow(message: unknown, id: number, localSeq?: num
     payload: localSeq === undefined ? serialized : null,
     bytes: Buffer.byteLength(serialized, "utf8"),
     role: role ?? null,
-    // Ordinary original and cleaned bodies share a key space, so equivalent matches
-    // advance the same order floor without advancing genuinely different quotations.
-    text: comparable.text === undefined ? null : JSON.stringify([null, comparable.text]),
-    undecorated_text:
-      comparable.cleanedRoutedKey ??
-      (comparable.undecoratedText === undefined
-        ? null
-        : JSON.stringify([null, comparable.undecoratedText])),
-    routed_key: comparable.scopedKey ?? null,
+    text: comparable.text === undefined ? null : JSON.stringify(comparable.text),
+    drift_text:
+      comparable.driftNoteText === undefined ? null : JSON.stringify(comparable.driftNoteText),
     timestamp: asFiniteNumber(record?.timestamp) ?? null,
     external_key: resolveImportedExternalIdentityKey(meta) ?? null,
     image_key:
@@ -207,7 +176,7 @@ export function createCliHistoryRow(message: unknown, id: number, localSeq?: num
   };
 }
 
-export type HistoryMatch = Pick<HistoryRow, "id" | "text" | "routed_key" | "metadata">;
+export type HistoryMatch = Pick<HistoryRow, "id" | "text" | "metadata">;
 export type HistoryTextMatch = {
   role: string;
   text: string;
@@ -215,11 +184,8 @@ export type HistoryTextMatch = {
   timestamp: number | null;
 };
 type HistoryTextMatchers = Record<
-  "text" | "routed_key",
-  Record<
-    "withIdentity" | "withoutIdentity",
-    Record<"any" | "window" | "missing", (params: HistoryTextMatch) => HistoryMatch | undefined>
-  >
+  "withIdentity" | "withoutIdentity",
+  Record<"any" | "window" | "missing", (params: HistoryTextMatch) => HistoryMatch | undefined>
 >;
 export type CliHistoryMergeStore = {
   matchExternal: (key: string) => HistoryMatch | undefined;
@@ -235,26 +201,10 @@ export function mergeCliHistoryRow(
   store: CliHistoryMergeStore,
 ): boolean {
   const { matchExternal, matchImage, matchers, minimumOrder, consume } = store;
-  const advance = (
-    matched: Pick<HistoryRow, "id" | "text" | "routed_key">,
-    matchedKey?: string,
-  ) => {
-    // Identity matches can omit the native envelope while retaining the exact sender body.
-    // Advancing its cleaned alternate would skip earlier plain turns on subsequent reads.
-    const sameRoutedBody =
-      imported.routed_key &&
-      !imported.routed_key.startsWith("[null,") &&
-      imported.routed_key === matched.routed_key;
+  const advance = (matched: Pick<HistoryRow, "id" | "text">) => {
     for (const text of new Set([
       imported.text,
-      matchedKey ??
-        (!sameRoutedBody && matched.text !== imported.text ? imported.undecorated_text : null),
-      // Literal matches must not advance a different cleaned-body floor.
-      matchedKey === imported.routed_key ||
-      (!matchedKey && !sameRoutedBody && matched.text !== imported.text) ||
-      !imported.routed_key?.startsWith("[null,")
-        ? imported.routed_key
-        : null,
+      matched.text === imported.text ? imported.text : imported.drift_text,
     ])) {
       if (text) {
         store.advanceOrderFloor({ role: imported.role ?? "", text, minimumOrder: matched.id + 1 });
@@ -262,7 +212,6 @@ export function mergeCliHistoryRow(
     }
   };
   let duplicate = imported.external_key ? matchExternal(imported.external_key) : undefined;
-  let matchedKey: string | undefined;
   if (duplicate) {
     advance(duplicate);
     return true;
@@ -272,14 +221,7 @@ export function mergeCliHistoryRow(
   }
   if (!duplicate && !imported.image_mentions) {
     const importedFloor = imported.text ? minimumOrder(imported.role, imported.text) : 0;
-    // Original text wins before cleaned views can collide with literal quotations.
-    // The existing scoped-key index also covers cleaned canonical user text.
-    const routed = imported.routed_key && !imported.routed_key.startsWith("[null,");
-    for (const [column, text] of [
-      ["text", imported.text],
-      ["routed_key", imported.routed_key],
-      ["routed_key", routed ? imported.undecorated_text : null],
-    ] as const) {
+    for (const text of [imported.text, imported.drift_text]) {
       if (!text || !imported.role) {
         continue;
       }
@@ -287,16 +229,13 @@ export function mergeCliHistoryRow(
         text === imported.text
           ? importedFloor
           : Math.max(minimumOrder(imported.role, text), importedFloor);
-      const match = imported.external_key
-        ? matchers[column].withIdentity
-        : matchers[column].withoutIdentity;
+      const match = imported.external_key ? matchers.withIdentity : matchers.withoutIdentity;
       const params = { role: imported.role, text, floor, timestamp: imported.timestamp };
       duplicate =
         imported.timestamp === null
           ? match.any(params)
           : (match.window(params) ?? match.missing(params));
       if (duplicate) {
-        matchedKey = text;
         break;
       }
     }
@@ -319,19 +258,92 @@ export function mergeCliHistoryRow(
       metadata: metadataChanged ? JSON.stringify(meta) : duplicate.metadata,
       external_key: resolveImportedExternalIdentityKey(meta) ?? null,
     });
-    advance(duplicate, matchedKey);
+    advance(duplicate);
     return true;
   }
   return false;
 }
 
-export function compareCliHistoryRows(
-  a: Pick<HistoryRow, "id" | "timestamp">,
-  b: Pick<HistoryRow, "id" | "timestamp">,
-): number {
-  return a.timestamp !== null && b.timestamp !== null && a.timestamp !== b.timestamp
-    ? a.timestamp - b.timestamp
-    : a.id - b.id;
+type CliHistoryOrderRow = Pick<HistoryRow, "id" | "local_seq" | "timestamp">;
+
+function compareImportedCliHistoryRows(a: CliHistoryOrderRow, b: CliHistoryOrderRow): number {
+  if (a.timestamp !== null && b.timestamp !== null && a.timestamp !== b.timestamp) {
+    return a.timestamp - b.timestamp;
+  }
+  if (a.timestamp === null && b.timestamp !== null) {
+    return 1;
+  }
+  if (a.timestamp !== null && b.timestamp === null) {
+    return -1;
+  }
+  return a.id - b.id;
+}
+
+function isLocalCliHistoryRow<T extends CliHistoryOrderRow>(
+  row: T,
+): row is T & { local_seq: number } {
+  return row.local_seq !== null;
+}
+
+function attachCliHistoryImport<T extends CliHistoryOrderRow>(
+  imported: T,
+  anchor: T | undefined,
+  before: T[],
+  afterLocal: Map<number, T[]>,
+): void {
+  if (!anchor) {
+    before.push(imported);
+    return;
+  }
+  const attached = afterLocal.get(anchor.id);
+  if (attached) {
+    attached.push(imported);
+    return;
+  }
+  afterLocal.set(anchor.id, [imported]);
+}
+
+/**
+ * Locals stay in transcript order. Each import follows the latest local at
+ * or before its timestamp. Dated imports and timestamp-sorted locals advance
+ * together so placement stays one pass.
+ */
+export function orderCliHistoryRows<T extends CliHistoryOrderRow>(rows: readonly T[]): T[] {
+  const locals = rows
+    .filter(isLocalCliHistoryRow)
+    .toSorted((a, b) => a.local_seq - b.local_seq || a.id - b.id);
+  const imports = rows
+    .filter((row) => row.local_seq === null)
+    .toSorted(compareImportedCliHistoryRows);
+  const byTime = locals
+    .filter((row): row is T & { local_seq: number; timestamp: number } => row.timestamp !== null)
+    .toSorted((a, b) => a.timestamp - b.timestamp || a.local_seq - b.local_seq || a.id - b.id);
+  const before: T[] = [];
+  const afterLocal = new Map<number, T[]>();
+  let timeIndex = 0;
+  let anchor: (typeof byTime)[number] | undefined;
+  for (const imported of imports) {
+    if (imported.timestamp === null) {
+      attachCliHistoryImport(imported, locals.at(-1), before, afterLocal);
+      continue;
+    }
+    for (;;) {
+      const candidate = byTime[timeIndex];
+      if (candidate === undefined || candidate.timestamp > imported.timestamp) {
+        break;
+      }
+      timeIndex += 1;
+      if (!anchor || candidate.local_seq > anchor.local_seq) {
+        anchor = candidate;
+      }
+    }
+    attachCliHistoryImport(imported, anchor, before, afterLocal);
+  }
+  const ordered = [...before];
+  for (const local of locals) {
+    ordered.push(local, ...(afterLocal.get(local.id) ?? []));
+  }
+  return ordered;
 }
 
 export type CliHistoryIndex = {
