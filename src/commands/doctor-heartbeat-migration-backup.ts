@@ -80,7 +80,7 @@ export async function prepareDoctorMigrationBackups(params: {
  * every migration it returns, so those stores are current and need no conservative
  * full backup; refused, unreadable, or unmigrated stores still do.
  */
-export function hasUnpreparedSchemas(
+function hasUnpreparedSchemas(
   schemas: Pick<DoctorDatabasePreflight, "pendingMigrations" | "agentRefusals" | "indeterminate">,
   committedVersionMigrations: readonly { path: string }[] | undefined,
 ): boolean {
