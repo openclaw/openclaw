@@ -560,7 +560,11 @@ function sweep(cache, current) {
     .filter(({ stat }) => stat)
     .sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
   let retained = 0;
+  let removed = 0;
   for (const { name, path, stat } of entries) {
+    // Cleanup runs before command dispatch; drain excess installs and stages
+    // incrementally without changing the four-install reuse window.
+    if (removed === 4) break;
     if (path === current || !stat?.isDirectory() || stat.uid !== process.getuid?.() ||
         (stat.mode & 0o777) !== 0o700) continue;
     // Creator PIDs survive the wrapper/supervisor exec chain. PID reuse only
@@ -581,6 +585,7 @@ function sweep(cache, current) {
       continue;
     }
     rmSync(path, { recursive: true, force: true });
+    removed++;
   }
 }
 

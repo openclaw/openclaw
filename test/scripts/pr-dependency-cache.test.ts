@@ -151,7 +151,7 @@ describePosix("frozen PR dependency identity", () => {
 });
 
 describePosix("frozen PR dependency cache sweep", () => {
-  it("keeps the four newest unused installations, live consumers, and the current entry", () => {
+  it("bounds each sweep while keeping newest unused installations and live consumers", () => {
     const cache = tempDirs.make("pr-dependency-cache-");
     // Deliberately reverse name/recency order; unused entries are younger than the old TTL.
     const names = Array.from({ length: 12 }, (_, index) => index.toString(16).padStart(64, "0"));
@@ -170,15 +170,29 @@ describePosix("frozen PR dependency cache sweep", () => {
     sweep(cache, current);
 
     expect(readdirSync(cache).toSorted((a, b) => a.localeCompare(b))).toEqual(
+      [...names.slice(0, 4), ...names.slice(-4)].toSorted((a, b) => a.localeCompare(b)),
+    );
+
+    sweep(cache, current);
+
+    expect(readdirSync(cache).toSorted((a, b) => a.localeCompare(b))).toEqual(
       [...names.slice(0, 2), ...names.slice(-4)].toSorted((a, b) => a.localeCompare(b)),
     );
   });
 
-  it("retires stale dead stages while preserving recent, live, and unsafe entries", () => {
+  it("shares the removal budget across installs and stages while preserving protected entries", () => {
     const cache = tempDirs.make("pr-dependency-stages-");
     entry(cache, "install-2147483647-dead", 25, false);
     entry(cache, "install-2147483647-recent", 1, false);
     entry(cache, `install-${process.pid}-live`, 25, false);
+    const completed = Array.from({ length: 6 }, (_, index) =>
+      (index + 10).toString(16).padStart(64, "0"),
+    );
+    for (const [index, name] of completed.entries()) {
+      entry(cache, name, 26 + index);
+    }
+    entry(cache, "install-2147483647-older", 32, false);
+    entry(cache, "install-2147483647-oldest", 33, false);
     const unsafe = entry(cache, "a".repeat(64), 25);
     chmodSync(unsafe, 0o755);
     entry(cache, "not-a-cache-entry", 25);
@@ -187,14 +201,22 @@ describePosix("frozen PR dependency cache sweep", () => {
 
     sweep(cache);
 
+    const protectedEntries = [
+      "a".repeat(64),
+      "b".repeat(64),
+      `install-${process.pid}-live`,
+      "install-2147483647-recent",
+      "not-a-cache-entry",
+      ...completed.slice(0, 4),
+    ];
     expect(readdirSync(cache).toSorted((a, b) => a.localeCompare(b))).toEqual(
-      [
-        "a".repeat(64),
-        "b".repeat(64),
-        `install-${process.pid}-live`,
-        "install-2147483647-recent",
-        "not-a-cache-entry",
-      ].toSorted((a, b) => a.localeCompare(b)),
+      [...protectedEntries, "install-2147483647-oldest"].toSorted((a, b) => a.localeCompare(b)),
+    );
+
+    sweep(cache);
+
+    expect(readdirSync(cache).toSorted((a, b) => a.localeCompare(b))).toEqual(
+      protectedEntries.toSorted((a, b) => a.localeCompare(b)),
     );
     expect(readdirSync(target)).toEqual([]);
   });

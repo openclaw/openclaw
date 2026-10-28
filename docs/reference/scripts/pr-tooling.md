@@ -66,9 +66,12 @@ The current wrapper can prepare dependencies for older retained workflows withou
 changing their binding or executing newer workflow code in their place.
 
 Each entry records its consumer wrapper PIDs. Reuse refreshes its modification
-time; each materialization keeps the four most recently used complete entries
-with no live consumers, plus every entry with a live consumer and the current
-entry. Other unused complete entries are removed regardless of age. Cleanup
+time; cleanup retains the four most recently used complete entries with no live
+consumers, plus every entry with a live consumer and the current entry. Each
+materialization removes at most four eligible entries, sharing this budget across
+unused complete installs and stale stages. Later calls drain any remaining excess;
+unused complete entries remain eligible regardless of age. This bounds removal
+count, not elapsed time. Cleanup
 only removes owned, mode-0700 directories with cache entry names. PID reuse may
 delay cleanup. Failed or interrupted staging directories and incomplete entries
 retain a 24-hour grace period and the same live-consumer and live-creator checks.
