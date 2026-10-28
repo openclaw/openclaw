@@ -27,3 +27,20 @@ export function useNativeAttachmentSourceMenu(): boolean {
   const ua = navigator.userAgent;
   return /AppleWebKit\//u.test(ua) && /Version\/[\d.]+(?: Mobile\/\S+)? Safari\/[\d.]+$/u.test(ua);
 }
+
+// Optional capability: unlike an unrestricted file input, this API requests the
+// document browser directly on Chromium Android. The OS still owns its providers.
+export function getDirectAttachmentFilePicker() {
+  const browser: Window & {
+    showOpenFilePicker?: (options: {
+      multiple: boolean;
+    }) => Promise<Pick<FileSystemFileHandle, "getFile">[]>;
+  } = window;
+  return typeof browser.showOpenFilePicker === "function" ? browser.showOpenFilePicker : undefined;
+}
+
+export function filePickerLabel() {
+  return getDirectAttachmentFilePicker()
+    ? "chat.composer.attachFilesOption"
+    : "chat.composer.attachFileOption";
+}

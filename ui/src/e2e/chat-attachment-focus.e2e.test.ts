@@ -23,6 +23,13 @@ suite.define(() => {
         },
         async ({ page }) => {
           await installAttachmentBrowserIdentity(page, fixture);
+          // This suite covers the retained input route; direct Files has its own browser proof.
+          await page.addInitScript(() => {
+            Object.defineProperty(window, "showOpenFilePicker", {
+              configurable: true,
+              value: undefined,
+            });
+          });
           await installMockGateway(page);
           // Arm interception before raw keyboard input can open a chooser.
           page.on("filechooser", () => {});

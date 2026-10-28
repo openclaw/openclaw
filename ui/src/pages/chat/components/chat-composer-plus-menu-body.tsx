@@ -22,7 +22,7 @@ import type {
   ChatComposerPlusMenuView,
 } from "../composer-capability-types.ts";
 import "./chat-camera-capture.tsx";
-import { useNativeAttachmentSourceMenu } from "./chat-attachment-picker-policy.ts";
+import { filePickerLabel, useNativeAttachmentSourceMenu } from "./chat-attachment-picker-policy.ts";
 import {
   handleComposerLibrarySelection,
   composerLibraryMenuItems,
@@ -133,7 +133,7 @@ function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
           // Image-only composers keep the single picker's file input, filtered to images.
           ...(menu.attachments.imagesOnly
             ? []
-            : ([["file", "paperclip", t("chat.composer.attachFileOption")]] as const)),
+            : ([["file", "paperclip", t(filePickerLabel())]] as const)),
         ] as const)) {
       sources.push({
         id,

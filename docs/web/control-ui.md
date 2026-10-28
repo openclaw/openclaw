@@ -34,6 +34,20 @@ visibility, or remote session-link titles. Side Chat is hidden, and session link
 keep their locally available labels. MCP Apps discovery requires general write
 access. The Gateway continues to authorize every request.
 
+## Composer file browsing
+
+Choose **Files** in the composer to open the device file browser directly where
+your browser supports it. It does not apply a file-type allowlist:
+unknown extensions and files such as Android `.stl` models remain selectable.
+Selecting files stages them in the draft; it does not send them. Existing
+attachment limits, image-only composer restrictions, and upload policy still apply.
+
+Browsers without direct file browsing retain their existing **File** or **Attach…**
+system picker. The browser or operating system owns its source choices, which may include
+camera and photo-library entries. This is an existing platform limitation, not
+strict separation of those sources. A failed direct-file request reports an error
+instead of silently opening a different chooser. Cancellation preserves the draft.
+
 ## Command palette file attachments
 
 Open the command palette with **Cmd+K** on macOS or **Ctrl+K** elsewhere. Drop

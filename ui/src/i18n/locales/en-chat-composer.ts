@@ -58,6 +58,7 @@ const catalog = {
       attachPhoto: "Photo",
       attachMedia: "Media",
       attachFileOption: "File",
+      attachFilesOption: "Files",
       menu: {
         toolAccess: {
           loadFailed: "Couldn’t load tools.",
@@ -292,6 +293,7 @@ const catalog = {
       htmlPreviewUnavailable:
         "Could not preview this HTML file. HTML previews require UTF-8 files up to 2 MiB. Download it to read the full file.",
       readFailed: "Could not attach file. Try again.",
+      pickerFailed: "Could not open the file browser. Try again.",
       imagesOnly: "Side chat accepts image attachments only.",
       tooLarge: "Too large to send: {names}{more}",
       tooLargeToast: "File too large. Try a smaller file.",
