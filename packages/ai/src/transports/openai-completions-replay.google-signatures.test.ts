@@ -50,7 +50,7 @@ function replayedTool(
     buildOpenAICompletionsParams(model, context as never, undefined),
   ) as { tool_calls?: Array<{ extra_content?: unknown; provider_specific_fields?: unknown }> };
   const { extra_content, provider_specific_fields } = replay.tool_calls?.[0] ?? {};
-  return JSON.parse(JSON.stringify({ extra_content, provider_specific_fields })) as unknown;
+  return { extra_content, provider_specific_fields };
 }
 
 const signature = "SIG-OPAQUE-ABC==";
