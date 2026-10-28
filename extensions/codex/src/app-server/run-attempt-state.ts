@@ -3,8 +3,9 @@ import {
   formatErrorMessage,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { CodexAppServerRpcError } from "./client.js";
+import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
 import { neutralizeCodexExplicitMentionSigils } from "./context-engine-projection.js";
+import { isCodexInferenceTransportFailure } from "./inference-transport.js";
 import { isJsonObject } from "./protocol.js";
 import {
   assertCodexBindingMayBeReplaced,
@@ -13,7 +14,36 @@ import {
   type CodexAppServerBindingStore,
   type CodexBindingAuthority,
 } from "./session-binding.js";
+import { retireSharedCodexAppServerClientIfCurrent } from "./shared-client-lifecycle.js";
 import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle-types.js";
+
+/** Called only after a native failure and its output projection have settled. */
+export function retireCodexTransportAfterFailure(
+  {
+    client,
+    thread,
+  }: { client: CodexAppServerClient; thread: CodexAppServerThreadLifecycleBinding },
+  error: unknown,
+): void {
+  if (
+    thread.connectionScope === "supervision" ||
+    thread.ringZeroClientInstanceId !== undefined ||
+    thread.ringZeroConfigFingerprint !== undefined ||
+    !isCodexInferenceTransportFailure(error)
+  ) {
+    return;
+  }
+  // Detach future acquisitions without aborting sibling leases or replaying tools.
+  const retired = retireSharedCodexAppServerClientIfCurrent(client);
+  if (retired) {
+    embeddedAgentLog.warn("codex inference transport retired after settled failure", {
+      reason: "parent_local_transport_failure",
+      stage: "turn_settled",
+      activeLeases: retired.activeLeases,
+      closed: retired.closed,
+    });
+  }
+}
 
 export function canClearCodexBindingForRecovery(
   thread: NonNullable<Parameters<typeof assertCodexBindingMayBeReplaced>[0]>,

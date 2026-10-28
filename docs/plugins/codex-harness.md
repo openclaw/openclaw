@@ -432,6 +432,29 @@ legacy Codex GPT refs. Put OpenAI agent auth order under `auth.order.openai`.
 Legacy Codex auth profile ids and legacy Codex auth order entries are
 repaired by `openclaw doctor --fix`.
 
+### Parent-local inference connection recovery
+
+When an ordinary managed turn ends with the exact `Codex parent-local inference
+transport failed` error, OpenClaw settles its recorded output before retiring
+that connection from future acquisitions. Existing sibling turns drain normally.
+The next eligible attempt can resume the saved thread on a fresh connection.
+The relay does not replay tools or add a retry loop; existing retry limits and
+side-effect checks still apply. Unrelated upstream 502s, supervised sessions,
+and client-bound native tool catalogs do not trigger this retirement.
+
+The logs include `codex inference HTTP relay failed` with a bounded stage and
+cause classification, plus `codex inference transport retired after settled failure`
+when retirement occurs. These diagnostics omit private routes, credentials,
+request bodies, and arbitrary exception text.
+
+After installing a repair, verify its live activation receipt before calling it
+active. If activation is pending, an authorized operator can run
+`openclaw plugins reload codex --json`. Then verify a reply and a read-only tool
+call in the affected session. For background-worker incidents, also follow up
+with the same worker through its parent and verify the worker's completed result;
+a successful parent reply alone does not establish worker recovery. Reconcile
+previous tool results and delivery receipts before retrying external work.
+
 With provider/model runtime policy unset or `auto`, the `openai/*` prefix alone
 never selects this harness. OpenAI may select Codex implicitly only for an
 exact official HTTPS Platform Responses or ChatGPT Responses route with no

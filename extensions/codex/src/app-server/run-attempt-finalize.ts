@@ -31,6 +31,7 @@ import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import {
   canClearCodexBindingForRecovery,
   clearCodexBindingAfterInvalidImagePayload,
+  retireCodexTransportAfterFailure,
   shouldUseFreshCodexThreadAfterContextEngineOverflow,
 } from "./run-attempt-state.js";
 import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
@@ -727,6 +728,9 @@ export async function finalizeCodexAttempt(
     });
     if (turnSucceeded && toolState.yieldDetected && !runAbortController.signal.aborted) {
       resourceState.nativeHookRelay?.authorizeRetentionAfterSuccessfulYield();
+    }
+    if (projectionDrained && terminalState.settledTurnStatus === "failed") {
+      retireCodexTransportAfterFailure(resourceState, finalPromptError);
     }
     return finalizedResult;
   } finally {

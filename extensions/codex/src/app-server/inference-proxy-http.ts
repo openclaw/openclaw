@@ -1,6 +1,28 @@
 import type { IncomingHttpHeaders } from "node:http";
 import type { Duplex } from "node:stream";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { rejectWebSocketUpgrade } from "openclaw/plugin-sdk/websocket-runtime";
+import { transportFailureReason } from "./inference-transport.js";
+
+export type CodexInferenceTransportStage =
+  | "request"
+  | "admission"
+  | "prepare"
+  | "authorization"
+  | "upstream"
+  | "response";
+
+export function logInferenceTransportFailure(
+  stage: CodexInferenceTransportStage,
+  error: unknown,
+  responseStarted: boolean,
+): void {
+  embeddedAgentLog.warn("codex inference HTTP relay failed", {
+    stage,
+    reason: transportFailureReason(error),
+    responseStarted,
+  });
+}
 
 const OVERLOADED = "Codex inference relay is busy; retry on a fresh connection.";
 export const OVERLOAD_HEADERS = { "content-type": "application/json", "retry-after": "1" };

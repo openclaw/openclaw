@@ -1,6 +1,7 @@
 import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
 import { once } from "node:events";
 import { Agent, createServer, request, type IncomingHttpHeaders } from "node:http";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   type ClientOptions,
   WebSocket,
@@ -180,6 +181,30 @@ async function fixture(
   };
   return { proxy, controller, registration, body };
 }
+
+it("reports bounded stage and cause without exposing private upstream errors", async () => {
+  const debug = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+  try {
+    const { proxy, body } = await fixture();
+    transport.fetch.mockRejectedValue(
+      new Error(`Bearer synthetic-secret at ${proxy.baseUrl}`, { cause: { code: "ECONNRESET" } }),
+    );
+    const result = await post(proxy.baseUrl + "/responses", body);
+    expect(result.status).toBe(502);
+    expect(await result.text()).toBe(
+      "Codex parent-local inference transport failed; retry on a fresh connection.",
+    );
+    expect(debug).toHaveBeenCalledWith("codex inference HTTP relay failed", {
+      stage: "upstream",
+      reason: "ECONNRESET",
+      responseStarted: false,
+    });
+    expect(JSON.stringify(debug.mock.calls)).not.toContain("synthetic-secret");
+    expect(JSON.stringify(debug.mock.calls)).not.toContain(proxy.baseUrl);
+  } finally {
+    debug.mockRestore();
+  }
+});
 
 it.each(["HTTP", "WebSocket"] as const)(
   "admits a fresh %s assignment after its listener's startup binding lease closes",
