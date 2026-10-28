@@ -1,3 +1,4 @@
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import { codexCatalogPageWorkerEntrypoint } from "../../catalog-page-worker-entrypoint.js";
@@ -91,7 +92,9 @@ export class CodexCatalogWorker {
         restartOnError: false,
         onRetirementFailure: (error) => {
           // Refuse queued pages promptly when native retirement retains the only slot.
-          void this.pool?.close(error).catch(() => undefined);
+          void this.pool
+            ?.close(toErrorObject(error, "Catalog worker retirement failed"))
+            .catch(() => undefined);
         },
       });
     }

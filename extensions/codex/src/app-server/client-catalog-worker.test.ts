@@ -56,7 +56,7 @@ describe("Codex catalog worker transport", () => {
     const retired = createDeferred<void>();
     // eslint-disable-next-line @typescript-eslint/unbound-method -- Rebound to the intercepted worker below.
     const terminate = Worker.prototype.terminate;
-    vi.spyOn(Worker.prototype, "terminate").mockImplementationOnce(async function () {
+    vi.spyOn(Worker.prototype, "terminate").mockImplementationOnce(async function (this: Worker) {
       const code = await terminate.call(this);
       retired.resolve();
       return code;
@@ -82,7 +82,7 @@ describe("Codex catalog worker transport", () => {
     const terminate = Worker.prototype.terminate;
     const termination = vi
       .spyOn(Worker.prototype, "terminate")
-      .mockImplementationOnce(async function () {
+      .mockImplementationOnce(async function (this: Worker) {
         const code = await terminate.call(this);
         retired.resolve();
         await release.promise;
