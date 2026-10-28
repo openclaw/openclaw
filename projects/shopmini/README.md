@@ -2,221 +2,224 @@
 
 # 🛍️ ShopMini
 
-### Hệ thống quản lý bán hàng dành cho cửa hàng nhỏ
+### Website quản lý bán hàng mini tích hợp trợ lý OpenClaw AI
 
-**Quản lý sản phẩm · Theo dõi đơn hàng · Kiểm soát kho · Báo cáo · Trợ lý OpenClaw AI**
+Quản lý sản phẩm · Đơn hàng · Kho hàng · Khách hàng · Báo cáo · Trò chuyện với AI
 
-<p>
-  <img src="https://img.shields.io/badge/Project-Frontend%20Demo-2563eb?style=for-the-badge" alt="Frontend Demo">
-  <img src="https://img.shields.io/badge/Language-HTML%20%7C%20CSS%20%7C%20JavaScript-f59e0b?style=for-the-badge" alt="HTML CSS JavaScript">
-  <img src="https://img.shields.io/badge/Database-localStorage-16a34a?style=for-the-badge" alt="localStorage">
-  <img src="https://img.shields.io/badge/Status-Learning%20Project-7c3aed?style=for-the-badge" alt="Learning Project">
-</p>
+![HTML](https://img.shields.io/badge/HTML5-Structure-orange?style=flat-square)
+![CSS](https://img.shields.io/badge/CSS3-Styles-blue?style=flat-square)
+![JavaScript](https://img.shields.io/badge/JavaScript-Frontend-yellow?style=flat-square)
+![Node.js](https://img.shields.io/badge/Node.js-Local%20Server-green?style=flat-square)
+![OpenClaw](https://img.shields.io/badge/AI-OpenClaw-purple?style=flat-square)
 
-*Giao diện demo phục vụ học tập và thử nghiệm quy trình quản lý một cửa hàng nhỏ.*
+*Dự án học tập và demo quy trình quản lý cửa hàng nhỏ. Chưa phải hệ thống sẵn sàng xử lý dữ liệu kinh doanh thật.*
 
 </div>
 
 ---
 
-## 📑 Mục lục
+## 📌 Giới thiệu
 
-- [✨ Giới thiệu](#-giới-thiệu)
-- [🚀 Tính năng](#-tính-năng)
-- [🖥️ Công nghệ sử dụng](#️-công-nghệ-sử-dụng)
-- [⚙️ Cài đặt và chạy thử](#️-cài-đặt-và-chạy-thử)
-- [🧭 Hướng dẫn sử dụng](#-hướng-dẫn-sử-dụng)
-- [📊 Cách tính báo cáo](#-cách-tính-báo-cáo)
-- [📁 Cấu trúc thư mục](#-cấu-trúc-thư-mục)
-- [⚠️ Giới hạn hiện tại](#️-giới-hạn-hiện-tại)
-- [🛣️ Lộ trình phát triển](#️-lộ-trình-phát-triển)
-- [🤝 Đóng góp](#-đóng-góp)
+**ShopMini** là ứng dụng web quản lý bán hàng được xây dựng bằng HTML, CSS và JavaScript, có máy chủ Node.js làm cầu nối tới **OpenClaw Gateway** để cung cấp trợ lý AI.
 
-## ✨ Giới thiệu
+Dự án có hai chế độ AI:
 
-**ShopMini** là dự án giao diện quản lý bán hàng đơn giản, được xây dựng để thực hành phát triển web bằng HTML, CSS và JavaScript thuần. Dự án hướng đến các nghiệp vụ thường gặp ở một cửa hàng nhỏ: quản lý danh mục sản phẩm, tạo và theo dõi đơn hàng, điều chỉnh số lượng tồn kho, xem thông tin khách hàng và xuất báo cáo.
+- **Quản lý bán hàng:** nhận tin nhắn bằng ngôn ngữ tự nhiên, xác định yêu cầu ghi nhận sản phẩm đã bán hoặc thêm sản phẩm mới, sau đó cập nhật dữ liệu demo nếu thông tin đủ và hợp lệ.
+- **Tư vấn khách hàng:** trả lời câu hỏi về sản phẩm và giá bán dựa trên danh mục được cung cấp cho AI.
 
-> **Lưu ý:** ShopMini hiện là bản demo frontend. Dữ liệu được lưu trong bộ nhớ cục bộ của trình duyệt, chưa có máy chủ hoặc cơ sở dữ liệu dùng chung.
+AI không tự biết tình trạng cửa hàng nếu không được gửi dữ liệu hiện tại. Hệ thống cần OpenClaw Gateway đang chạy và được cấu hình đúng mới có thể phản hồi.
 
-## 🚀 Tính năng
+## ✨ Tính năng
 
-### 📈 Tổng quan kinh doanh
-- Theo dõi doanh thu của các đơn hàng đã giao.
-- Xem tổng số đơn, số đơn đang xử lý và số lượng sản phẩm.
-- Xem ước tính lợi nhuận gộp và giá trị tồn kho theo giá vốn.
-
-### 📦 Quản lý sản phẩm
-- Thêm sản phẩm với tên, giá bán và số lượng ban đầu.
-- Theo dõi giá bán, giá vốn và tồn kho.
-- Hiển thị cảnh báo khi hàng sắp hết hoặc đã hết.
-- Hạn chế xóa sản phẩm có đơn hàng liên quan.
+### 📦 Quản lý sản phẩm và tồn kho
+- Thêm và xem sản phẩm, giá bán, giá vốn và số lượng tồn.
+- Theo dõi tồn kho và cảnh báo sản phẩm sắp hết.
+- Ghi lại lịch sử điều chỉnh kho.
 
 ### 🧾 Quản lý đơn hàng
-- Tạo đơn hàng theo sản phẩm, số lượng và tên khách hàng.
-- Kiểm tra số lượng tồn trước khi tạo đơn.
-- Tìm kiếm đơn và lọc theo trạng thái.
-- Cập nhật trạng thái đơn hàng.
-- Hủy đơn và hoàn số lượng sản phẩm về kho.
+- Tạo đơn hàng theo sản phẩm, số lượng và khách hàng.
+- Theo dõi trạng thái đơn hàng.
+- Hỗ trợ cập nhật tồn kho theo nghiệp vụ của bản demo.
+- Tìm kiếm và lọc thông tin đơn hàng.
 
-### 🏬 Quản lý kho
-- Nhập thêm hoặc điều chỉnh tồn kho.
-- Không cho phép tồn kho xuống dưới 0.
-- Ghi chú lý do điều chỉnh và xem lịch sử thay đổi kho.
+### 👥 Khách hàng và báo cáo
+- Tổng hợp thông tin khách hàng từ các đơn hàng.
+- Theo dõi doanh thu, giá vốn, lợi nhuận gộp ước tính và giá trị hàng tồn.
+- Xuất dữ liệu được hỗ trợ ra tệp CSV.
 
-### 👥 Quản lý thông tin khách hàng
-- Tổng hợp khách hàng xuất hiện trong các đơn.
-- Thống kê số đơn và tổng chi tiêu của đơn đã giao.
-- Tìm kiếm khách hàng theo tên.
+### 🤖 Trợ lý OpenClaw AI
+- Nhận yêu cầu quản lý bằng tiếng Việt.
+- Có thể đề xuất hành động ghi nhận bán hàng hoặc thêm sản phẩm dựa trên nội dung người dùng cung cấp.
+- Kiểm tra mã sản phẩm, số lượng tồn và dữ liệu bắt buộc trước khi áp dụng hành động.
+- Có chế độ tư vấn riêng, sử dụng thông tin sản phẩm công khai.
+- Gọi AI qua máy chủ Node.js; Gateway token không được đặt trong mã JavaScript phía trình duyệt.
 
-### 📊 Báo cáo và xuất dữ liệu
-- Xem doanh thu, giá vốn hàng đã giao và lợi nhuận gộp ước tính.
-- Xem giá trị hàng tồn theo giá vốn.
-- Xuất danh sách đơn hàng và dữ liệu khách hàng thành tệp CSV để mở bằng Excel hoặc phần mềm bảng tính tương thích.
+> **Lưu ý:** AI có thể hiểu sai ngôn ngữ tự nhiên. Hãy kiểm tra phản hồi và đối chiếu đơn hàng/tồn kho sau mỗi thao tác. Chỉ dùng dữ liệu giả khi thử nghiệm.
 
-### 🤖 Trợ lý AI tích hợp OpenClaw
-- Chế độ quản lý: ghi nhận bán hàng từ tin nhắn và cập nhật đơn hàng/tồn kho; thêm sản phẩm mới khi có đủ tên, giá bán và số lượng.
-- Chế độ tư vấn khách hàng: trả lời câu hỏi dựa trên danh mục sản phẩm công khai, không cung cấp dữ liệu khách hàng hay giá vốn.
-- Backend Node.js giữ Gateway token ở máy chủ, không gửi token xuống trình duyệt.
-- AI cần được cấu hình và chạy OpenClaw Gateway; không hoạt động chỉ bằng cách mở `index.html`.
-
-### 💾 Lưu trữ trên trình duyệt
-- Lưu dữ liệu bằng \`localStorage\`.
-- Không cần cài đặt thư viện JavaScript bên ngoài để chạy bản demo.
-- Dữ liệu demo phù hợp để thử nghiệm các thao tác cơ bản.
-
-## 🖥️ Công nghệ sử dụng
+## 🧰 Công nghệ
 
 | Công nghệ | Vai trò |
 |---|---|
-| **HTML5** | Xây dựng cấu trúc trang |
-| **CSS3** | Tạo kiểu giao diện và bố cục |
-| **JavaScript** | Xử lý nghiệp vụ và tương tác |
-| **Node.js** | Máy chủ cục bộ làm cầu nối an toàn tới OpenClaw Gateway |
-| **OpenClaw Gateway** | Cung cấp phản hồi AI cho quản lý và tư vấn khách hàng |
-| **localStorage** | Lưu dữ liệu trong trình duyệt |
-| **CSV** | Xuất dữ liệu để xem và xử lý bằng bảng tính |
-| **Visual Studio Code** | Môi trường chỉnh sửa mã nguồn được khuyến nghị |
-
-## ⚙️ Cài đặt và chạy thử
-
-### Cách 1 — Tải mã nguồn bằng Git
-
-Mở Terminal hoặc Git Bash và chạy:
-
-\`\`\`bash
-git clone -b feature/shopmini-mvp https://github.com/phamminhquan012572-ui/openclaw.git
-cd openclaw/projects/shopmini
-\`\`\`
-
-Sau đó mở thư mục \`projects/shopmini\` bằng VS Code.
-
-### Cách 2 — Nếu đã fork dự án
-
-Nếu bạn đã có bản sao repository trên máy, hãy chuyển sang đúng nhánh và cập nhật mã nguồn:
-
-\`\`\`bash
-git switch feature/shopmini-mvp
-git pull origin feature/shopmini-mvp
-\`\`\`
-
-> Nếu nhánh trên máy chưa được tạo, chạy \`git fetch origin\` rồi \`git switch --track origin/feature/shopmini-mvp\`.
-
-### Cách chạy kèm trợ lý OpenClaw AI
-
-1. Cài Node.js 20 trở lên và bật endpoint Chat Completions trong cấu hình OpenClaw Gateway:
-
-   ```json5
-   {
-     gateway: {
-       http: {
-         endpoints: { chatCompletions: { enabled: true } },
-       },
-     },
-   }
-   ```
-
-   Khởi động lại Gateway sau khi chỉnh cấu hình. Endpoint này mặc định đang tắt.
-2. Sao chép `.env.example` thành `.env` trong thư mục `projects/shopmini`.
-3. Điền `OPENCLAW_GATEWAY_TOKEN` bằng Gateway token của bạn. Nếu Gateway dùng địa chỉ khác, cập nhật `OPENCLAW_GATEWAY_URL`; model mặc định là `openclaw/default`.
-4. Chạy trong terminal:
-
-   ```bash
-   npm start
-   ```
-
-5. Mở `http://127.0.0.1:4173`.
-
-**Bảo mật:** Gateway token tương đương quyền operator của OpenClaw. Giữ Gateway và ShopMini trên máy cá nhân/mạng riêng; không đưa token vào `app.js`, không commit file `.env`, và không mở cổng Gateway ra Internet. Chỉ dùng dữ liệu thử nghiệm cho bản demo. Nếu chỉ muốn xem giao diện không có AI, có thể mở `index.html`, nhưng tính năng AI cần chạy server qua `npm start`.
-
-### Mở website
-
-1. Mở thư mục \`projects/shopmini\` trong VS Code.
-2. Tìm file \`index.html\`.
-3. Mở file bằng trình duyệt hoặc sử dụng tiện ích **Live Server** trong VS Code.
-4. Thử thêm sản phẩm, tạo đơn hàng, điều chỉnh tồn kho và xuất CSV.
-
-Không cần XAMPP hoặc lệnh \`npm install\` cho phiên bản frontend tĩnh hiện tại.
-
-## 🧭 Hướng dẫn sử dụng
-
-1. **Kiểm tra sản phẩm:** đảm bảo danh sách sản phẩm đã hiển thị.
-2. **Thêm sản phẩm:** nhập thông tin sản phẩm và số lượng ban đầu.
-3. **Tạo đơn:** chọn sản phẩm, nhập tên khách hàng và số lượng phù hợp với tồn kho.
-4. **Xử lý đơn:** tìm đơn hàng, cập nhật trạng thái hoặc hủy khi cần.
-5. **Điều chỉnh kho:** chọn sản phẩm, nhập số lượng thay đổi và ghi rõ lý do.
-6. **Xem khách hàng và báo cáo:** kiểm tra số đơn, chi tiêu, doanh thu và các chỉ số ước tính.
-7. **Xuất CSV:** tải dữ liệu ra tệp để xem hoặc xử lý bằng bảng tính.
-
-## 📊 Cách tính báo cáo
-
-- **Doanh thu:** tổng giá trị đơn có trạng thái **Đã giao**.
-- **Giá vốn hàng đã giao:** tổng giá vốn lưu trong đơn nhân số lượng đã giao.
-- **Lợi nhuận gộp ước tính:** doanh thu trừ giá vốn hàng đã giao.
-- **Giá trị tồn kho:** số lượng hiện có nhân giá vốn sản phẩm.
-- **Chi tiêu khách hàng:** tổng giá trị các đơn đã giao của khách hàng đó.
-
-Các chỉ số trên chỉ phục vụ minh họa. Lợi nhuận chưa trừ tiền thuê mặt bằng, lương, phí vận chuyển, thuế, hoàn tiền và các chi phí khác. Cần kiểm thử dữ liệu và nghiệp vụ trước khi sử dụng trong hoạt động kinh doanh thực tế.
+| HTML5 | Cấu trúc giao diện |
+| CSS3 | Bố cục và giao diện |
+| JavaScript | Xử lý tương tác và nghiệp vụ phía trình duyệt |
+| Node.js | Máy chủ cục bộ và API trung gian |
+| OpenClaw Gateway | Cung cấp khả năng trò chuyện AI |
+| localStorage | Lưu dữ liệu demo trong trình duyệt |
+| CSV | Xuất dữ liệu để mở bằng phần mềm bảng tính |
 
 ## 📁 Cấu trúc thư mục
 
-\`\`\`text
-openclaw/
-└── projects/
-    └── shopmini/
-        ├── index.html    # Cấu trúc giao diện
-        ├── style.css     # Kiểu dáng giao diện
-        ├── app.js        # Nghiệp vụ và tương tác
-        └── README.md     # Tài liệu dự án
-\`\`\`
+```text
+projects/shopmini/
+├── index.html       # Giao diện quản lý bán hàng và trợ lý AI
+├── style.css        # Kiểu dáng website
+├── app.js           # Logic giao diện, đơn hàng, kho và AI
+├── server.mjs       # Máy chủ Node.js và cầu nối OpenClaw Gateway
+├── package.json     # Lệnh khởi chạy máy chủ
+├── .env.example     # Mẫu cấu hình kết nối
+├── .gitignore       # Bỏ qua file bí mật .env
+└── README.md        # Tài liệu dự án
+```
+
+## ⚙️ Cài đặt và chạy
+
+### 1. Yêu cầu
+
+- Git
+- Node.js phiên bản 20 trở lên
+- OpenClaw đã được cài đặt và Gateway đang chạy
+- Gateway token hợp lệ và model được cấu hình trong OpenClaw
+
+### 2. Tải dự án
+
+Nếu chưa có mã nguồn trên máy, mở Terminal hoặc Git Bash và chạy:
+
+```bash
+git clone -b feature/shopmini-mvp https://github.com/phamminhquan012572-ui/openclaw.git
+cd openclaw/projects/shopmini
+```
+
+Nếu đã clone repository trước đó:
+
+```bash
+git switch feature/shopmini-mvp
+git pull origin feature/shopmini-mvp
+cd projects/shopmini
+```
+
+### 3. Bật endpoint Chat Completions của OpenClaw
+
+ShopMini gọi API tương thích OpenAI tại `/v1/chat/completions`. Trong cấu hình Gateway của OpenClaw, bật endpoint này:
+
+```json5
+{
+  gateway: {
+    http: {
+      endpoints: {
+        chatCompletions: { enabled: true },
+      },
+    },
+  },
+}
+```
+
+Lưu cấu hình và khởi động lại Gateway theo hướng dẫn của OpenClaw. Endpoint Chat Completions có thể bị tắt mặc định. Tham khảo [tài liệu API HTTP của OpenClaw](https://github.com/openclaw/openclaw/blob/main/docs/gateway/openai-http-api.md).
+
+### 4. Thiết lập biến môi trường
+
+Trong thư mục `projects/shopmini`, sao chép file mẫu:
+
+Windows Command Prompt:
+
+```bat
+copy .env.example .env
+```
+
+PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Mở `.env` và điền thông tin phù hợp với Gateway của bạn:
+
+```dotenv
+OPENCLAW_GATEWAY_URL=http://127.0.0.1:18789/v1/chat/completions
+OPENCLAW_MODEL=openclaw/default
+OPENCLAW_GATEWAY_TOKEN=YOUR_GATEWAY_TOKEN
+SHOPMINI_PORT=4173
+```
+
+- `OPENCLAW_GATEWAY_URL`: địa chỉ endpoint Chat Completions.
+- `OPENCLAW_MODEL`: tên model/định tuyến model mà Gateway của bạn chấp nhận.
+- `OPENCLAW_GATEWAY_TOKEN`: token xác thực của Gateway.
+- `SHOPMINI_PORT`: cổng chạy website, mặc định là `4173`.
+
+Các giá trị trên là mẫu. Hãy dùng đúng địa chỉ, token và model trong môi trường OpenClaw của bạn.
+
+### 5. Khởi động ShopMini
+
+Trong Terminal, tại thư mục `projects/shopmini`, chạy:
+
+```bash
+npm start
+```
+
+Khi máy chủ khởi động, mở trình duyệt tại:
+
+**http://127.0.0.1:4173**
+
+Không mở `index.html` trực tiếp bằng trình duyệt nếu muốn dùng AI; tính năng chat gọi API `/api/assistant` trên máy chủ Node.js.
+
+## 💬 Ví dụ sử dụng trợ lý AI
+
+### Chế độ Quản lý bán hàng
+
+- “Tôi vừa bán 2 Bình giữ nhiệt cho khách Minh Anh.”
+- “Thêm sản phẩm Chuột không dây, giá bán 150000 đồng, tồn kho ban đầu 20.”
+
+AI cần xác định được sản phẩm và thông tin bắt buộc. Nếu thiếu dữ liệu, sản phẩm không khớp hoặc tồn kho không đủ, hãy bổ sung thông tin thay vì cố ghi nhận giao dịch. Sau khi AI đề xuất hành động, ứng dụng mới kiểm tra và áp dụng hành động thuộc phạm vi được hỗ trợ.
+
+### Chế độ Tư vấn khách hàng
+
+- “Shop có những sản phẩm nào?”
+- “Sản phẩm này có giá bao nhiêu?”
+- “Tôi nên chọn sản phẩm nào trong danh mục?”
+
+Câu trả lời phụ thuộc vào danh mục được gửi đến AI. Không xem câu trả lời AI là bằng chứng về tồn kho thực tế hoặc xác nhận đơn hàng đã được thanh toán.
+
+## 🔐 Bảo mật quan trọng
+
+- **Không commit file `.env` lên GitHub.** File này đã được thêm vào `.gitignore`; chỉ commit `.env.example` không chứa token thật.
+- Không đặt Gateway token trong `app.js`, HTML hoặc bất kỳ mã nào gửi xuống trình duyệt.
+- Gateway token có thể cấp quyền nhạy cảm. Chỉ sử dụng token phù hợp, giữ Gateway trên máy cá nhân hoặc mạng tin cậy và không mở trực tiếp cổng Gateway ra Internet.
+- Máy chủ mẫu chỉ lắng nghe trên `127.0.0.1`, phù hợp để thử nghiệm cục bộ, không phải cấu hình triển khai công khai.
+- Không đưa dữ liệu cá nhân nhạy cảm, thông tin thanh toán hoặc dữ liệu kinh doanh thật vào bản demo.
+- Kiểm tra lại các cập nhật do AI đề xuất trước khi dựa vào chúng để ra quyết định.
 
 ## ⚠️ Giới hạn hiện tại
 
-ShopMini chưa phải hệ thống quản lý bán hàng hoàn chỉnh để triển khai kinh doanh thực tế.
-
-- Dữ liệu chỉ nằm trong trình duyệt hiện tại; không tự đồng bộ giữa thiết bị hoặc người dùng.
-- Chưa có đăng nhập, phân quyền, máy chủ hoặc cơ sở dữ liệu trung tâm.
-- Chưa có quản lý nhà cung cấp, phiếu nhập hàng đầy đủ, công nợ và chi phí vận hành.
-- Chưa tích hợp thanh toán trực tuyến, hóa đơn điện tử, vận chuyển hoặc sàn thương mại điện tử.
-- Đã có giao diện AI kết nối OpenClaw Gateway qua máy chủ cục bộ; cần cấu hình token và bật endpoint để sử dụng.
-- Dữ liệu trong trình duyệt có thể bị mất khi người dùng xóa dữ liệu website; nên chỉ dùng dữ liệu giả để thử nghiệm.
-
-**Không lưu thông tin thanh toán hoặc dữ liệu cá nhân nhạy cảm của khách hàng trong bản demo này.**
+- Dữ liệu nghiệp vụ vẫn lưu trong `localStorage` của từng trình duyệt, chưa có cơ sở dữ liệu dùng chung hoặc đồng bộ nhiều thiết bị.
+- Chưa có đăng nhập, phân quyền người dùng, sao lưu dữ liệu hoặc nhật ký kiểm toán phía máy chủ.
+- Tích hợp AI cần OpenClaw Gateway, endpoint được bật, token hợp lệ và model khả dụng.
+- Bản demo chưa được xác nhận qua kiểm thử triển khai thực tế; cần kiểm tra luồng AI, lỗi mạng, dữ liệu nhập và các trường hợp AI hiểu nhầm trước khi sử dụng.
+- Không thay thế phần mềm bán hàng chuyên nghiệp, hệ thống kế toán hoặc hệ thống thanh toán.
 
 ## 🛣️ Lộ trình phát triển
 
-- [ ] Hoàn thiện giao diện trên điện thoại và máy tính bảng.
-- [ ] Bổ sung chỉnh sửa sản phẩm và hồ sơ khách hàng.
-- [ ] Bổ sung nhà cung cấp, phiếu nhập kho và chi phí.
+- [x] Xây dựng giao diện quản lý sản phẩm, đơn hàng, kho và báo cáo.
+- [x] Bổ sung giao diện chat với hai chế độ AI.
+- [x] Tạo máy chủ Node.js làm cầu nối OpenClaw Gateway.
+- [ ] Kiểm thử tự động các hành động AI và tình huống lỗi.
 - [ ] Xây dựng backend và cơ sở dữ liệu dùng chung.
-- [ ] Thêm đăng nhập và phân quyền theo vai trò.
-- [ ] Hoàn thiện kiểm thử, xác thực dữ liệu và sao lưu.
-- [x] Bổ sung giao diện trợ lý OpenClaw AI cho quản lý bán hàng và tư vấn khách hàng (cần cấu hình Gateway để chạy).
-- [ ] Chuyển dữ liệu từ localStorage sang backend/database dùng chung để đồng bộ an toàn.
-- [ ] Triển khai bản thử nghiệm lên hosting sau khi hoàn thiện các yêu cầu bảo mật.
+- [ ] Thêm đăng nhập, phân quyền và nhật ký thao tác.
+- [ ] Bổ sung sao lưu, khôi phục dữ liệu và triển khai an toàn.
+- [ ] Hoàn thiện kiểm thử trên điện thoại và máy tính bảng.
 
 ## 🤝 Đóng góp
 
-Bạn có thể fork repository, tạo nhánh riêng, thực hiện thay đổi và gửi Pull Request. Khi báo lỗi, hãy mô tả các bước tái hiện, kết quả mong đợi và kết quả thực tế; không đính kèm dữ liệu khách hàng thật hoặc thông tin bí mật.
+Bạn có thể fork repository, tạo nhánh riêng, thực hiện thay đổi và gửi Pull Request. Khi báo lỗi, hãy nêu các bước tái hiện, kết quả mong đợi và kết quả thực tế. Không đính kèm token, file `.env` hoặc dữ liệu khách hàng thật.
 
 ## 📄 Giấy phép
 
@@ -226,8 +229,8 @@ Hãy kiểm tra file giấy phép ở thư mục gốc repository trước khi p
 
 <div align="center">
 
-**ShopMini — Học tập hôm nay, phát triển sản phẩm tốt hơn ngày mai.**
+**ShopMini — Quản lý đơn giản hơn, thử nghiệm AI có trách nhiệm hơn.**
 
-<sub>Thư mục dự án: \`projects/shopmini\` · Nhánh: \`feature/shopmini-mvp\`</sub>
+<sub>Thư mục: `projects/shopmini` · Nhánh: `feature/shopmini-mvp`</sub>
 
 </div>
