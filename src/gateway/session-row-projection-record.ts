@@ -22,6 +22,7 @@ import type { SessionRepositoryWorkspaceRecord } from "../state/session-reposito
 import type { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { compareSessionEntryPairs } from "./session-list-order.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
+import { sameSelectionFacts } from "./session-row-selection-facts.js";
 import { selectStoredSessionLineage } from "./session-store-key.js";
 import { sessionTitleRequests } from "./session-title-state.js";
 import type { SessionChildActivity, SessionListRowContext } from "./session-utils-contracts.js";
@@ -108,6 +109,8 @@ export type Row = {
   sharingEntry?: SessionEntry;
   entry?: SessionEntry;
   selection: ReturnType<typeof readSessionListSelectionFacts>;
+  /** One accepted selection snapshot shared by recents and list consumers. */
+  selectionSnapshot?: SelectionRow;
   materialized?: ReturnType<typeof rowProjection.materializeSessionRow>;
   materializedSequence?: number;
   profileRevision?: number;
@@ -137,7 +140,7 @@ export type Row = {
 export type SelectionRow = Pick<
   EntryRow,
   "key" | "agentId" | "storeTarget" | "entry" | "selection" | "hasBoard" | "generation"
->;
+> & { selectionFactsRevision?: object };
 export type SelectionChange =
   | { kind: "reset" }
   | {
@@ -151,17 +154,36 @@ export type SelectionChange =
     };
 
 export function selectionRow(row: Row): SelectionRow | undefined {
-  return row.entry
-    ? {
-        key: row.key,
-        agentId: row.agentId,
-        storeTarget: row.storeTarget,
-        entry: row.entry,
-        selection: row.selection,
-        hasBoard: row.hasBoard,
-        generation: row.generation,
-      }
-    : undefined;
+  if (!row.entry) {
+    row.selectionSnapshot = undefined;
+    return undefined;
+  }
+  const previous = row.selectionSnapshot;
+  if (
+    previous &&
+    previous.entry === row.entry &&
+    previous.selection === row.selection &&
+    previous.hasBoard === row.hasBoard &&
+    previous.generation === row.generation &&
+    previous.key === row.key &&
+    previous.agentId === row.agentId &&
+    previous.storeTarget.storePath === row.storeTarget.storePath
+  ) {
+    return previous;
+  }
+  const next: SelectionRow = {
+    key: row.key,
+    agentId: row.agentId,
+    storeTarget: row.storeTarget,
+    entry: row.entry,
+    selection: row.selection,
+    hasBoard: row.hasBoard,
+    generation: row.generation,
+  };
+  next.selectionFactsRevision =
+    previous && sameSelectionFacts(previous, next) ? previous.selectionFactsRevision : {};
+  row.selectionSnapshot = next;
+  return next;
 }
 
 export type Query = {
@@ -354,6 +376,7 @@ export function renewGeneration(row: Row): Row {
   return {
     ...row,
     entry: undefined,
+    selectionSnapshot: undefined,
     storedEntry: undefined,
     entryAcquisitionPending: undefined,
     pendingDatabaseFacts: undefined,
