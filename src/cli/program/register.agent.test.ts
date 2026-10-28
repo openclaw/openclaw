@@ -54,6 +54,8 @@ const handlers = vi.hoisted(() => ({
   gitLog: vi.fn(),
   gitRestore: vi.fn(),
   gitVerify: vi.fn(),
+  localCreate: vi.fn(),
+  localRestore: vi.fn(),
   sqliteCreate: vi.fn(),
   sqliteList: vi.fn(),
   sqliteRestore: vi.fn(),
@@ -67,6 +69,11 @@ vi.mock("../../commands/backup-git.js", () => ({
   backupGitLogCommand: handlers.gitLog,
   backupGitRestoreCommand: handlers.gitRestore,
   backupGitVerifyCommand: handlers.gitVerify,
+}));
+// mock-isolation: argument parsing must not capture or restore local checkpoints.
+vi.mock("../../commands/backup-local.js", () => ({
+  backupLocalCreateCommand: handlers.localCreate,
+  backupLocalRestoreCommand: handlers.localRestore,
 }));
 // mock-isolation: argument parsing must not restore or overwrite operator data.
 vi.mock("../../commands/backup-restore.js", () => ({ backupRestoreCommand: handlers.restore }));
@@ -200,6 +207,17 @@ describe("backup registration", () => {
       { global: true, repository: "/repo" },
     ],
     ["sqlite list --repository /repo --json", handlers.sqliteList, { repository: "/repo" }],
+    [
+      "local create --output /checkpoint.tar.gz --json",
+      handlers.localCreate,
+      { output: "/checkpoint.tar.gz", json: true },
+    ],
+    [
+      "local restore /checkpoint.tar.gz --json",
+      handlers.localRestore,
+      { json: true },
+      "/checkpoint.tar.gz",
+    ],
     [
       "git restore --repository /repo --store team-reports --target /restored.sqlite --json",
       handlers.gitRestore,

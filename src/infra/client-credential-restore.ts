@@ -380,6 +380,7 @@ export function prepareUpdateClientCredentialRestore(options: {
     localPath: local.snapshotPath,
     sharedPath: shared.snapshotPath,
     originalSharedPath: sharedPath,
+    originalSharedFile: shared.sourceFile ? { path: sharedPath, ...shared.sourceFile } : undefined,
     originalStateRoot: path.dirname(path.dirname(localPath)),
     restoredSharedPath: sharedPath,
     postgresStoreId: shared.storeId,

@@ -1,6 +1,7 @@
 import type { BigIntStats } from "node:fs";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { isNoReplaceUnsupported } from "@openclaw/fs-safe/errors";
 import type { RootCopyPublicationReceipt } from "@openclaw/fs-safe/root";
 import { FsSafeError, root } from "./fs-safe.js";
 
@@ -60,7 +61,11 @@ export async function copySqliteFile(
         !(
           error.code === "unsupported-platform" ||
           (error.code === "helper-unavailable" &&
-            error.message === "native file cloning is unavailable")
+            error.message === "native file cloning is unavailable") ||
+          // Required cloning also refuses unsupported no-replace publication.
+          // Admit a byte copy before fs-safe's guarded non-overwriting fallback.
+          (error.details?.phase === "publish" && isNoReplaceUnsupported(error.cause)) ||
+          isNoReplaceUnsupported(error)
         )
       ) {
         throw error;

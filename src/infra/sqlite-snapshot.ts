@@ -299,11 +299,11 @@ async function publishSqliteFile(
     let staged: FileIdentityStat & { size: bigint };
     let transferredOwnedImage = false;
     if (consumeOwnedSource === "prepared") {
-      if (options.sourcePath !== stagedPath || sourceIdentity.dev !== stagingIdentity.dev) {
-        throw new Error(
-          `SQLite prepared image is not on its publication volume: ${options.sourcePath}`,
-        );
+      if (options.sourcePath !== stagedPath) {
+        throw new Error(`SQLite prepared image path changed: ${options.sourcePath}`);
       }
+      // Overlay files and their directories can report different device IDs.
+      // Required hard-link publication below enforces the actual volume boundary.
       staged = sourceIdentity;
     } else if (
       consumeOwnedSource &&

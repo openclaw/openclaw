@@ -25,7 +25,6 @@ import type { OpenClawRegisteredAgentDatabase } from "../state/openclaw-agent-db
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
 import { readOpenClawAgentDatabaseRegistryRows } from "../state/openclaw-agent-db-registry.read.js";
 import { assertOpenClawStateDatabaseOwner } from "../state/openclaw-state-db-maintenance.js";
-import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   resolveOpenClawRegisteredAgentDatabasePath,
   resolveOpenClawStateSqlitePath,
@@ -43,14 +42,13 @@ import {
 } from "./backup-sqlite-source-groups.js";
 import { isTransientSqliteBackupPath } from "./backup-volatile-filter.js";
 import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
-import type { ClientCredentialDatabase } from "./client-credential-schema.js";
+import { sanitizeClientCredentialSnapshot } from "./client-credential-snapshot.js";
 import { resolveAgentPortRoots } from "./database-engine/agent-port.js";
 import { readEngineAnchor } from "./database-engine/open.js";
 import { listDatabaseEngineStores, selectDatabaseEngine } from "./database-engine/registry.js";
 import { sha256File } from "./directory-durability.js";
 import { hasErrnoCode, ignoreMissingPath as ignoreMissingSource } from "./errno.js";
 import { collectErrorGraphCandidates, formatErrorMessage } from "./errors.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   isAppleDoubleMetadataFile,
@@ -435,17 +433,9 @@ export async function createBackupSqliteSnapshotPlan(params: {
               rewriteLegacyAuditBackupCheckpoints(database, params.legacyAuditSnapshots);
             } else if (canonicalSource?.role === "agent") {
               sanitizeOpenClawStateLeaseRows(database);
-            } else if (
-              canonicalSource?.role === "client" &&
-              tableExists(database, "native_exec_socket_credentials")
-            ) {
+            } else if (canonicalSource?.role === "client") {
               // Socket authentication is installation-local and must regenerate on restore.
-              executeSqliteQuerySync(
-                database,
-                getNodeSqliteKysely<ClientCredentialDatabase>(database)
-                  .updateTable("native_exec_socket_credentials")
-                  .set({ socket_token: null }),
-              );
+              sanitizeClientCredentialSnapshot(database);
             }
             await embedSessionColdArchivesInSnapshot({
               database,

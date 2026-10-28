@@ -65,6 +65,43 @@ Archive `create`, `list`, `verify`, and `restore`, external `record`, plus SQLit
 `create`, `list`, `verify`, and `restore`, accept `--json` for one machine-readable
 result on stdout.
 
+## Local Gateway checkpoints
+
+When the Gateway keeps global state in SQLite and its configured agent stores
+in PostgreSQL, a local checkpoint preserves the Gateway's global database,
+local client identity and pairing credentials, and configured agent anchor
+files. It leaves PostgreSQL histories in their existing database and retains
+each anchor's store UUID and schema. It excludes config, workspaces, PostgreSQL
+agent records, and unconfigured agent directories. Provider SecretRefs remain
+in host-managed configuration; the local client credentials are device keys
+and pairing tokens.
+
+```bash
+openclaw backup local create --output /private/backups/gateway-local.tar.gz --json
+openclaw backup local restore /private/backups/gateway-local.tar.gz --json
+```
+
+Creation works while the Gateway is running and refuses an existing output
+file. JSON includes `ok`, the absolute `archivePath`, `databaseCount`, and
+`sizeBytes`. The archive contains native verified SQLite images and a manifest;
+retain it with the same confidentiality as device credentials.
+
+Restore requires a stopped Gateway, the original state-directory path and
+configured agent-directory paths, and fresh database targets with no SQLite
+sidecars. Install the host-managed config before restoring. Restore validates
+ownership, hashes, anchor identities, and the matched global/client pair, then
+rebinds client credentials to the newly published global database. Host leases,
+pending outbound deliveries, TTL blob data, and socket tokens are excluded
+through the ordinary backup sanitizer. Local socket authentication regenerates;
+scheduler and approval history
+remain in the captured global state. Restore JSON includes `ok`, `archivePath`,
+`stateDir`, and `databaseCount`.
+
+A failed publication retains its recovery images at the path printed in the
+error. A checkpoint has the timestamp and coverage of its successful capture;
+anchors created afterward require a newer checkpoint. Use `backup create` for
+a full backup, SQLite agent stores, or a PostgreSQL global database.
+
 ## PostgreSQL stores
 
 `openclaw backup create` routes each managed database through its physical engine,

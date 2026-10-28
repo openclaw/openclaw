@@ -103,7 +103,7 @@ export async function recordBackupOutcomeBestEffort(
 
 export function resolveRequiredBackupPath(
   value: string | undefined,
-  label: "--repository" | "--target" | "<snapshot>" | "--scratch",
+  label: "--repository" | "--target" | "<snapshot>" | "--scratch" | "--output" | "<archive>",
 ): string {
   const trimmed = value?.trim();
   if (!trimmed) {
