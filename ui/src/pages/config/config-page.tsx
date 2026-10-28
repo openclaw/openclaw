@@ -255,7 +255,14 @@ function ConfigPage(props: ConfigPageProps) {
       <Show when={props.pageId !== "memory"}>
         <SettingsPageHeader
           title={titleForRoute(props.pageId, t)}
-          subtitle={renderConfigPageSubtitle(props.pageId)}
+          subtitle={
+            props.pageId === "notifications" &&
+            !state.configProps().nativeNotifications &&
+            (state.configProps().nativeDeviceSettings === null ||
+              state.configProps().nativeDeviceSettings?.device.platform === "ios")
+              ? t("configView.notifications.iosNativeHint")
+              : renderConfigPageSubtitle(props.pageId)
+          }
         />
       </Show>
       <SettingsWorkspace>
