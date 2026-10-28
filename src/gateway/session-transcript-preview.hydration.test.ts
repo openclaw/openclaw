@@ -103,7 +103,7 @@ async function persistHistory(
 function readTalk(
   scope: ReturnType<typeof previewScope>,
   assertCurrent: () => void = vi.fn(),
-  cfg: OpenClawConfig = {},
+  cfg = {},
 ) {
   return readTalkRealtimeInitialItems(
     { ...scope, canonicalKey: scope.sessionKey, assertCurrent },
@@ -112,49 +112,30 @@ function readTalk(
   );
 }
 
-// A Talk call quotes this history to the provider and to every consult; a stale session quotes none
-// and stays unchanged, since the Gateway pinned the call's session before reading (#185942).
-it.each([
-  { name: "past the daily boundary", ageMs: 2 * 24 * 60 * 60 * 1000, stale: true },
-  { name: "within the same day", ageMs: 60 * 1000, stale: false },
-])("starts a Talk call from the configured reset $name", async ({ ageMs, stale }) => {
-  vi.useFakeTimers({ now: new Date(2026, 9, 27, 12).getTime(), toFake: ["Date"] });
-  try {
+// A stale session's call quotes no history and is left unchanged for the Gateway's pinned target.
+it.each([2 * 24 * 60, 1])(
+  "starts a Talk call from the daily reset (%i minutes old)",
+  async (age) => {
+    vi.useFakeTimers({ now: new Date(2026, 9, 27, 12).getTime(), toFake: ["Date"] });
     await withOpenClawTestState({ label: "talk-call-reset" }, async (state) => {
       const scope = previewScope(state, "talk-call");
-      const startedAt = Date.now() - ageMs;
-      const target = {
-        agentId: scope.agentId,
-        sessionKey: scope.sessionKey,
-        storePath: scope.storePath,
-      };
-      await replaceSessionEntry(target, {
+      const startedAt = Date.now() - age * 60_000;
+      const target = { agentId: "main", sessionKey: scope.sessionKey, storePath: scope.storePath };
+      const entry = {
         sessionId: scope.sessionId,
         lifecycleRevision: "day-one",
         updatedAt: startedAt,
-        sessionStartedAt: startedAt,
-      });
-      await persistHistory(scope, [
-        "Remember the code word PELICAN-DAY1.",
-        ...Array.from({ length: 9 }, (_, index) => `Filler message ${index + 2}.`),
-      ]);
-
-      const items = await readTalk(scope, vi.fn(), {
-        session: { reset: { mode: "daily", atHour: 4 } },
-      });
-
-      if (stale) {
-        expect(items).toEqual([]);
-      } else {
-        expect(items.at(0)?.text).toBe("Remember the code word PELICAN-DAY1.");
-        expect(items.at(-1)?.text).toBe("Filler message 10.");
-      }
+      };
+      await replaceSessionEntry(target, { ...entry, sessionStartedAt: startedAt });
+      const fillers = Array.from({ length: 9 }, (_, index) => `Filler message ${index + 2}.`);
+      await persistHistory(scope, ["Remember the code word PELICAN-DAY1.", ...fillers]);
+      const daily: OpenClawConfig = { session: { reset: { mode: "daily", atHour: 4 } } };
+      const texts = (await readTalk(scope, vi.fn(), daily)).map((item) => item.text);
+      expect(texts).toEqual(age > 1 ? [] : ["Remember the code word PELICAN-DAY1.", ...fillers]);
       expect(loadSessionEntry(target)?.lifecycleRevision).toBe("day-one");
-    });
-  } finally {
-    vi.useRealTimers();
-  }
-});
+    }).finally(() => vi.useRealTimers());
+  },
+);
 
 it("keeps missing preview storage absent and propagates terminal read refusal", async () => {
   await withOpenClawTestState({ label: "preview-reader-refusal" }, async (state) => {

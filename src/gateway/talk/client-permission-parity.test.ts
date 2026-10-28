@@ -42,15 +42,11 @@ const freshness = vi.hoisted(() => ({ afterStaleCheck: undefined as (() => void)
 // mock-isolation: pause a voice consult between its reset-freshness check and the reset write.
 vi.mock("../../config/sessions/entry-freshness.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../config/sessions/entry-freshness.js")>();
+  const read = actual.resolveSessionEntryResetFreshnessAsync;
   return {
     ...actual,
-    resolveSessionEntryResetFreshnessAsync: async (
-      ...args: Parameters<typeof actual.resolveSessionEntryResetFreshnessAsync>
-    ) => {
-      const resolved = await actual.resolveSessionEntryResetFreshnessAsync(...args);
-      freshness.afterStaleCheck?.();
-      return resolved;
-    },
+    resolveSessionEntryResetFreshnessAsync: (...args: Parameters<typeof read>) =>
+      read(...args).finally(() => freshness.afterStaleCheck?.()),
   };
 });
 
@@ -246,57 +242,52 @@ describe("authenticated Talk permission parity", () => {
       source.release();
     }
   });
-  // #185942: a voice consult on a stale session resets it in place. The reset commits only while the
-  // caller's authenticated source is current; a real revocation between the freshness check and the
-  // write leaves the session untouched and starts no run.
-  it.each([
-    { name: "allowed", revoke: false },
-    { name: "revoked during preparation", revoke: true },
-  ])("commits a consult's daily reset only for a current caller ($name)", async ({ revoke }) => {
-    const twoDaysAgo = Date.now() - 2 * 24 * 60 * 60 * 1000;
-    await writeSession({
-      lifecycleRevision: "before-reset",
-      sessionStartedAt: twoDaysAgo,
-      lastInteractionAt: twoDaysAgo,
-    });
-    const { context, source, retained } = await retainSource();
-    const previousSession = config.session;
-    config.session = { reset: { mode: "daily", atHour: 4 } };
-    let staleChecks = 0;
-    freshness.afterStaleCheck = () => {
-      staleChecks += 1;
-      if (revoke) {
-        invalidateGatewayDeviceRevocation(context, "parity-caller", "operator");
-      }
-    };
-    model.run.mockResolvedValueOnce({ payloads: [{ text: "Answered." }], meta: {} });
-    const target = { agentId: "main", sessionKey, storePath: sessionTarget.storePath };
-    try {
-      const runner = createRunner({ context, runAuthority: retained });
-      const result = runner.runArgs({ question: "What did I say yesterday?" });
-      if (revoke) {
-        const error = await result.then(
-          () => undefined,
-          (reason: unknown) => reason,
+  // #185942: a stale session's consult reset commits only for a current caller; a real revocation
+  // between the freshness check and the write leaves the session untouched and starts no run.
+  it.each([false, true])(
+    "commits a consult's daily reset only for a current caller (revoked=%s)",
+    async (revoke) => {
+      const twoDaysAgo = Date.now() - 2 * 24 * 60 * 60 * 1000;
+      const stale = { sessionStartedAt: twoDaysAgo, lastInteractionAt: twoDaysAgo };
+      await writeSession({ lifecycleRevision: "before-reset", ...stale });
+      const { context, source, retained } = await retainSource();
+      const previousSession = config.session;
+      config.session = { reset: { mode: "daily", atHour: 4 } };
+      let staleChecks = 0;
+      freshness.afterStaleCheck = () => {
+        staleChecks += 1;
+        if (revoke) {
+          invalidateGatewayDeviceRevocation(context, "parity-caller", "operator");
+        }
+      };
+      model.run.mockResolvedValueOnce({ payloads: [{ text: "Answered." }], meta: {} });
+      const revision = () =>
+        loadSessionEntry({ agentId: "main", sessionKey, storePath: sessionTarget.storePath })
+          ?.lifecycleRevision;
+      try {
+        const runner = createRunner({ context, runAuthority: retained });
+        const outcome = await runner.runArgs({ question: "What did I say yesterday?" }).then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error: String(error) }),
         );
-        // Persistence first: the reset never committed for the revoked caller.
-        expect(loadSessionEntry(target)?.lifecycleRevision).toBe("before-reset");
-        expect(String(error)).toContain("Talk caller source authority is no longer active");
-        expect(model.run).not.toHaveBeenCalled();
-      } else {
-        await expect(result).resolves.toEqual({ text: "Answered." });
-        expect(loadSessionEntry(target)?.lifecycleRevision).not.toBe("before-reset");
+        // Persistence first: a revoked caller's reset never commits.
+        expect(revision() === "before-reset").toBe(revoke);
+        expect(outcome).toEqual(
+          revoke
+            ? { error: expect.stringContaining("Talk caller source authority is no longer active") }
+            : { value: { text: "Answered." } },
+        );
+        expect(model.run.mock.calls.length > 0).toBe(!revoke);
+        expect(staleChecks).toBe(1); // the revocation landed after the stale-session check
+      } finally {
+        freshness.afterStaleCheck = undefined;
+        config.session = previousSession;
+        model.run.mockReset();
+        retained.release();
+        source.release();
       }
-      // The revocation landed at the pause point, after the stale-session check.
-      expect(staleChecks).toBe(1);
-    } finally {
-      freshness.afterStaleCheck = undefined;
-      config.session = previousSession;
-      model.run.mockReset();
-      retained.release();
-      source.release();
-    }
-  });
+    },
+  );
 
   it("retains but does not accept a pending voice-creation request", async () => {
     let pendingCurrent = true;
