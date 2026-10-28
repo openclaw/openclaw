@@ -94,7 +94,9 @@ it.each([".gitattributes", "nested/.GITATTRIBUTES"])(
   "checks newly staged attributes from the private snapshot index: %s",
   async (file) => {
     vi.stubEnv("GIT_LITERAL_PATHSPECS", "1");
-    onTestFinished(() => vi.unstubAllEnvs());
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+    });
     await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
     await write(file, "*.txt text\n");
     await git("add", file);
