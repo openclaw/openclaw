@@ -1,4 +1,3 @@
-import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -19,6 +18,7 @@ import {
   readSessionEventTargetCommandOwner,
   readSessionEventTargetEnvironment,
   readSessionEventTargetOperatorAuthority,
+  readSessionEventTargetOwnerContinuation,
   resolveSessionEventKey,
 } from "./session-event-target.js";
 import { setChannelSourceTurnId } from "./source-turn-id.js";
@@ -134,10 +134,11 @@ export function buildSessionEventContext(params: {
       : undefined;
   if (
     operatorAuthority &&
-    (automation?.controlUiAdmin || operatorAuthority.profileId === GATEWAY_OWNER_PROFILE_ID)
+    (automation?.controlUiAdmin || readSessionEventTargetOwnerContinuation(target))
   ) {
-    // Plugin and tool handoffs continue their captured owner capability while retaining
-    // internal provenance and the event text's existing command authorization.
+    // A tool handoff resumes the yielded turn: it continues that turn's own owner decision
+    // under the same live operator source, retaining internal provenance and the event
+    // text's existing command authorization. Non-owner and system turns never gain it.
     bindCommandOwnerAuthority(ctx, {
       operatorAuthority,
       isCurrent: () => {
@@ -145,18 +146,19 @@ export function buildSessionEventContext(params: {
         return true;
       },
     });
-  }
-  const commandOwner = readSessionEventTargetCommandOwner(target);
-  if (commandOwner) {
-    // A continuation of the requester's own work keeps their owner tools only while
-    // they are still an owner under the current config.
-    bindCommandOwnerAuthority(ctx, {
-      recoveryReference: commandOwner.recoveryReference,
-      isCurrent: () => {
-        params.assertCurrent();
-        return commandOwner.isCurrent(getSessionEventRuntimeConfig());
-      },
-    });
+  } else {
+    const commandOwner = readSessionEventTargetCommandOwner(target);
+    if (commandOwner) {
+      // A continuation of the requester's own work keeps their owner tools only while
+      // they are still an owner under the current config.
+      bindCommandOwnerAuthority(ctx, {
+        recoveryReference: commandOwner.recoveryReference,
+        isCurrent: () => {
+          params.assertCurrent();
+          return commandOwner.isCurrent(getSessionEventRuntimeConfig());
+        },
+      });
+    }
   }
   setChannelSourceTurnId(ctx, options.sourceTurnId);
   return ctx;

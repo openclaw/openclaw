@@ -363,14 +363,34 @@ function parseWorktreeList(output: string): WorktreeListEntry[] {
   return entries;
 }
 
+async function readGitWorktreeList(
+  repoRoot: string,
+  options: Parameters<typeof runGit>[2] = {},
+): Promise<string> {
+  return requireGitCommandOutput(
+    "git worktree list",
+    await runGit(repoRoot, ["worktree", "list", "--porcelain", "-z"], options),
+  );
+}
+
+function* worktreePaths(output: string): Generator<string, undefined> {
+  for (const match of output.matchAll(/(?:^|\0)worktree ([^\0]*)/gu)) {
+    yield normalizeGitPathForFilesystem(match[1]!);
+  }
+}
+
 export async function listGitWorktrees(
   repoRoot: string,
   options: Parameters<typeof runGit>[2] = {},
 ): Promise<WorktreeListEntry[]> {
-  return parseWorktreeList(
-    requireGitCommandOutput(
-      "git worktree list",
-      await runGit(repoRoot, ["worktree", "list", "--porcelain", "-z"], options),
+  return parseWorktreeList(await readGitWorktreeList(repoRoot, options));
+}
+
+/** Native registrations include external checkouts whose directories are currently missing. */
+export async function readGitWorktreePathInventory(repoRoot: string) {
+  return new Set(
+    Array.from(worktreePaths(await readGitWorktreeList(repoRoot)), (checkout) =>
+      path.resolve(checkout),
     ),
   );
 }
@@ -384,8 +404,9 @@ export async function resolveGitRepositoryPaths(
     await requireGit(sourceRoot, ["rev-parse", "--git-common-dir"], options),
   );
   const commonDir = await fs.realpath(path.resolve(sourceRoot, commonRaw));
-  const primary = (await listGitWorktrees(sourceRoot, options))[0]?.path ?? sourceRoot;
-  const canonicalRoot = await fs.realpath(primary);
+  // Repository identity needs only the primary checkout, not every linked HEAD and branch.
+  const primary = worktreePaths(await readGitWorktreeList(sourceRoot, options)).next().value;
+  const canonicalRoot = await fs.realpath(primary ?? sourceRoot);
   return { canonicalRoot, commonDir };
 }
 

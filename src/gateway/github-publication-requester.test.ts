@@ -25,6 +25,7 @@ import {
 } from "../state/user-profile-writes.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
+import { createGitHubPublicationRecoveryBackoff } from "./github-publication-recovery.js";
 import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
 import {
   createGitHubPublicationRequesterFixture,
@@ -168,6 +169,23 @@ describe("shared GitHub publication requester authority", () => {
         session,
       ),
     ).rejects.toThrow("no longer active");
+    expect(f.externalWrites).toEqual([]);
+  });
+
+  it("settles revoked repository requests while waiting for the first checkpoint", async () => {
+    const f = await fixture("repository", undefined, { initialCheckpoint: false });
+    const accepted = await request(f, "revoked-before-checkpoint");
+    expect(accepted.status).toBe("requested");
+    await f.revoke();
+    const restarted = createTestGitHubPublicationCoordinator({
+      placements: f.placements,
+      recovery: {
+        shared: createGitHubPublicationRecoveryBackoff(),
+        repository: createGitHubPublicationRecoveryBackoff(),
+      },
+    });
+    await restarted.resumeSessionRequests();
+    await expectResult(restarted, accepted.requestId, identityChanged);
     expect(f.externalWrites).toEqual([]);
   });
 

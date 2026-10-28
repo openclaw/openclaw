@@ -2,7 +2,11 @@ import path from "node:path";
 import * as ts from "typescript/ast";
 import { serverFS } from "typescript/fs";
 import { SymbolFlags, type Symbol } from "typescript/sync";
-import { createNativeTypeScriptProject } from "./native-typescript.mts";
+import {
+  createNativeTypeScriptProject,
+  reportNativeTypeScriptPhase,
+  type NativeTypeScriptObserver,
+} from "./native-typescript.mts";
 import { inspectPersonalCredentialWriters } from "./personal-credential-writer-guard.mts";
 
 // Each entry is a reviewed, released compatibility boundary, not a whole-file exemption.
@@ -355,6 +359,7 @@ export function inspectDatabaseWorkerBoundaries(
     /\.worker\.[cm]?[jt]s$/.test(file),
   classifyEntry: (file: string, operation: string) => NonRuntimeTier | undefined = () => undefined,
   validateCredentialWriters = true,
+  observer?: NativeTypeScriptObserver,
 ): {
   operations: Map<string, Set<string>>;
   callLocations: Map<string, Set<string>>;
@@ -395,10 +400,12 @@ export function inspectDatabaseWorkerBoundaries(
     files: [...sourceTexts.keys(), globals],
     include: [],
   });
+  reportNativeTypeScriptPhase(observer, "inputs", { files: sourceTexts.size });
   // The supplied snapshot owns all source bytes, including historical comparisons.
   using session = createNativeTypeScriptProject({
     cwd: root,
     configFileName: config,
+    observer,
     files,
     fs: {
       readFile: () => undefined,
@@ -568,8 +575,10 @@ export function inspectDatabaseWorkerBoundaries(
     }
     return { file, source };
   });
+  session.checkpoint?.("sources-registration");
   if (validateCredentialWriters) {
     violations.push(...inspectPersonalCredentialWriters(sources, checker));
+    session.checkpoint?.("credential-writers");
   }
   // Follow named kernels from the reviewed boundaries. A symbol reference from
   // outside this closure (or an escaped callback) will make that kernel live.
@@ -1287,6 +1296,7 @@ export function inspectDatabaseWorkerBoundaries(
       selectedLocations.set(operation.file, locations);
     }
   }
+  session.checkpoint?.("graph-classification");
   return {
     operations,
     callLocations,

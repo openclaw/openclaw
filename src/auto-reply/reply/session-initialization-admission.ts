@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding-metadata.js";
 import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
+import { resolveAgentHarnessSessionContextError } from "../../sessions/agent-harness-session-key.js";
 import type { ReplyOperation } from "../../sessions/session-controller.js";
 import { getReplyOperationSessionReader } from "../../sessions/session-controller.state.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
@@ -21,8 +22,10 @@ import { resolveSessionConversationBinding } from "./session-conversation-bindin
 import type { resolveSessionConversationBindingContext } from "./session-conversation-binding.js";
 import { resolveSessionInputDeliveryKey } from "./session-delivery.js";
 import type { SessionEventExecution } from "./session-event-contract.js";
+import type { ReplySessionPreprocessingState } from "./session-init.types.js";
 
 export type InitSessionStateParams = {
+  operatorAuthority?: InternalGetReplyOptions["operatorAuthority"];
   providerReviewAcknowledgment?: import("../../sessions/provider-review.js").ProviderReviewAcknowledgment;
   replyOperation?: ReplyOperation;
   cfg: OpenClawConfig;
@@ -196,6 +199,7 @@ export function resolveReplySessionInitializationOptions(
   opts: InternalGetReplyOptions | undefined,
 ) {
   return {
+    operatorAuthority: opts?.operatorAuthority,
     providerReviewAcknowledgment: opts?.providerReviewAcknowledgment,
     replyOperation: opts?.replyOperation,
     recordedSessionActivity: opts?.recordedSessionActivity,
@@ -210,5 +214,27 @@ export function resolveReplySessionInitializationOptions(
     requestedSessionId: opts?.requestedSessionId,
     resumeRequestedSession: opts?.resumeRequestedSession,
     signal: opts?.abortSignal,
+  };
+}
+
+/** Resolves durable ownership before utility preprocessing can invoke another model. */
+export async function resolveReplySessionPreprocessingState(
+  params: Pick<InitSessionStateParams, "cfg" | "ctx">,
+): Promise<ReplySessionPreprocessingState> {
+  const attemptContext = await resolveInitSessionStateAttemptContext(params, "preprocessing");
+  const { sessionKey } = attemptContext;
+  const { currentEntry: sessionEntry } = await loadReplySessionInitializationSnapshot({
+    agentId: attemptContext.agentId,
+    storePath: attemptContext.storePath,
+    sessionKey,
+  });
+  const contextError = resolveAgentHarnessSessionContextError(sessionKey, sessionEntry);
+  if (contextError) {
+    throw new Error(contextError);
+  }
+  return {
+    sessionEntry,
+    sessionKey,
+    storePath: attemptContext.storePath,
   };
 }

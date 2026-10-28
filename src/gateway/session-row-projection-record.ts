@@ -24,7 +24,7 @@ import { compareSessionEntryPairs } from "./session-list-order.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
 import { selectStoredSessionLineage } from "./session-store-key.js";
 import { sessionTitleRequests } from "./session-title-state.js";
-import type { SessionListRowContext } from "./session-utils-contracts.js";
+import type { SessionChildActivity, SessionListRowContext } from "./session-utils-contracts.js";
 import * as rowProjection from "./session-utils-row.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
@@ -169,12 +169,14 @@ export type Query = {
   storePath?: string;
   key?: string;
   sessionIdOrKey?: string;
+  candidateSessionIdsOrKeys?: ReadonlySet<string>;
   /** Prepared qualified rows carry identity; raw keys retain alias resolution. */
   parentSessionKey?: string | Pick<Row, "key" | "agentId">;
   sortBy?: Parameters<typeof compareSessionEntryPairs>[2] | null;
 };
 export type Inputs = Parameters<typeof rowProjection.readSessionRowInputs>[0];
 export type SnapshotOptions = Pick<Inputs, "now" | "excludedChildKeys"> & {
+  childActivity?: SessionChildActivity;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
   active?: boolean;
@@ -482,6 +484,7 @@ export function present(
     projectedSubagentActivity: context.projectedSubagentActivity,
     activeModel: active ? (live ?? undefined) : record.fallbackModel,
     excludedChildKeys: options.excludedChildKeys,
+    childActivity: options.childActivity,
   });
   Object.assign(row, options.preparedFacts ?? record.facts?.present());
   row.hasBoard = record.hasBoard;

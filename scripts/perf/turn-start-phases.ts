@@ -8,11 +8,17 @@
 // records a separate diagnostic CPU/Git-trace pass; --git-trace records Git Trace2 alone.
 // --state-dir reuses an existing
 // synthetic fixture after a setup failure; --output must always be new.
+// --now <epoch-ms> shares a fresh fixture clock between arms; otherwise use startup time.
 // Subscriber waterfalls include provider delay; server scope totals are overlapping stage aggregates.
 // Fresh bursts are separated by 31s to expire the base-refresh TTL. Tails at 40 samples are descriptive, not regression gates. All state is synthetic.
 // See docs/reference/session-start-measurement.md for receipts, outputs, and comparison rules.
 // --sandbox-image openclaw-sandbox:bookworm-slim exercises Docker workspace projection,
 // 40 synthetic skills with companion files, and real /workspace read/exec tool calls.
+// --rich-context measures warm turns over 100 seeded tool-call turns per session, two
+// loopback MCP servers with 40 tools each (in addition to core tools), and memory-core
+// among the 40 plugins. Memory search stays disabled; no embedding provider is called.
+// --history-turns overrides the seed length; seeded histories require --cold-rounds 0.
+// Warm-only fixtures omit the local origin clone; they exercise existing session workspaces.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -36,6 +42,7 @@ import {
 const { values } = parseArgs({
   options: {
     output: { type: "string" },
+    now: { type: "string" },
     "state-dir": { type: "string" },
     "start-file": { type: "string" },
     port: { type: "string", default: "41920" },
@@ -44,41 +51,66 @@ const { values } = parseArgs({
     "git-trace": { type: "boolean", default: false },
     "unchanged-origin": { type: "boolean", default: false },
     "sandbox-image": { type: "string" },
-    "cold-rounds": { type: "string", default: "10" },
+    "cold-rounds": { type: "string" },
     "warm-rounds": { type: "string", default: "10" },
+    "history-turns": { type: "string" },
+    "rich-context": { type: "boolean", default: false },
   },
 });
 if (!values.output) {
   throw new Error("--output must name a new directory");
 }
 const output = path.resolve(values.output);
-const port = Number(values.port);
-const coldRounds = Number(values["cold-rounds"]);
-const warmRounds = Number(values["warm-rounds"]);
-if (
-  ![port, coldRounds, warmRounds].every(Number.isSafeInteger) ||
-  port < 40000 ||
-  port > 65532 ||
-  coldRounds < 1 ||
-  warmRounds < 1
-) {
-  throw new Error("Use port 40000–65532 and positive integer round counts");
-}
-mkdirSync(output);
-const entry = path.resolve(values.entry);
 const stateDir = values["state-dir"]
   ? path.resolve(values["state-dir"])
   : path.join(output, "state");
+let fixtureShape = values["state-dir"]
+  ? JSON.parse(readFileSync(path.join(stateDir, "team-shape-summary.json"), "utf8"))
+  : undefined;
+const port = Number(values.port);
+const historyTurns = Number(values["history-turns"] ?? (values["rich-context"] ? "100" : "0"));
+const coldRounds = Number(values["cold-rounds"] ?? (historyTurns ? "0" : "10"));
+const warmRounds = Number(values["warm-rounds"]);
+const now = Number(fixtureShape?.now ?? values.now ?? Date.now());
+const worktreeLocalOrigin = coldRounds > 0;
+const advanceOrigin = worktreeLocalOrigin && !values["unchanged-origin"];
+if (
+  ![port, coldRounds, warmRounds, historyTurns, now].every(Number.isSafeInteger) ||
+  port < 40000 ||
+  port > 65532 ||
+  coldRounds < 0 ||
+  warmRounds < 1 ||
+  historyTurns < 0 ||
+  (historyTurns > 0 && coldRounds > 0) ||
+  now < 0
+) {
+  throw new Error(
+    "Use port 40000–65532, nonnegative cold/history counts and epoch-ms clock, positive warm rounds, and zero cold rounds with seeded history",
+  );
+}
+mkdirSync(output);
+const entry = path.resolve(values.entry);
 const before = { at: new Date().toISOString(), load: loadavg() };
 const buildInfoPath = path.join(path.dirname(entry), "build-info.json");
 const identity = {
   workload: {
+    now,
     sessions: 10800,
     plugins: 40,
     clients: 65,
     runs: 4,
     coldRounds,
     warmRounds,
+    historyTurns,
+    richContext: values["rich-context"],
+    ...(values["rich-context"]
+      ? {
+          mcpServers: 2,
+          mcpToolsPerServer: 40,
+          memoryPlugin: "memory-core",
+          memorySearchEnabled: false,
+        }
+      : {}),
     freshRoundGapMs: 31000,
     warmRoundGapMs: 0,
     files: 3000,
@@ -86,7 +118,8 @@ const identity = {
     longTranscriptEntries: 2000,
     longTranscriptSessions: 4,
     providerDelayMs: 200,
-    advanceOrigin: !values["unchanged-origin"],
+    generatedLocalOrigin: values["state-dir"] ? null : worktreeLocalOrigin,
+    advanceOrigin,
     cpuProfile: values["cpu-profile"],
     gitTrace: values["git-trace"] || values["cpu-profile"],
     sandboxImage: values["sandbox-image"],
@@ -134,20 +167,17 @@ const identity = {
 };
 writeFileSync(path.join(output, "identity.json"), JSON.stringify(identity, null, 2));
 if (!values["state-dir"]) {
-  await generateTeamShapeStressFixture({
+  ({ summary: fixtureShape } = await generateTeamShapeStressFixture({
     stateDir,
     port,
     seed: 1823,
-    now: 1792961880000,
+    now,
     worktreeFiles: 3000,
     worktreeFileBytes: 256,
-    worktreeLocalOrigin: true,
+    worktreeLocalOrigin,
     longTranscriptEntries: 2000,
-  });
+  }));
 }
-const fixtureShape = JSON.parse(
-  readFileSync(path.join(stateDir, "team-shape-summary.json"), "utf8"),
-);
 if (
   fixtureShape.sessionCount !== identity.workload.sessions ||
   fixtureShape.longTranscriptEntries !== identity.workload.longTranscriptEntries ||
@@ -177,7 +207,6 @@ if (values["sandbox-image"]) {
   config.skills = { load: { watch: false, extraDirs: [skillsDir] } };
   writeFileSync(configPath, JSON.stringify(config));
 }
-const previousProbeDirs = new Set(readdirSync(stateDir));
 function removeFixtureSandboxes() {
   const docker = (...args: string[]) => {
     const result = spawnSync("docker", args, { encoding: "utf8" });
@@ -217,74 +246,83 @@ function removeFixtureSandboxes() {
     docker("rm", "--force", ...ownedIds);
   }
 }
-const result = spawnSync(
-  process.execPath,
-  [
-    "--import",
-    "./scripts/tsx.mjs",
-    "scripts/perf/transcript-broadcast-measure.ts",
-    "--state-dir",
-    stateDir,
-    "--entry",
-    entry,
-    "--port",
-    String(port),
-    "--mock-port",
-    String(port + 2),
-    ...(values["cpu-profile"] ? ["--cpu-profile"] : []),
-    ...(values["git-trace"] || values["cpu-profile"] ? ["--git-trace"] : []),
-    ...(values["start-file"] ? ["--start-file", path.resolve(values["start-file"])] : []),
-    ...(values["sandbox-image"] ? ["--sandbox-image", values["sandbox-image"]] : []),
-    ...(values["unchanged-origin"] ? [] : ["--turn-start-advance-origin"]),
-    "--scenario",
-    "chat.send",
-    "--turn-start-phases",
-    "--diagnostics",
-    "--prep-trace",
-    "--plugins",
-    "40",
-    "--clients",
-    "65",
-    "--exact-clients",
-    "8",
-    "--runs",
-    "4",
-    "--rounds",
-    String(coldRounds + warmRounds),
-    "--cold-session-rounds",
-    String(coldRounds),
-    "--stress-tools",
-    "--mixed-rpc",
-    "--list-filter-churn",
-    "--row-mode",
-    "sidebar",
-    "--poll-between-rounds",
-    "--list-interval-ms",
-    "1000",
-    "--poll-seed",
-    "1823",
-    "--round-interval-ms",
-    "31000",
-    "--provider-delay-ms",
-    "200",
-    "--chunks",
-    "10",
-    "--chunk-interval-ms",
-    "20",
-    "--prompt-kib",
-    "8",
-  ],
-  {
+const probeArgs = [
+  "--import",
+  "./scripts/tsx.mjs",
+  "scripts/perf/transcript-broadcast-measure.ts",
+  "--state-dir",
+  stateDir,
+  "--entry",
+  entry,
+  "--port",
+  String(port),
+  "--mock-port",
+  String(port + 2),
+  ...(values["cpu-profile"] ? ["--cpu-profile"] : []),
+  ...(values["git-trace"] || values["cpu-profile"] ? ["--git-trace"] : []),
+  ...(values["start-file"] ? ["--start-file", path.resolve(values["start-file"])] : []),
+  ...(values["sandbox-image"] ? ["--sandbox-image", values["sandbox-image"]] : []),
+  ...(advanceOrigin ? ["--turn-start-advance-origin"] : []),
+  "--scenario",
+  "chat.send",
+  "--turn-start-phases",
+  ...(values["rich-context"] ? ["--turn-start-rich-context"] : []),
+  ...(historyTurns ? ["--history-turns", String(historyTurns)] : []),
+  "--diagnostics",
+  "--prep-trace",
+  "--plugins",
+  "40",
+  "--clients",
+  "65",
+  "--exact-clients",
+  "8",
+  "--runs",
+  "4",
+  "--rounds",
+  String(coldRounds + warmRounds),
+  "--cold-session-rounds",
+  String(coldRounds),
+  "--stress-tools",
+  "--mixed-rpc",
+  "--list-filter-churn",
+  "--row-mode",
+  "sidebar",
+  "--poll-between-rounds",
+  "--list-interval-ms",
+  "1000",
+  "--poll-seed",
+  "1823",
+  "--round-interval-ms",
+  "31000",
+  "--provider-delay-ms",
+  "200",
+  "--chunks",
+  "10",
+  "--chunk-interval-ms",
+  "20",
+  "--prompt-kib",
+  "8",
+];
+function runProbe(extraArgs: string[] = []) {
+  const result = spawnSync(process.execPath, [...probeArgs, ...extraArgs], {
     stdio: "inherit",
     env: { ...process.env, DEVELOPER_DIR: "/Applications/Xcode.app/Contents/Developer" },
-  },
-);
-// The child has drained its Gateway; exact immutable IDs and fixture mounts bind teardown.
-if (values["sandbox-image"]) {
-  removeFixtureSandboxes();
+  });
+  if (result.status !== 0) {
+    throw new Error(`Gateway probe failed: ${result.status ?? result.error}`);
+  }
 }
-if (result.status !== 0) {
-  throw new Error(`Gateway probe failed: ${result.status ?? result.error}`);
+if (historyTurns && !existsSync(path.join(stateDir, "reopen-history.json"))) {
+  runProbe(["--seed-history"]);
+}
+const previousProbeDirs = new Set(readdirSync(stateDir));
+try {
+  runProbe();
+} finally {
+  // The child has drained its Gateway; exact immutable IDs and fixture mounts bind teardown.
+  if (values["sandbox-image"]) {
+    removeFixtureSandboxes();
+  }
 }
 const probeDir = readdirSync(stateDir).find(
   (name) => name.startsWith("broadcast-measure-") && !previousProbeDirs.has(name),

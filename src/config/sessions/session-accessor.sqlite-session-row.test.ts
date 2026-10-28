@@ -132,7 +132,8 @@ it("records committed owner facts before cancellation observers", async () => {
   expect(facts.map((entry) => entry.skillsSnapshot)).toEqual([skillsSnapshot]);
   expect(observed).toEqual([{ acceptedId: "successor", persistedId: "successor" }]);
   expect(result?.skillsSnapshot).toEqual(skillsSnapshot);
-  result!.skillsSnapshot!.skills.push({ name: "caller-only" });
+  // Internal results share the frozen publication's nested facts (#186051).
+  expect(() => result!.skillsSnapshot!.skills.push({ name: "caller-only" })).toThrow(TypeError);
   expect(readEntry(scope)?.skillsSnapshot).toEqual(skillsSnapshot);
 });
 

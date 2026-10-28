@@ -3,6 +3,7 @@ import type {
   SessionsPatchParams,
   SessionsPatchResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import {
   agentSessionKeysMatchByRequestKey,
   buildAgentMainSessionKey,
@@ -328,6 +329,7 @@ class SystemAgentTuiBackend implements TuiBackend {
         // Match the Gateway session boundary: the failed conversation is dead.
         // Clear handoffs and dispose before exit so no queued exact command can
         // bypass the inference-first gate through this backend instance.
+        materializeErrorStack(error);
         this.inferenceFailure = error;
         this.handoff = null;
         try {

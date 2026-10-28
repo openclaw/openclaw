@@ -7,8 +7,11 @@ connects to an existing Gateway, discovers credentials, or drives a real browser
 Both builds must support the database schemas written by the tooling checkout's
 fixture generator. A schema mismatch is a setup failure; the harness never
 downstamps databases or bypasses Gateway schema admission.
-The Gateway's instrumentation loader disables tsconfig aliases, so runtime
-package imports resolve through each build's own package exports. Keep each
+The Gateway's instrumentation loader uses native Node type stripping and resolves
+source-only `.js` imports to TypeScript without applying tsconfig aliases.
+Already-built JavaScript stays byte-for-byte native: a transforming loader can
+append inline source maps and inflate retained Script source bytes and import cost.
+Runtime package imports resolve through each build's own package exports. Keep each
 checkout's source, workspace package artifacts, and `dist` build consistent;
 rebasing source invalidates previously built artifacts.
 
@@ -34,7 +37,7 @@ that dozens of synthetic external plugins would introduce.
 
 The seeded mix is 4,300 finished unarchived subagents, 4,400 archived dashboards,
 400 active dashboards, 200 explicit sessions, and 1,500 other sessions including
-small channel/cron cohorts. Four agents are configured; retained rows initially
+small channel/cron cohorts. Four agents are configured by default (`--agents 8` selects eight); retained rows initially
 belong to `main`. Transcripts contain 128 MiB of deterministic, incompressible
 message content with a skewed size distribution. This reproduces session shape,
 not a byte-for-byte copy of a production database. Retained runs are settled collectors
@@ -172,7 +175,8 @@ Missing array-buffer details alone do not invalidate a complete heap census.
 
 For a separate worker-retention diagnostic pass, add `--worker-heap-snapshot`.
 This forwards the workload's existing retained-worker instrumentation and captures
-the largest SQLite-store, model-catalog, and Git-operation worker after the measured window.
+the largest SQLite-store, model-catalog, Git-operation, shared-state read, and
+session-archive worker after the measured window.
 The worker profiler and explicit collections make this diagnostic evidence;
 use an ordinary timing pass for latency and GC acceptance.
 
@@ -217,3 +221,96 @@ installed names before interpreting zero counts; `prepareRefs` runs twice per
 policy construction for the explicit allow/deny fixture. Timing passes remain
 uninstrumented. Attribute sampled bytes to the policy stacks in
 `stress-allocation.heapprofile`; sampled bytes are estimates, not exact allocation.
+
+## Restart chaos with model traffic
+
+This opt-in scenario extends the same controller with real Gateway processes,
+throwaway Git workspaces, input receipts, metadata churn, and three restart legs
+(managed intent plus SIGTERM, raw SIGTERM, and deliberately injected SIGKILL).
+It is never run automatically by CI.
+
+Every workload session is created through `sessions.create`; the controller waits
+for the returned key before sending turns or starting metadata churn, matching the
+Control UI. Read-marker and label patches still run concurrently with `chat.send`
+admission on those published sessions. Racing patches against an absent key tests
+implicit creation instead and can fail before any restart is injected.
+
+Start with the mock setup check:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/team-shape-stress.ts \
+  --restart-chaos --dry --concurrency 8 --minutes 10 \
+  --output /absolute/new-report-directory
+```
+
+For an approved live campaign replace `--dry` with
+`--live-model openai/<approved-model> --key-file /secure/staged-key`.
+There is deliberately no live-model default. The private regular key file must
+have no group/other permissions. Only the Gateway launcher reads it into its
+environment; the controller never reads, copies, or writes its contents. A local
+Responses proxy accepts only `POST /v1/responses`, forwards to that fixed OpenAI
+endpoint, and records request metadata only. It forwards authorization in memory.
+It injects a bounded, OpenAI-shaped TPM 429 window for the synthetic
+primary model; the configured fallback uses the approved live model. Both routes
+forward to that model. Three real upstream 429s within one minute stop the campaign.
+The proxy does not persist headers or request/response bodies.
+
+The injected response advertises the remaining window in both `Retry-After` and
+its error text. After observing the first injected 429, the controller creates a
+fresh newcomer session through `sessions.create`. Invariant 9 records its first
+streamed request: it must use fallback or have a recorded rate-limit wait before
+using primary after reset. Preparation or queueing delays alone prove nothing.
+Title/utility calls are excluded. A newcomer created after reset, or one with no
+observed request or wait evidence, leaves shared knowledge unknown. Both mock and
+live modes use a 30-second window so preparation can finish before reset.
+
+Concurrency is bounded to 8–24 sessions and the campaign deadline to 1–18 minutes.
+Each wave asks for coding tools, subagents, a background process, steering, and
+queued follow-ups. A completed idle session is the negative control. The recovery
+cohort receives no follow-up after restart; separate sessions exercise sends during
+drain and immediately after return. Dry mode uses synthetic provider responses
+and real local exec tools; it checks harness plumbing, not real-model compliance
+with the complete scenario mix. Check recorded tool events before claiming that
+any requested behavior was actually exercised.
+
+After the final injection, the controller polls every input's public history until
+accepted inputs settle and their sessions are inactive, or ten minutes pass.
+The overall campaign deadline remains a hard bound and may shorten this wait;
+`settlement` records the effective deadline and observed finish. Still-unresolved
+accepted inputs become `timed-out`, never implicitly successful or silently active
+at cutoff. Safety aborts retain the reason and available evidence.
+
+Completion sentinels count only when `DONE_<input>` is alone on the final line of
+a final assistant message. Quoted markers, commentary, and promises do not count.
+Subagent prompts ask for independent, self-contained checks without specifying
+tool arguments or requesting checkouts; successful child launches still require
+recorded evidence.
+
+Use `--candidate /path/to/reviewed-checkout` to replay this tooling against another
+revision. Prepare that checkout's build first; `dist/entry.js` is required, matching
+the existing controller's built-candidate contract. Use isolated state, a unique
+CLI profile, and a free configured port when preparing a development build on a
+host with an operator Gateway. Keep runtime publication guards intact. The report
+records the candidate's exact Git SHA. Keep source and built artifacts consistent,
+and do not edit a candidate during a campaign. No existing Gateway URL, remote
+host, or live state directory can be supplied.
+
+Runtime state and workspaces use the test helper's private temporary directory.
+After verified process shutdown, the controller copies that synthetic evidence
+into the output directory and removes its temporary state. This keeps an external
+report volume's metadata latency out of the workload. The fixture exposes the
+listed coding and session tools directly, with Code Mode and tool search disabled,
+so mock and live campaigns use the same tool surface.
+
+`report.json` retains accepted/uncertain sends, events, restart exit outcomes,
+input receipts, projected transcripts, provider metadata, effect markers, and
+individual invariant verdicts. `summary.md` summarizes all nine invariants;
+`gateway.log`, `isolated-state/`, and `workspaces/` retain synthetic failure evidence.
+Reports remain local: inspect and sanitize before sharing. Failed setup is a
+harness failure, never a product verdict. Missing evidence is reported as unknown;
+consumed input alone never proves a delivered answer. Effect checks cover the
+explicit append markers, not arbitrary tool effects. Events missed while the
+socket is disconnected limit exact recovery/delivery attribution; durable answer
+markers and receipts still identify stuck inputs and duplicate answers.
+Idle-session transcript activity during reconnect also fails the recovery check;
+silence across that disconnected interval remains unknown.

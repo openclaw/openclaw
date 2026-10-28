@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.10.7",
+  "version": "2026.10.8",
   "openclaw": {
     "updateAdmissionProtocol": 1,
     "databaseEngines": [
@@ -15,8 +15,8 @@
       "team-reports"
     ],
     "schemaVersions": {
-      "state": 34,
-      "agent": 37
+      "state": 35,
+      "agent": 38
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
@@ -315,6 +315,7 @@
     "!dist/extensions/byteplus/**",
     "!dist/extensions/buzz/**",
     "!dist/extensions/cerebras/**",
+    "!dist/extensions/liquid-ai/**",
     "!dist/extensions/chutes/**",
     "!dist/extensions/cohere/**",
     "!dist/extensions/comfy/**",

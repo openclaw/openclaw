@@ -295,7 +295,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     }
   }
 
-  it.each([24, 25, 26, 27, 28, 31])(
+  it.each([24, 25, 26, 27, 28, 31, 33, 34])(
     "backs up and restores the real version %s before the registered migration",
     async (sourceVersion) => {
       stateEngineSchema.postgresMigrations = originalMigrations;
@@ -640,6 +640,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
         ...migration.fromSchema,
         postgresVectorDecoderVersion: migration.fromSchema.postgresVectorDecoderVersion,
         postgresVectorSearchVersion: migration.fromSchema.postgresVectorSearchVersion,
+        postgresTextSearchVersion: migration.fromSchema.postgresTextSearchVersion,
         postgresMigrations: [],
       };
       // Build the actual historical layout; dropping current columns would leave

@@ -122,12 +122,11 @@ the page topbar while the drawer is closed. Opening the drawer moves that action
 back to the rail, without a second header button. In team mode, creation opens the
 same agent picker as the rail. Native apps keep their native creation controls.
 
-When an owner filter already identifies a row's owner, standalone activity and
-unread indicators stay at the far-right edge in grouped, ungrouped, pinned, and
-child rows, including when hover or keyboard focus reveals pin and archive
-actions. Other rows keep their leading indicator slot. Owner avatars, session
-artwork, and their activity rings keep their leading attribution slot; team mode
-keeps its compact status layout.
+Session activity and unread indicators stay in the leading column across owner
+filters, grouping modes, pinned sessions, and child rows. Idle rows reserve the
+same column so titles stay aligned when status changes or hover and keyboard
+focus reveal row actions. Shared-owner activity traces around the avatar pair;
+team mode keeps its compact status layout.
 
 The owner filter is the only control for this selection. Its saved value belongs
 to the current Gateway and your profile in this browser. A signed-in profile
@@ -519,6 +518,8 @@ After token or device-token authentication, the sidebar can show its cached sess
 
 Switching agents refreshes the session list even while other conversations are active. A session action finishing for another agent keeps the selected agent’s filtered sidebar and pagination active. Confirmed permission changes remain visible if their follow-up list refresh fails. Read acknowledgments for known sessions update unread and attention state from their committed receipt without reloading the roster. Older responses cannot undo confirmed read state; newer activity or a later manual unread mark still takes effect.
 
+Reading a parent acknowledges its hidden subagent runs in sequential batches of up to 100. Each run keeps its conditional unread guard, so a manual reminder added during acknowledgement survives. Pending reads clear optimistically and settle from acknowledgement outcomes and admitted Gateway row events. Failed implicit hidden-run reads stay silent; an explicit **Mark as read** action reports its hidden-run failures together.
+
 **Load more sessions** stays disabled while the sidebar list is refreshing or loading another page. It becomes available again when the read finishes and more sessions remain.
 
 An older list response preserves newer session names and run status already loaded in another open session list.
@@ -788,6 +789,10 @@ The folder defaults to the agent workspace. Write-scoped connections can browse,
 Leave **From** empty to fetch `origin` when creating the worktree and use its default branch. The placeholder is a suggestion, not a saved branch selection. Explicitly selected or saved branches and commits are used as entered without fetching; selecting local `main` uses that local branch, which can lag behind `origin/main`. If fetching or resolving the remote default fails, the Gateway falls back to the source checkout's `HEAD`.
 
 ### Start a native coding CLI
+
+The actions beside **Codex** and **Claude Code** appear on hover or keyboard
+focus, and stay visible on touch screens. The main **Filter & sort** button
+stays visible independently of these catalog actions.
 
 The **+** beside **Codex** or **Claude Code** opens a native CLI draft, not an
 OpenClaw Chat. Choose the machine and folder, optionally enter a first prompt,

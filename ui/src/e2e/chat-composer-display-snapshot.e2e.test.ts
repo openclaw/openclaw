@@ -65,7 +65,11 @@ suite.define(() => {
             await Reflect.get(active!, "sessionSnapshotStore").flush();
           });
         await expect.poll(() => model.getAttribute("aria-disabled")).toBe("false");
+        await expect
+          .poll(() => model.getAttribute("data-chat-select-value"))
+          .toBe("example/reasoning-example");
         await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("high");
+        await expect.poll(() => permission.getAttribute("data-chat-select-value")).toBe("full");
         await flushSnapshot();
 
         const appearance = () =>

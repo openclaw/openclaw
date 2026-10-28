@@ -60,7 +60,7 @@ export function PeopleAvatar(props: { person: SessionParticipant }) {
 /** Metadata slot only. Details owns the heading, disclosure and in-memory choice. */
 export function ChatDetailsPeopleSummary(props: ChatDetailsPeopleSummaryProps) {
   const people = createMemo(() => uniquePeople(props.people));
-  const preview = () => people().slice(0, 3);
+  const preview = () => people().slice(0, people().length > 3 ? 2 : 3);
   const remaining = () => people().length - preview().length;
   return (
     <span class="chat-details-people__summary">
@@ -69,30 +69,8 @@ export function ChatDetailsPeopleSummary(props: ChatDetailsPeopleSummaryProps) {
           {t("chat.sessionDetails.peopleCount", { count: String(people().length) })}
         </span>
       </Show>
-      <Show
-        when={props.expanded}
-        fallback={
-          <span class="chat-details-people__preview" aria-hidden="true">
-            <For
-              each={preview()}
-              keyed={(person) => sessionParticipantIdentityKey(person.identity)}
-            >
-              {(person) => (
-                <span
-                  class="chat-details-people__preview-avatar"
-                  title={person().label || person().identity.id}
-                >
-                  <PeopleAvatar person={person()} />
-                </span>
-              )}
-            </For>
-            <Show when={remaining() > 0}>
-              <span class="chat-details-people__overflow">+{remaining()}</span>
-            </Show>
-          </span>
-        }
-      >
-        <Show when={!props.partial}>
+      <Show when={!props.expanded}>
+        <Show when={!props.partial && people().length > 3}>
           <span
             class="chat-details-people__count chat-details-desktop-section__count"
             aria-hidden="true"
@@ -101,6 +79,21 @@ export function ChatDetailsPeopleSummary(props: ChatDetailsPeopleSummaryProps) {
             {people().length}
           </span>
         </Show>
+        <span class="chat-details-people__preview" aria-hidden="true">
+          <For each={preview()} keyed={(person) => sessionParticipantIdentityKey(person.identity)}>
+            {(person) => (
+              <span
+                class="chat-details-people__preview-avatar"
+                title={person().label || person().identity.id}
+              >
+                <PeopleAvatar person={person()} />
+              </span>
+            )}
+          </For>
+          <Show when={remaining() > 0}>
+            <span class="chat-details-people__overflow">+{remaining()}</span>
+          </Show>
+        </span>
       </Show>
     </span>
   );

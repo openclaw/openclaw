@@ -94,27 +94,40 @@ export function normalizeReservedToolNames(names?: Iterable<string>): Set<string
   );
 }
 
+/**
+ * The name buildSafeToolName tries on a given attempt: attempt 1 is the
+ * unsuffixed name, and attempt n >= 2 is the `-n` collision-suffixed name.
+ */
+export function safeToolNameCandidate(params: {
+  serverName: string;
+  toolName: string;
+  attempt: number;
+}): string {
+  const maxToolChars = Math.max(
+    1,
+    TOOL_NAME_MAX_TOTAL - params.serverName.length - TOOL_NAME_SEPARATOR.length,
+  );
+  const baseToolName =
+    sanitizeToolFragment(params.toolName, "tool").slice(0, maxToolChars) || "tool";
+  // Keep the suffix inside the total tool-name budget while preserving the
+  // server prefix as the namespace boundary.
+  const suffix = params.attempt > 1 ? `-${params.attempt}` : "";
+  const candidateToolName = suffix
+    ? `${baseToolName.slice(0, Math.max(1, maxToolChars - suffix.length))}${suffix}`
+    : baseToolName;
+  return `${params.serverName}${TOOL_NAME_SEPARATOR}${candidateToolName}`;
+}
+
 export function buildSafeToolName(params: {
   serverName: string;
   toolName: string;
   reservedNames: Set<string>;
 }): string {
-  const cleanedToolName = sanitizeToolFragment(params.toolName, "tool");
-  const maxToolChars = Math.max(
-    1,
-    TOOL_NAME_MAX_TOTAL - params.serverName.length - TOOL_NAME_SEPARATOR.length,
-  );
-  const truncatedToolName = cleanedToolName.slice(0, maxToolChars);
-  let candidateToolName = truncatedToolName || "tool";
-  let candidate = `${params.serverName}${TOOL_NAME_SEPARATOR}${candidateToolName}`;
-  let n = 2;
+  let attempt = 1;
+  let candidate = safeToolNameCandidate({ ...params, attempt });
   while (params.reservedNames.has(normalizeLowercaseStringOrEmpty(candidate))) {
-    // Keep the suffix inside the total tool-name budget while preserving the
-    // server prefix as the namespace boundary.
-    const suffix = `-${n}`;
-    candidateToolName = `${(truncatedToolName || "tool").slice(0, Math.max(1, maxToolChars - suffix.length))}${suffix}`;
-    candidate = `${params.serverName}${TOOL_NAME_SEPARATOR}${candidateToolName}`;
-    n += 1;
+    attempt += 1;
+    candidate = safeToolNameCandidate({ ...params, attempt });
   }
   return candidate;
 }

@@ -32,7 +32,6 @@ import {
   resolveManagedUnsetPathsForWrite,
 } from "./config-path-mutation.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./config-write-guard.js";
-import { applyMessageQueueDefaults } from "./defaults.js";
 import {
   readConfigWriteMigrationFacts,
   preserveDeferredPluginMigrationConfig,
@@ -49,7 +48,7 @@ import {
   type ConfigWriteAuditResult,
 } from "./io.audit.js";
 import type { ConfigIoContext } from "./io.context.js";
-import { prepareCronOwnerWriteRefusal } from "./io.cron-owner-refusal.js";
+import * as cronOwnerWrite from "./io.cron-owner-refusal.js";
 import {
   projectWebhookMigrationIncludeWrite,
   recordConfigWriteMetadata,
@@ -178,13 +177,16 @@ export async function writeConfigFileFromContext(
     kind: options.inputBase ?? "runtime",
     config: options.inputBase === "source" ? authoredSourceConfig : authoredRuntimeConfig,
   };
-  const cronOwnerRefusal = cronOwner
-    ? await prepareCronOwnerWriteRefusal(snapshot.config, {
-        storePath: await resolveCronJobsStorePathFromConfigAsync(nextConfig, deps.env),
-        ...cronOwner,
-        env: deps.env,
-      })
-    : undefined;
+  const cronSourceConfig = snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig;
+  const cronOwnerRefusal =
+    cronOwner &&
+    !(await cronOwnerWrite.canDeferRehearsalCronMigration(cronSourceConfig, configPath, deps.env))
+      ? await cronOwnerWrite.prepareCronOwnerWriteRefusal(snapshot.config, {
+          storePath: await resolveCronJobsStorePathFromConfigAsync(nextConfig, deps.env),
+          ...cronOwner,
+          env: deps.env,
+        })
+      : undefined;
 
   let persistCandidate: unknown = authoredConfig;
   const changedPaths = collectConfigWriteChangedPaths(inputBasis.config, authoredConfig, [
@@ -280,7 +282,7 @@ export async function writeConfigFileFromContext(
   const materialized = stampConfigWriteMetadata(
     snapshot.exists
       ? validatedCandidate
-      : applyMessageQueueDefaults(initializeNativeSessionCatalogPreferences(validatedCandidate)),
+      : initializeNativeSessionCatalogPreferences(validatedCandidate),
     options.lastTouchedVersionOverride,
     snapshot.exists ? previousSource : null,
     deps.env,

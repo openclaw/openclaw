@@ -1,8 +1,10 @@
 import { execFile, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
@@ -23,6 +25,7 @@ import {
   startSqliteReadOnlyLocationAsync,
 } from "./sqlite-snapshot-source.js";
 import { allocateWorkerOwnedSqliteSnapshotDirectory } from "./sqlite-snapshot-staging-allocation.js";
+import { captureSqliteSnapshotStagingOwner } from "./sqlite-snapshot-staging-owner.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -75,6 +78,106 @@ function readQueries(location: string, ...queries: string[]) {
   using snapshot = openDatabase(location, true);
   return queries.map((sql) => snapshot.prepare(sql).get());
 }
+
+it.for([false, true] as const)(
+  "retires an owned snapshot after cancellation during native staging (preserve artifacts: %s)",
+  async (preserveSourceArtifacts, { signal }) => {
+    const source = createDatabase();
+    const sourceBefore = fs.readFileSync(source);
+    const root = tempDirs.make("openclaw-snapshot-cancel-allocation-");
+    const preload = path.join(root, "hold-allocation.mjs");
+    const ready = path.join(root, "ready");
+    fs.writeFileSync(
+      preload,
+      `import fs from "node:fs";
+const copy = ["sync", "async", "staged-sync", "staged-async"].some(mode => process.argv.includes(mode));
+let held = false;
+const hold = () => {
+  if (copy && !held) {
+    held = true;
+    fs.writeFileSync(${JSON.stringify(ready)}, "ready");
+    fs.readSync(0, Buffer.alloc(1), 0, 1, null);
+  }
+};
+const create = fs.mkdtempSync;
+fs.mkdtempSync = (...args) => {
+  const directory = create(...args);
+  if (directory.startsWith(${JSON.stringify(`${root}${path.sep}`)})) hold();
+  return directory;
+};
+const chmod = fs.chmodSync;
+fs.chmodSync = (directory, ...args) => {
+  const result = chmod(directory, ...args);
+  if (directory.startsWith(${JSON.stringify(`${root}${path.sep}`)})) hold();
+  return result;
+};
+const open = fs.openSync;
+let sourceOpens = 0;
+fs.openSync = (pathname, ...args) => {
+  const descriptor = open(pathname, ...args);
+  if (pathname === ${JSON.stringify(source)} && ++sourceOpens === 2) hold();
+  return descriptor;
+};
+`,
+    );
+    const entered = createDeferredCore();
+    const watcher = fs.watch(root, (_event, filename) => {
+      if (filename === "ready") {
+        entered.resolve();
+      }
+    });
+    const controller = new AbortController();
+    const reason = new Error("snapshot caller canceled during allocation");
+    const { env, cwd } = captureSqliteReadOnlyWorkerLaunch();
+    const request = captureSqliteSnapshotStagingOwner().start(
+      {
+        type: "prepare",
+        root,
+        pathname: source,
+        allowLegacyWorker: false,
+        preserveSourceArtifacts,
+        deadlineOwnedByCaller: false,
+        launch: {
+          env: {
+            ...env,
+            NODE_OPTIONS:
+              `${env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(preload).href}`.trim(),
+          },
+          cwd,
+          transport: { kind: "native" },
+        },
+      },
+      controller.signal,
+    );
+    const pending = request.result;
+    void pending.catch(() => {});
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          entered.promise,
+          pending,
+          "snapshot worker exited before its staging gate",
+        ),
+        signal,
+      );
+      controller.abort(reason);
+      await expect(pending).rejects.toThrow("snapshot preparation");
+      await request.startClose().result;
+      expect(fs.readdirSync(root).toSorted()).toEqual(["hold-allocation.mjs", "ready"]);
+      expect(fs.readFileSync(source)).toEqual(sourceBefore);
+    } finally {
+      watcher.close();
+      controller.abort(reason);
+      await Promise.allSettled([pending, request.startClose().result]);
+      // Failed-base cleanup touches only the directories minted below this fixture root.
+      for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+        if (entry.isDirectory()) {
+          fs.rmSync(path.join(root, entry.name), { recursive: true, force: true });
+        }
+      }
+    }
+  },
+);
 
 describe("scoped SQLite read-only children", () => {
   it("forks through retained IPC and joins cleanup after disposal refusal", async () => {

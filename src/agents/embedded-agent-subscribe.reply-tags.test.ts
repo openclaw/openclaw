@@ -233,31 +233,20 @@ describe("streamed reasoning tag privacy", () => {
     );
   });
 
-  it("keeps internal blocks private when reasoning visibility is enabled", () => {
+  const literal = "Use `<reasoning note='literal>` and `<internal>literal</internal>`.";
+  it.each([
+    ["internal", "stream", "Before <internal>PRIVATE_MARKER</internal> After", "Before  After"],
+    ["code", "off", `${literal} <reasoning>PRIVATE_MARKER</reasoning> After`, `${literal}  After`],
+    ["self-closing", "off", "Before <reasoning/> After", "Before  After"],
+  ] as const)("keeps reasoning private: %s", (_name, reasoningMode, delta, expected) => {
     const onPartialReply = vi.fn();
-    const onReasoningStream = vi.fn();
-    const emit = subscribe({ reasoningMode: "stream", onPartialReply, onReasoningStream });
-    emitAssistantTextDelta({ emit, delta: "Before <internal>PRIVATE_MARKER</internal> After" });
-    expect(extractTextPayloads(onPartialReply.mock.calls)).toEqual(["Before  After"]);
-    expect(onReasoningStream).not.toHaveBeenCalled();
-  });
-
-  it("preserves literal code tags without letting their quotes hide later reasoning tags", () => {
-    const onPartialReply = vi.fn();
-    const emit = subscribe({ reasoningMode: "off", onPartialReply });
-    const literal = "Use `<reasoning note='literal>` and `<internal>literal</internal>`.";
-    emitAssistantTextDelta({
-      emit,
-      delta: `${literal} <reasoning>PRIVATE_MARKER</reasoning> After`,
-    });
-    expect(extractTextPayloads(onPartialReply.mock.calls)).toEqual([`${literal}  After`]);
-  });
-
-  it("strips self-closing reasoning tags without hiding the following answer", () => {
-    const onPartialReply = vi.fn();
-    const emit = subscribe({ reasoningMode: "off", onPartialReply });
-    emitAssistantTextDelta({ emit, delta: "Before <reasoning/> After" });
-    expect(extractTextPayloads(onPartialReply.mock.calls)).toEqual(["Before  After"]);
+    const onReasoningStream = reasoningMode === "stream" ? vi.fn() : undefined;
+    const emit = subscribe({ reasoningMode, onPartialReply, onReasoningStream });
+    emitAssistantTextDelta({ emit, delta });
+    expect(extractTextPayloads(onPartialReply.mock.calls)).toEqual([expected]);
+    if (onReasoningStream) {
+      expect(onReasoningStream).not.toHaveBeenCalled();
+    }
   });
 });
 

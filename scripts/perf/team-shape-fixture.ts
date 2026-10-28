@@ -12,6 +12,7 @@ import {
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 import { runManagedCommand } from "../lib/managed-child-process.mts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
+import type { TeamShapeSessionsOptions } from "./team-shape-sessions.ts";
 
 export function parseTeamShapeOptions(argv: string[]) {
   const { values } = parseArgs({
@@ -19,6 +20,7 @@ export function parseTeamShapeOptions(argv: string[]) {
     options: {
       "state-dir": { type: "string" },
       sessions: { type: "string" },
+      agents: { type: "string" },
       runs: { type: "string" },
       "settled-runs": { type: "boolean" },
       "team-stress": { type: "boolean" },
@@ -127,6 +129,7 @@ export function parseTeamShapeOptions(argv: string[]) {
   return {
     stateDir: path.resolve(values["state-dir"] ?? "."),
     sessions,
+    agents: integer("agents", values["team-stress"] ? 4 : 1, 1),
     retainedRuns,
     settledRuns: values["settled-runs"] ?? false,
     teamStress: values["team-stress"] ?? false,
@@ -155,7 +158,9 @@ export function parseTeamShapeOptions(argv: string[]) {
   };
 }
 
-export async function generateTeamShapeFixture(options: ReturnType<typeof parseTeamShapeOptions>) {
+export async function generateTeamShapeFixture(
+  options: ReturnType<typeof parseTeamShapeOptions> & Pick<TeamShapeSessionsOptions, "sessionKeys">,
+) {
   const startedAt = performance.now();
   const { stateDir } = options;
   mkdirSync(path.dirname(stateDir), { recursive: true });
@@ -213,18 +218,16 @@ export async function generateTeamShapeFixture(options: ReturnType<typeof parseT
             }
           : {}),
         entries: Object.fromEntries(
-          (options.teamStress ? ["main", "reviewer", "researcher", "planner"] : ["main"]).map(
-            (agentId) => [
-              agentId,
-              {
-                workspace: path.join(
-                  stateDir,
-                  "workspace",
-                  ...(agentId === "main" ? [] : [agentId]),
-                ),
-              },
-            ],
-          ),
+          Array.from(
+            { length: options.agents },
+            (_, index) =>
+              ["main", "reviewer", "researcher", "planner"][index] ?? `agent-${index + 1}`,
+          ).map((agentId) => [
+            agentId,
+            {
+              workspace: path.join(stateDir, "workspace", ...(agentId === "main" ? [] : [agentId])),
+            },
+          ]),
         ),
       },
       logging: { file: path.join(stateDir, "gateway.log") },
@@ -265,6 +268,7 @@ export async function generateTeamShapeFixture(options: ReturnType<typeof parseT
         seed: options.seed,
         now: options.now,
         sessionCount: sessions.length,
+        agentCount: options.agents,
         ...sessionMetrics,
         sessionGenerationMs,
         ...extras,
@@ -294,6 +298,7 @@ async function main() {
   --sessions 5000 --runs 6000 --approvals 200 --cron 100 --projects 12
   --settled-runs           Keep run history terminal and delivered, without a subagent recovery backlog.
   --team-stress            Use the shared stress harness's session categories and four configured agents.
+  --agents <count>        Override configured agents (default one, or four with --team-stress).
   --local-placements 0    Retain local placement rows for startup orphan-workspace discovery.
   --cron-announce-last     Seed disabled isolated cron jobs with announce/last delivery.
   --seed 967 --now <epoch-ms> --transcript-mib 64

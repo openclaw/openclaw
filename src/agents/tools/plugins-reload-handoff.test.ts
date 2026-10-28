@@ -63,6 +63,15 @@ await Promise.all([
 
 const request = { action: "reloadAndResume", pluginId: "reload-fixture" };
 const callerRequired = "active Gateway conversation";
+function runningOperation(sessionKey: string, sessionId: string, storeScope: string) {
+  const operation = createTestReplyOperation({
+    sessionKey,
+    sessionId,
+    target: captureSessionTarget({ storeScope, sessionKey, incarnation: sessionId }),
+  });
+  operation.setPhase("running");
+  return operation;
+}
 afterEach(() => {
   vi.restoreAllMocks();
   resetGatewayWorkAdmission();
@@ -92,18 +101,9 @@ it.each([
     await upsertSessionEntryCore({ agentId: "main", sessionKey }, { sessionId, updatedAt: 1 });
     const runAbort = new AbortController();
     const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-    const runningOperation = (storeScope: string) => {
-      const operation = createTestReplyOperation({
-        sessionKey,
-        sessionId,
-        target: captureSessionTarget({ storeScope, sessionKey, incarnation: sessionId }),
-      });
-      operation.setPhase("running");
-      return operation;
-    };
-    const operation = runningOperation(storePath);
+    const operation = runningOperation(sessionKey, sessionId, storePath);
     const other = outcome.startsWith("same-ID")
-      ? runningOperation(state.path("other", "sessions.json"))
+      ? runningOperation(sessionKey, sessionId, state.path("other", "sessions.json"))
       : undefined;
     if (outcome !== "same-ID prepublication" && outcome !== "same-ID unmatched run") {
       operation.attachBackend({ kind: "embedded", runId, cancel: () => {} });
@@ -300,6 +300,7 @@ it.for([
   "replaced",
   "system",
   "non-owner",
+  "operator-owner",
 ] as const)(
   "preserves authenticated plugin execution across reload handoff: %s",
   async (scenario, { signal, onTestFinished }) => {
@@ -378,20 +379,9 @@ it.for([
             expect(input.ctx.SenderId).toBeUndefined();
             return dispatch(input);
           });
-        const operation = createTestReplyOperation({
-          sessionKey,
-          sessionId,
-          target: captureSessionTarget({
-            storeScope: storePath,
-            sessionKey,
-            incarnation: sessionId,
-          }),
-        });
-        operation.setPhase("running");
+        const operation = runningOperation(sessionKey, sessionId, storePath);
         operation.attachBackend({ kind: "embedded", runId: "reload-source", cancel: () => {} });
-        const endpoint = vi.fn<
-          import("../../gateway/server-methods/types.js").GatewayRequestHandler
-        >(async ({ respond }) => {
+        const endpoint = vi.fn<GatewayRequestHandler>(async ({ respond }) => {
           if (scenario === "reload failure") {
             respond(false, undefined, { code: "UNAVAILABLE", message: "fixture reload failed" });
           } else {
@@ -414,15 +404,15 @@ it.for([
           scenario === "system"
             ? undefined
             : createOperatorClient(
-                scenario === "non-owner"
-                  ? { profileName: "reload-guest", scopes: ["operator.admin"] }
+                scenario === "non-owner" || scenario === "operator-owner"
+                  ? { profileName: `reload-${scenario}`, scopes: ["operator.admin"] }
                   : { profileId: GATEWAY_OWNER_PROFILE_ID, scopes: ["operator.admin"] },
               );
         if (client) {
           client.internal = {
             authenticatedOperator: true,
             operatorRoleActor:
-              scenario === "non-owner"
+              scenario === "non-owner" || scenario === "operator-owner"
                 ? { kind: "operator", profileId: client.authenticatedUserProfile!.profileId }
                 : { kind: "system" },
             operatorAccessAuthority: {
@@ -434,27 +424,24 @@ it.for([
         const isOwner = scenario !== "system" && scenario !== "non-owner";
         const invalidated =
           scenario === "revoked" || scenario === "cancelled" || scenario === "replaced";
-        const resolveAudience = async (
-          senderIsOwner: boolean | undefined,
-          assertCallerCurrent: () => void,
-        ) => {
-          const resolution = await resolveMemoryAudienceFromEntry(
-            { ...scope, sessionId, storePath, senderIsOwner, assertCallerCurrent },
-            expectDefined(loadSessionEntry(scope), "admitted session"),
-          );
-          if (resolution.status !== "granted") {
-            throw new Error(resolution.reason);
-          }
-          return resolution;
-        };
         runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
           const admittedRunContext = await startEmbeddedTurn(params, "resumed owner admission");
           expect(readAdmittedRunOperatorAuthority(admittedRunContext)?.profileId).toBe(
             client?.authenticatedUserProfile?.profileId,
           );
-          const audience = await resolveAudience(params.senderIsOwner, () =>
-            params.preparedRunAdmission!.assertSourceCurrent(),
+          const audience = await resolveMemoryAudienceFromEntry(
+            {
+              ...scope,
+              sessionId,
+              storePath,
+              senderIsOwner: params.senderIsOwner,
+              assertCallerCurrent: () => params.preparedRunAdmission!.assertSourceCurrent(),
+            },
+            expectDefined(loadSessionEntry(scope), "admitted session"),
           );
+          if (audience.status !== "granted") {
+            throw new Error(audience.reason);
+          }
           const host = createAgentHarnessHostCapabilities({
             attempt: {
               admittedRunContext,
@@ -543,6 +530,26 @@ it.for([
             audience.release();
           }
         });
+        const reload = () =>
+          withSessionControllerOwner(operation, async () => {
+            expect(readOperatorToolGatewayAuthority()?.operatorRunAuthority?.profileId).toBe(
+              client?.authenticatedUserProfile?.profileId,
+            );
+            // Only the yielding turn's owner decision plus a live operator source grants owner tools.
+            const tool = createPluginsTool({
+              sessionId,
+              runId: "reload-source",
+              senderIsOwner: isOwner || scenario === "system",
+              onYield: () => {
+                operation.completeWithAfterClearBarrier(cleanup.promise);
+              },
+            });
+            const result = await tool.execute("reload", {
+              action: "reloadAndResume",
+              pluginId: "owner-probe",
+            });
+            expect(result.details).toMatchObject({ status: "started" });
+          });
         let receipt: EventReceipt | undefined;
         try {
           await withPluginRuntimeGatewayRequestScope(
@@ -556,31 +563,7 @@ it.for([
                 () =>
                   exec.withExecRequestTurn(
                     { identity: { ...scope, sessionId, runId: "reload-source" } },
-                    () =>
-                      withGatewayToolCallerIdentity(scope, () =>
-                        withSessionControllerOwner(operation, async () => {
-                          const sourceAuthority =
-                            readOperatorToolGatewayAuthority()?.operatorRunAuthority;
-                          expect(sourceAuthority?.profileId).toBe(
-                            client?.authenticatedUserProfile?.profileId,
-                          );
-                          const tool = createPluginsTool({
-                            sessionId,
-                            runId: "reload-source",
-                            onYield: () => {
-                              operation.completeWithAfterClearBarrier(cleanup.promise);
-                            },
-                          });
-                          expect(
-                            (
-                              await tool.execute("reload", {
-                                action: "reloadAndResume",
-                                pluginId: "owner-probe",
-                              })
-                            ).details,
-                          ).toMatchObject({ status: "started" });
-                        }),
-                      ),
+                    () => withGatewayToolCallerIdentity(scope, reload),
                   ),
               ),
           );

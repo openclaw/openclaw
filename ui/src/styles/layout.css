@@ -1664,8 +1664,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   align-items: center;
   min-width: 0;
   min-height: var(--sidebar-session-row-min-height);
-  padding: 0 calc(4px + var(--sidebar-session-state-reserve, 0px)) 0
-    var(--sidebar-session-row-inset);
+  padding: 0 4px 0 var(--sidebar-session-row-inset);
   border-radius: var(--radius-md);
   color: var(--muted);
   cursor: var(--cursor-action);
@@ -1760,72 +1759,9 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   outline-offset: -2px;
 }
 
-/* State-only indicators belong to the row edge in every native list layout.
-   Artwork and owner avatars keep their leading attribution slot. */
-.sidebar-recent-session > .sidebar-recent-session__link > .sidebar-session-indicator--state-only {
-  position: absolute;
-  inset-inline-end: calc(6px + (24px - var(--sidebar-lead)) / 2);
-  top: 50%;
-  transform: translateY(-50%);
-
-  &:empty {
-    display: none;
-  }
-}
-
-/* Keep the normal title column aligned with rows that have artwork. Only the
-   headerless Person layout deliberately starts titles at the owner picker. */
-.sidebar-session-indicator--state-only + .sidebar-recent-session__text {
-  margin-inline-start: calc(var(--sidebar-lead) + var(--sidebar-row-gap));
-}
-
-.sidebar-recent-sessions__group--inline-owner
-  .sidebar-recent-session:not(.sidebar-recent-session--child)
-  > .sidebar-recent-session__link
-  > .sidebar-session-indicator--state-only
-  + .sidebar-recent-session__text {
-  margin-inline-start: 0;
-}
-
-/* Keep state after hover actions and child controls, without reserving a
-   trailing slot for idle rows or moving an avatar's activity ring. */
-.sidebar-recent-session:has(
-  > .sidebar-recent-session__link > .sidebar-session-indicator--state-only:not(:empty)
-) {
-  --sidebar-session-state-reserve: 24px;
-}
-
 /* No section header separates the rows from the owner picker. */
 .sidebar-recent-sessions > .sidebar-recent-sessions__group--inline-owner:first-child {
   margin-top: calc(4px - var(--sidebar-group-gap));
-}
-
-.shell:not(.shell--mobile-nav)
-  .sidebar-recent-sessions__group--inline-owner
-  .sidebar-recent-session:not(.sidebar-recent-session--child)
-  > .sidebar-recent-session__link {
-  padding-inline-start: 6px;
-}
-
-/* Root-row actions overlay the link's trailing edge (on hover, or always on
-   the mobile drawer). Children already reserve their aside in flow. Keep the
-   overlay space on the root link; status has its own fixed row slot. */
-.shell:not(.shell--mobile-nav)
-  .sidebar-recent-session:not(.sidebar-recent-session--child):has(
-    > .sidebar-recent-session__link > .sidebar-session-indicator--state-only
-  ):is(:hover, :focus-within),
-.shell--mobile-nav
-  .sidebar-recent-session:not(.sidebar-recent-session--child):has(
-    > .sidebar-recent-session__link > .sidebar-session-indicator--state-only
-  ) {
-  > .sidebar-recent-session__link {
-    padding-inline-end: var(--session-row-actions-reserve);
-  }
-
-  .sidebar-recent-session__text,
-  .sidebar-recent-session__title-row {
-    padding-right: 0;
-  }
 }
 
 .sidebar-child-session-toggle {
@@ -2013,7 +1949,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 .sidebar-recent-session:not(.sidebar-recent-session--child) > .sidebar-recent-session__aside {
   position: absolute;
-  inset: 50% calc(4px + var(--sidebar-session-state-reserve, 0px)) auto auto;
+  inset: 50% 4px auto auto;
   transform: translateY(-50%);
   pointer-events: none;
 }
@@ -2025,8 +1961,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 .sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--single-line)
   > .sidebar-recent-session__aside {
-  inset: calc(1px + max(24px, var(--sidebar-title-line-height)) / 2)
-    calc(4px + var(--sidebar-session-state-reserve, 0px)) auto auto;
+  inset: calc(1px + max(24px, var(--sidebar-title-line-height)) / 2) 4px auto auto;
 }
 
 .sidebar-recent-session--child > .sidebar-recent-session__aside {
@@ -2043,15 +1978,13 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
    same link-relative geometry as toggle-less rows, so one mask fits both. */
 .sidebar-recent-session:not(.sidebar-recent-session--child):has(> .sidebar-child-session-toggle)
   > .sidebar-recent-session__aside {
-  right: calc(
-    var(--sidebar-child-session-toggle-width) + 6px + var(--sidebar-session-state-reserve, 0px)
-  );
+  right: calc(var(--sidebar-child-session-toggle-width) + 6px);
 }
 
 .sidebar-recent-session:not(
     .sidebar-recent-session--child,
     .sidebar-recent-session--single-line
-  ):is(:hover, :focus-within)
+  ):where(:hover, :focus-within)
   .sidebar-recent-session__title-row {
   padding-right: var(--session-row-actions-reserve);
 }
@@ -2423,7 +2356,7 @@ openclaw-session-menu[popover] {
   padding: var(--menu-padding);
   border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
+  background: var(--popover);
   box-shadow: var(--overlay-shadow);
   position: fixed;
   z-index: 121;
@@ -2567,6 +2500,7 @@ a:is(
 .settings-sidebar__item--active:hover,
 .nav-item--active:hover,
 .nav-item.active:hover {
+  color: var(--text-strong);
   background: var(--surface-selected-hover);
 }
 
@@ -2615,7 +2549,7 @@ a:is(
 
   .sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--single-line)
     > .sidebar-recent-session__aside {
-    inset: 50% calc(4px + var(--sidebar-session-state-reserve, 0px)) auto auto;
+    inset: 50% 4px auto auto;
   }
 
   .sidebar-recent-session:not(.sidebar-recent-session--child) .sidebar-recent-session__text {

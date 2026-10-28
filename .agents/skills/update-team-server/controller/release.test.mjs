@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test, { describe } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -253,6 +253,15 @@ function verificationMarker(fixture, sha, modified = Date.now()) {
   writeFileSync(marker, sha + "\n", { mode: 0o600 });
   utimesSync(marker, modified / 1000, modified / 1000);
   return marker;
+}
+
+/** A native transaction root with its pre-migration snapshot; an undefined status writes no receipt. */
+function nativeUpdateRoot(f, status) {
+  const root = join(f.runtime, ".openclaw-update", `update-${after}-${randomUUID()}`);
+  mkdirSync(join(root, "native.databases"), { recursive: true });
+  writeFileSync(join(root, "native.databases", "openclaw.sqlite"), "pre-migration snapshot");
+  if (status) writeFileSync(join(root, "native.receipt.json"), JSON.stringify({ schemaVersion: 1, status }), { mode: 0o600 });
+  return root;
 }
 
 function failedReleaseFixture(t, live = false, scenario = "success") {
@@ -1092,6 +1101,8 @@ exec '${process.execPath}' "$@"`);
     for (const sha of shas)
       writeFileSync(join(f.serving, "failed", sha), sha + "\n", { mode: 0o600 });
     const journal = readFileSync(f.journal);
+    // A retained journal may still need any native backup, settled or not.
+    const nativeRoot = nativeUpdateRoot(f, "restored");
     const result = runOwner(f, ["--cleanup"]);
     assert.equal(result.status, 0, result.stderr);
     for (const sha of shas) {
@@ -1099,6 +1110,24 @@ exec '${process.execPath}' "$@"`);
       assert.equal(readFileSync(join(f.serving, "failed", sha), "utf8"), sha + "\n");
     }
     assert.deepEqual(readFileSync(f.journal), journal);
+    assert.equal(existsSync(join(nativeRoot, "native.databases", "openclaw.sqlite")), true);
+    assert.doesNotMatch(events(f), /service\..*\.(stop|start|restart)/);
+  });
+
+  test("cleanup retires settled native update roots as the runtime account and keeps unsettled ones", (t) => {
+    const f = makeReleaseFixture(t);
+    const settled = ["migrated", "restored", "finished", undefined].map((status) => nativeUpdateRoot(f, status));
+    const empty = join(f.runtime, ".openclaw-update", `update-${after}-${randomUUID()}`);
+    mkdirSync(empty);
+    const unsettled = ["backed-up", "failed", "restoring-config"].map((status) => nativeUpdateRoot(f, status));
+    const result = runOwner(f, ["--cleanup"]);
+    assert.equal(result.status, 0, result.stderr);
+    for (const root of [...settled, empty]) assert.equal(existsSync(root), false, root);
+    for (const root of unsettled) {
+      assert.equal(existsSync(join(root, "native.databases", "openclaw.sqlite")), true, root);
+      assert.match(result.stderr, new RegExp(`RETAIN unsettled native update root=${basename(root)} `));
+    }
+    assert.match(events(f), /^account\.openclaw$/m);
     assert.doesNotMatch(events(f), /service\..*\.(stop|start|restart)/);
   });
 

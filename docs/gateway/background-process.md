@@ -268,12 +268,13 @@ Actions:
 
 Notes:
 
-- Only backgrounded sessions are listed/persisted — in memory only, not on disk. Sessions are lost on process restart.
+- Only backgrounded sessions are listed/persisted — in memory only, not on disk. Sessions are lost on process restart. New handles include an opaque boot suffix so old handles cannot select a new process after restart. Looking up an old handle explains that it is no longer tracked and advises checking saved output and side effects before rerunning. Older handles without a boot suffix cannot distinguish restart from expiry or removal.
+- Graceful Gateway shutdown stops supervised process trees and waits for their cleanup. After an abrupt crash, service-managed child processes have parent-loss cleanup; raw detached processes and native PTY descendants may survive. A lost handle does not establish that the process stopped.
 - Resetting or deleting a session clears only its completed background processes; other sessions, explicit shared scopes, and running processes remain unaffected.
 - A live background session blocks cooperative host suspension and safe Gateway restart until the process owner confirms its actual exit.
 - `process remove` can hide a running session immediately after requesting termination; suspension and restart remain blocked until exit confirmation.
 - Session logs are only saved to chat history if you run `process poll`/`log` and the tool result is recorded.
-- `process` is scoped per agent; it only sees sessions started by that agent.
+- `process` sees its own session’s processes and processes started by ancestor sessions belonging to the same agent. It cannot access sibling sessions, unrelated session trees, or another agent’s processes. Visibility follows the recorded session tree; handles do not need to be copied.
 - After an explicit `kill` or task cancellation, `list`, `poll`, `log`, and a repeated `kill` report a confirmed requested stop as a completed observation, retaining the process's signal and cancellation reason. Unexpected termination, timeouts, and cleanup failures remain errors; `finalizationFailed: true` identifies cleanup failure.
 - A repeated `kill` of a retained finished session returns its terminal facts without sending another signal or consuming output. An unknown or cleared session ID does not confirm termination.
 - Process context shown at turn start is a snapshot. Later `process` results supersede it; the snapshot is not refreshed during the turn.

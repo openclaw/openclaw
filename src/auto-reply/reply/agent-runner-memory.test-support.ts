@@ -81,8 +81,8 @@ export function createModifiedMemoryFlushPlan(overrides: Partial<FileFlushPlan>)
 }
 
 export type ModelFallbackParams = {
-  provider?: string;
-  model?: string;
+  provider: string;
+  model: string;
   abortSignal?: AbortSignal;
   agentId?: string;
   sessionId?: string;
@@ -106,6 +106,25 @@ export type ModelFallbackParams = {
     },
   ) => Promise<EmbeddedAgentRunResult>;
 };
+
+export function modelRoutingProvenance(
+  requestedProvider: string,
+  requestedModel: string,
+  stage: ModelFallbackAttemptProvenance["stage"] = "initial",
+): ModelFallbackAttemptProvenance {
+  return { requestedProvider, requestedModel, stage };
+}
+
+export async function runSelectedMemoryModel({ provider, model, run }: ModelFallbackParams) {
+  return {
+    result: await run(provider, model, {
+      modelRoutingProvenance: modelRoutingProvenance(provider, model),
+    }),
+    provider,
+    model,
+    attempts: [],
+  };
+}
 
 export function createMemoryRunEntryMockImplementation(deps: {
   runWithModelFallback: (params: ModelFallbackParams) => Promise<unknown>;

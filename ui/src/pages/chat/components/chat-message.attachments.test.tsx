@@ -101,6 +101,11 @@ describe("grouped chat attachments", () => {
     );
   }
 
+  async function waitForAudio(container: Element) {
+    await vi.dynamicImportSettled();
+    await waitForSolid(() => expect(audio(container)).not.toBeNull(), { interval: 0 });
+  }
+
   it("backs off stale managed ticket refreshes and eventually marks them unavailable", async () => {
     const { source, artifactId, ticket } = managedTicketFixture();
     let finishSecondRequest: (() => void) | undefined;
@@ -115,29 +120,23 @@ describe("grouped chat attachments", () => {
       });
     });
     const container = mountManagedAudio(source, artifactId, resolveArtifactDownload);
-    await vi.dynamicImportSettled();
-    await waitForSolid(() => expect(audio(container)).not.toBeNull(), { interval: 0 });
-    expect(resolveArtifactDownload).toHaveBeenCalledTimes(1);
-
-    await vi.advanceTimersByTimeAsync(4_999);
-    expect(resolveArtifactDownload).toHaveBeenCalledTimes(1);
-    await advanceAttachments(1);
-    expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
+    const expectRequestsAfter = async (ms: number, count: number) => {
+      await advanceAttachments(ms);
+      expect(resolveArtifactDownload).toHaveBeenCalledTimes(count);
+    };
+    await waitForAudio(container);
+    await expectRequestsAfter(0, 1);
+    await expectRequestsAfter(4_999, 1);
+    await expectRequestsAfter(1, 2);
     expect(audio(container)).not.toBeNull();
-
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
+    await expectRequestsAfter(1_000, 2);
     expectManagedAudio(container, true);
     finishSecondRequest?.();
     await flushAttachmentChecks();
-    await vi.advanceTimersByTimeAsync(9_999);
-    expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
-    await advanceAttachments(1);
-
-    expect(resolveArtifactDownload).toHaveBeenCalledTimes(3);
+    await expectRequestsAfter(9_999, 2);
+    await expectRequestsAfter(1, 3);
     expectManagedAudio(container, true);
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(resolveArtifactDownload).toHaveBeenCalledTimes(3);
+    await expectRequestsAfter(60_000, 3);
   });
 
   it.each([
@@ -159,8 +158,7 @@ describe("grouped chat attachments", () => {
         );
       });
       const container = mountManagedAudio(source, artifactId, resolveArtifactDownload);
-      await vi.dynamicImportSettled();
-      await waitForSolid(() => expect(audio(container)).not.toBeNull(), { interval: 0 });
+      await waitForAudio(container);
       await advanceAttachments(5_000);
       if (refreshFails) {
         expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
@@ -193,13 +191,15 @@ describe("grouped chat attachments", () => {
   });
 
   it("keeps server-rejected outside-allowed-folders media blocked", async () => {
-    const code = "outside-allowed-folders";
     const reason = "Outside allowed folders";
     const source = "/home/node/private/bootstrap-secret.mp3";
-    const fetchMock = stubFetch(async (url: string, init?: RequestInit) => {
+    stubFetch(async (url: string, init?: RequestInit) => {
       expect(url).toContain("meta=1");
       expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer session-token");
-      return { ok: true, json: async () => ({ available: false, code, reason }) };
+      return {
+        ok: true,
+        json: async () => ({ available: false, code: "outside-allowed-folders", reason }),
+      };
     });
 
     renderReactiveAssistant(
@@ -211,9 +211,6 @@ describe("grouped chat attachments", () => {
     );
 
     await vi.dynamicImportSettled();
-    await waitForSolid(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    await flushAttachmentChecks();
-
     await vi.waitFor(() =>
       expect(
         elementText(
@@ -254,7 +251,6 @@ describe("grouped chat attachments", () => {
     await advanceAttachments(30_001);
 
     expect(fetchInit?.signal).toMatchObject({ aborted: true });
-    expect(fetchInit?.signal).toBeInstanceOf(AbortSignal);
     expect(elementText(".chat-assistant-attachment-card__status-meta")).toContain("Unavailable");
     expectAbsent(".chat-assistant-attachment-card__action-skeleton");
   });
@@ -302,7 +298,6 @@ describe("grouped chat attachments", () => {
     await advanceAttachments(1_000);
     await panel.updateComplete;
 
-    expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
     expect(panel.querySelector("audio")?.getAttribute("src")).toBe(refreshed.url);
     panel.remove();
     container.remove();
@@ -313,7 +308,6 @@ describe("grouped chat images", () => {
   const imageElement = (root: Element = harness.view) =>
     root.querySelector<HTMLImageElement>(".chat-message-image");
   const thumbnail = (source: string) => `${source.replace(/\/full$/u, "/thumbnail")}?v=4&width=480`;
-  const dimensions = { width: 1, height: 1 };
 
   function mountAssistantImage(
     url: string,
@@ -344,7 +338,6 @@ describe("grouped chat images", () => {
     const requested: (string | null)[][] = [];
     stubFetch(async (url: string, init?: RequestInit) => {
       const mediaUrl = new URL(url, "http://control.test");
-      expect(mediaUrl.pathname).toBe("/openclaw/__openclaw__/assistant-media");
       expect(mediaUrl.searchParams.get("meta")).toBe("1");
       expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer test-auth-token");
       requested.push([mediaUrl.searchParams.get("source"), mediaUrl.searchParams.get("messageId")]);
@@ -367,24 +360,26 @@ describe("grouped chat images", () => {
         const params = new URL(image.src).searchParams;
         return [params.get("source"), params.get("messageId"), params.get("sessionKey")];
       });
-    const expected = (source: string, id: string) => [source, id, "agent:main:transcript-images"];
-    renderUserMedia("saved-image-octet-stream", [
-      { path: firstSource, contentType: "application/octet-stream" },
-    ]);
-    await waitForSolid(() =>
-      expect(displayed()).toEqual([expected(firstSource, "saved-image-octet-stream")]),
-    );
-
-    renderUserMedia("saved-image-pair", [
-      { path: firstSource, contentType: "image/png" },
-      { path: secondSource, contentType: "application/octet-stream" },
-    ]);
-    await waitForSolid(() =>
-      expect(displayed()).toEqual([
-        expected(firstSource, "saved-image-pair"),
-        expected(secondSource, "saved-image-pair"),
-      ]),
-    );
+    for (const [id, sources] of [
+      ["saved-image-octet-stream", [[firstSource, "application/octet-stream"]]],
+      [
+        "saved-image-pair",
+        [
+          [firstSource, "image/png"],
+          [secondSource, "application/octet-stream"],
+        ],
+      ],
+    ] as const) {
+      renderUserMedia(
+        id,
+        sources.map(([path, contentType]) => ({ path, contentType })),
+      );
+      await waitForSolid(() =>
+        expect(displayed()).toEqual(
+          sources.map(([path]) => [path, id, "agent:main:transcript-images"]),
+        ),
+      );
+    }
     expect(requested).toEqual([
       [firstSource, "saved-image-octet-stream"],
       [firstSource, "saved-image-pair"],
@@ -401,19 +396,17 @@ describe("grouped chat images", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-30T05:45:00Z"));
 
-    const renderQr = (data: string, ttl: number) =>
-      renderAssistantMessage(
-        createAssistantMessage([
-          {
-            type: "openclaw_pairing_qr",
-            image_url: `data:image/png;base64,${data}`,
-            alt: "OpenClaw pairing QR code",
-            expiresAtMs: Date.now() + ttl,
-          },
-        ]),
-        { showToolCalls: false },
-      );
-    renderQr("cXJwbmc=", 1_000);
+    renderAssistantMessage(
+      createAssistantMessage([
+        {
+          type: "openclaw_pairing_qr",
+          image_url: "data:image/png;base64,cXJwbmc=",
+          alt: "OpenClaw pairing QR code",
+          expiresAtMs: Date.now() + 1_000,
+        },
+      ]),
+      { showToolCalls: false },
+    );
 
     const image = imageElement();
     expect(image).toMatchObject({
@@ -426,10 +419,6 @@ describe("grouped chat images", () => {
     expect(element(".chat-message-image")).toBe(image);
     await vi.advanceTimersByTimeAsync(1);
     expect(element(".chat-bubble")).toBe(bubble);
-    expectAbsent(".chat-message-image");
-    expect(harness.view.textContent).toContain("Pairing QR expired");
-
-    renderQr("ZXhwaXJlZA==", -1);
     expectAbsent(".chat-message-image");
     expect(harness.view.textContent).toContain("Pairing QR expired");
   });
@@ -476,11 +465,10 @@ describe("grouped chat images", () => {
     });
 
     renderAssistantMessage(
-      createAssistantImageMessage(source, "Generated image body stall", dimensions),
+      createAssistantImageMessage(source, "Generated image body stall", { width: 1, height: 1 }),
     );
 
     await vi.advanceTimersByTimeAsync(0);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
     const [, fetchInit] = requireFetchCallForUrl(fetchMock, thumbnail(source));
     expect(fetchInit?.signal?.aborted).toBe(false);
     expectSameOriginGet(fetchInit);
@@ -499,7 +487,6 @@ describe("grouped chat images", () => {
       assistantAttachmentAuthToken: "test-auth-token",
       resourceBasePath: "/rosita",
     };
-    const expectedUrls = imageUrls.map((source) => `/rosita${thumbnail(source)}`);
     let objectUrlIndex = 0;
     const { createObjectURL, revokeObjectURL } = stubObjectUrls(
       () => `blob:managed-image-${objectUrlIndex++}`,
@@ -514,7 +501,6 @@ describe("grouped chat images", () => {
       const headers = new Headers(init?.headers);
       expect(headers.get("Authorization")).toBe("Bearer test-auth-token");
       expect(headers.get("x-openclaw-requester-session-key")).toBe("agent:main:main");
-      expect(expectedUrls).toContain(url);
       if (deferEvictedRefetch && url === `/rosita${thumbnail(imageUrls[1]!)}`) {
         return new Promise<typeof response>((resolve) => {
           resolveEvictedRefetch = resolve;

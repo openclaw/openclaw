@@ -55,7 +55,10 @@ are globally disabled, if `knowledge` is in `plugins.deny`, or if
 `plugins.entries.knowledge.enabled` is `false`. When the slot points elsewhere,
 the memory-slot gate keeps Knowledge disabled.
 
-Slot changes reload the plugin runtime without a Gateway restart. Verify the
+Slot changes reload the plugin runtime without a Gateway restart. Knowledge
+declares `reload.turnHandover`, so a reload does not wait for running agent
+turns: each turn moves to the new version at its next model step
+([reload-safe plugins](/plugins/sdk-runtime#reload-safe-plugins)). Verify the
 runtime registration and the live service:
 
 ```bash
@@ -101,17 +104,16 @@ optional.
 }
 ```
 
-| Key                       | Type     | Default           | Meaning                                                                                                                             |
-| ------------------------- | -------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `operatorRead`            | boolean  | `true`            | Let authenticated operators with `operator.read` (or higher) inspect stores in the Control UI and operator RPC.                     |
-| `writesEnabled`           | boolean  | `true`            | Allow agent writes. When `false`, write tools reject, the memory prompt omits save guidance, and no flush plan is offered.          |
-| `stores`                  | object   | `{}`              | Named shared stores. Keys match `^[a-z][a-z0-9-]{0,47}$`. Agents not listed use their own isolated store.                           |
-| `stores.<name>.label`     | string   | the store key     | Display name in the Control UI (1–80 characters). Not a path or identity.                                                           |
-| `stores.<name>.agents`    | string[] | required          | Agent IDs that use this store (at most 100). An empty list keeps the store without members.                                         |
-| `maintenance.enabled`     | boolean  | `true`            | Run the scheduled maintenance pass.                                                                                                 |
-| `maintenance.schedule`    | string   | `"30 3 * * *"`    | Five-field cron expression for the pass.                                                                                            |
-| `maintenance.timezone`    | string   | Gateway host zone | IANA time zone for the schedule.                                                                                                    |
-| `maintenance.reviewJobId` | string   | none              | Automation queued after a pass that leaves private claims unlinked. See [Maintenance](/plugins/knowledge/maintenance#agent-review). |
+| Key                    | Type     | Default           | Meaning                                                                                                                    |
+| ---------------------- | -------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `operatorRead`         | boolean  | `true`            | Let authenticated operators with `operator.read` (or higher) inspect stores in the Control UI and operator RPC.            |
+| `writesEnabled`        | boolean  | `true`            | Allow agent writes. When `false`, write tools reject, the memory prompt omits save guidance, and no flush plan is offered. |
+| `stores`               | object   | `{}`              | Named shared stores. Keys match `^[a-z][a-z0-9-]{0,47}$`. Agents not listed use their own isolated store.                  |
+| `stores.<name>.label`  | string   | the store key     | Display name in the Control UI (1–80 characters). Not a path or identity.                                                  |
+| `stores.<name>.agents` | string[] | required          | Agent IDs that use this store (at most 100). An empty list keeps the store without members.                                |
+| `maintenance.enabled`  | boolean  | `true`            | Run the scheduled maintenance pass.                                                                                        |
+| `maintenance.schedule` | string   | `"30 3 * * *"`    | Five-field cron expression for the pass.                                                                                   |
+| `maintenance.timezone` | string   | Gateway host zone | IANA time zone for the schedule.                                                                                           |
 
 `operatorRead` and `writesEnabled` are plugin-wide gates. Changes to
 `plugins.entries.knowledge.config.stores` do not reload the plugin; Knowledge
@@ -170,8 +172,8 @@ Markdown-only or Git-only copy is not a complete backup.
   step.
 - Corrections, withdrawals, and identity merges are explicit agent operations
   that preserve history. See [Corrections and merges](/plugins/knowledge/corrections).
-- The Control UI is read-only. It hands change requests to chat instead of
-  editing records.
+- The Control UI is read-only. **Ask** sends change requests to the agent in a
+  new chat instead of editing records.
 - Operators cannot save knowledge through operator read access. Changing store
   assignments needs `operator.admin`.
 
@@ -217,7 +219,8 @@ See [Ingestion workflows](/plugins/knowledge/ingestion).
 
 The **Knowledge** page has Recent and Browse views, keyword Search, entity pages
 with linked claims and evidence, typed connections, retained originals, and file
-history. **Settings** holds Stores & sharing, Vocabulary, Vault status, and
+history. **Scribes** starts and controls [scribes](/plugins/knowledge/scribes).
+**Settings** holds Stores & sharing, Vocabulary, Vault status, and
 Maintenance. A **Knowledge** chat side panel lists the records an agent found,
 read, or changed in the current conversation.
 
@@ -240,6 +243,15 @@ It never calls a model or creates pages. It runs only while `writesEnabled` is
 `true`. It uses the plugin service scheduler, not OpenClaw automations.
 
 See [Maintenance](/plugins/knowledge/maintenance).
+
+## Scribes
+
+The **Scribes** tab starts conversations that keep a store up to date on their
+own: reviewing unlinked claims after maintenance, learning from conversations
+once or daily, and importing Memory once. Each follows a bundled skill; ongoing
+scribes schedule themselves as OpenClaw automations.
+
+See [Scribes](/plugins/knowledge/scribes).
 
 ## Capabilities and limits
 
@@ -333,5 +345,6 @@ and [Uninstall](/cli/plugins/uninstall-and-update#uninstall).
 - [Corrections and merges](/plugins/knowledge/corrections)
 - [Local history](/plugins/knowledge/local-history)
 - [Maintenance](/plugins/knowledge/maintenance)
+- [Scribes](/plugins/knowledge/scribes)
 - [Control UI](/plugins/knowledge/control-ui)
 - [Memory overview](/concepts/memory)

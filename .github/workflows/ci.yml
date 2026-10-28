@@ -1869,6 +1869,15 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build:ci-artifacts
 
+      # This build already seals SDK-only records that the full warmer does not emit.
+      - name: Save build-all cache
+        if: ${{ success() && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && github.event_name == 'schedule' && !inputs.release_gate && needs.preflight.outputs.candidate_trust == 'main' && needs.preflight.outputs.cache_write_allowed == 'true' && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true' && needs.preflight.outputs.compatibility_target != 'true' && steps.dist_build.outcome == 'success' && steps.node_setup.outputs.build-all-cache-key != '' }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .artifacts/build-all-cache
+          key: ${{ steps.node_setup.outputs.build-all-cache-key }}
+
       # Reuse the public build before singleton/watch checks mutate its outputs.
       - name: Install Playwright Chromium for public-build browser tests
         id: browser_chromium
@@ -2068,6 +2077,19 @@ jobs:
           console.log(JSON.stringify({ proof: "browser-native-host", fullNames: expectedNames, passed: expectedNames.length, failed: 0, pending: 0 }));
           BROWSER_PROOF_REPORT
 
+      # Only this producer consumes a full worker generation captured after build.
+      # Runtime checks use separate slots and cannot replace the restored full seed.
+      - name: Restore built-source compiled Vitest workers
+        id: built_worker_cache
+        if: ${{ !cancelled() && needs.preflight.outputs.cache_mode != 'off' && runner.os == 'Linux' && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') && ((needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_checks == 'true') || needs.preflight.outputs.run_checks_node_core_dist == 'true' || needs.preflight.outputs.run_built_source_verifiers == 'true') }}
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .artifacts/vitest-worker-cache/run-cache-0
+          key: ${{ github.repository }}-vitest-workers-built-v1-protected-${{ steps.node_setup.outputs.node-toolchain-cache-key }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ${{ github.repository }}-vitest-workers-built-v1-protected-${{ steps.node_setup.outputs.node-toolchain-cache-key }}-
+
       - name: Run built artifact checks
         if: ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') }}
         id: built_artifact_checks
@@ -2079,6 +2101,7 @@ jobs:
           RUN_CHANNELS: ${{ (needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_checks == 'true') || needs.preflight.outputs.run_built_source_verifiers == 'true' }}
           CHANNEL_NODE_OPTIONS: ${{ fromJSON(needs.preflight.outputs.source_channel_test_env_json).NODE_OPTIONS }}
           CHANNEL_MAX_WORKERS: ${{ fromJSON(needs.preflight.outputs.source_channel_test_env_json).OPENCLAW_VITEST_MAX_WORKERS }}
+          SOURCE_VERIFIER_CACHE: ${{ steps.built_worker_cache.outputs.cache-matched-key != '' && '1' || '0' }}
           RUN_DOCTOR_PLUGIN_INDEX: ${{ needs.preflight.outputs.run_doctor_plugin_index }}
           RUN_DISCORD_COMPONENT_PROOF: ${{ needs.preflight.outputs.run_discord_component_proof }}
           RUN_CORE_SUPPORT_BOUNDARY: ${{ needs.preflight.outputs.run_checks_node_core_dist == 'true' || needs.preflight.outputs.run_built_source_verifiers == 'true' }}
@@ -2246,10 +2269,12 @@ jobs:
           fi
 
           if [ "$RUN_CHANNELS" = "true" ] && [ "$RUN_CORE_SUPPORT_BOUNDARY" = "true" ] && [ "$CHANNEL_NODE_OPTIONS" = "--max-old-space-size=8192" ] && [[ -f scripts/test-built-source-verifiers.mts ]]; then
-            start_check "source-support" node --import ./scripts/tsx.mjs scripts/test-built-source-verifiers.mts
+            start_check "source-support" env OPENCLAW_VITEST_WORKER_CACHE="$SOURCE_VERIFIER_CACHE" \
+              node --import ./scripts/tsx.mjs scripts/test-built-source-verifiers.mts
           else
             if [ "$RUN_CHANNELS" = "true" ]; then
               start_check "channels" env \
+                OPENCLAW_VITEST_WORKER_CACHE="$SOURCE_VERIFIER_CACHE" \
                 NODE_OPTIONS="$CHANNEL_NODE_OPTIONS" \
                 OPENCLAW_VITEST_MAX_WORKERS="$CHANNEL_MAX_WORKERS" \
                 pnpm test:channels
@@ -2257,6 +2282,7 @@ jobs:
 
             if [ "$RUN_CORE_SUPPORT_BOUNDARY" = "true" ]; then
               start_check "core-support-boundary" env \
+                OPENCLAW_VITEST_WORKER_CACHE="$SOURCE_VERIFIER_CACHE" \
                 NODE_OPTIONS=--max-old-space-size=8192 \
                 OPENCLAW_VITEST_MAX_WORKERS=2 \
                 node scripts/run-vitest.mjs run --config test/vitest/vitest.full-core-support-boundary.config.ts
@@ -3561,9 +3587,13 @@ jobs:
       - name: Run Node 24 minimum compatibility
         env:
           NODE_OPTIONS: --max-old-space-size=8192
+          CI_COMPAT_FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
         run: |
           pnpm build
-          pnpm ui:build
+          # Frozen targets may predate the full build's UI phase.
+          if [[ "${CI_COMPAT_FROZEN_TARGET:-}" != "false" ]]; then
+            pnpm ui:build
+          fi
           node openclaw.mjs --help
           node openclaw.mjs status --json --timeout 1
           pnpm test:build:singleton
@@ -5904,6 +5934,7 @@ jobs:
             -only-testing:OpenClawTests/CloudflareAccessSessionStoreTests
             -only-testing:OpenClawTests/ChatTypingFocusTests
             -only-testing:OpenClawTests/ChatSendHydrationTests
+            -only-testing:OpenClawTests/ChatComposerTextViewIOSTests
             -only-testing:OpenClawTests/GatewayIngressControllerTests
             -only-testing:OpenClawTests/GatewayIngressLoginPreparationTests
             -only-testing:OpenClawTests/GatewayConnectionControllerTests

@@ -4,7 +4,7 @@ import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
-import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
+import { prepareAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import { createRuntimeToolMatcher } from "../../agents/tool-policy-match.js";
 import {
@@ -43,7 +43,9 @@ const targetScopes = resolveGlobalSingleton(
       {
         env?: NodeJS.ProcessEnv;
         operatorAuthority?: AdmittedRunOperatorAuthority;
+        ownerContinuation?: true;
         commandOwner?: PreparedCommandOwnerAuthority;
+        deletion?: { agentId: string; isBlocked: () => boolean };
       }
     >(),
 );
@@ -88,6 +90,8 @@ export async function captureSessionEventTargetForHost(
     producerPolicy?: Readonly<Pick<SessionEventTarget, "toolsAllow" | "settings">>;
     /** Original host-issued source; the producer owns its lifetime until enqueue. */
     operatorAuthority?: AdmittedRunOperatorAuthority;
+    /** The producing turn held command-owner authority under `operatorAuthority`. */
+    ownerContinuation?: true;
     /**
      * Continue the producing turn's requester as command owner while they remain one.
      * The identity comes from the host-owned caller, never from the producer.
@@ -147,6 +151,7 @@ export async function captureSessionEventTargetForHost(
     const { withSessionEntryReadOnlyInWorker } =
       await import("../../config/sessions/session-entry-read-runtime.js");
     await readAgentDeletionJournalStatusInWorker(agentId, { env });
+    const deletion = { agentId, isBlocked: prepareAgentDeletionBlocked(agentId, { env }) };
     const entry = await withSessionEntryReadOnlyInWorker(
       { agentId, storePath, sessionKey, env },
       assertCaptureCurrent,
@@ -218,7 +223,9 @@ export async function captureSessionEventTargetForHost(
     targetScopes.set(target, {
       env,
       operatorAuthority,
+      ...(operatorAuthority && options.ownerContinuation ? { ownerContinuation: true } : {}),
       ...(commandOwner?.source && commandOwner.isCurrent(cfg) ? { commandOwner } : {}),
+      deletion,
     });
     return target;
   } finally {
@@ -234,7 +241,16 @@ export function assertSessionEventTargetCurrent(target: SessionEventTarget): voi
   }
   const cfg = getSessionEventRuntimeConfig();
   resolveConfiguredAgentId(cfg, target.agentId);
-  if (isAgentDeletionBlocked(target.agentId, { env: targetScopes.get(target)?.env })) {
+  const scope = targetScopes.get(target);
+  let deletion = scope?.deletion;
+  if (!deletion || deletion.agentId !== target.agentId) {
+    deletion = {
+      agentId: target.agentId,
+      isBlocked: prepareAgentDeletionBlocked(target.agentId, { env: scope?.env }),
+    };
+    targetScopes.set(target, { ...scope, deletion });
+  }
+  if (deletion.isBlocked()) {
     throw new Error("Session event owner is being deleted");
   }
 }
@@ -348,6 +364,11 @@ export function readSessionEventTargetOperatorAuthority(
   return targetScopes.get(target)?.operatorAuthority;
 }
 
+/** Whether the producing turn was an owner under the target's captured operator source. */
+export function readSessionEventTargetOwnerContinuation(target: SessionEventTarget): boolean {
+  return targetScopes.get(target)?.ownerContinuation === true;
+}
+
 export function readSessionEventTargetCommandOwner(
   target: SessionEventTarget,
 ): PreparedCommandOwnerAuthority | undefined {
@@ -374,6 +395,8 @@ export function combineSessionEventTargetsForHost(
       target.chatType !== first.chatType ||
       readSessionEventTargetOperatorAuthority(target) !==
         readSessionEventTargetOperatorAuthority(first) ||
+      readSessionEventTargetOwnerContinuation(target) !==
+        readSessionEventTargetOwnerContinuation(first) ||
       readSessionEventTargetCommandOwner(target)?.source !==
         readSessionEventTargetCommandOwner(first)?.source ||
       channelRouteDedupeKey(target.deliveryContext) !== route

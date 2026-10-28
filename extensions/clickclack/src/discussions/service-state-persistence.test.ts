@@ -1,5 +1,6 @@
 import "./service-http-mock.test-support.js";
 import "./session-authority.test-support.js";
+import assert from "node:assert/strict";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
@@ -178,9 +179,7 @@ async function activeRoute(input: Parameters<typeof resolveClickClackDiscussionR
   return result.route;
 }
 function requireBinding(binding: ClickClackDiscussionBinding | undefined) {
-  if (!binding) {
-    throw new Error("Expected the persisted discussion binding");
-  }
+  assert(binding, "Expected the persisted discussion binding");
   return binding;
 }
 
@@ -191,30 +190,38 @@ function generationStore(env: NodeJS.ProcessEnv) {
   });
 }
 function blockedGeneration(phase: "pending" | "finalize") {
+  return blockedWrite((_namespace, intent) =>
+    phase === "finalize"
+      ? intent.operation === "delete" && intent.action === "delete"
+      : intent.operation === "update" &&
+        intent.action === "set" &&
+        typeof intent.value === "object" &&
+        intent.value !== null &&
+        "pending" in intent.value,
+  );
+}
+function blockedWrite(
+  matches: (namespace: string, intent: PluginStateCompareIntent<unknown>) => boolean,
+  initiallyArmed = true,
+) {
   const gate = pause();
+  let armed = initiallyArmed;
+  let held = false;
   const f = generationFixture({
-    beforeCompare: async (_key, intent) => {
-      const matches =
-        phase === "finalize"
-          ? intent.operation === "delete" && intent.action === "delete"
-          : intent.operation === "update" &&
-            intent.action === "set" &&
-            typeof intent.value === "object" &&
-            intent.value !== null &&
-            "pending" in intent.value;
-      if (matches) {
+    beforeCompare: async (namespace, intent) => {
+      if (armed && !held && matches(namespace, intent)) {
+        held = true;
         gate.entered.resolve();
         await gate.release.promise;
       }
     },
   });
-  return { ...f, ...gate };
+  return { ...f, ...gate, arm: () => (armed = true) };
 }
 function generationFixture(
   options: {
     env?: NodeJS.ProcessEnv;
-    beforeCompare?: (key: string, intent: PluginStateCompareIntent<unknown>) => Promise<void>;
-    beforeWrite?: (namespace: string, key: string, action: "set" | "delete") => Promise<void>;
+    beforeCompare?: (namespace: string, intent: PluginStateCompareIntent<unknown>) => Promise<void>;
   } = {},
 ) {
   const env = options.env ?? {
@@ -224,9 +231,8 @@ function generationFixture(
   const f = createHarness(
     { label: "Title" },
     {
-      openSyncKeyedStore: <T>(storeOptions: OpenKeyedStoreOptions) => {
-        return createPluginStateSyncKeyedStoreForTests<T>("clickclack", { ...storeOptions, env });
-      },
+      openSyncKeyedStore: <T>(storeOptions: OpenKeyedStoreOptions) =>
+        createPluginStateSyncKeyedStoreForTests<T>("clickclack", { ...storeOptions, env }),
     },
   );
   f.runtime.state.openKeyedStoreV2 = <T>(
@@ -235,16 +241,13 @@ function generationFixture(
   ) => {
     const store = createPluginStateKeyedStoreForTests<T>("clickclack", { ...storeOptions, env })
       .withCurrent!(authority ?? { assertCurrent: () => {} });
-    if (!options.beforeCompare && !options.beforeWrite) {
+    if (!options.beforeCompare) {
       return store;
     }
     return {
       ...store,
       compareAndApply: async (...args: Parameters<typeof store.compareAndApply>) => {
-        await options.beforeCompare?.(args[0], args[2]);
-        if (args[2].action !== "keep") {
-          await options.beforeWrite?.(storeOptions.namespace, args[0], args[2].action);
-        }
+        await options.beforeCompare?.(storeOptions.namespace, args[2]);
         return await store.compareAndApply(...args);
       },
     };
@@ -432,21 +435,13 @@ it.each(
 )(
   "preserves a native successor on the $channel channel when stale discussion $phase waits",
   async ({ phase, channel }) => {
-    const { entered, release, track } = pause();
-    let armed = false;
-    let held = false;
-    const f = generationFixture({
-      beforeWrite: async (namespace, _key, action) => {
-        const targetNamespace =
-          phase === "revocation" ? "discussion-revoked-channels" : "discussion-bindings";
-        const targetAction = phase === "binding deletion" ? "delete" : "set";
-        if (armed && !held && namespace === targetNamespace && action === targetAction) {
-          held = true;
-          entered.resolve();
-          await release.promise;
-        }
-      },
-    });
+    const f = blockedWrite(
+      (namespace, intent) =>
+        namespace ===
+          (phase === "revocation" ? "discussion-revoked-channels" : "discussion-bindings") &&
+        intent.action === (phase === "binding deletion" ? "delete" : "set"),
+      false,
+    );
     await f.service.open(sessionKey);
     const native = nativeBindings(f.env);
     const previous = requireBinding(native.lookup(sessionKey));
@@ -466,11 +461,11 @@ it.each(
     f.createChannel.mockImplementationOnce(async (_workspaceId, input) =>
       discussionChannel({ ...input, id: "chn_candidate", route_id: "candidate-route" }),
     );
-    armed = true;
-    const opening = track(f.service.open(sessionKey));
-    await entered.promise;
+    f.arm();
+    const opening = f.track(f.service.open(sessionKey));
+    await f.entered.promise;
     native.register(sessionKey, successor);
-    release.resolve();
+    f.release.resolve();
     const opened = await opening;
 
     expect(native.lookup(sessionKey)).toEqual(successor);
@@ -576,7 +571,7 @@ describe("ClickClack pending generation persistence", () => {
     await expect(f.service.open(sessionKey)).rejects.toThrow("lost create response");
     const originalRef = f.createChannel.mock.calls[0]?.[1].external_ref;
     expect(await generationStore(f.env).lookup(sessionKey)).toMatchObject({
-      pending: expect.objectContaining({ externalRef: originalRef }),
+      pending: { externalRef: originalRef },
     });
     await f.service.cleanup();
     await closeOpenClawStateDatabaseAsync();
