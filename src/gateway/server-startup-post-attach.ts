@@ -246,7 +246,12 @@ export async function startGatewayPostAttachRuntime(params: {
 
   const startSidecars = () =>
     params.minimalTestGateway
-      ? startStartupLog().then(() => pluginRegistry)
+      ? startStartupLog().then(() => {
+          if (!candidateCanary && !params.isClosing?.()) {
+            params.onChannelsStarted?.();
+          }
+          return pluginRegistry;
+        })
       : nextTurn().then(async () => {
           if (params.isClosing?.()) {
             skipStartupLog();
