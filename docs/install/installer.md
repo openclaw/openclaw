@@ -34,7 +34,7 @@ full-history checkouts retain their history.
 | [`install-cli.sh`](#install-clish) | macOS / Linux / WSL / FreeBSD | Installs Node + OpenClaw into a local prefix (`~/.openclaw`) via npm (FreeBSD) or npm/git (macOS/Linux/WSL). No root required. |
 | [`install.ps1`](#installps1)       | Windows (PowerShell)          | Installs Node if needed, installs OpenClaw via npm (default) or git, can run onboarding.                                       |
 
-All three support Node **24.22.1+ or 26.12.1+** with a WAL-reset-safe linked SQLite library. When Node is missing and nvm is not detected, `install.sh` provisions Node 26 through Homebrew on macOS and the supported Node 24 LTS line through NodeSource on Linux. When a supported RPM-owned Node links unsafe SQLite, `install.sh` preserves the distro package and provisions a user-space Node runtime through `install-cli.sh`. The rootless `install-cli.sh` downloads Node 24.22.1 on macOS and glibc Linux. FreeBSD uses an installed system runtime. Linux ARMv7 is unsupported. On Windows, winget/Chocolatey/Scoop install the supported Node LTS line, and the portable fallback downloads Node 26.
+All three accept Node **24.16.0+ on 24.x or 26.1.0+** (24.22.1+/26.12.1+ strongly recommended for security) with a WAL-reset-safe linked SQLite library. When Node is missing and nvm is not detected, `install.sh` provisions Node 26 through Homebrew on macOS and the supported Node 24 LTS line through NodeSource on Linux. When a supported RPM-owned Node links unsafe SQLite, `install.sh` preserves the distro package and provisions a user-space Node runtime through `install-cli.sh`. The rootless `install-cli.sh` downloads Node 24.22.1 on macOS and glibc Linux. FreeBSD uses an installed system runtime. Linux ARMv7 is unsupported. On Windows, winget/Chocolatey/Scoop install the supported Node LTS line, and the portable fallback downloads Node 26.
 
 Before changing packages, every installer checks the exact npm executable it will use. npm 11.15 and earlier installs normally; npm 11.16 and later, including npm 12, receives `--allow-scripts` for only the npm-resolved OpenClaw candidate identity. An unreadable npm version stops before package mutation. A remaining `.openclaw-lifecycle-pending` marker or legacy `dist/openclaw-install-guard` makes the install fail instead of reporting a lifecycle-skipped package as successful.
 
@@ -149,7 +149,7 @@ checks also default to five minutes.
   <Step title="Install a supported Node.js runtime">
     <a id="ensure-a-supported-nodejs-runtime" />
     <a id="ensure-a-supported-node-js-runtime" />
-    Checks the Node version and linked SQLite library, then installs Node if needed (Node 26 through Homebrew `node` on macOS; Node 24 LTS through NodeSource setup scripts on Linux apt/dnf/yum). On RPM-based Linux, a supported distro Node that links unsafe SQLite remains installed while OpenClaw receives a user-space Node runtime. On macOS, Homebrew is installed only when the installer needs it for Node or Git. Node 24.22.1+ and Node 26.12.1+ are supported; Node 22, 23, and 25 are unsupported.
+    Checks the Node version and linked SQLite library, then installs Node if needed (Node 26 through Homebrew `node` on macOS; Node 24 LTS through NodeSource setup scripts on Linux apt/dnf/yum). On RPM-based Linux, a supported distro Node that links unsafe SQLite remains installed while OpenClaw receives a user-space Node runtime. On macOS, Homebrew is installed only when the installer needs it for Node or Git. Node 24.16.0+ on 24.x and Node 26.1.0+ are supported; 24.22.1+/26.12.1+ is strongly recommended for security; Node 22, 23, and 25 are unsupported.
     On Alpine/musl Linux, the installer uses apk packages instead of NodeSource and verifies the actual linked SQLite version. Current stable Alpine package streams can provide a new-enough Node with vulnerable system SQLite; when that happens, use an official `node:26.12.1-alpine` container or a glibc-based host instead.
   </Step>
   <Step title="Install Git if missing">
@@ -529,7 +529,7 @@ its existing service-refresh behavior.
   <Step title="Install a supported Node.js runtime">
     <a id="ensure-a-supported-nodejs-runtime-1" />
     <a id="ensure-a-supported-node-js-runtime-1" />
-    If missing, attempts install via winget, then Chocolatey, then Scoop. If those methods are unavailable, fail, or leave an unsupported runtime, the script downloads the official Node.js 26 Windows zip into `%LOCALAPPDATA%\OpenClaw\deps\portable-node` and adds it to the current process and user PATH. Node 24.22.1+ and Node 26.12.1+ are supported; Node 22, 23, and 25 are unsupported.
+    If missing, attempts install via winget, then Chocolatey, then Scoop. If those methods are unavailable, fail, or leave an unsupported runtime, the script downloads the official Node.js 26 Windows zip into `%LOCALAPPDATA%\OpenClaw\deps\portable-node` and adds it to the current process and user PATH. Node 24.16.0+ on 24.x and Node 26.1.0+ are supported; 24.22.1+/26.12.1+ is strongly recommended for security; Node 22, 23, and 25 are unsupported.
   </Step>
   <Step title="Install OpenClaw">
     - `npm` method (default): global npm install using the selected `-Tag`, launched from a writable installer temp directory so shells opened in protected folders such as `C:\` still work

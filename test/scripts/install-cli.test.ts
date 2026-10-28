@@ -1016,7 +1016,7 @@ fi
     const failed = install();
     expect(failed.status).toBe(1);
     expect(failed.stdout).toContain(
-      "Installed Node 24.22.1 must provide Node >= 24.22.1 with WAL-reset-safe SQLite",
+      "Installed Node 24.22.1 must provide Node >= 24.16.0 with WAL-reset-safe SQLite",
     );
     expect(failed.stdout).toContain("found Node unknown, SQLite unavailable");
     expectActive(oldRuntime, "v22.23.2");
@@ -1057,7 +1057,7 @@ fi
     [
       "vulnerable Node",
       "NODE_VERSION=24.14.1; install_node linux x64",
-      "Node 24.14.1 is unsupported; use Node 24.22.1+ or Node 26.12.1+.",
+      "Node 24.14.1 is unsupported; use Node 24.16.0+ or Node 26.1.0+.",
       "Installing Node 24.14.1",
     ],
     [

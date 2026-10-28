@@ -459,7 +459,7 @@ describe("resolveSystemNodeInfo", () => {
     );
 
     expect(warning).toBe(
-      `System Node 18.19.0 at ${darwinNode} is outside the supported range. Using ${selectedNode} for the daemon. Install Node >=24.22.1 <25, or >=26.12.1 (Node 26 recommended) from nodejs.org or Homebrew.`,
+      `System Node 18.19.0 at ${darwinNode} is outside the supported range. Using ${selectedNode} for the daemon. Install Node >=24.16.0 <25, or >=26.1.0 (Node 26 recommended) from nodejs.org or Homebrew.`,
     );
   });
 
@@ -491,7 +491,7 @@ describe("resolveSystemNodeInfo", () => {
 
     expect(warning).toContain("uses SQLite 3.51.2");
     expect(warning).toContain("not WAL-reset-safe");
-    expect(warning).toContain("Install Node >=24.22.1");
+    expect(warning).toContain("Install Node >=24.16.0");
   });
 
   it("renders a shared-system-SQLite remediation when Node is supported but the system library is unsafe", () => {
@@ -507,7 +507,7 @@ describe("resolveSystemNodeInfo", () => {
     expect(warning).toContain("uses shared system SQLite 3.51.2");
     expect(warning).toContain("not WAL-reset-safe");
     expect(warning).toContain("Upgrade the system SQLite library");
-    expect(warning).not.toContain("Install Node >=24.22.1");
+    expect(warning).not.toContain("Install Node >=24.16.0");
   });
 
   it("uses validated custom Program Files roots on Windows", async () => {

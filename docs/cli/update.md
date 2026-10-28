@@ -102,6 +102,8 @@ Cleanup warnings never fail or roll back the successful update. Manual
 `openclaw update cleanup` remains available for inspection and retry; see
 [recovery retirement](/cli/update/repair-and-recovery#update-cleanup).
 
+Compatible Node 24.16.0+ on 24.x and 26.1.0+ remain accepted. If the updater or selected service Node is below the recommended security patches (24.22.1/26.12.1), update prints a prominent warning and continues; this recommendation alone does not reject the update. SQLite capability and target-package compatibility checks still apply. Run `openclaw security audit` to review the local Node security-patch warning.
+
 ## Usage
 
 ```bash

@@ -44,6 +44,7 @@ import {
   type McporterRegistryRejectReason,
 } from "./audit-mcporter-registry.js";
 import { listConfiguredOpenInboundPolicyPaths } from "./audit-open-inbound.js";
+import { collectElevatedFindings, collectNodeRuntimeFindings } from "./audit-runtime.js";
 import type {
   SecurityAuditFinding,
   SecurityAuditReport,
@@ -429,36 +430,6 @@ async function collectPluginSecurityAuditFindings(
     }),
   );
   return collectorResults.flat();
-}
-
-function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
-  const findings: SecurityAuditFinding[] = [];
-  const enabled = cfg.tools?.elevated?.enabled;
-  const allowFrom = cfg.tools?.elevated?.allowFrom ?? {};
-
-  if (enabled === false) {
-    return findings;
-  }
-  for (const [provider, list] of Object.entries(allowFrom)) {
-    const normalized = normalizeStringEntries(Array.isArray(list) ? list : []);
-    if (normalized.includes("*")) {
-      findings.push({
-        checkId: `tools.elevated.allowFrom.${provider}.wildcard`,
-        severity: "critical",
-        title: "Elevated exec allowlist contains wildcard",
-        detail: `tools.elevated.allowFrom.${provider} includes "*" which effectively approves everyone on that channel for elevated mode.`,
-      });
-    } else if (normalized.length > 25) {
-      findings.push({
-        checkId: `tools.elevated.allowFrom.${provider}.large`,
-        severity: "warn",
-        title: "Elevated exec allowlist is large",
-        detail: `tools.elevated.allowFrom.${provider} has ${normalized.length} entries; consider tightening elevated access.`,
-      });
-    }
-  }
-
-  return findings;
 }
 
 function collectExecRuntimeFindings(
@@ -1016,6 +987,8 @@ export async function runSecurityAuditCore(
         .plugins.flatMap((plugin) => (plugin.packageChannel ? [plugin.packageChannel] : []))
     : [];
   const openInboundPolicies = listConfiguredOpenInboundPolicyPaths(cfg, channelMetadata);
+
+  findings.push(...collectNodeRuntimeFindings());
 
   findings.push(
     ...(await auditNonDeep.collectAttackSurfaceSummaryFindings(cfg, openInboundPolicies)),

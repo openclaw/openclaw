@@ -132,6 +132,19 @@ export async function resolveUpdateCommandTarget(
           recordUpdateCommandTarget(opts.run, { step });
         }
       };
+      const recordNodeSecurityWarning = (warning: string) => {
+        recordPreflightStep({
+          name: "node-security-patch",
+          command: "inspect Node.js security patch level",
+          cwd: root,
+          durationMs: 0,
+          exitCode: 0,
+          warnings: [warning],
+        });
+      };
+      if (prepared.nodeSecurityWarning) {
+        recordNodeSecurityWarning(prepared.nodeSecurityWarning);
+      }
       const resolveMode = async (): Promise<UpdateRunResult["mode"]> => {
         // Policy/config refusals can precede target preparation. Inspect their owner too.
         return updateInstallKind === "git"
@@ -615,6 +628,13 @@ export async function resolveUpdateCommandTarget(
             runtime.recoverySteps,
           );
           return undefined;
+        }
+        if (
+          runtime.value.nodeSecurityWarning &&
+          runtime.value.nodeSecurityWarning !== prepared.nodeSecurityWarning
+        ) {
+          warn(`SECURITY WARNING: ${runtime.value.nodeSecurityWarning}`);
+          recordNodeSecurityWarning(runtime.value.nodeSecurityWarning);
         }
       }
 

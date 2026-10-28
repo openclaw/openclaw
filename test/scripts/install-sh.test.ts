@@ -2149,7 +2149,7 @@ EOF
     const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
       engines?: { node?: string };
     };
-    expect(pkg.engines?.node).toBe(">=24.22.1 <25 || >=26.12.1");
+    expect(pkg.engines?.node).toBe(">=24.16.0 <25 || >=26.1.0");
 
     const tmp = tempDirs.make("openclaw-install-node-floor-");
     const bin = join(tmp, "bin");
@@ -2197,7 +2197,11 @@ EOF
     [
       { version: "24.22.1", defect: "none", expected: 0 },
       { version: "24.22.1", defect: "text", expected: 1 },
+      { version: "24.16.0+vendor.1", defect: "none", expected: 0 },
+      { version: "26.1.0", defect: "none", expected: 0 },
+      { version: "24.16.0", defect: "text", expected: 1 },
       { version: "24.15.0+vendor.1", defect: "none", expected: 1 },
+      { version: "26.0.0+vendor.1", defect: "none", expected: 1 },
       { version: "24.22.1", defect: "blob", expected: 1 },
       { version: "24.22.1", defect: "json", expected: 1 },
     ].flatMap(({ version, defect, expected }) =>
