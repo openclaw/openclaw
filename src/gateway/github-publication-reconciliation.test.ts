@@ -586,7 +586,9 @@ it.skipIf(!process.env.OPENCLAW_GH_CLI_PATH)(
         });
       },
     );
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     const address = server.address();
     if (!address || typeof address === "string") {
       throw new Error("The local GitHub API fixture did not bind to a TCP port.");
@@ -626,7 +628,9 @@ it.skipIf(!process.env.OPENCLAW_GH_CLI_PATH)(
         if (argv.includes("push") || argv.includes("graphql")) {
           await observePush();
           pushed = true;
-          if (phase === "update") readbackAvailable = false;
+          if (phase === "update") {
+            readbackAvailable = false;
+          }
         }
         return response;
       },
@@ -682,7 +686,9 @@ it.skipIf(!process.env.OPENCLAW_GH_CLI_PATH)(
       await persistTrace();
     } finally {
       await persistTrace();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
       await fs.rm(proofDirectory, { recursive: true, force: true });
     }
   },
