@@ -10,6 +10,7 @@ structured claims, then verify them. Read a reference only when its step needs i
 
 - [setup](references/setup.md): always, first (status, ontology, search)
 - [source acquisition](references/source-acquisition.md): fetching from an API, including Granola
+  through its plugin
 - [sources](references/sources.md): retaining originals; citation format
 - [speakers](references/speakers.md): possible split, duplicate or unclear speaker
 - [identity](references/identity.md): resolving a person, company or project
@@ -168,3 +169,44 @@ unresolved identities and remaining work here, in the report, not on the pages;
 the user resolves them. If a check can't pass, report the meeting as not
 ingested and name the check. A partial report is honest progress, not
 completion.
+
+## Scribe runs
+
+The **Learn from Granola** scribe runs this skill unattended. Its prompt checks
+access, sets up any automation and lists its settings; this section is only the
+work. Do not ask questions. Acquire with the Granola plugin's tools
+([source acquisition](references/source-acquisition.md)).
+
+### Learn from Granola
+
+The prompt names which meetings (the owner's, or every meeting the account can
+read) and how far back to start (today, or the last 7 or 30 days, in the owner's
+time zone).
+
+1. **Plugin.** Tool search for `granola list_meetings`. If the Granola tools
+   are missing or say the account is not connected, stop with
+   `Scribe status: failed — the Granola plugin is not installed or connected`.
+2. **Checkpoint.** `knowledge_lookup` the note page
+   `Knowledge scribe checkpoint · Learn from Granola`. Its body lists one line
+   per Granola meeting handled: meeting date, UUID, `updated_at`, and the outcome (meeting
+   page title, `already in Knowledge`, or `no transcript`). Create it with
+   `knowledge_save_page` (type `note`) on the first run.
+3. **List.** `list_meetings` from the prompt's start date on the first run,
+   otherwise from 7 days before the newest meeting date in the checkpoint,
+   through today.
+   For the owner's meetings pass
+   `involvement: {captured_by_me: true, listed_as_participant: true}`. Follow
+   `next_cursor`. Skip meetings already in the checkpoint, unless a later
+   `updated_at` shows a note that was still being written last time.
+4. **Dedup.** Before acquiring, `knowledge_grep` the UUID, then the meeting
+   title, and read candidate meeting pages with the same date (±1 day). A
+   match is recorded as `already in Knowledge` and skipped.
+5. **Ingest.** Oldest first, one meeting at a time, run steps 1–5 of this skill
+   in full. Leave a meeting still being recorded or with a pending transcript
+   for the next run; record `no transcript` for one that has none. After each
+   meeting passes verification, add its checkpoint line with
+   `knowledge_edit_body`, so an interrupted run resumes instead of redoing it.
+   A meeting that fails verification gets no line; say so in the counts. If
+   context runs short, stop after the current meeting and leave the rest.
+6. Count meetings ingested, already in Knowledge, skipped and left for later,
+   and pages and claims written.
