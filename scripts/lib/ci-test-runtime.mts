@@ -104,6 +104,7 @@ const nodeRequiredFiles = new Set([
   // Consumed async-loader retention is specific to V8's suspended frames.
   "src/agents/harness/lifecycle-hook-helpers.test.ts",
   // JavaScriptCore's conservative stack scanning cannot prove forced WeakRef collection.
+  "src/agents/agent-tools.execution-validation.test.ts",
   "src/config/sessions/session-accessor.pending-input-retention.test.ts",
   "src/gateway/session-list-history-retention.test.ts",
   "src/gateway/session-row-projection.retention.test.ts",
