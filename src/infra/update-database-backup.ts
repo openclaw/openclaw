@@ -274,6 +274,7 @@ export async function createUpdateDatabaseBackupInProcess(
   const { warnings } = await checkUpdateDatabaseBackupSpace(
     directory,
     await measureUpdateStateFiles(inventory.present),
+    input,
   );
   const { buildBackupArchivePath } = await import("../commands/backup-shared.js");
   const { createStoppedSqliteSnapshot, createVerifiedSqliteSnapshot } =

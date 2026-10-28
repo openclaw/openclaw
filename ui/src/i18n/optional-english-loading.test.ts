@@ -21,7 +21,7 @@ it("keeps sidebar and chat actions readable until the session management dialog 
   ]);
 
   expect(manager.t("sessionsView.searchGroups")).toBe("sessionsView.searchGroups");
-  expect(manager.t("sessionsView.personalGroupNew")).toBe("New personal group");
+  expect(manager.t("sessionsView.personalGroupNew")).toBe("New section");
   expect(manager.t("sessionsView.personalGroupEdit")).toBe("sessionsView.personalGroupEdit");
   expect(manager.t("sessionsView.archiveReasonManual")).toBe("Archived manually");
   expect(manager.t("sessionsView.stopCloudWorkerConfirm", { session: "Build" })).toBe(
@@ -32,7 +32,7 @@ it("keeps sidebar and chat actions readable until the session management dialog 
 
   await import("../components/personal-session-group-dialog-view.tsx");
   expect(manager.t("sessionsView.searchGroups")).toBe("Search groups");
-  expect(manager.t("sessionsView.personalGroupEdit")).toBe("Edit personal group");
+  expect(manager.t("sessionsView.personalGroupEdit")).toBe("Edit section");
   expect(manager.t("sessionsView.goal")).toBe("Ziel");
   expect(manager.getLocale()).toBe("de");
   expect(en.sessionsView).toBe(sessionsView);
