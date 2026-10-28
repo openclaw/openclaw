@@ -7,8 +7,11 @@ import {
   persistPublicationTestSession,
   root,
 } from "./github-publication.test-support.js";
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -25,6 +28,7 @@ import {
 import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
 
 const mocks = githubPublicationTestMocks();
+const execFileAsync = promisify(execFile);
 const checkpoint = vi.hoisted(() => vi.fn());
 vi.mock("./worker-environments/session-repository-checkpoints.js", () => ({
   withSessionRepositoryCheckpoint: (...args: unknown[]) => checkpoint(...args),
@@ -450,3 +454,236 @@ it("creates a new local publication request with unchanged content after its ori
     mocks.runCommand.mock.calls.slice(beforeNewRequest).filter(([argv]) => isPullCreation(argv)),
   ).toHaveLength(1);
 });
+
+it("allows fresh creation after restart reconciles an interrupted closed update", async () => {
+  const { f, first, pullRequest, transport, observePush } =
+    await prepareExistingPullRequest("local");
+  let pushed = false;
+  let readbackAvailable = true;
+  let phase = "update";
+  mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+    if (argv.includes("state=all")) {
+      return pushed && !readbackAvailable
+        ? commandResult("", 1)
+        : commandResult(JSON.stringify([pullRequest]));
+    }
+    const response = await transport(argv, options);
+    if (argv.includes("push") || argv.includes("graphql")) {
+      await observePush();
+      pushed = true;
+      if (phase === "update") {
+        readbackAvailable = false;
+      }
+    }
+    return response;
+  });
+
+  const idempotencyKey = "interrupted-closed-update-then-fresh-request";
+  const publication = f.coordinator.requestForSessionV2(f.request(idempotencyKey, f.guest));
+  await expect(publication).rejects.toBeInstanceOf(GitHubPublicationRecoveryPendingError);
+  const requestId = readGitHubPublicationRequest(f.database.db, {
+    sessionId: f.session.sessionId,
+    idempotencyKey,
+  })!.request_id;
+  const acceptedWrites = [...f.externalWrites];
+
+  pullRequest.state = "closed";
+  readbackAvailable = true;
+  phase = "restart";
+  await f.restart().resumeSessionRequests();
+  expect(f.readReceipt(requestId)).toMatchObject({
+    status: "published",
+    pull_request_url: first.url,
+    head_commit: pullRequest.headSha,
+  });
+  expect(f.externalWrites).toEqual(acceptedWrites);
+
+  phase = "fresh-request";
+  const beforeFreshRequest = mocks.runCommand.mock.calls.length;
+  const fresh = await f.coordinator.requestForSessionV2(
+    f.request("fresh-after-interrupted-closed-update", f.guest),
+  );
+  expect(fresh.status).toBe("published");
+  expect(
+    mocks.runCommand.mock.calls.slice(beforeFreshRequest).filter(([argv]) => isPullCreation(argv)),
+  ).toHaveLength(1);
+});
+
+it.skipIf(!process.env.OPENCLAW_GH_CLI_PATH)(
+  "recovers an interrupted closed update through the real gh client and preserves fresh creation",
+  async () => {
+    const { f, first, pullRequest, transport, observePush } =
+      await prepareExistingPullRequest("local");
+    const trace: string[] = [];
+    let phase = "update";
+    let pushed = false;
+    let readbackAvailable = true;
+    const proofDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gh-e2e-"));
+    const keyPath = path.join(proofDirectory, "gateway.key");
+    const certificatePath = path.join(proofDirectory, "gateway.crt");
+    const configDirectory = path.join(proofDirectory, "config");
+    await fs.mkdir(configDirectory);
+    await execFileAsync("openssl", [
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-nodes",
+      "-keyout",
+      keyPath,
+      "-out",
+      certificatePath,
+      "-subj",
+      "/CN=localhost",
+      "-addext",
+      "subjectAltName=DNS:localhost,IP:127.0.0.1",
+      "-days",
+      "1",
+    ]);
+    const https = await import("node:https");
+    const server = https.createServer(
+      {
+        key: await fs.readFile(keyPath),
+        cert: await fs.readFile(certificatePath),
+      },
+      (req, res) => {
+        const pathname = new URL(req.url ?? "/", "https://localhost").pathname;
+        req.resume();
+        req.on("end", () => {
+          const send = (status: number, value: unknown) => {
+            const body = JSON.stringify(value);
+            res.writeHead(status, {
+              "content-type": "application/json",
+              "content-length": Buffer.byteLength(body),
+            });
+            res.end(body);
+          };
+          const auth = req.headers.authorization ? "[redacted]" : "none";
+          if (req.method === "GET" && pathname === "/repos/openclaw/openclaw/pulls") {
+            const status = pushed && !readbackAvailable ? 503 : 200;
+            trace.push(`${phase} GET ${pathname} status=${status} Authorization=${auth}`);
+            return status === 503
+              ? send(status, { message: "fixture readback temporarily unavailable" })
+              : send(status, [
+                  {
+                    html_url: pullRequest.url,
+                    user: { id: pullRequest.userId },
+                    state: pullRequest.state,
+                    body: pullRequest.body,
+                    head: { sha: pullRequest.headSha, ref: pullRequest.headRef },
+                    base: { ref: pullRequest.baseRef },
+                  },
+                ]);
+          }
+          if (req.method === "POST" && pathname === "/repos/openclaw/openclaw/pulls") {
+            trace.push(
+              `${phase} POST ${pathname} status=201 Authorization=${auth} body=[redacted]`,
+            );
+            return send(201, { html_url: "https://github.com/openclaw/openclaw/pull/1000" });
+          }
+          trace.push(`${phase} ${req.method ?? "?"} ${pathname} status=404 Authorization=${auth}`);
+          return send(404, { message: "fixture route not found" });
+        });
+      },
+    );
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("The local GitHub API fixture did not bind to a TCP port.");
+    }
+    await fs.writeFile(
+      path.join(configDirectory, "hosts.yml"),
+      "github.com:\n    api_host: localhost:" + address.port + "\n",
+    );
+    const ghCliDirectory = path.dirname(process.env.OPENCLAW_GH_CLI_PATH!);
+    const persistTrace = async () => {
+      const tracePath = process.env.OPENCLAW_GH_E2E_TRACE_FILE;
+      if (tracePath) {
+        await fs.writeFile(tracePath, trace.join("\n") + "\n");
+      }
+    };
+    const apiEnv: NodeJS.ProcessEnv = {
+      PATH: [ghCliDirectory, process.env.PATH].filter(Boolean).join(path.delimiter),
+      HOME: process.env.HOME ?? proofDirectory,
+      GH_CONFIG_DIR: configDirectory,
+      GH_TOKEN: "fixture-only-token",
+      SSL_CERT_FILE: certificatePath,
+    };
+    mocks.prepareIdentity.mockResolvedValue({
+      source: "system-configured",
+      profileId: "fixture-profile",
+      account: { accountId: pullRequest.userId, login: "fixture-bot", avatarUrl: null },
+      env: apiEnv,
+    });
+    const { runCommandBuffered: runReal } =
+      await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
+    mocks.runCommand.mockImplementation(
+      async (argv: string[], options?: { input?: string; env?: NodeJS.ProcessEnv }) => {
+        if (argv[0] === "gh" && (argv.includes("state=all") || isPullCreation(argv))) {
+          return await runReal(argv, { ...options, env: { ...apiEnv, ...options?.env } });
+        }
+        const response = await transport(argv, options);
+        if (argv.includes("push") || argv.includes("graphql")) {
+          await observePush();
+          pushed = true;
+          if (phase === "update") readbackAvailable = false;
+        }
+        return response;
+      },
+    );
+
+    try {
+      const publication = f.coordinator.requestForSessionV2(
+        f.request("real-client-interrupted-update", f.guest),
+      );
+      await expect(publication).rejects.toBeInstanceOf(GitHubPublicationRecoveryPendingError);
+      expect(pushed).toBe(true);
+      expect(
+        trace.some((entry) => entry.startsWith("update GET") && entry.includes("status=503")),
+      ).toBe(true);
+      expect(trace.some((entry) => entry.includes("POST /repos/openclaw/openclaw/pulls"))).toBe(
+        false,
+      );
+
+      pullRequest.state = "closed";
+      readbackAvailable = true;
+      phase = "restart";
+      const beforeRestart = trace.length;
+      const requestId = readGitHubPublicationRequest(f.database.db, {
+        sessionId: f.session.sessionId,
+        idempotencyKey: "real-client-interrupted-update",
+      })!.request_id;
+      const restarted = f.restart();
+      await restarted.resumeSessionRequests();
+      expect(await restarted.readAsync(requestId)).toMatchObject({
+        status: "published",
+        url: first.url,
+      });
+      expect(
+        trace
+          .slice(beforeRestart)
+          .filter((entry) => entry.includes("POST /repos/openclaw/openclaw/pulls")),
+      ).toHaveLength(0);
+
+      phase = "fresh-request";
+      const beforeFresh = trace.length;
+      const fresh = await f.coordinator.requestForSessionV2(
+        f.request("real-client-fresh-after-close", f.guest),
+      );
+      expect(fresh).toMatchObject({
+        status: "published",
+        url: "https://github.com/openclaw/openclaw/pull/1000",
+      });
+      expect(
+        trace
+          .slice(beforeFresh)
+          .filter((entry) => entry.includes("POST /repos/openclaw/openclaw/pulls")),
+      ).toHaveLength(1);
+      await persistTrace();
+    } finally {
+      await persistTrace();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await fs.rm(proofDirectory, { recursive: true, force: true });
+    }
+  },
+);

@@ -325,7 +325,8 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     );
     const [initialHead, currentTree, parents, ...message] = head.split("\n");
     let headCommit = initialHead!;
-    const currentMessage = message.join("\n").trim();
+    const markerPresent = message.join("\n").trim().split(/\r?\n/u).includes(marker);
+    const requestHeadCommit = markerPresent ? row.head_commit : undefined;
     const findPullRequest = () =>
       findGitHubPublicationPullRequest({
         repository,
@@ -334,7 +335,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         branch,
         baseBranch,
         host: githubHost,
-        ...requestHeadFields(headCommit, row.head_commit, sourceHeadCommit),
+        ...requestHeadFields(headCommit, requestHeadCommit, sourceHeadCommit),
         marker: pullRequestMarker,
         refreshIdentity,
         recordObserved: async (url) => {
@@ -343,7 +344,6 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         },
         assertCurrent,
       });
-    const markerPresent = currentMessage.split(/\r?\n/u).includes(marker);
     if (markerPresent) {
       if (parents!.split(" ", 1)[0] !== sourceHeadCommit || currentTree !== workspaceTree) {
         throw new GitHubPublicationWorkspaceChangedError(
