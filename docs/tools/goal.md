@@ -125,6 +125,8 @@ In textual CLI/TUI commands, starting a second goal still fails with
   objective and records the error as a status note; sending an ordinary message
   does not automatically resume the goal. Errors that recover through a retry
   do not pause it.
+  A definitive restart-recovery failure also pauses an active goal and records
+  its reason, rather than leaving stopped work labeled as pursuing the goal.
 - `blocked`: the agent or operator reported a real blocker. `/goal resume`
   makes it active again when new information or state is available.
 - `budget_limited`: the configured token budget was reached. `/goal resume`

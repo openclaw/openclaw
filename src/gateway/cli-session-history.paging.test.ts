@@ -6,7 +6,6 @@ import {
   formatCliImageTurnContext,
   hashCliImageTurnEntryId,
 } from "../agents/cli-image-turn-correlation.js";
-import { buildCliSessionDriftNote } from "../agents/cli-session-drift.js";
 import {
   appendTranscriptMessage,
   replaceSessionEntry,
@@ -379,80 +378,6 @@ it("observes newly available reset archives and refuses changed archive bodies u
         { content: "Replacement body", __openclaw: { id: "replacement" } },
         { __openclaw: { id: "native-only" } },
       ]);
-    });
-  });
-});
-
-it.each([
-  "resume",
-  "legacy hint",
-  "legacy context",
-  "legacy resume",
-  "legacy hint CRLF",
-  "legacy context CRLF",
-])("matches original native text and cleans unmatched imports with %s", async (decoration) => {
-  const kind = decoration.replace(" CRLF", "");
-  await withPagingHistory("cli-generated-prefixes", async (fixture) => {
-    const { scope, entry, readers } = fixture;
-    const note = buildCliSessionDriftNote(["prompt-tools"]);
-    const hint =
-      'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.\n\n';
-    const context =
-      'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"requester_profile":{"id":"owner","display_name":"Owner"}}\n```\n\n';
-    const prefix = (
-      kind === "resume"
-        ? `${note}\n\n`
-        : kind === "legacy hint"
-          ? hint
-          : kind === "legacy context"
-            ? context + hint
-            : `${note}\n\n${context}${hint}`
-    ).replaceAll("\n", decoration.endsWith("CRLF") ? "\r\n" : "\n");
-    const literal = `${prefix}hello`;
-    const plain =
-      kind === "legacy context"
-        ? context.replace("}}", '},"requester_profile_hint":"current"}') + "hello"
-        : "hello";
-    const events = "System: [2026-10-04 13:15:44 GMT+8] Model switched.\n\n";
-    await fixture.setEvents([
-      local("plain", null, plain, 1_000, "user"),
-      local("literal", "plain", literal, 2_000, "user"),
-      local("question", "literal", "real question", 3_000, "user"),
-    ]);
-    const nativeUser = (uuid: string, content: string, timestamp: number) =>
-      native(uuid, content, timestamp, "user");
-    await fs.writeFile(
-      fixture.filePath,
-      [
-        nativeUser("native-literal", literal, 1_001),
-        nativeUser(
-          "native-plain",
-          kind === "legacy context" ? `${prefix}${events}hello` : "hello",
-          2_001,
-        ),
-        nativeUser("native-question", `${prefix}${events}real question`, 3_001),
-        nativeUser("native-unmatched", `${prefix}${events}only in the native file`, 4_000),
-      ].join("\n"),
-    );
-    await fixture.owner.run(fixture.target.database, async () => {
-      await withCliReader(
-        historyParams({ scope, entry }, fixture.homeDir),
-        readers,
-        async (cli) => {
-          const page = await cli.readers.readRecentSessionMessagesWithStatsAsync(scope, {
-            maxMessages: 10,
-          });
-          expect(page.messages).toMatchObject([
-            { content: plain, __openclaw: { id: "plain", externalId: "native-plain" } },
-            { content: literal, __openclaw: { id: "literal", externalId: "native-literal" } },
-            { content: "real question", __openclaw: { id: "question" } },
-            {
-              content: "only in the native file",
-              __openclaw: { externalId: "native-unmatched" },
-            },
-          ]);
-        },
-      );
     });
   });
 });

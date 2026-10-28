@@ -21,7 +21,10 @@ import { readResidentUserProfileAliases } from "../../state/user-profile-list.js
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
-import { recordCommittedSessionMetadataPublication } from "./session-accessor.sqlite-entry-cache-publication-state.js";
+import {
+  recordCommittedSessionMetadataPublication,
+  retainedSharingReads,
+} from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import {
   bindPreparedSessionEntryPublication,
   commitSessionSharingFieldChange,
@@ -35,10 +38,12 @@ import {
   resolveSqliteWriteAdmissionScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { publishRetainedSessionEntryPredicate } from "./session-accessor.sqlite-sharing-acquisition.js";
 import type { SessionActorMemoryCollaborationCommand } from "./session-actor-memory-collaboration-contract.js";
 import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
+import type { SessionEntryMetadataFact } from "./session-entry-metadata-receipt.js";
 import type { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
 import { readSessionCollaborationCandidate } from "./session-sharing-store.receipt.js";
 import type {
@@ -190,6 +195,7 @@ export async function runSessionCollaborationWrite<
           let activeAdmission: RetainedWorkerTransactionAdmission | undefined;
           let mutationAdmission: typeof activeAdmission;
           let candidate: SessionSharingCommitReceipt | undefined;
+          const entryMetadata = new Map<string, SessionEntryMetadataFact>();
           const worker = await openOpenClawAgentSqliteWorkerStore<SessionSharingWorkerOperations>(
             options,
             { execution },
@@ -213,6 +219,13 @@ export async function runSessionCollaborationWrite<
                       identity,
                     ),
                   );
+                  for (const metadata of candidate.entryMetadata ?? []) {
+                    for (const [key, fact] of metadata.facts) {
+                      if (fact.kind === "postimage") {
+                        entryMetadata.set(key, fact.value);
+                      }
+                    }
+                  }
                 }
                 return request;
               },
@@ -249,8 +262,17 @@ export async function runSessionCollaborationWrite<
                       memberships,
                       publicationKeys,
                       participantProjections,
-                      undefined,
+                      entryMetadata.size > 0
+                        ? new Map([...entryMetadata].map(([key, value]) => [key, value.entry]))
+                        : undefined,
                       sharingAuthorityChanged,
+                      entryMetadata.size > 0
+                        ? new Map(
+                            [...entryMetadata].flatMap(([key, value]) =>
+                              value.fullEntry ? [[key, value.fullEntry] as const] : [],
+                            ),
+                          )
+                        : undefined,
                     );
                   }
                 }
@@ -288,7 +310,21 @@ export async function runSessionCollaborationWrite<
                         changes,
                         (currentKeys, invalidations, release) => {
                           for (const [sessionKey, fact] of receipt.publication.facts) {
-                            if (!currentKeys.has(sessionKey) || fact.kind !== "postimage") {
+                            if (fact.kind !== "postimage") {
+                              continue;
+                            }
+                            const metadata = entryMetadata.get(sessionKey);
+                            if (!currentKeys.has(sessionKey)) {
+                              // A later receipt cannot erase a mismatch observed at this commit.
+                              if (metadata) {
+                                for (const read of retainedSharingReads(identity, sessionKey) ??
+                                  []) {
+                                  publishRetainedSessionEntryPredicate(read, metadata.entry, true, {
+                                    preserveMatchingEntry: true,
+                                    fullEntry: metadata.fullEntry,
+                                  });
+                                }
+                              }
                               continue;
                             }
                             for (const change of fact.value) {
@@ -303,6 +339,8 @@ export async function runSessionCollaborationWrite<
                                   identity,
                                   sessionKey,
                                   change,
+                                  metadata?.entry,
+                                  metadata?.fullEntry,
                                 );
                               }
                               if (

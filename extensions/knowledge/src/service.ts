@@ -53,10 +53,12 @@ const WRITE_TOOLS = new Set([
   "knowledge_remember",
   "knowledge_relink",
   "knowledge_edit_body",
+  "knowledge_extract_section",
   "knowledge_reconcile_evidence",
   "knowledge_save_page",
   "knowledge_correct",
   "knowledge_withdraw",
+  "knowledge_supersede",
   "knowledge_merge",
   "knowledge_unmerge",
   "knowledge_recall",
@@ -254,6 +256,7 @@ export function createKnowledgeService(
       annotate: agentChange("annotate"),
       reconcile_evidence: agentChange("reconcileEvidence"),
       edit_body: agentChange("editBody"),
+      extract_section: agentChange("extractSection"),
       timeline: (input, context) =>
         call("timeline", false, () => emptyChronicle(input))(input, context),
       chronicle_day: (input, context) =>
@@ -354,6 +357,7 @@ export function createKnowledgeService(
       create_relationship: authored("createRelationship"),
       correct: agentChange("correct"),
       withdraw: agentChange("withdraw"),
+      supersede: agentChange("supersede"),
       merge: agentChange("merge"),
       unmerge: agentChange("unmerge"),
       recall: (input, context) => {

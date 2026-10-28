@@ -132,9 +132,10 @@ function fixture() {
       const target = targets.get(key);
       return target ? { status: "ready", target } : { status: "missing" };
     },
+    hasMembership: () => false,
   } satisfies Pick<
     SessionRowProjection,
-    "getPolicyConfig" | "sharingRevision" | "sharingTargetState"
+    "getPolicyConfig" | "sharingRevision" | "sharingTargetState" | "hasMembership"
   >;
   return {
     clients,

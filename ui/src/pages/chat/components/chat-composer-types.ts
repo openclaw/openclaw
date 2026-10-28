@@ -90,7 +90,8 @@ export type ChatComposerDisabledBanner = {
   stop?: { onAbort: () => void };
 } & ({ actionLabel: string; onAction: () => void } | { actionLabel?: never; onAction?: never });
 
-export type ChatSessionProgressProps = {
+export type ChatSessionProgressProps = import("../chat-spawned-subagent.ts").SubagentRoster & {
+  connected?: boolean;
   sessionKey: string;
   currentAgentId: string;
   progressCard?: ProgressCard | null;

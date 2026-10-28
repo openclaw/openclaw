@@ -37,6 +37,12 @@ browser transport preserves control of its accepted work. The legacy
 `talk.client.steer` RPC remains session-scoped: it selects owned work by
 `sessionKey`, not by a voice call ID.
 
+If a hot configuration change moves that session's storage route, a new native
+provider consultation rejects the old target before updating consultation metadata
+or starting model work. Start a new call to use the current route. Changing only
+the default Talk agent preserves an existing call's selected agent, and ending
+its audio transport does not cancel work already accepted by the Gateway.
+
 Native steering uses the current caller's tool policy and session permissions. The
 host captures the actual backend attempt's authority after policy preparation and
 checks that exact owner again before delivering a control. Changed caller authority, tool

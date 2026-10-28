@@ -214,6 +214,7 @@ function MobileGroupRows(props: {
   folder: boolean;
   search: string;
   onBrowsePath: SessionWorkspaceProps["onBrowsePath"];
+  onBrowseFiles: () => void;
   onOpenFileInsideFiles: SessionWorkspaceProps["onOpenFile"];
   onOpenArtifactInsideFiles: SessionWorkspaceProps["onOpenArtifact"];
 }) {
@@ -273,9 +274,20 @@ function MobileGroupRows(props: {
         </For>
       </ul>
       <Show when={workspace()?.truncated}>
-        <p class="chat-workspace-mobile__notice" role="status">
-          {t("chat.workspaceFiles.truncated")}
-        </p>
+        <div class="chat-workspace-mobile__notice">
+          <div role="status">
+            {t(
+              props.search.trim()
+                ? "chat.workspaceFiles.searchIncomplete"
+                : "chat.workspaceFiles.truncated",
+            )}
+          </div>
+          <Show when={props.search.trim()}>
+            <button type="button" class="btn" onClick={() => props.onBrowseFiles()}>
+              {t("chat.workspaceFiles.browseFiles")}
+            </button>
+          </Show>
+        </div>
       </Show>
     </>
   );
@@ -480,6 +492,7 @@ export function MobileWorkspaceContents(props: {
   function View(view: { status: SessionWorkspaceMobileStatus }) {
     let scroll!: HTMLDivElement;
     let content!: HTMLDivElement;
+    let searchField: HTMLInputElement | undefined;
     const folderLocation = () => {
       const current = location();
       return current.kind === "folder" ? current : undefined;
@@ -522,7 +535,12 @@ export function MobileWorkspaceContents(props: {
               type="search"
               placeholder={searchLabel()}
               aria-label={searchLabel()}
-              ref={liveValue(() => query())}
+              ref={[
+                liveValue(() => query()),
+                (element) => {
+                  searchField = element;
+                },
+              ]}
               onInput={(event) => props.workspace.onSearch(event.currentTarget.value)}
             />
           </label>
@@ -627,6 +645,10 @@ export function MobileWorkspaceContents(props: {
                         folder={folder()}
                         search={query()}
                         onBrowsePath={onBrowsePath}
+                        onBrowseFiles={() => {
+                          props.workspace.onSearchOpenChange?.(false);
+                          searchField?.focus({ preventScroll: true });
+                        }}
                         onOpenFileInsideFiles={(file, origin) =>
                           props.workspace.onOpenFile(file, origin)
                         }

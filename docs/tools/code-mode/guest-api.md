@@ -251,6 +251,10 @@ retain the native MCP result (`content`, optional `structuredContent`, and
 optional `isError`). Exact catalog ids and raw `{ tool, result }` envelopes are
 not guest-visible.
 
+Native Gateway and sandbox exec workdir errors and foreground process failures
+include their concise diagnostic in `message`, with command output in `aggregated`. Returned failures
+remain values; thrown tool errors remain catchable.
+
 The `ls`, `find`, and `grep` tools include their bounded listing or search text
 in `content`, including empty-result messages and truncation notices. Directory
 pages retain `nextAfter`; search results retain their existing limit and

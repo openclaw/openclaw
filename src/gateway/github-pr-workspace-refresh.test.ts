@@ -44,6 +44,8 @@ describe("imported PR source refresh", () => {
         preparedHeadCommit: f.headCommit,
       });
       await f.advanceHead({ "newer-pr.txt": "remote advanced during recovery\n" });
+      f.pr.base.ref = "new-destination";
+      f.pr.base.sha = f.headCommit;
       if (boundRuntime) {
         expect(runtime?.isPaused()).toBe(true);
       } else {
@@ -96,7 +98,9 @@ describe("imported PR source refresh", () => {
         status: "prepared",
         headCommit: acceptedHead,
         headChanged: true,
+        review: { mode: "local", base: f.headCommit },
       });
+      expect(f.readSession().worktree?.githubPullRequest?.base.branch).toBe("new-destination");
       expect(f.readSession().worktree?.githubPullRequest?.preparedHeadCommit).toBe(acceptedHead);
       expect(await f.guestGit("show", ":pr.txt")).toBe("remote PR update");
       expect(await f.invoke()).toMatchObject({

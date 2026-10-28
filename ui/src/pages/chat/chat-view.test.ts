@@ -339,53 +339,31 @@ describe("chat history pagination", () => {
   it("keeps earlier history discoverable and retryable until the transcript is exhausted", () => {
     const onShowEarlier = vi.fn();
     const container = createComposerContainer();
-    renderChatInto(container, {
-      historyPagination: { hasMore: true, loading: false, onShowEarlier },
-    });
-
-    const button = requireElement(
-      container,
-      ".chat-history-boundary__action",
-      "earlier history action",
-    ) as HTMLButtonElement;
-    expect(button.textContent).toContain("Show earlier");
-    expect(button.getAttribute("aria-label")).toBe("Show earlier");
-    expect(button.getAttribute("aria-busy")).toBe("false");
-    expect(button.disabled).toBe(false);
-    expect(button.closest(".chat-thread")).not.toBeNull();
-    button.click();
-    expect(onShowEarlier).toHaveBeenCalledOnce();
-
-    renderChatInto(container, {
-      historyPagination: { hasMore: true, loading: true, onShowEarlier },
-    });
-    const loadingButton = requireElement(
-      container,
-      ".chat-history-boundary__action",
-      "loading earlier history action",
-    ) as HTMLButtonElement;
-    expect(loadingButton.textContent?.trim()).toBe("Loading earlier…");
-    expect(loadingButton.getAttribute("aria-label")).toBe("Loading earlier…");
-    expect(loadingButton.getAttribute("aria-busy")).toBe("true");
-    expect(loadingButton.getAttribute("aria-disabled")).toBe("true");
-    expect(loadingButton.closest(".chat-history-boundary--loading")).not.toBeNull();
-    loadingButton.click();
-    expect(onShowEarlier).toHaveBeenCalledOnce();
-
-    renderChatInto(container, {
-      historyPagination: { hasMore: true, loading: false, onShowEarlier },
-    });
-    const retryButton = requireElement(
-      container,
-      ".chat-history-boundary__action",
-      "retry earlier history action",
-    ) as HTMLButtonElement;
-    expect(retryButton.textContent?.trim()).toBe("Show earlier");
-    expect(retryButton.getAttribute("aria-label")).toBe("Show earlier");
-    expect(retryButton.getAttribute("aria-busy")).toBe("false");
-    expect(retryButton.disabled).toBe(false);
-    retryButton.click();
-    expect(onShowEarlier).toHaveBeenCalledTimes(2);
+    for (const [loading, label, clicks] of [
+      [false, "Show earlier", 1],
+      [true, "Loading earlier…", 1],
+      [false, "Show earlier", 2],
+    ] as const) {
+      renderChatInto(container, {
+        historyPagination: { hasMore: true, loading, onShowEarlier },
+      });
+      const button = requireElement(
+        container,
+        ".chat-history-boundary__action",
+        "earlier history action",
+      ) as HTMLButtonElement;
+      expect(button.querySelector('[role="status"]')?.textContent?.trim()).toBe(label);
+      expect(button.getAttribute("aria-label")).toBe(label);
+      expect(button.getAttribute("aria-busy")).toBe(String(loading));
+      expect(button.disabled).toBe(false);
+      expect(button.closest(".chat-thread")).not.toBeNull();
+      if (loading) {
+        expect(button.getAttribute("aria-disabled")).toBe("true");
+        expect(button.closest(".chat-history-boundary--loading")).not.toBeNull();
+      }
+      button.click();
+      expect(onShowEarlier).toHaveBeenCalledTimes(clicks);
+    }
 
     renderChatInto(container);
     expect(container.querySelector(".chat-history-boundary")).toBeNull();

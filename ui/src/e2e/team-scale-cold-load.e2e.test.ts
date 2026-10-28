@@ -7,10 +7,13 @@ import {
   restoreColdLoadWarmState,
 } from "../../../scripts/lib/control-ui-bench-warm-state.ts";
 import { buildSandboxHostPath } from "../../../src/agents/sandbox-host.js";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
+import { CHAT_SNAPSHOT_PROJECTION_VERSION } from "../pages/chat/session-snapshot-projection.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   installMockGateway,
+  navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createTeamScaleSidebarListOwner } from "../test-helpers/control-ui-sidebar-list-fixture.ts";
 import {
@@ -18,6 +21,8 @@ import {
   TEAM_SCALE_SELF_INSTANCE_ID,
 } from "../test-helpers/control-ui-team-scale-fixture.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
+import { layoutBox } from "./chat-presentation.test-support.ts";
 import { createLocalNetworkControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -140,6 +145,7 @@ suite.define(() => {
     });
     sandboxAssets = fixture.assets;
     await suite.withPage(createLocalNetworkControlUiContextOptions(), async ({ page }) => {
+      await page.setViewportSize({ width: 1719, height: 1179 });
       await page.route("**/__openclaw__/**", async (route) => {
         const asset = fixture.assets.get(new URL(route.request().url()).pathname);
         if (asset) {
@@ -150,7 +156,7 @@ suite.define(() => {
       });
       await page.addInitScript(
         ({ key, entries }) => {
-          if (window !== window.top) {
+          if (window !== window.top || localStorage.getItem(key)) {
             return;
           }
           localStorage.setItem(
@@ -168,18 +174,40 @@ suite.define(() => {
         },
       );
       const sessions = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
-      const gateway = await installMockGateway(page, fixture.scenario, {
-        requestHandlers: {
-          "sessions.list": queryHandler("sessions.list", (params) => sessions.list(params).result),
-          "cron.list": queryHandler("cron.list", (params) => fixture.listCronJobs(params)),
+      let liveJobName: string = fixture.cronJobs[0]!.name;
+      const gateway = await installMockGateway(
+        page,
+        {
+          ...fixture.scenario,
+          deferredMethods: ["connect"],
+          featureMethods: [...fixture.scenario.featureMethods!, "progressCard.refresh"],
         },
-      });
+        {
+          requestHandlers: {
+            "sessions.list": queryHandler(
+              "sessions.list",
+              (params) => sessions.list(params).result,
+            ),
+            "cron.list": queryHandler("cron.list", (params) => {
+              const result = fixture.listCronJobs(params);
+              return {
+                ...result,
+                jobs: result.jobs.map((job) =>
+                  job.id === fixture.cronJobs[0]!.id
+                    ? Object.assign({}, job, { name: liveJobName })
+                    : job,
+                ),
+              };
+            }),
+          },
+        },
+      );
       await page.goto(
         controlUiSessionUrl(suite.server.baseUrl, fixture.selectedSessionKey, "dashboard"),
       );
-      await page.locator(".chat-pane__header").first().waitFor();
-
       const connectRequest = await gateway.waitForRequest("connect");
+      await gateway.resolveDeferred("connect");
+      await page.locator(".chat-pane__header").first().waitFor();
       const instanceId = asRecord(asRecord(connectRequest.params)?.client)?.instanceId;
       expect(typeof instanceId).toBe("string");
       const ownPresence = <T extends { instanceId?: string }>(entry: T) =>
@@ -259,6 +287,35 @@ suite.define(() => {
         JSON.stringify(sampled),
       ).toBe(true);
 
+      await navigateToControlUiSession(page, fixture.selectedSessionKey);
+      await sidebar.locator('[data-navigation-view="online"]').click();
+      await sidebar.locator('[data-online-user-id="team-person-120"]').waitFor();
+      const details = await openChatDetails(page);
+      const sectionSelector = '[data-details-group], [data-progress-card-placement="details"]';
+      const sections = details.locator(sectionSelector);
+      const sectionOrder = () =>
+        sections.evaluateAll((rows) =>
+          rows.map((row) => row.getAttribute("data-details-group") ?? "progress"),
+        );
+      const expectedSections = ["people", "subagents", "outputs", "progress", "automations"];
+      const controls = [
+        [details.locator(".task-progress-details__refresh"), "progressCard.refresh"],
+        [details.locator(".chat-summary__automation-more"), "cron.list"],
+      ] as const;
+      await details.getByText(liveJobName, { exact: true }).waitFor();
+      await controls[0][0].waitFor();
+      await expect.poll(sectionOrder).toEqual(expectedSections);
+      await details.locator(".chat-details-people__preview-avatar").first().waitFor();
+      const geometry = async () => Promise.all([details, ...(await sections.all())].map(layoutBox));
+      const appearance = () =>
+        details
+          .locator(".task-progress-details__refresh, .chat-summary__automation-more")
+          .evaluateAll((buttons) =>
+            buttons.map((button) => {
+              const style = getComputedStyle(button);
+              return [button.className, style.opacity, style.color, style.cursor];
+            }),
+          );
       const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
         sessionKey: fixture.selectedSessionKey,
         sidebarView: "online",
@@ -266,7 +323,7 @@ suite.define(() => {
       const warm = await page.evaluate(persistColdLoadWarmState, warmInput);
       expect(warm).toMatchObject({
         databaseVersion: 8,
-        projectionVersion: 6,
+        projectionVersion: CHAT_SNAPSHOT_PROJECTION_VERSION,
         sidebarView: "online",
         sidebarPeople: 120,
       });
@@ -336,7 +393,59 @@ suite.define(() => {
       expect(
         await page.evaluate(readStoredWarmState, { ...warmInput, includeDrafts: true }),
       ).toEqual({ ...baseline, drafts: 0 });
+      liveJobName = "A refreshed scheduled check 1";
       await page.reload();
+      await gateway.waitForRequest("connect");
+      await details.getByText("Synthetic scheduled check 1", { exact: true }).waitFor();
+      expect(await sectionOrder()).toEqual(expectedSections);
+      expect(await details.locator("openclaw-panel-loading-skeleton").count()).toBe(0);
+      expect(await details.locator(".chat-details-people__preview-avatar").count()).toBeGreaterThan(
+        0,
+      );
+      expect(
+        await details
+          .locator('[data-details-group="outputs"] .chat-details-desktop-section__count')
+          .textContent(),
+      ).toBe("·1");
+      const cachedAppearance = await appearance();
+      const chatUrl = page.url();
+      for (const [control, method] of controls) {
+        expect(await control.getAttribute("aria-disabled")).toBe("true");
+        expect(await control.getAttribute("disabled")).toBeNull();
+        // Forced inputs still need settled disclosure geometry to hit their intended controls.
+        await control.scrollIntoViewIfNeeded();
+        await waitForLayoutSettled(
+          page,
+          ".chat-details :is(.chat-details-desktop-section__body, button, a)",
+        );
+        await control.click({ force: true });
+        for (const key of ["Enter", "Space"]) {
+          await control.press(key);
+        }
+        expect(page.url()).toBe(chatUrl);
+        expect(await gateway.getRequests(method)).toHaveLength(0);
+      }
+      await page.mouse.move(0, 0);
+      const retained = await details
+        .locator(
+          `${sectionSelector}, .task-progress-details__refresh, .chat-summary__automation-more`,
+        )
+        .elementHandles();
+      await waitForLayoutSettled(page, ".chat-details-desktop-body__content");
+      const before = await geometry();
+      await gateway.resolveDeferred("connect");
+      await details.getByText(liveJobName, { exact: true }).waitFor();
+      for (const [control] of controls) {
+        await expect.poll(() => control.getAttribute("aria-disabled")).toBeNull();
+      }
+      await waitForLayoutSettled(page, ".chat-details-desktop-body__content");
+      expect(await geometry()).toEqual(before);
+      expect(await appearance()).toEqual(cachedAppearance);
+      expect(await gateway.getRequests("progressCard.refresh")).toHaveLength(0);
+      for (const element of retained) {
+        expect(await element.evaluate((node) => node.isConnected)).toBe(true);
+        await element.dispose();
+      }
       await sidebar.locator('[data-navigation-view="online"][aria-pressed="true"]').waitFor();
       await sidebar.locator('[data-online-user-id="team-person-120"]').waitFor();
       expect(await sidebar.locator("[data-online-user-id]").count()).toBe(120);

@@ -202,9 +202,8 @@ export function createInterruptedRecoveryCoordinator(params: {
               if (!result.retained.isCurrent()) {
                 retryRetainedOwner(entry.runId, attempt);
               }
-              void result.retained.released?.then(() => {
-                retryRetainedOwner(entry.runId, attempt);
-              });
+              const resume = () => retryRetainedOwner(entry.runId, attempt);
+              void result.retained.released?.then(resume, resume);
             }
             return result.status === "handled";
           }

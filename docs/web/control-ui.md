@@ -114,7 +114,7 @@ The saved sidebar also retains unread marks, activity and attention glyphs, pull
 
 Message reactions share the message footer. Desktop Chat Details lists automations after session information and task progress so arriving automation results keep those sections in place. The mobile composer reserves one activity row so arriving task and subagent status does not move the transcript.
 
-A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen. While older messages load, **Show earlier** keeps keyboard focus and ignores repeated activation.
+A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen. A reader action checks up to three consecutive pages when entries are empty, overlapping, or hidden by display preferences; longer hidden intervals remain available through another action. Transient read failures retry within the existing one-minute history-recovery budget, honoring the server’s backoff. Permission denials are not automatically retried. The touch-friendly history control keeps keyboard focus during loading and ignores repeated activation. Failed reads show **Retry earlier messages** at that same boundary without removing the loaded conversation. While disconnected, the control shows **Waiting for connection…** instead of accepting a click that cannot load history.
 
 GitHub item URLs and repository-qualified references such as `owner/repo#126` render as compact links. Use `PR owner/repo#126` for a pull request or `issue owner/repo#126` for an issue. References identified by keywords, such as `PR #126`, remain plain text without a repository qualifier. Project display names, the checkout, the project catalog, and other messages do not supply a destination. A standalone hash token that is also a valid hexadecimal color, such as `#126`, retains its color preview without a GitHub link.
 
@@ -411,6 +411,10 @@ Opening a file collapses the file tree to make room for its preview. Use **Toggl
 file tree** to browse another file, or **Show in Files** to reveal the current file
 in its folder with the **All** filter.
 
+The **Review** file menu offers **Edit file** when the file reader confirms editing
+is available. Readable files keep **Open File** and their supported Markdown and
+source views when editing is unavailable; downloads remain available from the preview.
+
 If the **Files** panel shows a listing error, select **Retry** to load the current
 folder or search again. This keeps the session and query in place; access checks
 still apply, and a failed retry displays its error.
@@ -510,7 +514,7 @@ An embedder that supplies linked Gateways adds them to the identity menu's **Gat
 
 If you paste a setup code from **Devices → Pair device → Copy setup code** into **Gateway secret**, the UI shows an inline hint before you connect. Paste that code into **Settings → Gateway** in the OpenClaw mobile app. For the Control UI, run `openclaw gateway auth-token --show` in an interactive terminal on the Gateway host and paste the shared token instead. If a connection with a setup code is rejected for a token or password mismatch, the login screen repeats this guidance.
 
-Local onboarding generates a Gateway secret in token mode by default, without a token/password picker, and preserves existing password mode. Use `--gateway-auth password` or `--gateway-password <value>` for explicit password setup; Tailscale Funnel requires password mode. If the Gateway starts in token mode without a configured token, it generates an ephemeral runtime token for that process instead. The runtime token is not written to config, so it cannot be recovered and a loopback browser without that token is rejected. Run `openclaw doctor --generate-gateway-token`, restart the Gateway, then run `openclaw gateway auth-token --show` in an interactive terminal and paste the output into **Gateway secret**.
+Local onboarding generates a Gateway secret in token mode by default, without a token/password picker, and preserves existing password mode. Use `--gateway-auth password` or `--gateway-password <value>` for explicit password setup; Tailscale Funnel requires password mode. If the Gateway starts in token mode without a configured token, it generates an ephemeral runtime token for that process instead. The runtime token is not written to config, so it cannot be recovered and a loopback browser without that token is rejected. Run `openclaw doctor --generate-gateway-token`, restart the Gateway, then run `openclaw gateway auth-token --show` in an interactive terminal and paste the output into **Gateway secret**. If Windows PowerShell reports that running scripts is disabled, start those commands through [npm's `openclaw.cmd`](/platforms/windows#powershell-execution-policy) instead of changing the execution policy.
 
 <a id="agents-home" />
 

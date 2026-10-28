@@ -615,21 +615,23 @@ Control UI pages without restarting the Gateway.
 
 ## Custom plugin UI
 
-Find **Labs** in the **System** section of the Settings sidebar, after **Infrastructure**.
+Enabled plugins can add native pages, widgets, actions, and view replacements
+by default. Custom plugin UI is no longer a Labs setting. Installed plugin
+details and existing enable reviews disclose native UI from the inspected
+manifest; catalog install surfaces explain that plugin code may also include
+native UI when the catalog does not provide that information.
 
-**Settings → Labs → Custom plugin UI** enables native pages, widgets, actions,
-and view replacements from user-installed plugins. It defaults to off and
-writes `gateway.controlUi.experimental.customPlugins`. Changes apply without
-restarting the Gateway, and connected pages refresh their plugin views
-automatically. After disabling it, reload browser tabs to clear plugin
-JavaScript that already ran.
-
-Only enable it for plugin authors you trust: native UI runs in the Control UI
-origin with the signed-in operator's Gateway authority. Native UI from enabled
-bundled plugins, including Workboard, remains available with the lab off.
-Backend plugin APIs, ordinary plugin loading, sandboxed dashboard widgets, and
-MCP Apps are unaffected. All plugin APIs are experimental; see
+Only install plugins from authors you trust: native UI runs in the Control UI
+origin with each signed-in viewer's Gateway authority. It is not sandboxed.
+All plugin APIs remain experimental; see
 [Feature plugins](/plugins/feature-plugins) for authoring and the trust model.
+
+The existing `gateway.controlUi.experimental.customPlugins: false` remains an
+advanced opt-out for user-installed native UI. Existing explicit `false` values
+stay off on upgrade; omission and `true` allow native UI. Changes hot-apply and
+refresh connected pages without a Gateway restart. After disabling, reload
+browser tabs to clear JavaScript that already ran. Enabled bundled plugin views,
+backend operations, sandboxed dashboard widgets, and MCP Apps are unaffected.
 
 Authenticated native UI requires HTTPS or a browser-trusted loopback URL.
 On non-local plain HTTP, plugin pages explain how to open a supported URL;

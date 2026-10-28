@@ -309,7 +309,10 @@ suite.define(() => {
           await gateway.rejectDeferred("chat.history", {
             message: "History temporarily unavailable",
           });
-          const showEarlier = thread.getByRole("button", { name: "Show earlier", exact: true });
+          const showEarlier = thread.getByRole("button", {
+            name: "Retry earlier messages",
+            exact: true,
+          });
           await expect.poll(() => showEarlier.isEnabled()).toBe(true);
           await gateway.deferNext("chat.history");
           await showEarlier.click();

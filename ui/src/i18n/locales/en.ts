@@ -9,6 +9,7 @@ type EnglishCatalog = TranslationMap & {
   execApproval: TranslationMap & { labels: TranslationMap; scope: TranslationMap };
   sessionProgressCard: TranslationMap & {
     refresh: TranslationMap;
+    runtime: TranslationMap;
     activity: TranslationMap;
     outcome: TranslationMap;
     status: TranslationMap;
@@ -362,8 +363,8 @@ const startupEnglish = {
       "This view is unavailable. Check that its plugin is installed, enabled, and allowed for your account. Reload the conversation after installing or updating the plugin.",
     dashboardTitle: "Session dashboard",
     customPluginsDisabled: "Custom plugin UI is off",
-    customPluginsEnableHint: "Enable Custom plugin UI in Labs.",
-    openLabs: "Open Labs",
+    customPluginsEnableHint:
+      "Disabled by the Gateway configuration. An administrator can enable native plugin UI.",
     surface: {},
   },
   capacityMeter: {},
@@ -520,6 +521,7 @@ const startupEnglish = {
     checks: {},
   },
   sessionProgressCard: {
+    runtime: {},
     composerTitle: "Task progress",
 
     clearFailed: "Could not clear saved progress card.",
@@ -1198,8 +1200,6 @@ const startupEnglish = {
     },
     toolSearch: {},
 
-    customPluginUi: {},
-
     hostDesktop: {},
     workerDesktop: {},
   },
@@ -1575,11 +1575,15 @@ const startupEnglish = {
     waitingOnSessions: "Waiting on {count} sessions",
     sessionsNeedInputOne: "1 needs your input",
     sessionsNeedInput: "{count} need your input",
+    sessionsPaused: "{count} paused",
+    sessionPausedNote: "{name} is paused",
+    sessionsPausedNote: "{count} sessions are paused",
     handoffResumed: "Resumed · {duration} later",
     handoffSessionsOne: "1 session",
     handoffSessions: "{count} sessions",
     handoffSessionStatus: {
       attention: "Needs your input",
+      paused: "Paused",
       running: "Running",
       failed: "Failed",
       stopped: "Stopped",

@@ -113,9 +113,9 @@ describe("mounted pane session event ownership", () => {
     });
     transcript.start();
     await flushDeferredRowPrune();
-    expect(view.container.querySelector(".chat-activity-group__label")?.textContent).toBe(
-      "Worked for 3 minutes",
-    );
+    expect(layout.primary.chat.selectedSession?.lastRunId).toBe("work-run");
+    expect(layout.primary.chat.selectedSession?.runtimeMs).toBe(180_000);
+    expect(view.container.querySelector(".chat-activity-group__label")?.textContent).toBe("Worked");
   });
 
   it("retires Talk on a provider pause and prevents it from starting again", async () => {

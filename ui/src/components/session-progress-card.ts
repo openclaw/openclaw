@@ -3,6 +3,7 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { t } from "../i18n/index.ts";
 import { registerSessionProgressEnglish } from "../i18n/locales/en-session-progress.ts";
 import type { SessionProgressCardRefreshState } from "../lib/session-progress-cards.ts";
+import type { SessionProgressCardRuntime } from "../lib/session-progress-runtime.ts";
 
 registerSessionProgressEnglish();
 
@@ -29,10 +30,7 @@ export const STATUS_LABEL_KEYS: Record<ProgressCardStep["status"], Parameters<ty
   pending: "sessionProgressCard.status.pending",
 };
 
-export const TERMINAL_RUN_OUTCOMES: Partial<
-  Record<SessionRunStatus, "completed" | "failed" | "stopped">
-> = {
-  done: "completed",
+export const TERMINAL_RUN_OUTCOMES: Partial<Record<SessionRunStatus, "failed" | "stopped">> = {
   failed: "failed",
   killed: "stopped",
   timeout: "failed",
@@ -69,14 +67,37 @@ function isProgressCardStaleForRun(card: ProgressCard, startedAt?: number): bool
   return runStart !== undefined && cardUpdate !== undefined && cardUpdate < runStart;
 }
 
+/** A session outcome only describes a plan written during that same run. */
+export function progressCardRunOutcome(
+  card: ProgressCard | null | undefined,
+  sessionStatus?: SessionRunStatus,
+  startedAt?: number,
+  endedAt?: number,
+) {
+  const start = asDateTimestampMs(startedAt);
+  const end = asDateTimestampMs(endedAt);
+  const updated = asDateTimestampMs(card?.updatedAt);
+  return sessionStatus &&
+    start !== undefined &&
+    end !== undefined &&
+    updated !== undefined &&
+    end >= start &&
+    updated >= start &&
+    updated <= end
+    ? TERMINAL_RUN_OUTCOMES[sessionStatus]
+    : undefined;
+}
+
 export function progressCardHeadsUp(
   card: ProgressCard | null | undefined,
   sessionStatus?: SessionRunStatus,
   startedAt?: number,
   hasActiveRun = true,
+  hasActiveSubagentRun = false,
+  endedAt?: number,
 ): ProgressCardHeadsUp | null {
   const staleForRun = card ? isProgressCardStaleForRun(card, startedAt) : false;
-  if (sessionStatus && TERMINAL_RUN_OUTCOMES[sessionStatus] && !staleForRun) {
+  if (!hasActiveSubagentRun && progressCardRunOutcome(card, sessionStatus, startedAt, endedAt)) {
     return null;
   }
   const counts = card ? progressCounts(card) : null;
@@ -88,7 +109,10 @@ export function progressCardHeadsUp(
     return null;
   }
   const status =
-    step.status === "in_progress" && (staleForRun || !hasActiveRun) ? "paused" : step.status;
+    step.status === "in_progress" &&
+    (staleForRun || (!hasActiveSubagentRun && (!hasActiveRun || sessionStatus === "done")))
+      ? "paused"
+      : step.status;
   return { ...counts, status, step: step.step };
 }
 
@@ -151,6 +175,7 @@ export function progressCardPresentation(
   startedAt?: number,
   endedAt?: number,
   hasActiveRun = true,
+  runtime?: SessionProgressCardRuntime,
 ) {
   const counts = progressCounts(card);
   const countLabel = counts
@@ -162,25 +187,24 @@ export function progressCardPresentation(
   const validStartedAt = asDateTimestampMs(startedAt);
   const validEndedAt = asDateTimestampMs(endedAt);
   const validUpdatedAt = asDateTimestampMs(card.updatedAt);
-  const hasValidRunWindow =
-    validStartedAt !== undefined &&
-    validEndedAt !== undefined &&
-    validEndedAt >= validStartedAt &&
-    validUpdatedAt !== undefined &&
-    validUpdatedAt >= validStartedAt &&
-    validUpdatedAt <= validEndedAt;
+  const runOutcome = progressCardRunOutcome(card, sessionStatus, startedAt, endedAt);
   // A refreshed snapshot written after a run ended belongs to the new status
   // check, not that run’s old completion time or outcome.
   // A later run does not own durable progress last updated before it starts.
   // Queued runs can retain the previous run's timestamps, but do not own its progress.
   const hasCurrentRunActivity =
-    hasActiveRun &&
+    runtime?.connected !== false &&
+    runtime?.known !== false &&
+    (runtime?.hasActiveSubagentRun === true || (hasActiveRun && sessionStatus !== "done")) &&
     !isProgressCardStaleForRun(card, startedAt) &&
     (validUpdatedAt === undefined ||
       (sessionStatus !== "queued" &&
         (validStartedAt !== undefined || sessionStatus === undefined)));
   const terminalTimestamp =
-    sessionStatus && TERMINAL_RUN_OUTCOMES[sessionStatus] && hasValidRunWindow
+    runOutcome &&
+    !runtime?.hasActiveSubagentRun &&
+    runtime?.connected !== false &&
+    runtime?.known !== false
       ? validEndedAt
       : undefined;
   const effectiveSessionStatus =
@@ -214,6 +238,7 @@ export function progressCardPresentation(
     currentPosition,
     complete,
     stepLabel,
+    runOutcome,
     terminalOutcome,
     outcomeLabel,
     presentedCurrentStatus,

@@ -11,6 +11,7 @@ export const STANDALONE_USAGE =
 
 /**
  * @typedef {{
+ *   allowCodeFromDisk?: true,
  *   aotLogTypeMismatches?: true,
  *   aotExplain?: string[],
  *   aotDisable?: string[],
@@ -153,6 +154,11 @@ export function parseStandaloneArguments(args) {
   }
   const mode =
     compileFlags[0] === "--aot" ? "aot" : compileFlags[0] === "--bytecode" ? "bytecode" : "jit";
+  if (mode === "aot") {
+    // Installed plugins, their workers, and dynamic imports run interpreted.
+    aotCompileOptions.allowCodeFromDisk = true;
+    aotFlags.push("--aot-allow-code-from-disk");
+  }
   if (trimAllow.size) {
     /** @type {("run" | "jit")[]} */
     const features = ["run", "jit"];

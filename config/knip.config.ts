@@ -31,6 +31,25 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  // Spawned directly by native-allocation-profile.test.ts.
+  "test/scripts/fixtures/native-profile-census.mjs!",
+  // Their source headers document standalone benchmark and measurement commands.
+  "scripts/bench-duplicate-paragraphs.mts!",
+  "scripts/perf/auth-file-watch-events-measure.ts!",
+  "scripts/perf/completion-payload-bytes-measure.ts!",
+  "scripts/perf/connect-profile-binding-measure.ts!",
+  "scripts/perf/cron-reader-reuse-measure.ts!",
+  "scripts/perf/cron-registry-read-measure.ts!",
+  "scripts/perf/local-workspace-refresh-measure.ts!",
+  "scripts/perf/plugin-state-claims-measure.ts!",
+  "scripts/perf/session-append-reload-measure.ts!",
+  "scripts/perf/session-membership-retention-measure.ts!",
+  "scripts/perf/session-message-custody-payload-measure.mjs!",
+  "scripts/perf/session-patch-response-measure.ts!",
+  "scripts/perf/transcript-pool-idle-measure.ts!",
+  "scripts/perf/worktree-creation-measure.ts!",
+  // The source header documents this matched Code Mode engine probe by path.
+  "scripts/perf/code-mode-engine-measure.ts!",
   // The prepublish registry executes this shared build-and-pack lifetime by path.
   "scripts/lib/plugin-npm-build-and-pack.mts!",
   // Package scripts execute the PostgreSQL schema generator, which consumes state declarations.
@@ -198,6 +217,7 @@ const repositoryScriptEntries = [
   // #181150 invokes this reproducible session-row owner probe by path.
   "scripts/perf/session-actor-row-facts-measure.ts!",
   "scripts/perf/session-catalog-selection-measure.ts!",
+  "scripts/perf/session-selection-facts-measure.ts!",
   // The offline health-cron measurement invokes this synthetic fixture by path.
   "scripts/perf/health-cron-fixture.ts!",
   // #183020 invokes this synthetic category-registration workload by path.
@@ -592,6 +612,7 @@ const repositoryScriptEntries = [
   "scripts/perf/ui-streaming-render-measure.ts!",
   // Their source headers document these standalone performance commands.
   "scripts/perf/active-run-projector-measure.ts!",
+  "scripts/perf/cron-definition-publication-measure.ts!",
   "scripts/perf/cron-store-context-measure.ts!",
   "scripts/perf/diagnostic-frozen-trace-measure.ts!",
   "scripts/perf/image-worker-buffers-measure.mjs!",
@@ -997,6 +1018,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/missing-configured-plugin-migration.mjs!",
   // run.sh starts this persistent native peer as a separate process.
   "scripts/e2e/lib/upgrade-survivor/native-assignment-app-server.mjs!",
+  // native-plugin-ui.sh invokes fixture creation and packaged upgrade probes through Node.
+  "scripts/e2e/lib/upgrade-survivor/native-plugin-ui.mjs!",
   // package-activation-recovery.sh preloads this observer into the released updater.
   "scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs!",
   // run.sh preloads this fixture adapter through NODE_OPTIONS by path.
@@ -2040,6 +2063,10 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/cloudflare-ai-gateway`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/chutes`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/clawrouter`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/code-mode-quickjs`]: bundledPluginWorkspace([
+      // The source header documents this opt-in engine attribution probe by path.
+      "bench/engine-attribution.ts!",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/cohere`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/comfy`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/copilot`]: bundledPluginWorkspace([

@@ -696,12 +696,20 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
           this.olderCursorsSeen.has(page.nextCursor));
       this.history.catalogMessages = nextMessages;
       this.history.catalogCursor = olderExhausted ? undefined : page.nextCursor;
-      state.lastError = null;
+      if (older) {
+        this.history.olderError = null;
+      } else {
+        state.lastError = null;
+      }
       scheduleChatScroll(state, !older);
       return !older || addedMessages || !olderExhausted;
     } catch (error) {
       if (isCurrent()) {
-        state.lastError = formatUiError(error);
+        if (older) {
+          this.history.olderError = formatUiError(error);
+        } else {
+          state.lastError = formatUiError(error);
+        }
       }
       return false;
     } finally {

@@ -22,7 +22,7 @@ const pathSets = "local_workspace_source_path_sets";
 const epochKey = "workspace.manifest.sweepEpoch";
 const query = (db: EngineConnection) => getNodeSqliteKysely<DB>(db);
 
-function currentEpoch(db: EngineConnection): number {
+export function currentLocalWorkspaceSweepEpoch(db: EngineConnection): number {
   if (!tableExists(db, "config_machine_state")) {
     return 0;
   }
@@ -40,12 +40,12 @@ function currentEpoch(db: EngineConnection): number {
 export function prepareLocalWorkspaceContentInDatabase(
   db: EngineConnection,
   preparation: LocalWorkspacePreparation,
-): void {
+): number {
   if (!tableExists(db, packs)) {
     // sqlite-allow-raw -- Canonical first-use schema admission for the existing workspace feature.
     db.exec(getOpenClawStateFeatureSchemaSql("local_workspace_projections"));
   }
-  const epoch = currentEpoch(db);
+  const epoch = currentLocalWorkspaceSweepEpoch(db);
   if (preparation.packs?.length) {
     if (preparation.packs.length > LOCAL_WORKSPACE_CONTENT_BATCH) {
       throw new Error("Local workspace pack preparation exceeds its batch limit");
@@ -124,6 +124,7 @@ export function prepareLocalWorkspaceContentInDatabase(
         ),
     );
   }
+  return epoch;
 }
 
 export function readLocalWorkspaceSourcePaths(db: EngineConnection, digest: Uint8Array): string {
@@ -178,7 +179,7 @@ export function readLocalWorkspaceTree(db: EngineConnection, root: Uint8Array) {
 }
 
 export function beginLocalWorkspaceSweepInDatabase(db: EngineConnection): number {
-  const epoch = currentEpoch(db) + 1;
+  const epoch = currentLocalWorkspaceSweepEpoch(db) + 1;
   executeSqliteQuerySync(
     db,
     query(db)
