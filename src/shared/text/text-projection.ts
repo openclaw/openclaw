@@ -571,6 +571,8 @@ function createDuplicateParagraphProjector(protectCode = true): TextProjector {
   let hasDuplicate = false;
   let wasCollapsed = false;
   let wasDuplicate = false;
+  let codeProtectionRequired = false;
+  let codeProbeTail: string | undefined;
   return (input) => {
     let appended = input.delta ?? input.text;
     if (!separator) {
@@ -647,6 +649,13 @@ function createDuplicateParagraphProjector(protectCode = true): TextProjector {
     }
     const duplicate = Boolean(paragraph) && equal && normalizedLength === lastNormalized?.length;
     const collapsed = hasDuplicate || duplicate;
+    if (protectCode && !codeProtectionRequired && (collapsed || codeProbeTail !== undefined)) {
+      // An empty Markdown prefix has no code; retain split four-space indentation.
+      // Once syntax is ambiguous, the canonical transform keeps ownership of it.
+      const probe = codeProbeTail === undefined ? input.text : codeProbeTail + appended;
+      codeProtectionRequired = !canReuseMarkdownOwnership("", probe);
+      codeProbeTail = probe.slice(-3);
+    }
     let delta = input.delta;
     if (collapsed) {
       // Code can expose pending whitespace; the plain suffix cannot safely append across it.
@@ -661,7 +670,7 @@ function createDuplicateParagraphProjector(protectCode = true): TextProjector {
           : added;
       text =
         delta === null
-          ? protectCode
+          ? codeProtectionRequired
             ? collapseDuplicateParagraphs(input.text)
             : completed + (paragraph && !duplicate ? (completed ? separator : "") + paragraph : "")
           : text + delta;

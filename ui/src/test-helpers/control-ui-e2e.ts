@@ -296,10 +296,6 @@ export type ControlUiMockGatewayScenario = ControlUiMockAuth & {
   /** Partition sessions.list fixtures by archived state after applying patches. */
   sessionArchiveFiltering?: boolean;
   models?: ModelCatalogEntry[];
-  /** Operator scopes returned by the mocked connect handshake. */
-  operatorScopes?: string[];
-  /** Role-limited access to other people's sessions, as a configured Gateway role reports it. */
-  operatorSessionCap?: "write" | "suggest" | "view" | "none" | null;
   /** Selected fixture and event default; use controlUiSessionUrl to select it in the UI. */
   sessionKey?: string;
   sessionScope?: AgentsListResult["scope"];
@@ -842,14 +838,6 @@ function normalizeScenario(
     inFlightRun: scenario.inFlightRun ?? null,
     presenceUsers: scenario.presenceUsers ?? [],
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
-    operatorSessionCap: scenario.operatorSessionCap ?? null,
-    operatorScopes: scenario.operatorScopes ?? [
-      "operator.admin",
-      "operator.read",
-      "operator.write",
-      "operator.approvals",
-      "operator.pairing",
-    ],
     repeatingSessionEvents: scenario.repeatingSessionEvents ?? { events: [] },
     sessionInfo: scenario.sessionInfo ?? null,
     sessions:
@@ -1675,6 +1663,7 @@ function installControlUiMockGateway(
                   recoveryScope: "e2e-recovery-scope",
                   role: "operator",
                   scopes: scenario.operatorScopes,
+                  roleAllowsAdmin: scenario.roleAllowsAdmin,
                   ...(scenario.operatorSessionCap
                     ? { sessionCap: scenario.operatorSessionCap }
                     : {}),

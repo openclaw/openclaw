@@ -616,6 +616,7 @@ extension ChatMessageBubble {
         return ChatToolActivity.items(
             calls: self.message.content.filter(\.isToolCall),
             results: self.message.content.filter(\.isToolResult),
+            recordedResults: self.message.presentationRecordedToolResults,
             activity: self.message.activity,
             liveTools: self.liveToolCalls)
     }

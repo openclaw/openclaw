@@ -423,14 +423,21 @@ The error names the missing extension and the installation SQL. Install it in
 the selected database, then reopen the store; use `provider: "none"` when only
 keyword search is wanted.
 
-Full text uses a named `simple` plus `unaccent` configuration, a stored generated
-`tsvector`, and GIN. Queries bind literal terms and compile conjunctions,
+Full text uses a named `simple` plus `unaccent` configuration, a stored
+`tsvector` column, and GIN. Agent schema 38 and newer keep that column as a plain
+column maintained by a `<table>_search_sync` trigger (also after the 37→38
+migration, which drops the old generated expression in place and reparses the
+rows); historical stores before 38 used a generated column. Queries bind literal terms and compile conjunctions,
 disjunctions, adjacent phrases, and final-lexeme prefixes. User text is never
 interpreted as PostgreSQL query operators. The default full-text capability uses
 `ts_rank_cd` with normalization 2: scores are engine-local, higher is better, and ordering differs
-from SQLite BM25. Tokenization also differs for punctuation, compound words, and
-Unicode. Snippets use `ts_headline` only after a materialized, bounded candidate
-selection, with a word budget of 2–48, a character cap of 500, and empty highlight markers. Trigram
+from SQLite BM25. Punctuation runs are replaced by spaces before indexing and before
+parsing the query, so words inside dates, paths, file names, and `a/b` pairs match
+on both engines (`08` in `2026-08-18`, `server` in `server.py`); Unicode
+normalization still differs. Snippets use `ts_headline` only after a materialized, bounded candidate
+selection, with a word budget of 2–48, a character cap of 500, and empty highlight markers. The headline
+parses the same punctuation split as the query to pick its passage, then returns that passage from
+the original text, so snippets keep their punctuation. Trigram
 contains uses its own GIN index and escaped literal `ILIKE`; it is not a universal
 fallback for full-text queries. Trigram matches rank by native `word_similarity`
 before the result limit; multi-term memory queries average their term scores.

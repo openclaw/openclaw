@@ -188,6 +188,28 @@ In the macOS Web experience and Tauri desktop app on macOS, Linux, and Windows, 
 Collapsing the panel leaves only expand-sidebar beside the rail, which keeps New session and search; the content header still starts with back/forward.
 Drag an empty area of the titlebar row to move the window; its buttons keep their normal actions.
 
+## Desktop message input
+
+Choose **Settings → Appearance → Chat → Send shortcut** to control how you submit
+a message from the chat composer on Windows, macOS, or Linux:
+
+| Send shortcut      | Submit a message                                | Add a line break     |
+| ------------------ | ----------------------------------------------- | -------------------- |
+| **Enter**          | Enter                                           | Shift+Enter          |
+| **Cmd/Ctrl+Enter** | Cmd+Enter on macOS; Ctrl+Enter on Windows/Linux | Enter or Shift+Enter |
+
+These shortcuts apply to an ordinary draft when no suggestion menu is handling
+the key. If the agent is already working, submission follows the conversation's
+follow-up mode. With **Enter** selected, Cmd/Ctrl+Enter can switch between queuing
+and steering for that message; see [Stop and abort](/web/control-ui/chat#stop-and-abort).
+
+When using a Chinese, Japanese, or Korean input method, Enter that confirms a
+composition stays with the input method instead of sending the draft. For example,
+type `zhongwen` with a Chinese Pinyin input method and confirm `中文`: the text
+should remain in the composer. Finish composing, then use the configured send
+shortcut or the send button to submit. Choose **Cmd/Ctrl+Enter** if you prefer
+plain Enter to add a line after composition has finished.
+
 ## Mobile message input
 
 On iPhone, iPad (including desktop mode), and Android, Return adds a line break;
@@ -1334,11 +1356,15 @@ other runs are not included. Source cards require run identity in the transcript
 and follow tool-activity visibility. They are hidden while a run is active or
 transcript search is filtering messages.
 
-In completed dashboard turns, commentary, reasoning-only messages, and tool activity
-share one **Worked for…** disclosure above the answers. Expanding it shows the
-activity in its original order; explicit answer segments and visual results stay
-visible below it. Browser tab previews keep their execution order relative to those
-visible results, so a page opened after an inline widget appears after that widget.
+In completed dashboard turns, all assistant text and visual results stay visible
+in their original positions. Contiguous tool activity and reasoning-only parts
+fold into separate **Worked** disclosures between those visible parts in both
+flat and bubble mode. Expanding a disclosure shows that stretch of activity in its
+original order, and loading older history preserves which disclosures are open.
+Messages with saved attachments stay intact so each attachment appears once.
+Each disclosure is untimed; the final recap keeps the duration for the whole turn,
+including after reopening a completed chat when its saved timing matches the visible reply.
+Browser tab previews keep their execution order relative to visible results, so a page opened after an inline widget appears after that widget.
 Failed tool results after the last answer stay visible outside
 the disclosure until a later answer follows them. This is display grouping, not a
 change to stored history. Live turns, search results, and turns without an answer
@@ -1348,7 +1374,7 @@ resumes the closing line reports the request. User messages,
 forwarded inputs, and structural markers remain boundaries for grouping.
 Selecting the author's name on a reply's **Replying to** line scrolls to the
 original message and briefly highlights it, first opening its containing
-**Worked for…** group when the original sits inside one.
+**Worked** group when the original sits inside one.
 
 On wide desktop panes, the conversation position rail provides keyboard shortcuts
 to messages. In right-to-left interface languages, the rail uses the right gutter

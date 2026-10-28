@@ -1,5 +1,5 @@
 import {
-  compareCliHistoryRows,
+  orderCliHistoryRows,
   createCliHistoryRow,
   DEDUPE_TIMESTAMP_WINDOW_MS,
   mergeCliHistoryRow,
@@ -150,7 +150,7 @@ export class MemoryCliSessionHistoryIndex implements CliHistoryIndex {
       }
     }
     if (expanded) {
-      this.order.sort(compareCliHistoryRows);
+      this.order = orderCliHistoryRows(this.order);
     }
     this.order.forEach((row, ordinal) => {
       row.ordinal = ordinal;

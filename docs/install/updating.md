@@ -33,12 +33,23 @@ For Docker, Podman, and Kubernetes image replacements, see
 image entrypoint runs Doctor before starting the Gateway and exits if mounted
 state cannot be repaired safely.
 
+For distro packages and image-based systems (bootc, rpm-ostree), see
+[System-package and image-based installs](/install/updating/update-methods#system-package-and-image-based-installs).
+Nothing OpenClaw-managed runs Doctor for these, and an image-based host starts the
+Gateway on the new release before anyone can.
+
 Before upgrading, follow the [preflight checklist](/install/updating/rollback-and-recovery#before-you-upgrade).
 Before a significant update, [create a verified backup](#before-updating-create-a-verified-backup).
 Automatic config copies and migration recovery originals are not a full-state
 backup.
 
 ## Update implementation contract
+
+When artifact-preserving SQLite inspection exhausts its stabilization attempts,
+update failures retain the final consistency reason code and attempt count in
+`openclaw update status` and the prepared failure report. The candidate worker
+must contain this diagnostic change. Snapshot checks and retry limits are unchanged;
+the reason identifies the failed check, not the writer or underlying cause.
 
 Candidate Doctor preserves same-conversation automation continuations when adopting
 a stored inference account. It carries forward the original authenticated source

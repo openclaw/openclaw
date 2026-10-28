@@ -668,6 +668,7 @@ describe("sendGatewayHello update detail scope", () => {
       method: "none",
       role: "operator",
       scopes: ["operator.pairing"],
+      roleAllowsAdmin: true,
       recoveryMigrationAllowed: true,
       recoveryScope: expect.stringMatching(/^[A-Za-z0-9_-]+$/u),
       deviceToken: "paired-token",
