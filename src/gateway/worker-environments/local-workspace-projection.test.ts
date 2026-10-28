@@ -239,6 +239,14 @@ it.each(["operator", "gateway"] as const)(
   },
 );
 
+it("denies guest filesystem writes after role revocation and a late involvement receipt", async ({
+  signal,
+}) => {
+  const { proveStoppedSandboxAuthority } =
+    await import("./local-workspace-cancellation.test-support.js");
+  await proveStoppedSandboxAuthority(owner, "guest-involvement", signal);
+});
+
 it("reconciles during shared state reads without caller-thread store SQL", () =>
   proveWorkerOwnedIncrementalWorkspace(owner));
 
