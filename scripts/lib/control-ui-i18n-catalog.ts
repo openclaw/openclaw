@@ -261,7 +261,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
           ? ["viewMode", "diff", "raw"]
           : key === "openFile"
             ? ["openDetails"]
-            : key === "failureCount"
+            : key === "exitCode"
               ? ["noOutputFailed"]
               : [];
     for (const contentKey of contentKeys) {

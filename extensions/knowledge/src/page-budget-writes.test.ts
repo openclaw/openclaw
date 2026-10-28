@@ -254,9 +254,9 @@ it("extracts a section with its links, evidence, claim subjects and history, or 
   });
   expect(JSON.stringify(carried.evidence)).toContain("We chose option B.");
 
-  // Cited claims move their primary subject; the source stays only where the claim names it.
+  // Cited claims gain the destination as primary subject and keep their established subjects.
   const entities = async (id: string) => (await f.read(id)).metadata!.entities;
-  expect(await entities(provider.id)).toStrictEqual([destination.id]);
+  expect(await entities(provider.id)).toStrictEqual([destination.id, atlas.id]);
   expect(await entities(owner.id)).toStrictEqual([destination.id, atlas.id]);
   expect(await entities(search.id)).toStrictEqual([atlas.id]);
 
@@ -266,4 +266,36 @@ it("extracts a section with its links, evidence, claim subjects and history, or 
   expect(
     (await f.call("revision", { sequence: previous.sequence, maxChars: 65536 })).raw,
   ).toContain(billing);
+});
+
+it("moves only parsed links, checks them in both complete pages, and keeps a short-named subject", async () => {
+  const f = await fixture();
+  const ledger = await f.save("Ledger", "concept", "Ledger notes.\n");
+  const runbook = await f.save("Runbook", "concept", "Runbook.\n\n```\nlog\n");
+  const ai = await f.save("AI", "concept", "AI.\n");
+  const local = await f.claim("Local inference", "AI uses local inference.", [ai.id]);
+  const inference = `## Inference\n\nSee [Ledger](ledger.md) and [[${local.id}|claim]].\n\n\`\`\`md\n[Ledger](ledger.md)\n\`\`\`\n\nInline \`[Ledger](ledger.md)\` and \\[Ledger](ledger.md).\n\n`;
+  const text = `# AI\n\nRuns on [[Runbook]].\n\n## Billing\n\nSee [Ledger][ledger].\n\n${inference}## Notes\n\n[ledger]: ledger.md\n`;
+  await f.call("save_page", {
+    requestId: randomUUID(),
+    ...(await f.fence(ai.id)),
+    title: "AI",
+    body: text,
+  });
+  const bytes = await f.file(ai.path);
+  // The reference definition stays behind, and the runbook ends inside an open code block.
+  await expect(f.extract(ai.id, text.indexOf("## Billing"))).rejects.toThrow(/would not lead/);
+  await expect(
+    f.extract(ai.id, text.indexOf("## Inference"), { destination: await f.fence(runbook.id) }),
+  ).rejects.toThrow(/would not lead/);
+  expect(await f.file(ai.path)).toBe(bytes);
+
+  const receipt = await f.extract(ai.id, text.indexOf("## Inference"), {
+    destination: { title: "AI inference", type: "project" },
+  });
+  const destination = receipt.items!.find((i) => i.key === "destination")!;
+  const rewritten = path.posix.relative(path.posix.dirname(destination.path), ledger.path);
+  // Code, inline code and escaped text keep their bytes; only the parsed link moves.
+  expect(await f.body(destination.path)).toBe(inference.replace("](ledger.md)", `](${rewritten})`));
+  expect((await f.read(local.id)).metadata!.entities).toStrictEqual([destination.id, ai.id]);
 });

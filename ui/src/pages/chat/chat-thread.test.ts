@@ -7,6 +7,7 @@ import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { prependUniqueNativeMessages } from "../../lib/chat/history-message-identity.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import * as toolCards from "../../lib/chat/tool-cards.ts";
+import { resolveWorkingProgress } from "./chat-progress.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import {
   groupsOf as groupsIn,
@@ -42,6 +43,19 @@ const { extractToolCardsCached: extractToolCards } = toolCards;
 
 beforeEach(() => resetChatThreadState());
 afterEach(() => vi.restoreAllMocks());
+
+it("projects an older page without retiring the live progress clock", () => {
+  const now = vi.spyOn(Date, "now").mockReturnValue(1000);
+  const props = createProps({ messages: [{ role: "user", content: "Earlier prompt" }] });
+  const before = resolveWorkingProgress(props.sessionKey, null, null, [], [], []);
+  now.mockReturnValue(10000);
+  expect(buildChatItems(props, undefined, "history")).toMatchObject([
+    { kind: "group", role: "user" },
+  ]);
+  const after = resolveWorkingProgress(props.sessionKey, null, null, [], [], []);
+  expect(after.key).toBe(before.key);
+  expect(after.startedAt).toBe(1000);
+});
 
 function preparedGroup(key: string, message: unknown): MessageGroup {
   return requireGroup(groupMessages([{ kind: "message", key, message }])[0]);

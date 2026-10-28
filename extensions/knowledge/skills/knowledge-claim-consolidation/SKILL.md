@@ -161,7 +161,10 @@ resolved open question, or page text that later claims show to be wrong.
   edit saved nothing, but the linked claims already hold the facts. Move a
   section to its subject's page with `knowledge_extract_section` (creating the
   page per step 3 when needed), reread, and retry. Never shorten other prose to
-  make room.
+  make room. Extraction makes the destination the first subject of the claims
+  the section cites and keeps their existing subjects, including the page you
+  extracted from. Apply step 2 to each of those claims and drop the source page
+  with `knowledge_annotate` `entities` where the claim says nothing about it.
 
 Use `knowledge_edit_body` for section edits. Compute UTF-16 offsets from a fresh
 full read, and reread the revision and hash before every edit: other sessions

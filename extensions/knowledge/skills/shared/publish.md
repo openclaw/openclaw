@@ -63,8 +63,12 @@ Claims have no budget.
 source, or `{title, type}` for a new page), a one-line `summary`, a reason, and
 the vault and ontology fences. In one publication the section moves verbatim with
 its links and the source evidence it quotes; claims it cites that name the source
-as a subject move to the destination; the source keeps the heading, your summary
-and a link. The destination's own budget applies.
+as a subject gain the destination as primary subject and keep the source; the
+source keeps the heading, your summary and a link. The destination's own budget
+applies. Afterwards decide for each moved claim whether the source page is still
+a subject, and remove it with `knowledge_annotate` `entities` when it is not.
+Reference-style links and a destination ending inside an open code block reject
+the move: write the section's links inline or as `[[id|label]]` first.
 
 ## Publish related records together
 

@@ -157,7 +157,6 @@ suite.define(() => {
             await confirmation
               .getByRole("button", { name: `Switch to ${gatewayUrl.host}`, exact: true })
               .click();
-            await waitForControlUiGatewayReady(page);
             const capture = async (name: string, selector: string) => {
               if (!process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
                 return;
@@ -170,6 +169,7 @@ suite.define(() => {
               await writeFile(path.join(suite.artifactDir, name), frame.png);
             };
             await text(".profile-hero__name").toBe("Test Person");
+            await page.locator("#personal-instructions-content:enabled").waitFor();
             await capture("guest-profile.png", "#settings-profile-access");
             await text(".profile-hero__handle").toContain(authenticatedUser);
             await text(".profile-hero").not.toContain("Clipper");
@@ -255,7 +255,7 @@ suite.define(() => {
             await expect.poll(auth).toMatchObject({ sessionCap: "write", roleAllowsAdmin: true });
             const promotedAuth = await auth();
             expect(promotedAuth.scopes).not.toContain("operator.admin");
-            await access.getByRole("button", { name: "Request admin", exact: true }).waitFor();
+            await page.locator("#personal-instructions-content:enabled").waitFor();
             await capture("promoted-profile.png", "#settings-profile-access");
             await access.getByRole("button", { name: "Request admin", exact: true }).click();
             await access.getByText(/Approve this browser by running/u).waitFor();

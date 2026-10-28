@@ -11,10 +11,13 @@ describePosix("native merge completion", () => {
     const f = fixture();
     f.bindWorkflow();
     configureMerge(f, { cleanup: "absent" });
+    const nested = "refs/heads/archive/refs/heads/topic";
+    f.git(["push", "-q", "origin", `${f.head}:${nested}`]);
     const run = expectExit(f.run());
     expect(run.output).not.toContain("Warning: remote cleanup pending");
     expect(f.record().phase).toBe("complete");
     expect(f.state().posts).toBe(1);
+    expect(f.git(["--git-dir=" + f.remote, "rev-parse", nested])).toBe(f.head);
     expect(
       f.git(["for-each-ref", "--format=%(refname)", "refs/openclaw/pr-workflow-bindings/123"]),
     ).toBe("");
@@ -58,9 +61,12 @@ describePosix("native merge completion", () => {
   it("preserves unrelated local source-name branches during explicit completion", () => {
     const f = reconciledMergeAfterCleanup();
     f.git(["branch", "topic", f.base]);
+    const nested = "refs/heads/archive/refs/heads/topic";
+    f.git(["push", "-q", "origin", `${f.head}:${nested}`]);
     expectExit(f.complete(f.git(["rev-parse", outcomeRef])));
     expect(f.record().phase).toBe("complete");
     expect(f.git(["rev-parse", "topic"])).toBe(f.base);
+    expect(f.git(["--git-dir=" + f.remote, "rev-parse", nested])).toBe(f.head);
     expect(f.state()).toMatchObject({ posts: 1, mutations: 1 });
   });
 

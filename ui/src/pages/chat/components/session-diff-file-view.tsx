@@ -362,7 +362,9 @@ export function createSessionDiffFileView(bindings: SessionDiffViewBindings) {
                   desktop() &&
                   Boolean(props.openFileView) &&
                   file().status !== "deleted" &&
-                  file().binary !== true,
+                  file().binary !== true
+                    ? props.canEditFile?.(file().path)
+                    : false,
               });
             }}
           >

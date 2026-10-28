@@ -1,6 +1,7 @@
-import syncFs from "node:fs";
+import callbackFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { openRootFile, type RootFileOpenResult } from "../infra/boundary-file-read.js";
 import { FsSafeError, root as fsRoot } from "../infra/fs-safe.js";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
@@ -17,6 +18,9 @@ import { toRelativeSandboxPath } from "./path-policy.js";
 import { isPathBoundaryEscapeError, markHostRootEscape } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { resolveHostWorkspaceRoot } from "./workspace-write-scope.js";
+
+const readFileDescriptor = promisify(callbackFs.readFile);
+const closeFileDescriptor = promisify(callbackFs.close);
 
 export type SandboxApplyPatchConfig = {
   root: string;
@@ -172,9 +176,11 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
         assertBoundaryRead(opened, filePath);
         try {
           assertCurrent();
-          return decodeUtf8Input(syncFs.readFileSync(opened.fd), `File ${filePath}`);
+          const buffer = await readFileDescriptor(opened.fd);
+          assertCurrent();
+          return decodeUtf8Input(buffer, `File ${filePath}`);
         } finally {
-          syncFs.closeSync(opened.fd);
+          await closeFileDescriptor(opened.fd);
         }
       }),
     writeFile: async (filePath, content) => {

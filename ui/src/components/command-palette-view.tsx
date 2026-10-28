@@ -25,6 +25,7 @@ import {
 } from "../lib/keyboard-shortcut-contract.ts";
 import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { keyboardHintsVisible } from "../lib/reactive/keyboard-hints.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
 import { paneDomId } from "../pages/chat/components/chat-composer-dom.ts";
@@ -238,9 +239,11 @@ function resolvePaletteResults(snapshot: CommandPaletteProps, prepared?: Command
 
 function PaletteHint(props: { shortcut: SolidJSX.Element; label: string }) {
   return (
-    <span class="cmd-palette__hint">
-      {props.shortcut} <span>{props.label}</span>
-    </span>
+    <Show when={keyboardHintsVisible()}>
+      <span class="cmd-palette__hint">
+        {props.shortcut} <span>{props.label}</span>
+      </span>
+    </Show>
   );
 }
 
