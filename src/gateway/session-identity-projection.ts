@@ -21,7 +21,7 @@ import type {
 } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { isAvatarDataUrl, isAvatarHttpUrl, looksLikeAvatarPath } from "../shared/avatar-policy.js";
+import { isAvatarDataUrl, looksLikeAvatarPath } from "../shared/avatar-policy.js";
 import { SESSIONS_LIST_OWNER_LIMIT } from "../shared/session-list-limits.js";
 import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import { sortAndLimitBy } from "../shared/sort-and-limit.js";
@@ -119,15 +119,16 @@ export function resolveSessionProfileId(
   return profiles.get(id)?.profileId ?? id;
 }
 
-/** Session rows share the agent-list URL contract: remote sources stay external; data URLs get a revision. */
+/**
+ * Session rows share the agent-list URL contract for Gateway-owned sources.
+ * Data URLs get the revision query; remote HTTP sources stay on the bare
+ * Gateway route (Control UI never loads external avatar URLs directly).
+ */
 function projectAgentAvatarUrl(
   cfg: OpenClawConfig,
   agentId: string,
   avatar: string,
 ): { avatarUrl?: string } {
-  if (isAvatarHttpUrl(avatar)) {
-    return { avatarUrl: avatar };
-  }
   const basePath = normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath);
   if (isAvatarDataUrl(avatar)) {
     const image = prepareGatewayAvatarDataUrl(cfg, agentId, avatar);
