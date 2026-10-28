@@ -43,6 +43,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { RemoteWorkspaceFileReader } from "openclaw/plugin-sdk/file-access-runtime";
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   asNonArrayRecord,
@@ -82,6 +83,7 @@ import {
   applyCurrentMessageProvider,
   resolveCodexToolResultSourceReply,
 } from "./dynamic-tool-source-reply.js";
+import { readCodexMediaContentAlias } from "./media-content-alias.js";
 import type {
   CodexDynamicToolCallParams,
   CodexDynamicToolFunctionSpec,
@@ -595,8 +597,21 @@ export function createCodexDynamicToolBridge(params: {
           recordAgentHarnessToolResultTelemetry({
             extractSourceReplyPayload: extractMessagingToolSourceReplyPayload,
             collectMessagingMediaUrls: collectAgentHarnessMessagingMediaUrls,
-            resolveMessagingMediaSourceUrls: (mediaUrls) =>
-              resolveCodexMediaSourceUrls(mediaUrls, preparedMessageMedia?.sourcePathsByStagedPath),
+            resolveMessagingMediaSourceUrls: (mediaUrls) => [
+              ...resolveCodexMediaSourceUrls(
+                mediaUrls,
+                preparedMessageMedia?.sourcePathsByStagedPath,
+              ),
+              // Record the sent bytes now: the source file can change before the turn ends.
+              // Delivered URLs are Gateway-local (staged remote copies), never remote aliases.
+              ...mediaUrls.flatMap(
+                (url) =>
+                  readCodexMediaContentAlias(
+                    url,
+                    resolveGeneratedMediaMaxBytes(params.hookContext?.config, "image"),
+                  ) ?? [],
+              ),
+            ],
             toolName,
             args: executedArgs,
             result,

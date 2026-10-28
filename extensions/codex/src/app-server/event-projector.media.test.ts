@@ -366,6 +366,8 @@ describe("CodexAppServerEventProjector media projection", () => {
       messageResult({ messageDelivery: receipt() }),
     );
     await sendMedia(bridge, copy, "chat-source");
+    // Only the bytes that were sent count, not what the path holds later.
+    await fs.writeFile(copy, Buffer.from(SECOND_PNG_BASE64, "base64"));
     await events.complete();
     const result = events.result(bridge.telemetry);
 

@@ -1,7 +1,3 @@
-import { createHash } from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
@@ -17,6 +13,7 @@ import {
   saveMediaBuffer,
 } from "openclaw/plugin-sdk/media-store";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readCodexMediaContentAlias } from "./media-content-alias.js";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";
 
 const GENERATED_IMAGE_MEDIA_SUBDIR = "tool-image-generation";
@@ -223,30 +220,24 @@ export class CodexGeneratedMediaProjection {
         generatedUrlBySource.set(normalizeMediaReferenceForComparison(savedPath), mediaUrl);
       }
     }
-    const sentMediaUrls = new Set(params.messagingToolSentMediaUrls);
-    const generatedUrlsByTarget = new Map<MessagingToolSend, Set<string>>();
-    let generatedByContent: { urls: Map<string, string>; sizes: Set<number> } | undefined;
-    const findGeneratedCopy = (sourceUrl: string) => {
-      // The agent may send its own copy of a generated image. Matching bytes
-      // still mean this delivery carried that image.
-      if (!generatedByContent) {
-        generatedByContent = { urls: new Map(), sizes: new Set() };
-        for (const url of generatedUrls) {
-          const content = readLocalFileContent(url);
-          if (content) {
-            generatedByContent.urls.set(content.key, url);
-            generatedByContent.sizes.add(content.size);
-          }
+    if (params.confirmedMediaDeliveries?.length) {
+      // Deliveries also carry the content of the bytes they sent, so a sent
+      // copy of a generated image at another path still matches it.
+      const maxBytes = resolveGeneratedMediaMaxBytes(this.config, "image");
+      for (const mediaUrl of generatedUrls) {
+        const alias = readCodexMediaContentAlias(mediaUrl, maxBytes);
+        if (alias) {
+          generatedUrlBySource.set(alias, mediaUrl);
         }
       }
-      const content = readLocalFileContent(sourceUrl, generatedByContent.sizes);
-      return content && generatedByContent.urls.get(content.key);
-    };
+    }
+    const sentMediaUrls = new Set(params.messagingToolSentMediaUrls);
+    const generatedUrlsByTarget = new Map<MessagingToolSend, Set<string>>();
     for (const delivery of params.confirmedMediaDeliveries ?? []) {
       for (const sourceUrl of delivery.sourceUrls) {
-        const generatedUrl =
-          generatedUrlBySource.get(normalizeMediaReferenceForComparison(sourceUrl)) ??
-          (generatedUrls.size > 0 ? findGeneratedCopy(sourceUrl) : undefined);
+        const generatedUrl = generatedUrlBySource.get(
+          normalizeMediaReferenceForComparison(sourceUrl),
+        );
         if (!generatedUrl) {
           continue;
         }
@@ -276,28 +267,5 @@ export class CodexGeneratedMediaProjection {
           : target;
       }),
     };
-  }
-}
-
-/** Size and SHA-256 of a regular local file, without following symlinks.
- * A file whose size is not in `sizes` is not read. */
-function readLocalFileContent(
-  reference: string,
-  sizes?: ReadonlySet<number>,
-): { key: string; size: number } | undefined {
-  try {
-    const file = reference.startsWith("file://") ? fileURLToPath(reference) : reference;
-    if (!path.isAbsolute(file)) {
-      return undefined;
-    }
-    const stat = fs.lstatSync(file);
-    const size = stat.size;
-    if (!stat.isFile() || (sizes && !sizes.has(size))) {
-      return undefined;
-    }
-    const digest = createHash("sha256").update(fs.readFileSync(file)).digest("hex");
-    return { key: `${size}:${digest}`, size };
-  } catch {
-    return undefined;
   }
 }
