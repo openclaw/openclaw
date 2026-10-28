@@ -65,6 +65,7 @@ async function withPackageRoots(
     await withEnvAsync(
       {
         HOME: base,
+        PATH: `${process.env.PATH}${path.delimiter}${base}`,
         OPENCLAW_HOME: undefined,
         OPENCLAW_PROFILE: undefined,
         OPENCLAW_STATE_DIR: undefined,
@@ -111,17 +112,7 @@ describe("FreeBSD pkg update admission", () => {
         });
         if (ownership !== "owned") {
           await expect(admission).resolves.toBe("npm");
-          if (ownership === "missing") {
-            expect(onWarning).toHaveBeenCalledExactlyOnceWith(
-              expect.stringContaining("pkg executable was not found"),
-            );
-            expect(onWarning.mock.calls[0]?.[0]).toContain(
-              "Continuing without verified system-package ownership.",
-            );
-            expect(onWarning.mock.calls[0]?.[0]).not.toContain("Restore access");
-          } else {
-            expect(onWarning).not.toHaveBeenCalled();
-          }
+          expect(onWarning).not.toHaveBeenCalled();
         } else {
           await expect(admission).rejects.toMatchObject({ reason: "pkg-owned-install" });
           expect(command).not.toHaveBeenCalled();

@@ -78,10 +78,29 @@ export type SystemPackageOwnershipInspection = ReturnType<
   typeof createSystemPackageOwnershipInspection
 >;
 
-async function readPackageFiles(
+// Share unavailable backends across update phases, but refresh successful
+// inventories before effects so newly package-owned files remain protected.
+const packageQueries = new Map<string, Promise<string[] | null>>();
+const warnedQueries = new WeakSet<Promise<string[] | null>>();
+
+function readPackageFiles(
   owner: NonNullable<ReturnType<typeof packageOwner>>,
   timeoutMs: number,
-): Promise<string[]> {
+): Promise<string[] | null> {
+  const key = JSON.stringify([owner.manager, process.env.PATH]);
+  return getOrCreatePromise(packageQueries, key, async () => {
+    const files = await queryPackageFiles(owner, timeoutMs);
+    if (files !== null) {
+      packageQueries.delete(key);
+    }
+    return files;
+  });
+}
+
+async function queryPackageFiles(
+  owner: NonNullable<ReturnType<typeof packageOwner>>,
+  timeoutMs: number,
+): Promise<string[] | null> {
   // -N prevents the base-system pkg launcher from bootstrapping. Pin the builtin
   // query: pkg expands aliases once, and plugin initialization precedes dispatch.
   const result = await runCommandBuffered([...owner.command], {
@@ -89,6 +108,9 @@ async function readPackageFiles(
     env: owner.env,
     maxOutputBytes: { stdout: 16 * 1024 * 1024, stderr: 64 * 1024 },
   });
+  if (result.termination === "error" && extractErrorCode(result.error) === "ENOENT") {
+    return null;
+  }
   // pkg may emit a config error with exit 0; only complete, silent output is authoritative.
   const output = result.stdout.toString("utf8");
   const files = output === "" ? [] : output.slice(0, -1).split("\n");
@@ -111,9 +133,9 @@ async function readPackageFiles(
   return files;
 }
 
-/** One planning snapshot; create a fresh inspection before installation effects. */
 const log = createSubsystemLogger("update");
 
+/** One planning snapshot; create a fresh inspection before installation effects. */
 export function createSystemPackageOwnershipInspection(
   timeoutMs = PKG_INSPECTION_TIMEOUT_MS,
   options: {
@@ -121,7 +143,7 @@ export function createSystemPackageOwnershipInspection(
   } = {},
 ) {
   const owner = packageOwner();
-  let files: Promise<string[]> | undefined;
+  let files: Promise<string[] | null> | undefined;
   let unavailable = false;
   const directories = new Map<string, Promise<string>>();
   const assertions = new Map<string, Promise<void>>();
@@ -190,6 +212,9 @@ export function createSystemPackageOwnershipInspection(
       `${owner.manager} query`,
       () => (files ??= readPackageFiles(owner, budget)),
     );
+    if (inventory === null) {
+      return;
+    }
     const matches = (candidate: string, file: string) =>
       entryOnly ? candidate === file : isPathInside(candidate, file);
     // A recorded lexical owner is authoritative even when another package's
@@ -230,6 +255,12 @@ export function createSystemPackageOwnershipInspection(
         return;
       }
       unavailable = true;
+      if (files && warnedQueries.has(files)) {
+        return;
+      }
+      if (files) {
+        warnedQueries.add(files);
+      }
       const warn = options.onWarning ?? ((message: string) => log.warn(message));
       warn(`${error.message} Continuing without verified system-package ownership.`);
     });

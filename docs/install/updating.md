@@ -45,6 +45,12 @@ backup.
 
 ## Update implementation contract
 
+System-package ownership inspection treats missing package-manager executables as
+inapplicable without warning. Unavailable backend results are reused across update
+phases in the same process and command search path; other query failures warn once.
+Successful inventories stay fresh before installation effects to protect files
+claimed by a system package manager. This behavior requires the updated updater.
+
 When artifact-preserving SQLite inspection exhausts its stabilization attempts,
 update failures retain the final consistency reason code and attempt count in
 `openclaw update status` and the prepared failure report. The candidate worker

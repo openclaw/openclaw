@@ -9,9 +9,14 @@ import { UpdatePreMutationError } from "./update-pre-mutation-error.js";
 import { createSystemPackageOwnershipInspection } from "./update-system-package-ownership.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-beforeEach(() => vi.spyOn(process, "platform", "get").mockReturnValue("freebsd"));
+let inspectionId = 0;
+beforeEach(() => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("freebsd");
+  vi.stubEnv("PATH", `${process.env.PATH}${path.delimiter}/fixture/inspection-${++inspectionId}`);
+});
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   vi.useRealTimers();
 });
 function fixture(inventory = "", timeout = 100) {
@@ -39,17 +44,25 @@ it("uses one non-bootstrap, alias-pinned inventory for a planning snapshot", asy
     maxOutputBytes: { stdout: 16 * 1024 * 1024, stderr: 64 * 1024 },
   });
 });
-it("warns once and continues after timeout without consulting the host", async () => {
+it.each(["ENOENT", "EACCES", "timeout"])("reuses %s failures", async (code) => {
   for (const platform of ["linux", "freebsd"] as const) {
     vi.spyOn(process, "platform", "get").mockReturnValue(platform);
-    const onWarning = vi.fn();
-    const runCommand = vi.spyOn(exec, "runCommandBuffered");
-    runCommand.mockClear().mockResolvedValue(result("", { code: null, termination: "timeout" }));
-    const inspection = createSystemPackageOwnershipInspection(100, { onWarning });
-    await expect(inspection.assertUnowned("/fixture/openclaw")).resolves.toBeUndefined();
-    await expect(inspection.assertEntryUnowned("/fixture/launcher")).resolves.toBeUndefined();
-    expect(runCommand).toHaveBeenCalledOnce();
-    expectWarning(onWarning, "Continuing without verified system-package ownership");
+    const { onWarning, query } = fixture();
+    query.mockClear().mockResolvedValue(
+      result("", {
+        code: null,
+        termination: code === "timeout" ? "timeout" : "error",
+        error: Object.assign(new Error("backend failed"), { code }),
+      }),
+    );
+    const inspect = () => createSystemPackageOwnershipInspection(100, { onWarning });
+    await Promise.all(Array.from({ length: 5 }, () => inspect().assertUnowned("/fixture/root")));
+    await inspect().assertEntryUnowned("/fixture/later");
+    expect(query).toHaveBeenCalledOnce();
+    expect(onWarning).toHaveBeenCalledTimes(code === "ENOENT" ? 0 : 1);
+    if (code !== "ENOENT") {
+      expectWarning(onWarning, "Continuing without verified system-package ownership");
+    }
   }
 });
 it("retains the pre-mutation error contract for a positive linux owner", async () => {
@@ -116,9 +129,7 @@ it("does not continue an ancestor walk or reset the snapshot after a late ENOENT
   await vi.advanceTimersByTimeAsync(0);
   await expect(inspect("/another/root")).resolves.toBeUndefined();
   expectWarning(onWarning, "exhausted its shared 100 ms budget");
-  expect([query.mock.calls.length, lookup.mock.calls.length, canonical.mock.calls.length]).toEqual([
-    1, 1, 0,
-  ]);
+  expect([query, lookup, canonical].map((spy) => spy.mock.calls.length)).toEqual([1, 1, 0]);
 });
 it.each(["query", "path"] as const)(
   "warns when %s work synchronously consumes the deadline",
@@ -141,22 +152,20 @@ it.each(["query", "path"] as const)(
     expectWarning(onWarning, "exhausted its shared 100 ms budget");
     // Observe any rejection orphaned by deadline admission.
     await nextEventLoopTurn();
-    expect([
-      query.mock.calls.length,
-      lookup.mock.calls.length,
-      canonical.mock.calls.length,
-    ]).toEqual([1, stage === "query" ? 0 : 1, 0]);
+    expect([query, lookup, canonical].map((spy) => spy.mock.calls.length)).toEqual([
+      1,
+      stage === "query" ? 0 : 1,
+      0,
+    ]);
   },
 );
 it("caps the inspection independently of a long installation timeout", async () => {
-  const { inspect, query, onWarning } = fixture("", 20 * 60_000);
+  const { query, onWarning } = fixture("", 20 * 60_000);
   query.mockImplementation(() => new Promise<never>(() => {}));
   vi.useFakeTimers();
-  const pending = expect(inspect("/fixture/openclaw")).resolves.toBeUndefined();
-  await Promise.all([pending, vi.advanceTimersByTimeAsync(30_000)]);
+  const inspect = () => createSystemPackageOwnershipInspection(20 * 60_000, { onWarning });
+  const pending = Array.from({ length: 5 }, () => inspect().assertUnowned("/fixture/root"));
+  await Promise.all([...pending, vi.advanceTimersByTimeAsync(30_000)]);
   expectWarning(onWarning, "exhausted its shared 30000 ms budget during pkg query");
-  expect(query).toHaveBeenCalledWith(
-    expect.any(Array),
-    expect.objectContaining({ timeoutMs: 30_000 }),
-  );
+  expect(query.mock.calls[0]?.[1]?.timeoutMs).toBe(30_000);
 });
