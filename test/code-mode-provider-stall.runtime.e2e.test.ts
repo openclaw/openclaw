@@ -56,7 +56,7 @@ function sendExec(response: Parameters<typeof writeOpenAiResponsesSse>[0], corre
 it(
   "continues a failed Code Mode result after a provider request stalls before headers",
   { timeout: 60_000 },
-  async ({ signal }) => {
+  async ({ signal, onTestFailed }) => {
     const testStartedAt = performance.now();
     const phases: Record<string, number> = {};
     const fixture = await createFixture("openclaw-code-mode-stall-", TOKEN);
@@ -94,18 +94,20 @@ it(
     );
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
     const events: Array<{ event?: string; payload?: unknown }> = [];
-    const recordPhase = (phase: string) => {
-      phases[phase] = performance.now() - testStartedAt;
-      console.error(
+    onTestFailed(() => {
+      // The e2e lane silences console calls, including diagnostics from a failed test.
+      process.stderr.write(
         JSON.stringify({
           proof: "stall-recovery-progress",
-          phase,
           phases,
           requests: requests.length,
           closedAfterMs,
           providerErrors: provider.errors.map(String),
-        }),
+        }) + "\n",
       );
+    });
+    const recordPhase = (phase: string) => {
+      phases[phase] = performance.now() - testStartedAt;
     };
     recordPhase("fixtureReadyMs");
     try {
