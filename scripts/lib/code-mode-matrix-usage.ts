@@ -227,9 +227,13 @@ export async function readMatrixModelAccounting(params: {
     tokens: Object.fromEntries(
       MODEL_TOKEN_BUCKETS.map((key) => [
         key,
-        complete && selected.every((call) => call.usage?.[key] !== undefined)
-          ? selected.reduce((sum, call) => sum + call.usage![key], 0)
-          : null,
+        selected.reduce<number | null>(
+          (sum, call) => {
+            const value = call.usage?.[key];
+            return sum === null || value === undefined ? null : sum + value;
+          },
+          complete ? 0 : null,
+        ),
       ]),
     ),
   });

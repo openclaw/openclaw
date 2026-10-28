@@ -88,6 +88,27 @@ describe("matrix logical model accounting", () => {
     expect(result.usageObservations).toHaveLength(1);
   });
 
+  it.each(["first", "last"])("preserves a missing bucket in the %s call", async (missing) => {
+    const rows = timeline([
+      { name: "provider.request.started", runId: "task", spanId: "second-call" },
+      {
+        name: "provider.request",
+        type: "provider.request",
+        runId: "task",
+        spanId: "second-call",
+        ok: true,
+        attributes: { usageState: "available", input: 5, output: 7 },
+      },
+    ]);
+    rows[2]!.attributes.input = 3;
+    delete rows[missing === "first" ? 2 : 4]!.attributes.output;
+    expect(await read(rows)).toMatchObject({
+      complete: true,
+      foreground: { observedCalls: 2, tokens: { input: 8, output: null } },
+      other: { observedCalls: 0, tokens: { input: 0, output: 0 } },
+    });
+  });
+
   it("reads the canonical writer and metadata-only usage projection through final close", async () => {
     const file = path.join(tempDirs.make("matrix-model-accounting-writer-"), "timeline.jsonl");
     await withEnvAsync(
