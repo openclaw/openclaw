@@ -3453,7 +3453,7 @@ describe("main-session-restart-recovery", () => {
 
     await expectRecovery({ skipped: 1 });
     expect(sendRecoveryNotice).toHaveBeenCalledOnce();
-    expect(sendRecoveryNotice).toHaveBeenCalledWith({
+    expect(sendRecoveryNotice.mock.calls[0]?.[0]).toMatchObject({
       accountId: "work",
       channel: "discord",
       to: "discord:dm:main",

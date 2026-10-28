@@ -232,6 +232,9 @@ Import from explicitly configured local paths (`unsafeLocal.paths`) in `unsafe-l
 
 Import a ChatGPT export into draft wiki source pages.
 
+Imported transcript text preserves line breaks, code indentation, and internal
+spacing, including text parts stored as serialized JSON in the export.
+
 ```bash
 openclaw wiki chatgpt import --export ./chatgpt-export
 openclaw wiki chatgpt import --export ./conversations.json --dry-run

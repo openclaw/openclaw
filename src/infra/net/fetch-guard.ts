@@ -647,6 +647,7 @@ async function fetchWithSsrFGuardInternal(
           ? AbortSignal.any([signal, requestController.signal])
           : requestController.signal,
       };
+      let captureBody = currentInit?.body ?? null;
       if (init.body instanceof Blob) {
         // Node 24.16–24.19 Blob streams pin the request's async context. Fresh per-hop
         // bytes also avoid Fetch's unused body tee while preserving immutable replay.
@@ -661,7 +662,9 @@ async function fetchWithSsrFGuardInternal(
         init.headers = headers;
         // This is the caller's immutable Blob, not an unbounded network Response.
         // nosemgrep: security.opengrep.ghsa-p536-vvpp-9mc8.openclaw.web-fetch-or-media-unbounded-response-read
-        init.body = new Uint8Array(await body.arrayBuffer());
+        const bytes = new Uint8Array(await body.arrayBuffer());
+        init.body = bytes;
+        captureBody = captureAdmission.capture ? Buffer.from(bytes) : captureBody;
       }
 
       // Explicit caller stubs and test-installed fetch mocks should win.
@@ -674,7 +677,7 @@ async function fetchWithSsrFGuardInternal(
         method: currentInit?.method ?? "GET",
         signal: process.versions.bun ? (init.signal ?? undefined) : undefined,
         requestHeaders: currentInit?.headers as Headers | Record<string, string> | undefined,
-        requestBody: currentInit?.body ?? null,
+        requestBody: captureBody,
         transport: "http" as const,
         flowId: params.capture === false ? undefined : params.capture?.flowId,
         meta: {

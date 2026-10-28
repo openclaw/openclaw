@@ -111,7 +111,15 @@ async function createRecovery(
         ...fields,
       },
     );
-  await writeEntry({ restartRecoveryDeliveryRunId: scope.recoveryRunId });
+  const entry = await writeEntry({ restartRecoveryDeliveryRunId: scope.recoveryRunId });
+  assert(entry, "Missing seeded recovery session");
+  const generation = {
+    agentId: scope.agentId,
+    storePath: scope.storePath,
+    sessionKey: scope.sessionKey,
+    sessionId: entry.sessionId,
+    lifecycleRevision: entry.lifecycleRevision ?? null,
+  };
   const snapshot = captureActivePluginRegistrySnapshot();
   stageActivePluginRegistry(
     createTestRegistry([{ pluginId: "telegram", source: "test", plugin }]),
@@ -128,7 +136,7 @@ async function createRecovery(
     isDispatchAvailable: () => true,
   });
   const restore = () => restoreActivePluginRegistrySnapshot(snapshot);
-  return { scope, runtime, settings, restore, writeEntry };
+  return { scope, generation, runtime, settings, restore, writeEntry };
 }
 
 function beforeCompletion<T>(signal: Promise<T>, operation: Promise<unknown>, message: string) {
@@ -157,7 +165,7 @@ it.each([
     const noticeText = "Recovery result";
     const api = await startApi(stateDir, "notice");
     const { cfg, blocked, blockerText } = api;
-    const { scope, runtime, settings, restore, writeEntry } = await createRecovery(
+    const { scope, generation, runtime, settings, restore, writeEntry } = await createRecovery(
       stateDir,
       "notice",
       cfg,
@@ -192,7 +200,8 @@ it.each([
         ...scope.deliveryContext,
         text: noticeText,
         idempotencyKey: "notice-" + mode,
-        liveOnly: true,
+        generation,
+        provenance: { kind: "recovery-notice", noticeId: "notice-" + mode },
         isCurrent: deliveryCurrent?.isCurrent ?? (() => policyCurrent),
       });
       notice = operation.then(

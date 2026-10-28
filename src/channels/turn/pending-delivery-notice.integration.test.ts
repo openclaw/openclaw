@@ -21,6 +21,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { runPreparedChannelTurn } from "./execution.js";
 import { dispatchRoutedChannelTurn } from "./lifecycle.js";
 import type { ChannelTurnDeliveryAdapter } from "./types.js";
 
@@ -109,6 +110,36 @@ describe("pending delivery notice end to end", () => {
     });
     return dispatch({ deliver });
   };
+
+  it("passes the context owner to a global record target before dispatch", async () => {
+    await settle("unknown");
+    const secondary = { agentId: "secondary", sessionKey: "global", storePath };
+    await replaceSessionEntry(secondary, { ...entry()!, sessionId: "secondary-global" });
+    const runDispatch = vi.fn(async () => {
+      expect(sendRecoveryNotice).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          generation: { ...secondary, sessionId: "secondary-global", lifecycleRevision: null },
+        }),
+      );
+      expect(loadSessionEntry(secondary)?.pendingDeliveryNotice?.state).toBe("acknowledged");
+      return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+    });
+    await runPreparedChannelTurn({
+      ...route,
+      storePath,
+      routeSessionKey: "agent:secondary:telegram:direct:chat-1",
+      ctxPayload: {
+        AgentId: "secondary",
+        SessionKey: "agent:secondary:command:telegram:chat-1",
+        CommandAuthorized: false,
+      },
+      record: { sessionKey: secondary.sessionKey },
+      recordInboundSession: async () => undefined,
+      runDispatch,
+    });
+    expect(runDispatch).toHaveBeenCalledOnce();
+    expect(entry()?.pendingDeliveryNotice?.state).toBe("owed");
+  });
   const freshTurn = () => runTurn(visible, false);
   function queueFinal(prepared = false, custody = completion, beforeIdle = Promise.resolve()) {
     dispatchCore.mockImplementationOnce(async (params) => {

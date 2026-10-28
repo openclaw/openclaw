@@ -68,6 +68,14 @@ supplied. Neither job depends on the other, so
 their results remain independently visible; either requested proof failing fails
 the workflow.
 
+The source-native job compiles and validates test workers in a separate
+five-minute preparation step, then reuses that generation through the existing
+content-validated worker cache. The lifecycle step retains its own five-minute
+limit, including cache validation and finalization; the case's 240-second limit,
+65-second restart observation, assertions, and cleanup are unchanged. Both steps
+remain inside the 75-minute job limit. Preparation failure fails the job and
+prevents the lifecycle step from running.
+
 Set `skip_defender_exclusions=true` to leave Windows Defender policy unchanged
 throughout the workflow, including native and installed Scheduled Task proof jobs.
 This skips only the workspace and Node process exclusions; proof selection,

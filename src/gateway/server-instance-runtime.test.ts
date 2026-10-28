@@ -2,6 +2,8 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { GatewayNativeApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import type { GatewayApprovalEventSubscriber } from "../infra/approval-gateway-runtime.types.js";
 import { findDeliveryIntentOwner } from "../infra/outbound/delivery-queue-storage.js";
@@ -268,7 +270,21 @@ it("sends recovery notices through normal outbound without invoking plugin actio
         threadId: "thread-1",
         text: "Recovery notice",
       };
-      const notice = { channel: "signal", ...target, idempotencyKey };
+      const generation = {
+        agentId: "main",
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+        sessionKey: "agent:main:dashboard:notice",
+        sessionId: "notice-session",
+        lifecycleRevision: null,
+      };
+      await replaceSessionEntry(generation, { sessionId: generation.sessionId, updatedAt: 1 });
+      const notice = {
+        channel: "signal",
+        ...target,
+        idempotencyKey,
+        generation,
+        provenance: { kind: "recovery-notice" as const, noticeId: idempotencyKey },
+      };
       await runtime.recovery.sendRecoveryNotice(notice);
       await runtime.recovery.sendRecoveryNotice(notice);
 
@@ -281,7 +297,10 @@ it("sends recovery notices through normal outbound without invoking plugin actio
       const staleDelivery = runtime.recovery.sendRecoveryNotice({
         ...notice,
         idempotencyKey: "main-session-restart-recovery:run-2:failed-notice",
-        liveOnly: true,
+        provenance: {
+          kind: "recovery-notice",
+          noticeId: "main-session-restart-recovery:run-2:failed-notice",
+        },
         isCurrent: () => ownerCurrent,
       });
       await vi.waitFor(() => expect(sendText).toHaveBeenCalledTimes(2));
@@ -294,13 +313,17 @@ it("sends recovery notices through normal outbound without invoking plugin actio
       await expect(staleDelivery).rejects.toThrow("Recovery notice owner retired before delivery");
 
       expect(visibleSend).toHaveBeenCalledOnce();
-      expect(queuedResumption).toMatchObject({ namespace: "preparing", retired: true });
+      expect(queuedResumption).toMatchObject({ namespace: "prepared", status: "pending" });
       expect(sendText).toHaveBeenCalledWith(expect.objectContaining(target));
       expect(handleAction).not.toHaveBeenCalled();
 
       const guardedDurableNotice = {
         ...notice,
         idempotencyKey: "main-session-restart-recovery:subagent:run-3:resumed-notice",
+        provenance: {
+          kind: "recovery-notice" as const,
+          noticeId: "main-session-restart-recovery:subagent:run-3:resumed-notice",
+        },
         isCurrent: () => true,
       };
       await runtime.recovery.sendRecoveryNotice(guardedDurableNotice);
@@ -308,6 +331,10 @@ it("sends recovery notices through normal outbound without invoking plugin actio
       await runtime.recovery.sendRecoveryNotice(guardedDurableNotice);
       expect(visibleSend).toHaveBeenCalledTimes(2);
       await expectCompleted(guardedDurableNotice.idempotencyKey);
+      runtime.close();
+      await expect(runtime.recovery.sendRecoveryNotice(notice)).rejects.toThrow(
+        "Gateway instance dispatch unavailable for recovery notice",
+      );
     } finally {
       runtime.close();
       restoreActivePluginRegistrySnapshot(pluginRegistrySnapshot);

@@ -67,6 +67,7 @@ import {
   resolveAnthropicCacheOptions,
   resolveAnthropicRequestBetaHeader,
 } from "./anthropic-payload-policy.js";
+import { applyAnthropicPayloadHook } from "./anthropic-request-body.js";
 import { resolveAnthropicMessagesMaxTokens } from "./anthropic-transport-options.js";
 import { resolveProviderEndpoint } from "./host-policy.js";
 import {
@@ -88,6 +89,19 @@ type AnthropicWireMessage = {
   reasoning_content?: string;
   clear_at?: "next_user_message";
 };
+
+type AnthropicMessageProjection = {
+  key: string;
+  followingSources: Context["messages"];
+  message: AnthropicWireMessage | undefined;
+};
+
+// Weak source ownership releases projections with history; route and grouped-result
+// variants share the same bounded lifetime as Responses message projections.
+const anthropicMessageProjections = new WeakMap<
+  Context["messages"][number],
+  AnthropicMessageProjection[]
+>();
 
 const NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)";
 
@@ -241,18 +255,18 @@ export async function buildAnthropicRequest(
   const activeToolTurnAssistantIndex = replayThinkingEnabled
     ? -1
     : findActiveAnthropicToolTurnAssistantIndex(transformed);
-  for (let i = 0; i < transformed.length; i += 1) {
-    const msg = transformed[i];
-    if (!msg) {
-      continue;
-    }
+  const convertMessage = async (
+    msg: Context["messages"][number],
+    i: number,
+    end: number,
+  ): Promise<AnthropicWireMessage | undefined> => {
     if (msg.role === "user") {
       const operatorMessage = inHistorySystemUpdates ? msg.operatorMessage : undefined;
       const sourceContent = msg.content;
       let content: AnthropicWireMessage["content"];
       if (typeof sourceContent === "string") {
         if (sourceContent.trim().length === 0) {
-          continue;
+          return undefined;
         }
         content = sanitizeTransportPayloadText(sourceContent);
       } else {
@@ -285,10 +299,10 @@ export async function buildAnthropicRequest(
             : !managed || model.input.includes("image"),
         );
         if (content.length === 0) {
-          continue;
+          return undefined;
         }
       }
-      appendMessage({
+      return {
         role: operatorMessage ? "system" : "user",
         content: operatorMessage
           ? typeof content === "string"
@@ -296,15 +310,7 @@ export async function buildAnthropicRequest(
             : content.filter((block) => block.type === "text")
           : content,
         ...(operatorMessage?.turnScoped ? { clear_at: "next_user_message" as const } : {}),
-      });
-      const runtimeContextRetained =
-        msg.runtimeContext !== undefined
-          ? msg.runtimeContext.retained
-          : msg.runtimeContextCarrierRetained;
-      if (hasRuntimeContextMarker(msg) && !(runtimeContextRetained ?? modelRetainsRuntimeContext)) {
-        cacheBreakpointOptOutMessageIndexes.add(messages.length - 1);
-      }
-      continue;
+      };
     }
     if (msg.role === "assistant") {
       const blocks: AnthropicReplayBlock[] = i === 0 && compaction ? [compaction] : [];
@@ -386,14 +392,13 @@ export async function buildAnthropicRequest(
             signature: "reasoning_content",
           });
         }
-        messages.push(assistantMsg);
+        return assistantMsg;
       }
-      continue;
+      return undefined;
     }
     if (msg.role === "toolResult") {
       const toolResults: ToolResultBlockParam[] = [];
-      let j = i;
-      while (j < transformed.length) {
+      for (let j = i; j < end; j++) {
         const nextMsg = transformed.at(j);
         if (nextMsg?.role !== "toolResult") {
           break;
@@ -416,14 +421,92 @@ export async function buildAnthropicRequest(
           ),
           is_error: nextMsg.isError,
         });
-        j += 1;
       }
-      i = j - 1;
-      appendMessage({
+      return {
         role: "user",
         content: toolResults,
-      });
+      };
     }
+    return undefined;
+  };
+  const immutable = getAiTransportHost().immutableData;
+  const projectionKey = JSON.stringify([
+    profile,
+    model.provider,
+    model.api,
+    model.id,
+    model.baseUrl,
+    model.input.includes("image"),
+    isOAuthToken,
+    allowReasoningContentReplay,
+    allowEmptySignature,
+    replayThinkingEnabled,
+    inHistorySystemUpdates,
+  ]);
+  const activeProjectionKey = `${projectionKey}:active`;
+  const canReuse = (message: Context["messages"][number]) =>
+    Boolean(immutable?.isPlainData) &&
+    immutable?.isDeeplyFrozenPlainData(message) &&
+    (typeof message.content === "string" ||
+      !message.content.some((block) => block.type === "image"));
+  for (let i = 0; i < transformed.length;) {
+    const msg = transformed[i];
+    if (!msg) {
+      i++;
+      continue;
+    }
+    let end = i + 1;
+    if (msg.role === "toolResult") {
+      while (transformed[end]?.role === "toolResult") {
+        end++;
+      }
+    }
+    // Image budgets and prepared suffix IDs are request-scoped. Compaction inserts
+    // a request-owned block before replay; none of these enter the projection cache.
+    let reusable = !compaction && !preparedRequestSuffix.has(context) && canReuse(msg);
+    for (let j = i + 1; reusable && j < end; j++) {
+      const following = transformed[j];
+      reusable = following !== undefined && canReuse(following);
+    }
+    const key = i === activeToolTurnAssistantIndex ? activeProjectionKey : projectionKey;
+    let projections = reusable ? anthropicMessageProjections.get(msg) : undefined;
+    const projection = projections?.find(
+      (entry) =>
+        entry.key === key &&
+        entry.followingSources.length === end - i - 1 &&
+        entry.followingSources.every((source, index) => source === transformed[i + index + 1]),
+    );
+    let output = projection?.message;
+    if (!projection) {
+      output = await convertMessage(msg, i, end);
+      if (reusable && immutable) {
+        immutable.freezeJsonSnapshot(output);
+        if (!projections) {
+          projections = [];
+          anthropicMessageProjections.set(msg, projections);
+        }
+        if (projections.length >= 8) {
+          projections.shift();
+        }
+        projections.push({ key, followingSources: transformed.slice(i + 1, end), message: output });
+      }
+    }
+    if (output) {
+      appendMessage(output);
+      if (msg.role === "user") {
+        const runtimeContextRetained =
+          msg.runtimeContext !== undefined
+            ? msg.runtimeContext.retained
+            : msg.runtimeContextCarrierRetained;
+        if (
+          hasRuntimeContextMarker(msg) &&
+          !(runtimeContextRetained ?? modelRetainsRuntimeContext)
+        ) {
+          cacheBreakpointOptOutMessageIndexes.add(messages.length - 1);
+        }
+      }
+    }
+    i = end;
   }
   if (managed && messages.length === 0) {
     messages.push({ role: "user", content: "." });
@@ -546,15 +629,12 @@ export async function prepareAnthropicRequest(
 ) {
   let params = initialParams;
   applyAnthropicContextManagementToRequest(params, model, options, directApiKeyBetaHeader);
-  const nextParams = await options?.onPayload?.(params, model);
-  if (nextParams !== undefined) {
-    // SAFETY: the public payload hook owns the replacement request shape.
-    params = nextParams as MessageCreateParamsStreaming;
-  }
+  const hooked = await applyAnthropicPayloadHook(params, model, options);
+  params = hooked.params;
   applyClaudeRequestContract(params, model);
   const betaHeader = resolveAnthropicRequestBetaHeader(params, directApiKeyBetaHeader);
   const headers =
     applyAnthropicThinkingBindingControls(params, betaHeader) ??
     (betaHeader ? { "anthropic-beta": betaHeader } : undefined);
-  return { params, headers };
+  return { params, headers, messageSources: hooked.messageSources };
 }
