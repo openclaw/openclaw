@@ -11,9 +11,18 @@ import {
   resolvePackedRootDir,
 } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
+import { expandHomePrefix } from "./home-dir.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import { withInstallActivity, type InstallActivityObserver } from "./install-progress.js";
 import { withInstallWorkspace } from "./install-source-utils.js";
+
+/**
+ * Local install specs select a host path, so quoted leading or trailing whitespace
+ * belongs to the directory or archive name. Blank values keep the default resolution.
+ */
+export function resolveLiteralInstallPath(inputPath: string): string {
+  return inputPath.trim() ? path.resolve(expandHomePrefix(inputPath)) : resolveUserPath(inputPath);
+}
 
 export async function resolveExistingInstallPath(inputPath: string): Promise<
   | {
@@ -26,7 +35,7 @@ export async function resolveExistingInstallPath(inputPath: string): Promise<
       error: string;
     }
 > {
-  const resolvedPath = resolveUserPath(inputPath);
+  const resolvedPath = resolveLiteralInstallPath(inputPath);
   if (!(await pathExists(resolvedPath))) {
     return { ok: false, error: `path not found: ${resolvedPath}` };
   }

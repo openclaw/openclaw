@@ -7,6 +7,7 @@ import { resolveArchiveKind } from "../infra/archive.js";
 import { isDefaultClawHubBaseUrl } from "../infra/clawhub-client.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
+import { resolveLiteralInstallPath } from "../infra/install-flow.js";
 import { looksLikeLocalInstallSpec } from "../infra/install-spec.js";
 import { resolveUserPath } from "../utils.js";
 import { findBundledPluginSource, type BundledPluginSource } from "./bundled-sources.js";
@@ -99,7 +100,7 @@ export function resolvePluginInstallSourcePlan(params: {
     return fileSpec;
   }
   const normalized = fileSpec?.path ?? params.raw;
-  const resolved = resolveUserPath(normalized);
+  const resolved = resolveLiteralInstallPath(normalized);
   if (fs.existsSync(resolved)) {
     const recordSource = resolveArchiveKind(resolved) ? "archive" : "path";
     const bundled =
@@ -411,7 +412,7 @@ export function resolveManagedPluginInstallRequest(
       return { source: "bundled", rawSpec: request.spec ?? request.pluginId, bundledSource };
     }
     case "local": {
-      const resolved = resolveUserPath(request.path);
+      const resolved = resolveLiteralInstallPath(request.path);
       const bundled = findBundledPluginSource({ lookup: { kind: "localPath", value: resolved } });
       return {
         source: "local",

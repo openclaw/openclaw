@@ -28,6 +28,27 @@ describe("resolveExistingInstallPath", () => {
     });
   });
 
+  it.skipIf(process.platform === "win32")(
+    "preserves a literal install path beside its trimmed neighbor",
+    async () => {
+      await withTestDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
+        const neighbor = path.join(fixtureRoot, "plugin");
+        const literal = `${neighbor} `;
+        await fs.mkdir(neighbor);
+        await fs.mkdir(literal);
+
+        const result = await resolveExistingInstallPath(literal);
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) {
+          return;
+        }
+        expect(result.resolvedPath).toBe(literal);
+        expect(result.stat.isDirectory()).toBe(true);
+      });
+    },
+  );
+
   it("returns a path-not-found error for missing paths", async () => {
     await withTestDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
       const missing = path.join(fixtureRoot, "missing.tgz");
