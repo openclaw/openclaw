@@ -7,6 +7,7 @@ read_when:
   - Understanding locked desktops or keeping the computer awake
   - Packaging or signing the macOS app
   - Changing bundle IDs or app install paths
+  - LAN or tailnet clients stop reaching a Node service after a Node upgrade
 title: "macOS permissions"
 ---
 
@@ -131,6 +132,28 @@ Treat a `node` entry in System Settings as broad permission for that Node runtim
 Basic presence comes from interaction with OpenClaw and needs no Accessibility grant. **Dashboard → Settings → This Mac → Permissions → System-wide presence detection** is a separate, off-by-default control that includes physical activity in other apps. Accessibility approval alone does not enable it. Turning it off clears the system-wide sample and falls back to app-local activity, without revoking Accessibility or disconnecting the node.
 
 If you accidentally granted Accessibility to `node`, remove that entry from System Settings -> Privacy & Security -> Accessibility. Then grant the signed app or helper that should own UI automation.
+
+## Incoming connections after a Node upgrade
+
+If LAN or direct tailnet access to a Node service, such as a Gateway with `gateway.bind` set to `lan` or `tailnet`, stops working after a Homebrew Node upgrade while `localhost` still works, check the macOS Application Firewall. Homebrew installs the replacement executable at a versioned Cellar path, and you may need to allow it again. A firewall permission prompt can go unnoticed on a headless Mac, leaving incoming connections blocked.
+
+Use the Node executable that runs the affected service; it may differ from `node` on your shell's `PATH` (see [Node.js](/install/node#homebrew-upgrades-while-the-gateway-is-running)). Check the firewall state and that executable's rule:
+
+```bash
+NODE_BIN="$(readlink -f "$(command -v node)")"   # or the service's Node path
+/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate
+/usr/libexec/ApplicationFirewall/socketfilterfw --getblockall
+/usr/libexec/ApplicationFirewall/socketfilterfw --getappblocked "$NODE_BIN"
+```
+
+If incoming connections are blocked for that executable, allow it:
+
+```bash
+sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add "$NODE_BIN"
+sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp "$NODE_BIN"
+```
+
+This rule applies to every service that uses that Node executable, not just OpenClaw. Recheck it after future Node upgrades. A loopback-only Gateway behind Tailscale Serve does not need an incoming-connection rule for Node.
 
 ## Separate Computer Control grants
 
