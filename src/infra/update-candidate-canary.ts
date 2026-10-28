@@ -264,7 +264,7 @@ export async function validateUpdateCandidateCanary(params: {
               entryPath: entry,
               command: "doctor",
             },
-            { cwd: params.root, baseEnv: env, timeoutMs: params.timeoutMs },
+            { cwd: params.root, baseEnv: env, timeoutMs: budget },
           )
         ).has("--full-integrity-check"),
     });

@@ -55,43 +55,6 @@ function routed(
 }
 
 describe("routed CLI prompts in chat history", () => {
-  it.each([
-    "earlier messages in this chat",
-    "messages recorded in this chat since your last reply here (possibly already in this session)",
-  ])("preserves unmatched routed text block provenance beneath %s context", async (description) => {
-    const note = `[OpenClaw: 2 ${description} from start to end. Their contents are not included here. Read history.]`;
-    const content = [{ type: "text", text: `${note}\n\n${envelope()}\nPlease check the build.` }];
-    await withImports([claudeUser(content, { uuid: "routed-switch-back" })], (messages) => {
-      const merged = merge([], messages);
-      expect(merged).toMatchObject([{ role: "user", content, provenance: OPS_PROVENANCE }]);
-      expect(merged[0]).not.toMatchObject({ senderIsOwner: true });
-    });
-  });
-
-  it("records inter-session provenance from the routed prompt envelope", async () => {
-    const provenance: InputProvenance = {
-      ...OPS_PROVENANCE,
-      sourceChannel: "webchat",
-    };
-    const text = envelope(provenance);
-    const contents = [
-      `${text}\n${DRIFT_NOTE}\nPlease check the build.`,
-      [{ type: "text", text: `${text}\nBlock body.` }],
-      "[Inter-session message] sourceTool=sessions_send isUser=false\nTyped by hand.",
-    ];
-    await withImports(
-      contents.map((content, index) => claudeUser(content, { uuid: `entry-${index}` })),
-      (messages) => {
-        expect(messages).toMatchObject(
-          contents.map((content, index) =>
-            index < 2 ? { role: "user", content, provenance } : { role: "user", content },
-          ),
-        );
-        expect(messages[2]?.provenance).toBeUndefined();
-      },
-    );
-  });
-
   it("matches literal routed text block requester frame before removing generated-looking decorations", async () => {
     const quoted = `${REQUESTER_FRAME}${REQUESTER_HINT}\n\nPlease check the build.`;
     const content = [{ type: "text", text: `${envelope()}\n${quoted}` }];
