@@ -134,10 +134,16 @@ final class OpenClawSnapshotUITests: XCTestCase {
             XCTAssertEqual(input.value as? String, focusProbe)
             self.clearTextField(input)
             XCTAssertEqual(input.value as? String, "")
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+            // Dismiss through the transcript gutter, not a diagram that opens its preview on tap.
+            app.scrollViews["chat-transcript"]
+                .coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.05)).tap()
             if keyboard.exists {
                 XCTAssertTrue(keyboard.waitForNonExistence(timeout: 3))
             }
+            XCTAssertFalse(app.buttons["Close diagram preview"].exists)
+            let diagram = app.buttons["Mermaid diagram"]
+            XCTAssertTrue(diagram.waitForExistence(timeout: 8))
+            XCTAssertTrue(diagram.isHittable)
         }
     }
 
@@ -1097,6 +1103,48 @@ final class OpenClawSnapshotUITests: XCTestCase {
         jumpToLatest.tap()
         XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 3))
         XCTAssertTrue(finalReply.exists)
+    }
+
+    func testAnthropicWorkChunksKeepNarrationVisibleInOrder() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-anthropic-work-chunks-fixture", "--openclaw-no-reactions-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let first = app.staticTexts["I will read the sample file."]
+        let second = app.staticTexts["The file looks good. I will run the check."]
+        let final = app.staticTexts["All checks passed."]
+        XCTAssertTrue(final.waitForExistence(timeout: 8))
+        self.attachScreenshot(named: "180490-after-initial")
+        XCTAssertTrue(first.exists)
+        XCTAssertTrue(second.exists)
+        let work = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked"))
+        XCTAssertEqual(work.count, 2, "Each adjacent tool/result pair needs its own disclosure")
+        let firstWork = work.element(boundBy: 0)
+        let secondWork = work.element(boundBy: 1)
+        XCTAssertLessThan(first.frame.maxY, firstWork.frame.midY)
+        XCTAssertLessThan(firstWork.frame.midY, second.frame.minY)
+        XCTAssertLessThan(second.frame.maxY, secondWork.frame.midY)
+        XCTAssertLessThan(secondWork.frame.midY, final.frame.minY)
+        for (index, disclosure) in [firstWork, secondWork].enumerated() {
+            disclosure.tap()
+            XCTAssertTrue(first.exists)
+            XCTAssertTrue(second.exists)
+            XCTAssertTrue(final.exists)
+            let detail = index == 0 ? "sample.txt" : "printf checked"
+            let otherDetail = index == 0 ? "printf checked" : "sample.txt"
+            let tool = app.descendants(matching: .any).matching(NSPredicate(
+                format: "value CONTAINS %@", detail)).firstMatch
+            let otherTool = app.descendants(matching: .any).matching(NSPredicate(
+                format: "value CONTAINS %@", otherDetail)).firstMatch
+            XCTAssertTrue(tool.waitForExistence(timeout: 5), "The selected tool did not expand")
+            XCTAssertFalse(otherTool.exists, "Expanding one chunk must not expand the other")
+            self.attachScreenshot(named: "180490-after-work-\(index + 1)-expanded")
+            disclosure.tap()
+        }
+        self.assertElementHasRenderedContent(first, named: "first narration outside work")
+        self.assertElementHasRenderedContent(second, named: "second narration outside work")
+        self.assertElementHasRenderedContent(final, named: "final answer outside work")
+        self.attachScreenshot(named: "180490-after-collapsed")
     }
 
     func testUnknownOutcomeStepUsesLocalToolTitle() throws {

@@ -8,7 +8,10 @@ import {
   ServiceInspectionError,
   findServiceOwnershipRefusal,
 } from "../../daemon/service-inspection-error.js";
-import { resolveManagedServiceNodeRunner } from "../../daemon/service-layout.js";
+import {
+  resolveManagedServiceNodeRunner,
+  resolveManagedServiceStartupRuntime,
+} from "../../daemon/service-layout.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import {
   resolveManagedGatewayServiceCommand,
@@ -39,6 +42,7 @@ import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-err
 import type {
   ManagedGatewayUpdateVerdict,
   ManagedGatewayServiceObservation,
+  ManagedServiceStopParams,
   PreManagedServiceStop,
 } from "./update-command-service-context-types.js";
 import {
@@ -144,36 +148,6 @@ async function maybeSuspendWindowsTaskAutoStartForUpdate(params: {
   }
   return recovery;
 }
-
-type ManagedServiceStopParams = {
-  recovery?: unknown;
-  updateRun?: UpdateCommandOptions["run"];
-  recordPhase?: (phase: "activating") => Promise<void>;
-  updateInstallKind: "git" | "package";
-  root: string;
-  shouldRestart: boolean;
-  jsonMode: boolean;
-  phase?: "inspect" | "prepare" | "refresh";
-  /** Package/helper root can differ from the inspected service during a rebind. */
-  handoffRoot?: string;
-  handoffFromGateway?: (state: GatewayServiceState) => Promise<boolean>;
-  expectedService?: ManagedGatewayServiceObservation &
-    Partial<Pick<PreManagedServiceStop, "stopped">>;
-  allowInstallRootChange?: boolean;
-  onStopped?: (state: PreManagedServiceStop) => void;
-  /** Doctor restores this same native instance after its offline repair. */
-  retainNativeIdentity?: boolean;
-  assertCurrent?: (phase?: "restore") => void;
-  /** Revalidate a parent deadline immediately before the native stop side effect. */
-  assertDeadline?: () => void;
-  waitForCurrent?: () => Promise<void>;
-  timeoutMs?: number;
-  warn?: (message: string) => void;
-} & (
-  | { recordPhase: (phase: "activating") => Promise<void> }
-  | { updateRun?: undefined }
-  | { phase: "inspect" | "refresh" }
-);
 
 function unavailableServiceState(
   verdict: Extract<ManagedGatewayUpdateVerdict, { kind: "unavailable" }>,
@@ -433,6 +407,9 @@ async function stopManagedServiceBeforeMutableUpdate(
           ? "Gateway service management skipped: the service belongs to a different OpenClaw installation and was left untouched."
           : "Gateway restart skipped: no Gateway service or listener is running.",
     };
+  }
+  if (params.phase === "inspect" && serviceUpdateVerdict.kind === "owned") {
+    params.onOwnedStartupRuntime?.(resolveManagedServiceStartupRuntime(serviceState));
   }
   const operatorRestartWarning =
     process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" && serviceUpdateVerdict.kind === "owned"

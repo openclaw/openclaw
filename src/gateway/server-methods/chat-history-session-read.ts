@@ -55,7 +55,7 @@ export async function prepareChatHistorySessionRead({
     return undefined;
   }
   const queries = (cfg: OpenClawConfig) => {
-    const requested = resolveRequestedSessionAgentId(cfg, sessionKey, agentIdOverride);
+    const requested = resolveRequestedSessionAgentId(cfg, sessionKey, agentIdOverride, "read");
     if (!requested.ok) {
       return [];
     }
@@ -68,7 +68,7 @@ export async function prepareChatHistorySessionRead({
   };
   const selectSession = (read: SessionRowReadView) => {
     const cfg = read.state.cfg;
-    const requested = resolveRequestedSessionAgentId(cfg, sessionKey, agentIdOverride);
+    const requested = resolveRequestedSessionAgentId(cfg, sessionKey, agentIdOverride, "read");
     if (!requested.ok) {
       respond(false, undefined, requested.error);
       return undefined;
@@ -104,13 +104,21 @@ export async function prepareChatHistorySessionRead({
     };
   };
   const authorizeSharingFacts = (
-    current: Pick<NonNullable<ReturnType<typeof selectSession>>, "entry" | "canonicalKey">,
+    current: Pick<
+      NonNullable<ReturnType<typeof selectSession>>,
+      "entry" | "canonicalKey" | "agentId" | "storePath"
+    >,
     sharing: ReturnType<typeof prepareProjectedSessionSharing>,
   ) => {
     sessionMutationAuthorization?.assertCurrent();
     if (
       current.entry
-        ? sharing.entryFilter?.(current.canonicalKey, current.entry) === false
+        ? !sharing.canReadTarget({
+            ...current,
+            entry: current.entry,
+            storeKey: current.canonicalKey,
+            storeKeys: [current.canonicalKey],
+          })
         : requestedSessionId && !retainedSessionId && !isGatewayAdmin(client)
     ) {
       respond(false, undefined, hiddenSessionNotFound(current.canonicalKey));
@@ -298,7 +306,7 @@ export async function prepareChatHistorySessionRead({
             return;
           }
           const sharing = authorizeSharingFacts(
-            { entry: target?.entry, canonicalKey },
+            { entry: target?.entry, canonicalKey, agentId: sessionAgentId, storePath },
             prepareProjectedSessionSharing({
               cfg: rowProjection.getPolicyConfig(),
               client: client ?? null,

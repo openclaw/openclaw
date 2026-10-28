@@ -25,11 +25,13 @@ vi.mock("../../utils/provider-utils.js", () => ({
 }));
 
 const {
+  bindReplyMessageActionSource,
   buildThreadingToolContext,
   buildEmbeddedRunExecutionParams,
   mintReplyMessageActionTurnCapability,
 } = await import("./agent-runner-utils.js");
 const {
+  mintMessageActionTurnCapability,
   resolveCurrentPromptReaction,
   resolveMessageActionTurnAuthorization,
   resolveMessageActionTurnCapability,
@@ -112,6 +114,66 @@ describe("agent-runner-utils", () => {
         },
       };
     }
+
+    it("uses retained source scope for a fresh recovered run without dashboard ingress", () => {
+      const turn = makeTurn();
+      let current = true;
+      const prepare = vi.fn(
+        (identity: { agentId: string; runId: string; sessionId: string; sessionKey: string }) => {
+          if (!current) {
+            throw new Error("Original source revoked");
+          }
+          return mintMessageActionTurnCapability({
+            ...identity,
+            requesterAccountId: "original-account",
+            requesterSenderId: "original-sender",
+            toolContext: {
+              currentChannelProvider: "discord",
+              currentChannelId: "original-channel",
+              currentThreadTs: "original-thread",
+              currentSourceTurnId: "interrupted-input",
+              sameChannelThreadRequired: true,
+            },
+            expiresWithRun: true,
+          });
+        },
+      );
+      turn.opts = { prepareMessageActionTurnCapability: prepare };
+      bindReplyMessageActionSource(turn.followupRun.run, prepare);
+      const token = mintReplyMessageActionTurnCapability(turn, "recovered-run");
+      try {
+        expect(prepare).toHaveBeenCalledWith({
+          agentId: "agent-1",
+          runId: "recovered-run",
+          sessionId: source.sessionId,
+          sessionKey: source.sessionKey,
+          runtimePolicySessionKey: undefined,
+        });
+        expect(
+          resolveMessageActionTurnCapability({ ...source, runId: "recovered-run", token }),
+        ).toMatchObject({
+          requesterAccountId: "original-account",
+          requesterSenderId: "original-sender",
+          toolContext: {
+            currentChannelProvider: "discord",
+            currentChannelId: "original-channel",
+            currentThreadTs: "original-thread",
+            currentSourceTurnId: "interrupted-input",
+            sameChannelThreadRequired: true,
+          },
+        });
+        const unrelated = makeTurn();
+        unrelated.opts = turn.opts;
+        expect(mintReplyMessageActionTurnCapability(unrelated, "unrelated-run")).toBeUndefined();
+        expect(prepare).toHaveBeenCalledTimes(1);
+        current = false;
+        expect(() => mintReplyMessageActionTurnCapability(turn, "later-run")).toThrow(
+          "Original source revoked",
+        );
+      } finally {
+        revokeMessageActionTurnCapability(token);
+      }
+    });
 
     it("mints host-only dashboard authority for the original admitted identity", () => {
       const turn = makeTurn();

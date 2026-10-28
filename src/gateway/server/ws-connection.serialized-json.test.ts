@@ -206,6 +206,7 @@ it.each(["small", "large"])("owns and reuses %s offset segments per window", asy
   storage.set(encoded, 8);
   const bytes = storage.subarray(8, -8);
   const messages = new SerializedJsonArray(bytes);
+  const activity = new SerializedJsonArray(Buffer.from('[{"messageId":"tool","items":[]}]'));
   const retained = new Map<number, Uint8Array>();
   for (const windowBits of [15, 10]) {
     const {
@@ -221,7 +222,7 @@ it.each(["small", "large"])("owns and reuses %s offset segments per window", asy
         type: "res",
         id: `${windowBits}-${sequence}`,
         ok: true,
-        payload: { messages },
+        payload: { messages, activity },
       });
       if (!(serialized instanceof SerializedGatewayFrame)) {
         throw new Error("expected segmented response");

@@ -13,7 +13,6 @@ import {
 } from "./embedded-agent-runner/model.inline-provider.js";
 import { loadBundledProviderStaticCatalogContextModels } from "./embedded-agent-runner/model.static-catalog.js";
 import { createPreparedConfiguredRuntimeModelLookup } from "./embedded-agent-runner/model.static-id.js";
-import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
 import {
   enrichHarnessRows,
   modelCatalogRouteVariantKey,
@@ -108,10 +107,16 @@ export async function prepareFullCatalogFacts(
       ...(input.readOnly ? { readOnly: true } : {}),
       ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     });
-    const modelCatalog =
-      catalogMode === "live" && options.includeNative !== false
-        ? await augmentPreparedModelCatalogWithAgentHarness({ input, snapshot, pluginRegistry })
-        : snapshot;
+    let modelCatalog = snapshot;
+    if (catalogMode === "live" && options.includeNative !== false) {
+      const { augmentPreparedModelCatalogWithAgentHarness } =
+        await import("./harness/model-catalog.js");
+      modelCatalog = await augmentPreparedModelCatalogWithAgentHarness({
+        input,
+        snapshot,
+        pluginRegistry,
+      });
+    }
     const providerStaticModels =
       input.config.models?.mode === "replace"
         ? []

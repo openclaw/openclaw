@@ -75,7 +75,11 @@ closure is reported only when the hosting process closes its lifeline. A signal
 alone does not identify its sender: Node does not expose the sender PID or command. Three occurrences of
 the same signal within five minutes in one process, or three recorded plain
 SIGTERM/SIGINT stops across process lifetimes, produce a hint to check
-`openclaw gateway status --deep` for another supervisor. Deep local status shows
+`openclaw gateway status --deep` for another supervisor. Under Kubernetes or
+`OPENCLAW_SUPERVISOR_MODE=external`, that platform owns stops and replacements,
+so repeated stops across process lifetimes are logged at info without the hint.
+A SIGTERM that arrives after an in-process restart released Gateway state stops
+the Gateway and logs at info, since no restart intent can be read then. Deep local status shows
 the last recorded shutdown reason and time for the selected state directory;
 on Linux, it also reports competing user and system service units when inspecting
 the native service. Failure outcomes keep their specific failure reason.

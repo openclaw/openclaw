@@ -90,6 +90,7 @@ it("allows offline drafting but disables submission without a live connection", 
       button.click();
     }
     expect(request).not.toHaveBeenCalledWith("cron.add", expect.anything());
+    expect(dom.callsFor(request, "models.list")).toHaveLength(0);
     expect(page.cron.cronForm.name).toBe("Offline draft");
   } finally {
     page.remove();
@@ -251,6 +252,7 @@ it.each(["visible", "later page"])("opens linked history for a job on %s", async
     expect(dom.text(page, ".cron-run-entry--highlighted")).toContain("Linked run");
   });
   expect(page.querySelectorAll(".cron-run-entry--highlighted")).toHaveLength(1);
+  expect(dom.callsFor(request, "models.list")).toHaveLength(0);
   expect(request).toHaveBeenCalledWith(
     "cron.runs",
     expect.objectContaining({
@@ -267,7 +269,7 @@ it.each(["visible", "later page"])("opens linked history for a job on %s", async
   updateCronRunsFilter(page.cron, previousFilters);
   page.routeSearch = "?job=linked-job";
   await page.settle();
-  expect(request).toHaveBeenLastCalledWith(
+  expect(dom.callsFor(request, "cron.runs").at(-1)).toEqual([
     "cron.runs",
     expect.objectContaining({
       id: job.id,
@@ -276,7 +278,8 @@ it.each(["visible", "later page"])("opens linked history for a job on %s", async
       statuses: ["error"],
       deliveryStatuses: ["not-delivered"],
     }),
-  );
+  ]);
+  await waitFor(() => expect(dom.callsFor(request, "models.list")).toHaveLength(1));
 });
 
 it.each(["selecting another job", "changing agent scope", "opening another link", "disconnecting"])(
@@ -399,11 +402,13 @@ it.each([
   async (_scenario, scopeId, suggested) => {
     const request = harness.createRequest();
     const { page } = mountCronPage(request, { scopeId, selectedId: "writer" });
-    await expectRpc(request, "models.list", { agentId: "writer", view: "configured" });
+    await page.settle();
+    expect(dom.callsFor(request, "models.list")).toHaveLength(0);
     const createSelector = suggested
       ? '[data-suggestion="repoPulse"]'
       : dom.testId("cron-new-task");
     (await dom.waitForElement(page, createSelector)).click();
+    await expectRpc(request, "models.list", { agentId: "writer", view: "configured" });
     await waitFor(() => {
       expect(page.querySelector("#cron-name")).not.toBeNull();
       expect(page.querySelector("#cron-payload-text")).not.toBeNull();

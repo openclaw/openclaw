@@ -108,7 +108,8 @@ struct ChatMessageUsagePresentation: Equatable {
         message: OpenClawChatMessage,
         contextWindowTokens: Int?) -> ChatMessageUsagePresentation?
     {
-        guard message.role.lowercased() == "assistant", let usage = message.usage else { return nil }
+        guard message.presentationOwnsFooter,
+              message.role.lowercased() == "assistant", let usage = message.usage else { return nil }
 
         var visualParts: [String] = []
         var accessibilityParts: [String] = []

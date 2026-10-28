@@ -289,7 +289,9 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "messages.queue.mode":
     'Queue mode for active runs. Use "steer" to inject prompts into the active run, "followup" to run later, "collect" to batch compatible messages later, or "interrupt" to abort the active run before starting the newest prompt.',
   "messages.queue.allowCollaborativeSteering":
-    "Allow admitted human input in the same conversation to steer under the active turn's unchanged identity and prepared permissions, even when its author has fewer permissions (default: false). When false, another person's steering attempt is refused without queueing it; they can explicitly submit /followup <message> for a new turn under their own identity. Same-requester compatibility checks, queue modes, and cross-session steering authorization still apply.",
+    "Allow admitted human input in the same conversation to steer under the active turn's unchanged identity and prepared permissions, even when its author has fewer permissions (default: true). When false, collaborativeSteeringFallback selects a quiet requester-owned queued turn (queue) or strict refusal (reject). Ordinary same-requester guidance retains the active execution’s prepared permissions. Current access, live execution authority, execution-setting checks, queue modes, and cross-session steering authorization still apply.",
+  "messages.queue.collaborativeSteeringFallback":
+    'What happens when another person cannot steer because collaborative steering is disabled: "queue" (default) runs their input as a separate turn without a status notice; "reject" preserves strict refusal and requires a fresh /followup request. Does not enable collaborative steering or bypass access checks.',
   "messages.queue.byChannel":
     "Per-channel queue mode overrides keyed by channel ID, including plugin channels (for example discord, telegram, x). Use this when one channel's traffic pattern needs different behavior than global defaults.",
   "messages.queue.debounceMsByChannel":

@@ -213,10 +213,10 @@ export const GatewayConfigSchema = z
         basePath: z.string().optional(),
         experimental: z
           .strictObject({
-            /** Allow native UI from user-installed plugins (default false; bundled UI stays available). */
+            /** Advanced native UI opt-out (default true; existing false stays off, bundled UI unaffected). */
             customPlugins: z.boolean().optional(),
-            /** Show the official Claw catalog and Add flow in Control UI (default false). */
-            claws: z.boolean().optional(),
+            /** Show the official Template catalog and Add flow in Control UI (default false). */
+            templates: z.boolean().optional(),
             /** Enable experimental speech bubbles in the Control UI (default false). */
             chatBubbles: z.boolean().optional(),
             /** Optional, tool-free next-message suggestions (disabled by default). */

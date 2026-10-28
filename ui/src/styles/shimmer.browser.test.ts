@@ -22,6 +22,34 @@ const skeletonFixture = styleDocument(
 );
 
 fixture.describe("Control UI shimmer", () => {
+  it.each(["standalone", "gallery"])(
+    "clips %s attachment shimmer without clipping status text",
+    async (context) => {
+      await withBrowserPage(
+        fixture.page({ viewport: { width: 390, height: 844 } }),
+        async (page) => {
+          await page.setContent(
+            styleDocument(
+              readStyles("styles/base", "styles/chat/message-layout"),
+              `<div class="${context === "gallery" ? "chat-message-images--gallery" : ""}"><div class="chat-video-preview"><div class="chat-assistant-attachment-card chat-assistant-attachment-card--blocked">
+            <span class="chat-assistant-attachment-card__status-meta skeleton skeleton-line"></span>
+            <span class="chat-assistant-attachment-card__status-meta">
+              <span class="chat-assistant-attachment-card__status-reason">File unavailable. Retry to load this attachment.</span>
+            </span>
+          </div></div></div>`,
+            ),
+          );
+          const status = page.locator(".chat-assistant-attachment-card__status-meta");
+          expect(
+            await status.first().evaluate((element) => getComputedStyle(element).overflow),
+          ).toBe("hidden");
+          expect(
+            await status.last().evaluate((element) => getComputedStyle(element).overflow),
+          ).toBe("visible");
+        },
+      );
+    },
+  );
   it.each(["no-preference", "reduce"] as const)(
     "keeps skeleton shimmer compositor-safe with motion=%s",
     async (reducedMotion) => {

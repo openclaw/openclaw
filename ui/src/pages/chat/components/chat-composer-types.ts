@@ -44,7 +44,7 @@ import type {
   HumanMentionDirectory,
   HumanMentionMenu,
 } from "./chat-composer-mention-menu-state.ts";
-import type { ChatComposerCapabilityMenuProps } from "./chat-composer-plus-menu.types.ts";
+import type { ChatComposerCapabilityMenuSource } from "./chat-composer-plus-menu.types.ts";
 import type { SkillMenu } from "./chat-composer-skill-menu-state.ts";
 import type { SlashMenu } from "./chat-composer-slash-menu-state.ts";
 import type { ChatPermissionPickerProps } from "./chat-permission-picker.tsx";
@@ -84,11 +84,14 @@ export type ChatComposerDisabledBanner = {
   busy?: boolean;
   busyLabel?: string;
   disabledReason?: string;
+  /** Cached presentation retains its appearance until live mutation authority arrives. */
+  actionPending?: boolean;
   /** Existing pane run action, relocated into the desktop subagent notice. */
   stop?: { onAbort: () => void };
 } & ({ actionLabel: string; onAction: () => void } | { actionLabel?: never; onAction?: never });
 
-export type ChatSessionProgressProps = {
+export type ChatSessionProgressProps = import("../chat-spawned-subagent.ts").SubagentRoster & {
+  connected?: boolean;
   sessionKey: string;
   currentAgentId: string;
   progressCard?: ProgressCard | null;
@@ -170,7 +173,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   /** The pane resolves aliases and agent ownership; absence must not reuse an unowned row. */
   selectedSession?: GatewaySessionRow;
   toolOverrides?: SessionToolOverrides;
-  capabilityMenu?: ChatComposerCapabilityMenuProps;
+  capabilityMenu?: ChatComposerCapabilityMenuSource;
   providerUsage?: ProviderUsageDisplayProps;
   contextGateway?: ApplicationGateway;
   onOpenContext?: () => void;

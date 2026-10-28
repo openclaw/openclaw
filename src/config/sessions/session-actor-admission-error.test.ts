@@ -51,6 +51,7 @@ it("preserves a prior unknown outcome when an actor command fails before native 
       appendSessionManagerActor({
         actor,
         toolResult: false,
+        message: { role: "user" },
         assertCurrent() {},
         append: {
           kind: "message",

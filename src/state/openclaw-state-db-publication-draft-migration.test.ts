@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { digestGitHubPublicationRequest } from "../gateway/github-publication-receipt.js";
@@ -14,8 +15,10 @@ import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
   withStateMigrationBackupForTest,
 } from "./openclaw-state-schema.test-support.js";
+import { resolveSchemaMigrationBackupTables } from "./schema-migration-backup-scope.js";
 import { assertSqliteMigrationScopePreserved } from "./sqlite-migration-scope.test-support.js";
 
 const tables = [
@@ -43,6 +46,7 @@ function legacyDatabase(absent: boolean, refuse = false) {
   mkdirSync(path.dirname(pathname), { recursive: true });
   using db = new DatabaseSync(pathname);
   db.exec(OPENCLAW_STATE_SCHEMA_SQL.replaceAll("\n  draft INTEGER,", ""));
+  restorePreTemplateStateIdentifiersForTest(db);
   addPreCutoverClientCredentialTablesForTest(db);
   db.exec(`PRAGMA user_version = 27;
     INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
@@ -84,15 +88,14 @@ it.each([false, true])(
       using witness = new DatabaseSync(pathname);
       const database = await assertSqliteMigrationScopePreserved(
         witness,
-        [
-          "schema_meta",
-          "config_machine_state",
-          ...tables,
-          "device_identities",
-          "device_auth_tokens",
-          "gateway_origin_device_tokens",
-          "exec_approvals_config",
-        ],
+        expectDefined(
+          resolveSchemaMigrationBackupTables({
+            kind: "state",
+            foundVersion: 27,
+            supportedVersion: version,
+          }),
+          "Every executed publication migration step must declare its bounded scope",
+        ),
         () => openDatabase(options),
       );
       expect(publication(database.db)).toEqual({ ...before, draft: null });

@@ -6,9 +6,16 @@ import {
 import type { MessageReactionSummary, ProgressCard } from "@openclaw/gateway-protocol";
 import { createSignal } from "solid-js";
 import type { GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
+import { i18n } from "../../i18n/index.ts";
 import type { ChatFastModePresentation } from "../../lib/chat/model-select-state.ts";
 import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
+import type { ChatDetailsSnapshot, DetailsSnapshotPatch } from "./chat-details-snapshot.ts";
+import type {
+  ChatHeaderSharingSnapshot,
+  ChatHeaderViewersSnapshot,
+} from "./chat-header-viewers-snapshot.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
+import type { ChatSessionStateSnapshot } from "./chat-session-state-snapshot.ts";
 import type { ChatHistoryState, ChatTranscriptMetadata } from "./chat-transcript-metadata.ts";
 import { createTranscriptMemo } from "./components/chat-transcript-memo.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
@@ -67,6 +74,10 @@ export type ChatComposerSnapshot = Pick<
   };
 
 export type ChatSessionSnapshot = {
+  sessionState?: ChatSessionStateSnapshot;
+  headerViewers?: ChatHeaderViewersSnapshot;
+  headerSharing?: ChatHeaderSharingSnapshot | null;
+  details?: ChatDetailsSnapshot;
   composer?: ChatComposerSnapshot | null;
   // The board provider validates cached payloads before they can reach a view.
   board?: { snapshot: unknown; receivedAtMs: number } | null;
@@ -90,6 +101,10 @@ export type ChatWidgetLayout = {
   invalidateRow: (rowKey: string | undefined) => void;
 };
 
+function captureWidgetLayoutReservation(snapshot: ChatSessionSnapshot | undefined) {
+  return snapshot && { sessionId: snapshot.sessionId, widgetHeights: snapshot.widgetHeights };
+}
+
 export function createChatWidgetLayout() {
   const layouts = createTranscriptMemo<ChatWidgetLayout>();
   return (
@@ -100,14 +115,14 @@ export function createChatWidgetLayout() {
     layouts(cache, [resolveChatSnapshotKey(host, target), host.currentSessionId], () => {
       const [rowRevision, setRowRevision] = createSignal(0);
       const cacheKey = resolveChatSnapshotKey(host, target);
-      // Reserve the admitted snapshot; new measurements belong to the next reload.
-      let admitted = cache.get(cacheKey)?.snapshot;
+      // Reserve admitted geometry until reload without retaining replaceable message bodies.
+      let admitted = captureWidgetLayoutReservation(cache.get(cacheKey)?.snapshot);
       const current = () => {
         const snapshot =
           resolveChatSnapshotKey(host, target) === cacheKey
             ? cache.get(cacheKey)?.snapshot
             : undefined;
-        admitted ??= snapshot;
+        admitted ??= captureWidgetLayoutReservation(snapshot);
         return snapshot?.sessionId === admitted?.sessionId ? snapshot : undefined;
       };
       const writeHeights = (heights: Record<string, number>) => {
@@ -139,7 +154,7 @@ export function createChatWidgetLayout() {
         }
         const prune = (heights: typeof snapshot.widgetHeights) =>
           Object.fromEntries(Object.entries(heights ?? {}).filter(retain));
-        admitted = { ...snapshot, widgetHeights: prune(admitted?.widgetHeights) };
+        admitted = { sessionId: snapshot.sessionId, widgetHeights: prune(admitted?.widgetHeights) };
         const widgetHeights = widgetKey ? prune(snapshot.widgetHeights) : snapshot.widgetHeights;
         cacheChatSessionSnapshot(cache, host, target, { ...snapshot, widgetHeights });
         setRowRevision((revision) => revision + 1);
@@ -213,6 +228,54 @@ type ChatHistoryCursorHost = ChatMessageCacheHost & {
   currentSessionId?: string | null;
   chatHistoryCursor?: ChatHistoryCursor;
 };
+
+/** Display receipts share the transcript's scope and incarnation, never live read authority. */
+export function captureChatDetailsSnapshot(
+  host: ChatHistoryCursorHost & {
+    chatMessagesBySession: ChatMessageCache;
+    connectionEpoch: number;
+  },
+) {
+  const target = { sessionKey: host.sessionKey };
+  const key = resolveChatSnapshotKey(host, target);
+  const snapshot = readChatSessionSnapshot(host.chatMessagesBySession, host, target);
+  if (!snapshot?.sessionId || snapshot.sessionId !== host.currentSessionId) {
+    return undefined;
+  }
+  const client = host.client;
+  const epoch = host.connectionEpoch;
+  const locale = i18n.getLocale();
+  return {
+    snapshot,
+    details: snapshot.details?.locale === locale ? snapshot.details : undefined,
+    write: (patch: DetailsSnapshotPatch) => {
+      if (
+        !host.connected ||
+        host.client !== client ||
+        host.connectionEpoch !== epoch ||
+        host.currentSessionId !== snapshot.sessionId ||
+        resolveChatSnapshotKey(host, target) !== key ||
+        host.sessionKey !== target.sessionKey ||
+        i18n.getLocale() !== locale
+      ) {
+        return;
+      }
+      const current = readChatSessionSnapshot(host.chatMessagesBySession, host, target);
+      if (!current || current.sessionId !== snapshot.sessionId) {
+        return;
+      }
+      const details = {
+        ...(current.details?.locale === locale ? current.details : {}),
+        ...patch,
+        locale,
+      };
+      if (JSON.stringify(details) === JSON.stringify(current.details)) {
+        return;
+      }
+      cacheChatSessionSnapshot(host.chatMessagesBySession, host, target, { ...current, details });
+    },
+  };
+}
 
 export function readChatHistoryCursor(state: ChatHistoryCursorHost): string | undefined {
   const receipt = state.chatHistoryCursor;
@@ -396,11 +459,22 @@ export function cacheChatSessionSnapshot(
       ? { ...withWidgetHeights, board: existing.snapshot.board }
       : withWidgetHeights;
   const snapshot =
-    withBoard.composer === undefined &&
-    existing?.snapshot.composer !== undefined &&
-    existing.snapshot.sessionId === incoming.sessionId
-      ? { ...withBoard, composer: existing.snapshot.composer }
+    existing?.snapshot.sessionId === incoming.sessionId
+      ? {
+          ...withBoard,
+          composer:
+            withBoard.composer === undefined ? existing.snapshot.composer : withBoard.composer,
+          details: withBoard.details ?? existing.snapshot.details,
+          headerViewers: withBoard.headerViewers ?? existing.snapshot.headerViewers,
+          headerSharing:
+            withBoard.headerSharing === undefined
+              ? existing.snapshot.headerSharing
+              : withBoard.headerSharing,
+          sessionState: withBoard.sessionState ?? existing.snapshot.sessionState,
+        }
       : withBoard;
+  const previousState = existing?.snapshot.sessionState;
+  const sessionState = snapshot.sessionState;
   if (
     existing?.snapshot.messages === snapshot.messages &&
     existing.snapshot.deltaCursor === snapshot.deltaCursor &&
@@ -413,6 +487,15 @@ export function cacheChatSessionSnapshot(
     existing.snapshot.widgetHeights === snapshot.widgetHeights &&
     existing.snapshot.board === snapshot.board &&
     existing.snapshot.composer === snapshot.composer &&
+    (previousState === sessionState ||
+      (previousState?.archived === sessionState?.archived &&
+        previousState?.visibility === sessionState?.visibility &&
+        previousState?.sharingRole === sessionState?.sharingRole &&
+        previousState?.unarchiveAllowed === sessionState?.unarchiveAllowed &&
+        previousState?.parentSession === sessionState?.parentSession)) &&
+    existing.snapshot.headerViewers === snapshot.headerViewers &&
+    existing.snapshot.headerSharing === snapshot.headerSharing &&
+    existing.snapshot.details === snapshot.details &&
     samePagination(existing.snapshot.pagination, snapshot.pagination)
   ) {
     return;

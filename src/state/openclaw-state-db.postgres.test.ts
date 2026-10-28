@@ -2,6 +2,7 @@ import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
 import { getEnvironmentData, setEnvironmentData, type Worker } from "node:worker_threads";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import pg from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -39,6 +40,7 @@ import { readActiveOpenClawAgentDatabaseLeasesReadOnly } from "./openclaw-agent-
 import { repairOpenClawAgentDatabasePaths } from "./openclaw-agent-db-path-repair.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { openDoctorStateSchemaReadAdmission } from "./openclaw-state-db-doctor-schema.js";
+import { stateEngineSchema } from "./openclaw-state-db-engine.js";
 import {
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
@@ -53,6 +55,7 @@ import {
   ensureAgentDeletionJournalPhaseSchema,
 } from "./openclaw-state-db-schema-additive.js";
 import { withLegacyPublicationDraft } from "./openclaw-state-db-schema-v28-publication.js";
+import { TEMPLATE_STATE_TABLE_RENAMES } from "./openclaw-state-db-schema-v36-template-names.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -109,6 +112,39 @@ async function restorePublicationSchemaV27(client: pg.Client) {
       throw new Error("Missing publication fixture schema");
     }
     await client.query(`DROP TABLE ${table}; ${withLegacyPublicationDraft(fragment.sql)}`);
+  }
+}
+// These fixtures start at the successor; restore only empty feature tables from
+// the registered predecessor, including CHECK/PK declarations, before old seals.
+async function restoreTemplatePredecessor(client: pg.Client, previousVersion: number) {
+  const source = expectDefined(
+    stateEngineSchema.postgresMigrations?.find((step) => step.version === previousVersion + 1)
+      ?.fromSchema,
+    "Registered historical shared-state schema",
+  );
+  const eager = expectDefined(source.postgres, "Historical PostgreSQL DDL");
+  for (const [previous, current] of TEMPLATE_STATE_TABLE_RENAMES) {
+    const declaration = expectDefined(
+      eager.match(new RegExp(`CREATE TABLE "${previous}" \\([\\s\\S]*?\\n\\);`))?.[0],
+      `Historical declaration for ${previous}`,
+    );
+    expect((await client.query(`SELECT count(*)::int AS n FROM "${current}"`)).rows).toEqual([
+      { n: 0 },
+    ]);
+    await client.query(`DROP TABLE "${current}"; ${declaration}`);
+  }
+  const present = await client.query(
+    "SELECT to_regclass('agent_provenance') IS NOT NULL AS present",
+  );
+  if (present.rows[0].present) {
+    const fragment = expectDefined(
+      source.postgresFragments?.find((item) => item.tables.includes("agent_provenance")),
+      "Historical optional provenance DDL",
+    );
+    expect((await client.query("SELECT count(*)::int AS n FROM agent_provenance")).rows).toEqual([
+      { n: 0 },
+    ]);
+    await client.query(`DROP TABLE agent_provenance; ${fragment.sql}`);
   }
 }
 const legacyPublicationInsert = `INSERT INTO github_publication_requests
@@ -593,6 +629,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
         retireSqliteDatabaseAdmissionForPath(pathname);
         // Restore the actual historical catalog before relabeling metadata.
         await client.query(`BEGIN; SET LOCAL search_path TO "${namespace}";`);
+        await restoreTemplatePredecessor(client, previousVersion);
         if (previousVersion < 28) {
           await restorePublicationSchemaV27(client);
         }
@@ -789,6 +826,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
       expect(cold.threadId).not.toBe(0);
       await client.query(`SET search_path = "${namespace}"`);
       await client.query("BEGIN");
+      await restoreTemplatePredecessor(client, 24);
       await restorePublicationSchemaV27(client);
       await client.query(`
         ${statePostgresRuntime.clientCredentialSource.sql}

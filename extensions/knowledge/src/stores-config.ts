@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { Type, type Static } from "typebox";
 import { Check } from "typebox/value";
+import { DEFAULT_HUB_PERCENTILE } from "./page-budget.js";
 import { AGENT_ID, STORE_KEY } from "./stores-contract.js";
 export const agentIdPattern = new RegExp(AGENT_ID);
 const storeKeyPattern = new RegExp(STORE_KEY);
@@ -18,8 +19,6 @@ export const StoresSection = Type.Record(Type.String({ pattern: STORE_KEY }), Na
 });
 export type StoresSection = Static<typeof StoresSection>;
 
-const REVIEW_JOB_DESCRIPTION =
-  "Automation run after each maintenance pass that leaves private claims reachable from no page. Its agent turn follows the knowledge-unlinked-claims skill. When unset, maintenance runs the automation with declaration key knowledge:scribe:unlinked-review. Disable the automation to pause the review.";
 /** Authored plugin configuration. Membership is the only per-agent setting;
  * everything else is a plugin-wide gate. */
 export const PluginConfig = Type.Object(
@@ -27,6 +26,21 @@ export const PluginConfig = Type.Object(
     operatorRead: Type.Optional(Type.Boolean()),
     writesEnabled: Type.Optional(Type.Boolean()),
     stores: Type.Optional(StoresSection),
+    pageBudgets: Type.Optional(
+      Type.Object(
+        {
+          hubPercentile: Type.Optional(
+            Type.Number({
+              minimum: 50,
+              maximum: 99.9,
+              description:
+                "Authored-link degree percentile, within each store partition, at which a page counts as a hub and gets the smaller body budget. Default 90.",
+            }),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+    ),
     maintenance: Type.Optional(
       Type.Object(
         {
@@ -51,13 +65,6 @@ export const PluginConfig = Type.Object(
                 "IANA time zone for the schedule. Default: the Gateway host's time zone.",
             }),
           ),
-          reviewJobId: Type.Optional(
-            Type.String({
-              minLength: 1,
-              maxLength: 100,
-              description: REVIEW_JOB_DESCRIPTION,
-            }),
-          ),
         },
         { additionalProperties: false },
       ),
@@ -72,11 +79,11 @@ type MaintenanceSettings = {
   enabled: boolean;
   schedule: string;
   timezone: string;
-  reviewJobId?: string;
 };
 export type Policy = {
   operatorRead: boolean;
   writesEnabled: boolean;
+  hubPercentile: number;
   maintenance: MaintenanceSettings;
 };
 const DEFAULT_MAINTENANCE_SCHEDULE = "30 3 * * *";
@@ -94,11 +101,11 @@ export function parsePolicy(config: Record<string, unknown> | undefined): Policy
   return {
     operatorRead: value.operatorRead ?? true,
     writesEnabled: value.writesEnabled ?? true,
+    hubPercentile: value.pageBudgets?.hubPercentile ?? DEFAULT_HUB_PERCENTILE,
     maintenance: {
       enabled: maintenance.enabled ?? true,
       schedule: maintenance.schedule ?? DEFAULT_MAINTENANCE_SCHEDULE,
       timezone: maintenance.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
-      ...(maintenance.reviewJobId ? { reviewJobId: maintenance.reviewJobId } : {}),
     },
   };
 }

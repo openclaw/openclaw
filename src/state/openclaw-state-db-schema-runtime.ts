@@ -84,6 +84,7 @@ export function ensureOpenClawStateRuntimeSchema(
   initialization: StateDatabaseInitialization,
   busyTimeoutMs = OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   initializeNativeOnly = false,
+  legacyCronDefaultStoreKey?: string,
 ): string[] {
   // Workers borrow host generation proof, never mint a competing receipt in their isolate.
   const integrity =
@@ -142,7 +143,8 @@ export function ensureOpenClawStateRuntimeSchema(
           });
           migrateCronDefaultStoreIdentity(db, {
             previousVersion,
-            legacyDefaultStoreKey: resolveCronIdentityMigrationDefaultStoreKey(env),
+            legacyDefaultStoreKey:
+              legacyCronDefaultStoreKey ?? resolveCronIdentityMigrationDefaultStoreKey(env),
             fresh: true,
             nowMs: now,
           });
@@ -182,7 +184,10 @@ export function ensureOpenClawStateRuntimeSchema(
         } else {
           assertStateDatabaseIntegrityOnce(db, pathname);
         }
-        const boundedChanges = migrateBoundedStateSchema(db, previousVersion, { env });
+        const boundedChanges = migrateBoundedStateSchema(db, previousVersion, {
+          env,
+          legacyCronDefaultStoreKey,
+        });
         if (boundedChanges) {
           writeCurrentStateSchemaMetadata(db, now);
           assertCurrentStateRuntimeSchema(db, pathname);
@@ -217,7 +222,7 @@ export function ensureOpenClawStateRuntimeSchema(
         // v21 only derives predicates; don't replay legacy payload repair on v20 rows.
         ensureAdditiveStateColumns(db, previousVersion < 20 ? "repair" : "runtime");
         for (const migration of versionedStateMigrations) {
-          if (migration.migrate(db, previousVersion, { env })) {
+          if (migration.migrate(db, previousVersion, { env, legacyCronDefaultStoreKey })) {
             changes.push(migration.applied);
           }
         }

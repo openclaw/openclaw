@@ -293,6 +293,9 @@ The browser uses its session token or paired-device credential; passwords remain
 in memory only. This also works on loopback HTTP, which permits public readers. Chat links remain
 reloadable during Gateway updates; the temporary recovery marker is removed when
 the app starts.
+With Tailscale Serve identity authentication enabled, the same-origin handoff
+verifies the viewer through Tailscale and checks access to the requested conversation.
+No saved browser token or extra **Log in** click is needed.
 In trusted-proxy deployments, browsers controlled by the installed Control UI service worker request the
 protected session-entry app document directly when reopening a chat deep link,
 without first loading the public reader or probing access. Registration is only
@@ -575,7 +578,7 @@ no route-specific URL parameters.
 | Apps                | `/apps`                                        | -                         | -                                                                                 |
 | Portals             | `/portals`                                     | -                         | -                                                                                 |
 | Agents              | `/settings/agents`                             | -                         | `/settings/agents/<agentId>[/<panel>]`                                            |
-| Claws               | `/claws`                                       | -                         | `/claws/<official-package-slug>`; requires the Claws Labs toggle                  |
+| Templates           | `/templates`                                   | -                         | `/templates/packages/<encoded-package>`; requires the Templates Labs toggle       |
 | Channels            | `/settings/channels`                           | `/channels`               | Shared settings parameters below                                                  |
 | Connection          | `/settings/connection`                         | -                         | Shared settings parameters below                                                  |
 | Legacy General      | `/settings/general`                            | `/config`                 | Redirects to Appearance → Language                                                |

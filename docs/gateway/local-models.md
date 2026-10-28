@@ -251,6 +251,7 @@ Compat overrides for stricter OpenAI-compatible backends:
       providers: {
         local: {
           baseUrl: "http://127.0.0.1:8000/v1",
+          remote: true, // Hosted watchdog timing through this relay.
           apiKey: "sk-local",
           api: "openai-responses",
           models: [

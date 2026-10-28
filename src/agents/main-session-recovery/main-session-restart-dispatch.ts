@@ -56,7 +56,6 @@ import {
 } from "./main-session-restart-dispatch-start.js";
 import type { ResumeMainSessionParams } from "./main-session-restart-dispatch.types.js";
 import {
-  announceRestartRecoveryResumption,
   hasRestartRecoveryMessageActionAuthority,
   requiresRestartRecoveryMessageActionAuthority,
   prepareRestartRecoveryDeliveryCurrent,
@@ -264,6 +263,7 @@ async function resumeMainSessionWithinAdmission(
   let reservation: MainSessionRecoveryReservation | undefined;
   let ownedInput: SessionControllerInput | undefined;
   let controllerInput = params.controllerInput;
+  let replyOwned = false;
   let dispatchStarted = false;
   let dispatchAccepted = false;
   let executionStarted = false;
@@ -518,6 +518,10 @@ async function resumeMainSessionWithinAdmission(
         runWithAgentToolSourceExecutionScope(params.completionSource, async () => {
           params.completionSource?.();
         }),
+      onRecoveryInputTransferred: () => {
+        replyOwned = true;
+        reservation = undefined;
+      },
       onSettled: () => {
         onDispatchSettled();
         dispatchSettled = true;
@@ -562,6 +566,7 @@ async function resumeMainSessionWithinAdmission(
       return "skipped";
     }
     if (
+      !replyOwned &&
       !(await settleAcceptedRestartRecovery({
         ...settlementTarget,
         terminalStatus,
@@ -573,7 +578,13 @@ async function resumeMainSessionWithinAdmission(
       return "skipped";
     }
     const resumeResult = terminalStatus ? "settled" : "started";
-    if (resumeResult === "started" && agentParams.deliver && deliveryContext && taskRemainsOwed()) {
+    if (
+      !replyOwned &&
+      resumeResult === "started" &&
+      agentParams.deliver &&
+      deliveryContext &&
+      taskRemainsOwed()
+    ) {
       deliveryCurrent = await prepareRestartRecoveryDeliveryCurrent({
         ...target,
         storePath: requesterStorePath,
@@ -586,7 +597,7 @@ async function resumeMainSessionWithinAdmission(
         shouldContinue: params.shouldContinue,
       }).catch((error: unknown) => {
         log.warn(
-          `failed to prepare restart recovery notice ${params.sessionKey}: ${String(error)}`,
+          `failed to prepare restart recovery typing ${params.sessionKey}: ${String(error)}`,
         );
         return undefined;
       });
@@ -601,19 +612,6 @@ async function resumeMainSessionWithinAdmission(
           });
           retainDeliveryCurrent = stopTyping !== undefined;
         }
-        await announceRestartRecoveryResumption({
-          ...target,
-          isCurrent: (cfg) => !dispatchSettled && taskRemainsOwed() && isDeliveryCurrent(cfg),
-          sessionKey: dispatchSessionKey,
-          sessionId: params.entry.sessionId,
-          recoveryRunId,
-          lifecycleGeneration,
-          deliveryContext,
-          cfg: params.cfg,
-          shouldContinue: () =>
-            !dispatchSettled && taskRemainsOwed() && params.shouldContinue?.() !== false,
-          gatewayRuntime: params.gatewayRuntime,
-        });
       }
     }
     log.info(
@@ -623,6 +621,12 @@ async function resumeMainSessionWithinAdmission(
     );
     return resumeResult;
   } catch (error) {
+    if (replyOwned) {
+      // The atomic input admission retired our claim. The ordinary reply owner records
+      // cancellation/failure; restoring the old claim would replay an already accepted input.
+      log.warn("ordinary reply recovery failed for " + params.sessionKey + ": " + String(error));
+      return "failed";
+    }
     const explicitlyRejected = error instanceof GatewayClientRequestError && !dispatchAccepted;
     try {
       const unconfirmedStartTimeout = await reconcileAcceptedRestartRecoveryCancellation({

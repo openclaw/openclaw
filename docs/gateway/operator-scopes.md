@@ -120,7 +120,11 @@ retain document-ID-only access.
 
 In the Control UI, session writers can use **New Session**, send messages in
 their own conversations, fork from a persisted user message in an owned settled
-conversation, and stop their own active runs. Their model, effort,
+conversation, use **Advanced → Fork conversation** on their own conversation,
+and stop their own active runs. Whole-conversation forks preserve the saved
+conversation history; while the source is working, they copy through its last
+completed reply. Forking does not grant access to another creator's conversation
+or change the source's workspace and isolation rules. Their model, effort,
 fast-mode, and non-full permission choices use the same session grant and the
 Gateway's allowed model catalog. Full permission mode, sandbox changes, and
 changes to an existing session's context window still require administrator access.
@@ -207,6 +211,18 @@ active Gateway connections. Reconnecting applies the current role and scope
 ceiling. A committed change still retires the previous access if returning the
 result fails. An authorized self-downgrade receives its response before its
 connection closes.
+
+The Control UI distinguishes a role ceiling from limited browser pairing. When
+the authenticated role does not allow administrator access, its limited-access
+notice explains that device approval cannot grant it and does not offer
+**Request admin**. Ask a Gateway administrator to change the role if more access
+is needed, then reconnect. A role that permits administrator access can still
+request an upgrade for a pairing-limited browser; approval and RPC authorization
+continue to check the current role.
+
+The optional `hello-ok.auth.roleAllowsAdmin` field reports this ceiling for
+presentation. Clients can ignore it; it does not grant access or change RPC
+authorization.
 
 Use `gateway.roles.assignments.byGithubLogin` to declare assignments before a
 person's first login or share the same mapping across Gateways. Keys are GitHub

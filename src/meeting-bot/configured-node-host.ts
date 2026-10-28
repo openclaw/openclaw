@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import {
   ensureMeetingAudioBackend,
   resolveMeetingAudioRuntimeForFormat,
@@ -53,16 +54,16 @@ export function createMeetingConfiguredNodeHost(
   };
 
   const prepareAudio = async (config: MeetingNodeAudioConfig, timeoutMs: number) => {
-    const deadline = Date.now() + timeoutMs;
+    const deadline = monotonicNow() + timeoutMs;
     const commandTimeout = () => {
       if (!options.sharePrerequisiteDeadline) {
         return timeoutMs;
       }
-      const remainingMs = deadline - Date.now();
+      const remainingMs = deadline - monotonicNow();
       if (remainingMs <= 0) {
         throw new Error(`${options.meetingLabel} audio prerequisite check timed out on the node.`);
       }
-      return remainingMs;
+      return Math.max(1, Math.floor(remainingMs));
     };
     const runtime = resolveMeetingAudioRuntimeForFormat({
       backend: config.backend,

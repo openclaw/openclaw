@@ -34,7 +34,10 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { requireOpenClawStateDatabaseIdentity } from "../state/openclaw-state-db-cache.js";
+import {
+  recordOpenClawStateDatabaseOpenFailure,
+  requireOpenClawStateDatabaseIdentity,
+} from "../state/openclaw-state-db-cache.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
@@ -52,6 +55,7 @@ import {
   captureAgentLifecycleBinding,
   claimCompletedAgentDeletion,
   isAgentDeletionBlocked,
+  prepareAgentDeletionBlocked,
   matchesAgentLifecycleBinding,
   matchesAgentLifecycleBindingAsync,
   withAgentDeletion as withAgentDeletionRuntime,
@@ -191,7 +195,7 @@ const blocked = (id = "main") => isAgentDeletionBlocked(id, options);
 const setProvenance = (
   nowMs?: number,
   agentId = "main",
-  createdVia: "operator" | "claw" = "operator",
+  createdVia: "operator" | "template" = "operator",
 ) => recordAgentProvenance(agentId, { createdVia }, { ...options, nowMs });
 
 beforeEach(() => {
@@ -225,11 +229,13 @@ describe("agent lifecycle registry", () => {
     },
   );
 
-  it("keeps committed lifecycle authority through a rolled-back writer transaction", async () => {
+  it("keeps lifecycle authority through rollback but rejects terminal database failure", async () => {
     const config = { agents: { entries: { main: {} } } };
     await setProvenance(1);
     const binding = (await captureAgentLifecycleBinding(() => config, "main", options))!;
     await readAgentDeletionJournalStatusInWorker("main", options);
+    const preparedBlocked = prepareAgentDeletionBlocked("main", options);
+    expect(preparedBlocked()).toBe(false);
     const rollback = new Error("rollback authority changes");
     expect(() =>
       runOpenClawStateWriteTransaction((database) => {
@@ -249,13 +255,20 @@ describe("agent lifecycle registry", () => {
           options,
         );
         expect(blocked()).toBe(true);
+        expect(preparedBlocked()).toBe(true);
         expect(matchesAgentLifecycleBinding(config, binding, options)).toBe(true);
         throw rollback;
       }, options),
     ).toThrow(rollback);
     await readAgentDeletionJournalStatusInWorker("main", options);
     expect(blocked()).toBe(false);
+    expect(preparedBlocked()).toBe(false);
     expect(matchesAgentLifecycleBinding(config, binding, options)).toBe(true);
+    recordOpenClawStateDatabaseOpenFailure(
+      openOpenClawStateDatabase(options).path,
+      new Error("synthetic terminal failure"),
+    );
+    expect(preparedBlocked).toThrow();
   });
 
   it.each(["commit", "rollback"] as const)(
@@ -367,18 +380,23 @@ describe("agent lifecycle registry", () => {
     expect(tableExists(database.db, "agent_deletion_journal")).toBe(false);
   });
 
-  it("reads current deletion authority outside an inherited discovery snapshot", async () => {
+  it("reads current deletion authority across snapshots but rejects closed scopes and databases", async () => {
     const config = { agents: { entries: { main: {} } } };
     await setProvenance();
     const binding = await captureAgentLifecycleBinding(() => config, "main", options);
     await readAgentDeletionJournalStatusInWorker("main", options);
     let retainedGuard: (() => boolean) | undefined;
+    let retainedPreparedGuard: (() => boolean) | undefined;
+    const preparedBlocked = prepareAgentDeletionBlocked("main", options);
     await withOpenClawStateDatabaseReadSnapshot(async () => {
       retainedGuard = AsyncLocalStorage.bind(blocked);
+      retainedPreparedGuard = AsyncLocalStorage.bind(preparedBlocked);
       expect(blocked()).toBe(false);
+      expect(preparedBlocked()).toBe(false);
       await withAgentDeletion(async (begin) => {
         const deletion = await begin(createEntry());
         expect(blocked()).toBe(true);
+        expect(preparedBlocked()).toBe(true);
         expect(await captureAgentLifecycleBinding(() => config, "main", options)).toBeUndefined();
         expect(binding && matchesAgentLifecycleBinding(config, binding, options)).toBe(false);
         await withoutHostSql(() => deletion.assertCurrentAsync(), true);
@@ -387,9 +405,13 @@ describe("agent lifecycle registry", () => {
         await expect(deletion.assertCurrentAsync()).rejects.toThrow("no longer owns");
         expect(binding && matchesAgentLifecycleBinding(config, binding, options)).toBe(true);
         expect(blocked()).toBe(false);
+        expect(preparedBlocked()).toBe(false);
       });
     }, options);
     expect(retainedGuard).toThrow("read scope is closing or closed");
+    expect(retainedPreparedGuard).toThrow("read scope is closing or closed");
+    await closeStateDatabaseForTest();
+    expect(preparedBlocked).toThrow();
   });
 
   it("uses committed journal authority for filesystem effects without host SQL", async () => {
@@ -555,7 +577,6 @@ describe("agent lifecycle registry", () => {
       expect(tableExists(openOpenClawStateDatabase(options).db, "agent_provenance")).toBe(
         provenanceTable === "present",
       );
-      expect(matchesAgentLifecycleBinding(config, legacy, options)).toBe(true);
       assertMatches(legacy, true);
 
       await setProvenance(42);
@@ -629,7 +650,7 @@ describe("agent lifecycle registry", () => {
     "fences stale deletion owners and preserves provenance through recovery %s",
     async (action) => {
       const config = { agents: { entries: { main: {}, kept: {} } } };
-      await setProvenance(1, "main", "claw");
+      await setProvenance(1, "main", "template");
       await setProvenance(undefined, "kept");
       const before = readProvenance();
       const binding = await captureAgentLifecycleBinding(() => config, "main", options);

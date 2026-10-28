@@ -173,20 +173,10 @@ describe("extractMessagingToolSend", () => {
     expect(result?.threadId).toBe("999.000");
   });
 
-  it("does not infer native threads without a reply mode", () => {
-    const result = extractMessagingToolSend(
-      "slack",
-      { action: "sendMessage", to: "Channel:C1" },
-      {
-        currentChannelId: "channel:c1",
-        currentThreadId: "171.222",
-      },
-    );
-    expect(result?.threadImplicit).toBeUndefined();
-    expect(result?.threadId).toBeUndefined();
-  });
-
-  it("infers a native first-mode thread without consuming reply state", () => {
+  it.each([
+    ["does not infer native threads without a reply mode", undefined, undefined, undefined],
+    ["infers a native first-mode thread without consuming reply state", "first", true, "171.222"],
+  ] as const)("%s", (_name, replyToMode, threadImplicit, threadId) => {
     const hasRepliedRef = { value: false };
     const result = extractMessagingToolSend(
       "slack",
@@ -194,32 +184,25 @@ describe("extractMessagingToolSend", () => {
       {
         currentChannelId: "channel:c1",
         currentThreadId: "171.222",
-        replyToMode: "first",
-        hasRepliedRef,
+        ...(replyToMode ? { replyToMode, hasRepliedRef } : {}),
       },
     );
-    expect(result?.threadImplicit).toBe(true);
-    expect(result?.threadId).toBe("171.222");
+    expect(result?.threadImplicit).toBe(threadImplicit);
+    expect(result?.threadId).toBe(threadId);
     expect(hasRepliedRef.value).toBe(false);
   });
 
   it("records explicit suppression of implicit message threading", () => {
-    const topLevel = extractMessagingToolSend("message", {
-      action: "send",
-      provider: "telegram",
-      to: "123",
-      topLevel: true,
-    });
-    const nullThread = extractMessagingToolSend("message", {
-      action: "send",
-      provider: "telegram",
-      to: "123",
-      threadId: null,
-    });
-    expect(topLevel?.threadSuppressed).toBe(true);
-    expect(topLevel?.threadImplicit).toBeUndefined();
-    expect(nullThread?.threadSuppressed).toBe(true);
-    expect(nullThread?.threadImplicit).toBeUndefined();
+    for (const suppression of [{ topLevel: true }, { threadId: null }]) {
+      const result = extractMessagingToolSend("message", {
+        action: "send",
+        provider: "telegram",
+        to: "123",
+        ...suppression,
+      });
+      expect(result?.threadSuppressed).toBe(true);
+      expect(result?.threadImplicit).toBeUndefined();
+    }
   });
 });
 

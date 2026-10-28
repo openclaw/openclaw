@@ -19,14 +19,18 @@
  * the settled final heap after the measured window, never during it. Diagnostic owner censuses
  * are sampled every 30 seconds; their sampleAgeMs records asynchronous collection freshness.
  * This exercises a real catalog worker, not a complete Gateway or its client workload.
+ * --built-worker /path/to/build uses an already-built dist worker with the native stress
+ * loader, excluding TypeScript transform caches from the worker heap. Build before running.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import workerThreads from "node:worker_threads";
 import { prepareModelCatalogWorkerContext } from "../../src/agents/prepared-model-catalog-fingerprints.js";
 import type {
   PreparedModelCatalogWorkerTask,
@@ -40,6 +44,7 @@ const { values } = parseArgs({
     models: { type: "string", default: "5000" },
     "owner-dir": { type: "string" },
     snapshot: { type: "boolean", default: false },
+    "built-worker": { type: "string" },
     "runtime-plugin": { type: "boolean", default: false },
     "idle-seconds": { type: "string", default: "0" },
     "duration-seconds": { type: "string", default: "0" },
@@ -110,6 +115,37 @@ if (values["owner-dir"]) {
   delete process.env.OPENCLAW_BENCH_BASELINE_DIR;
 }
 // Install the same observer and optional source substitution before either owner imports.
+if (values["built-worker"]) {
+  assert(!values["owner-dir"], "--built-worker requires a complete build, not a source overlay");
+  const workerEntry = path.resolve(
+    values["built-worker"],
+    "dist/agents/prepared-model-catalog.worker.js",
+  );
+  const NativeWorker = workerThreads.Worker;
+  workerThreads.Worker = class extends NativeWorker {
+    constructor(
+      filename: ConstructorParameters<typeof NativeWorker>[0],
+      options: ConstructorParameters<typeof NativeWorker>[1] = {},
+    ) {
+      const catalog = String(filename).endsWith("/prepared-model-catalog.worker.ts");
+      super(
+        catalog ? workerEntry : filename,
+        catalog
+          ? {
+              ...options,
+              execArgv: [
+                "--import",
+                new URL("./team-shape-stress-loader.mjs", import.meta.url).href,
+                "--import",
+                new URL("./worker-retained-heap-preload.ts", import.meta.url).href,
+              ],
+            }
+          : options,
+      );
+    }
+  };
+  syncBuiltinESMExports();
+}
 await import("./worker-retained-heap-preload.js");
 const workerMetrics =
   idleSeconds > 0 || durationSeconds > 0
@@ -123,8 +159,8 @@ const { loadPluginMetadataSnapshot } =
 const { createPreparedModelCatalogWorkerInput } =
   await import("../../src/agents/prepared-model-catalog-worker.js");
 const { AuthStorage } = await import("../../src/agents/sessions/auth-storage.js");
-const { captureClawInstallSchemaVersionFacts } =
-  await import("../../src/claws/provenance-runtime-read.js");
+const { captureTemplateInstallSchemaVersionFacts } =
+  await import("../../src/templates/provenance-runtime-read.js");
 const { prepareSharedAuthStoreOwnership } =
   await import("../../src/agents/auth-profiles/path-resolve.js");
 await prepareSharedAuthStoreOwnership(env);
@@ -299,8 +335,9 @@ async function sample(
     .find(
       (file) =>
         file.endsWith(".ready.json") &&
-        JSON.parse(fs.readFileSync(path.join(output, file), "utf8")).script ===
-          "prepared-model-catalog.worker.ts",
+        /^prepared-model-catalog\.worker\.[jt]s$/.test(
+          JSON.parse(fs.readFileSync(path.join(output, file), "utf8")).script,
+        ),
     );
   assert(ready, "Missing catalog-worker instrumentation after completed task");
   const identity = JSON.parse(fs.readFileSync(path.join(output, ready), "utf8"));
@@ -360,7 +397,7 @@ async function runRevision(revision: number, count = workspaces, timed = false) 
           kind: "catalog",
           ...(timed ? { refresh: true } : {}),
           syntheticAuth: [],
-          clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env }),
+          templateInstallSchemaVersions: captureTemplateInstallSchemaVersionFacts({ env }),
         },
       },
       { timeoutMs: 120_000 },

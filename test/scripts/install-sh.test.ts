@@ -54,6 +54,7 @@ function runInstallShell(script: string, env: NodeJS.ProcessEnv = {}) {
       encoding: "utf8",
       env: {
         ...process.env,
+        ZDOTDIR: undefined,
         HOME: home,
         ...env,
         BASH_ENV: "",
@@ -2145,59 +2146,47 @@ EOF
     );
   });
 
-  it("mirrors the canonical support policy for Node release labels", () => {
-    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
-      engines?: { node?: string };
-    };
-    expect(pkg.engines?.node).toBe(">=24.22.1 <25 || >=26.12.1");
-
-    const tmp = tempDirs.make("openclaw-install-node-floor-");
-    const bin = join(tmp, "bin");
-    mkdirSync(bin, { recursive: true });
-
-    const nodePath = join(bin, "node");
-    writeFileSync(
-      nodePath,
-      ["#!/bin/sh", 'printf "%s\\n" "${FAKE_NODE_VERSION:-v0.0.0}"', ""].join("\n"),
-    );
-    chmodSync(nodePath, 0o755);
-
-    const result = runInstallShell(
-      [
-        `cd ${JSON.stringify(process.cwd())}`,
-        `source ${JSON.stringify(SCRIPT_PATH)}`,
-        "set +e",
-        `PATH=${JSON.stringify(`${bin}:/usr/bin:/bin`)}`,
-        "export PATH",
-        "unset -f node 2>/dev/null || true",
-        "unalias node 2>/dev/null || true",
-        'node() { printf "%s\\n" "${FAKE_NODE_VERSION:-v0.0.0}"; }',
-        ...NODE_RELEASE_VERSION_CASES.flatMap((version, index) => [
-          `FAKE_NODE_VERSION=${JSON.stringify(version)}`,
-          "export FAKE_NODE_VERSION",
-          "node_version_is_supported",
-          `printf '${index}=%s\\n' "$?"`,
-        ]),
-        "exit 0",
-      ].join("\n"),
-      {
-        PATH: `${bin}:/usr/bin:/bin`,
-        TERM: "dumb",
-      },
-    );
-
-    expect(result.status).toBe(0);
-    for (const [index, version] of NODE_RELEASE_VERSION_CASES.entries()) {
-      const expectedStatus = isSupportedOpenClawNodeVersion(version) ? 0 : 1;
-      expect(result.stdout, version).toContain(`${index}=${expectedStatus}`);
-    }
-  });
+  it.each(["install.sh", "install-cli.sh"])(
+    "checks canonical Node release labels in %s",
+    (installer) => {
+      const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
+        engines?: { node?: string };
+      };
+      expect(pkg.engines?.node).toBe(">=24.16.0 <25 || >=26.1.0");
+      const result = runInstallShell(
+        [
+          `source "scripts/${installer}"`,
+          "set +e",
+          'node() { printf "%s\\n" "$FAKE_NODE_VERSION"; }',
+          ...NODE_RELEASE_VERSION_CASES.flatMap((version, index) => [
+            `FAKE_NODE_VERSION=${JSON.stringify(version)}`,
+            installer === "install.sh"
+              ? "node_version_is_supported"
+              : 'node_release_version_is_supported "$FAKE_NODE_VERSION"',
+            `printf '${index}=%s\\n' "$?"`,
+          ]),
+          "exit 0",
+        ].join("\n"),
+        { TERM: "dumb", OPENCLAW_INSTALL_CLI_SH_NO_RUN: "1" },
+      );
+      expect(result.status).toBe(0);
+      for (const [index, version] of NODE_RELEASE_VERSION_CASES.entries()) {
+        expect(result.stdout, version).toContain(
+          `${index}=${isSupportedOpenClawNodeVersion(version) ? 0 : 1}`,
+        );
+      }
+    },
+  );
 
   it.each(
     [
       { version: "24.22.1", defect: "none", expected: 0 },
       { version: "24.22.1", defect: "text", expected: 1 },
+      { version: "24.16.0+vendor.1", defect: "none", expected: 0 },
+      { version: "26.1.0", defect: "none", expected: 0 },
+      { version: "24.16.0", defect: "text", expected: 1 },
       { version: "24.15.0+vendor.1", defect: "none", expected: 1 },
+      { version: "26.0.0+vendor.1", defect: "none", expected: 1 },
       { version: "24.22.1", defect: "blob", expected: 1 },
       { version: "24.22.1", defect: "json", expected: 1 },
     ].flatMap(({ version, defect, expected }) =>
@@ -2434,95 +2423,83 @@ EOF
   });
 
   it.each([
-    { shell: "/bin/bash", profiles: [".bashrc", ".profile"], absent: [".zshrc", ".zprofile"] },
-    { shell: "/bin/zsh", profiles: [".zshrc", ".zprofile"], absent: [".bashrc", ".profile"] },
+    { shell: "bash", profiles: [".bashrc", ".profile"], absent: [".zshrc", ".zprofile"] },
+    { shell: "zsh", profiles: [".zshrc", ".zprofile"], absent: [".bashrc", ".profile"] },
     {
-      shell: "/usr/bin/fish",
-      profiles: [".config/fish/conf.d/openclaw.fish"],
-      absent: [".bashrc"],
+      shell: "zsh",
+      zdotdir: ".config/zsh profiles 'quoted'",
+      profiles: [".zshrc", ".zprofile"],
+      absent: [".zshrc", ".zprofile", ".bashrc", ".profile"],
     },
-  ])("persists a fresh Git install for $shell", ({ shell, profiles, absent }) => {
-    const tmp = tempDirs.make("openclaw-install-shell-path-");
-    const home = join(tmp, "home"),
-      bin = join(home, ".local", "bin");
-    mkdirSync(bin, { recursive: true });
-    writeFileSync(join(bin, "openclaw"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-    const env = { HOME: home, PATH: "/usr/bin:/bin", SHELL: shell };
-    const persist = runInstallShell(
-      `source "${SCRIPT_PATH}"; ensure_user_local_bin_on_path; ensure_user_local_bin_on_path`,
-      env,
-    );
-    expect(persist.status).toBe(0);
-    for (const profile of profiles) {
-      expect(readFileSync(join(home, profile), "utf8")).toBe(
-        shell.endsWith("fish")
-          ? 'fish_add_path -- "$HOME/.local/bin"\n'
-          : 'export PATH="$HOME/.local/bin:$PATH"\n',
+    { shell: "fish", profiles: [".config/fish/conf.d/openclaw.fish"], absent: [".bashrc"] },
+  ] as const)(
+    "persists a fresh Git install for $shell (ZDOTDIR=$zdotdir)",
+    ({ shell, profiles, absent, zdotdir }) => {
+      const home = join(tempDirs.make("openclaw-install-shell-path-"), "home");
+      const bin = join(home, ".local", "bin");
+      const profileDir = zdotdir ? join(home, zdotdir) : home;
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(join(bin, "openclaw"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      const env = {
+        HOME: home,
+        ZDOTDIR: zdotdir ? profileDir : undefined,
+        PATH: "/usr/bin:/bin",
+        SHELL: `/bin/${shell}`,
+        BASH_ENV: "",
+        ENV: "",
+      };
+      const persist = runInstallShell(
+        `source "${SCRIPT_PATH}"; ensure_user_local_bin_on_path; ensure_user_local_bin_on_path`,
+        env,
       );
-    }
-    for (const profile of absent) {
-      expect(existsSync(join(home, profile))).toBe(false);
-    }
-    if (shell === "/bin/bash") {
-      const interactive = spawnSync(
-        "/bin/bash",
-        ["-ic", "printf 'openclaw-path=%s\\n' \"$(command -v openclaw)\""],
-        {
-          encoding: "utf8",
-          env: { HOME: home, PATH: "/usr/bin:/bin", BASH_ENV: "", ENV: "" },
-        },
-      );
-      const login = spawnSync(
-        "/bin/bash",
-        ["--noprofile", "--norc", "-c", '. "$HOME/.profile"; command -v openclaw'],
-        {
-          encoding: "utf8",
-          env: { HOME: home, PATH: "/usr/bin:/bin", BASH_ENV: "", ENV: "" },
-        },
-      );
-      expect(interactive.status).toBe(0);
-      expect(interactive.stdout.match(/^openclaw-path=.*$/gm)).toEqual([
-        `openclaw-path=${join(bin, "openclaw")}`,
-      ]);
-      expect(login.status).toBe(0);
-      expect(login.stdout.trim()).toBe(join(bin, "openclaw"));
-    } else if (shell === "/bin/zsh") {
-      if (spawnSync("zsh", ["--version"], { encoding: "utf8" }).status === 0) {
-        for (const args of [
-          ["-ic", "command -v openclaw"],
-          ["-lic", "command -v openclaw"],
-        ]) {
-          const fresh = spawnSync("zsh", args, {
-            encoding: "utf8",
-            env: { HOME: home, PATH: "/usr/bin:/bin", ZDOTDIR: home },
-          });
-          expect(fresh.status).toBe(0);
-          expect(fresh.stdout.trim()).toBe(join(bin, "openclaw"));
-        }
+      expect(persist.status, persist.stdout + persist.stderr).toBe(0);
+      for (const profile of profiles) {
+        expect(readFileSync(join(profileDir, profile), "utf8")).toBe(
+          shell === "fish"
+            ? 'fish_add_path -- "$HOME/.local/bin"\n'
+            : 'export PATH="$HOME/.local/bin:$PATH"\n',
+        );
       }
-    } else {
+      for (const profile of absent) {
+        expect(existsSync(join(home, profile))).toBe(false);
+      }
       const warning = runInstallShell(
         `source "${SCRIPT_PATH}"; warn_shell_path_missing_dir "$HOME/.local/bin" "user-local bin dir"`,
         env,
       );
       expect(warning.status).toBe(0);
       expect(warning.stdout).toContain("PATH missing user-local bin dir");
-      expect(warning.stdout).toContain(`set -gx PATH "${bin}" $PATH`);
       expect(warning.stdout).toContain(
-        `If your shell reads ${join(home, ".config/fish/conf.d/openclaw.fish")} and it adds this directory to PATH`,
+        `If your shell reads ${join(profileDir, profiles[0])} and it adds this directory to PATH`,
       );
       expect(warning.stdout).not.toContain("PATH updated in");
-      const fishPath = runInstallShell("command -v fish");
-      if (fishPath.status === 0) {
-        const fresh = spawnSync(fishPath.stdout.trim(), ["-lc", "command -v openclaw"], {
-          encoding: "utf8",
-          env: { HOME: home, PATH: "/usr/bin:/bin" },
-        });
-        expect(fresh.status).toBe(0);
-        expect(fresh.stdout.trim()).toBe(join(bin, "openclaw"));
+      if (shell === "fish") {
+        expect(warning.stdout).toContain(`set -gx PATH "${bin}" $PATH`);
       }
-    }
-  });
+      const executable = runInstallShell(`command -v ${shell}`).stdout.trim();
+      const commands =
+        shell === "bash"
+          ? [
+              ["-ic", "printf 'openclaw-path=%s\\n' \"$(command -v openclaw)\""],
+              ["--noprofile", "--norc", "-c", '. "$HOME/.profile"; command -v openclaw'],
+            ]
+          : shell === "zsh"
+            ? [
+                ["-ic", "command -v openclaw"],
+                ["-lic", "command -v openclaw"],
+              ]
+            : [["-lc", "command -v openclaw"]];
+      for (const args of executable ? commands : []) {
+        const fresh = spawnSync(executable, args, { encoding: "utf8", env });
+        expect(fresh.status, fresh.stdout + fresh.stderr).toBe(0);
+        expect(
+          shell === "bash" && args[0] === "-ic"
+            ? fresh.stdout.match(/^openclaw-path=(.*)$/m)?.[1]
+            : fresh.stdout.trim(),
+        ).toBe(join(bin, "openclaw"));
+      }
+    },
+  );
 
   it("updates existing startup files for dual-shell users", () => {
     const tmp = tempDirs.make("openclaw-install-dual-shell-path-");
@@ -3106,6 +3083,7 @@ EOF
       expect(result.stdout).not.toMatch(/(^|run: )source |^ {4}source /m);
       const command = result.stdout.match(/For this shell, run:\n {4}(.+)/)?.[1];
       expect(command).toBeTruthy();
+      expect(command).toContain("; hash -r");
       const direct = runInstallShell(`${command}; command -v openclaw; openclaw --version`, {
         HOME: home,
         PATH: "/usr/bin:/bin",
@@ -3195,22 +3173,6 @@ EOF
     expect(result.stdout).toContain("Fish: set -gx PATH ");
     expect(result.stdout).not.toContain("For this shell, run:");
     expect(result.stdout).not.toContain("source ");
-  });
-
-  it("refreshes the shell command cache in the direct PATH remedy", () => {
-    const result = runInstallShell(`
-      set -euo pipefail
-      source "${SCRIPT_PATH}"
-      printf 'export PATH="$HOME/.local/bin:$PATH"\\n' > "$HOME/.bashrc"
-      ORIGINAL_PATH="/usr/bin:/bin"
-      SHELL=/bin/bash
-      warn_shell_path_missing_dir "$HOME/.local/bin" "user-local bin dir"
-    `);
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("For this shell, run:\n    export PATH=");
-    expect(result.stdout).not.toContain("source ");
-    expect(result.stdout).toContain("; hash -r");
   });
 
   it("resolves requested git install versions to checkout refs", () => {

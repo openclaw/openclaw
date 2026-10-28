@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeEach, describe, expect, onTestFinished, test, vi } from "vitest";
+import * as execDefaults from "../agents/exec-defaults.js";
 import { resolveLegacyInheritedAuthAgentId } from "../agents/legacy-inherited-auth-dir.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -19,7 +20,6 @@ import {
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { CronJob } from "../cron/types.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
-import * as execApprovalsStore from "../infra/exec-approvals-store.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
@@ -587,8 +587,7 @@ describe("gateway session utils", () => {
       const patch = applySessionContextWindowPatch({
         next: entry,
         patch: { key: "agent:main:main", contextWindow: String(after) },
-        defaultProvider: "ollama",
-        defaultModel: "qwen3:8b",
+        resolveDefaultModel: () => ({ provider: "ollama", model: "qwen3:8b" }),
         runtimeId: () => "openclaw",
         routeVariants: () => catalog,
         *loadModelCatalog() {
@@ -1305,38 +1304,29 @@ describe("gateway session utils", () => {
     });
   });
 
-  test("listAgentsForGateway never overstates global sandbox all", async () => {
-    const cfg: OpenClawConfig = { agents: { defaults: { sandbox: { mode: "all" } } } };
+  test("listAgentsForGateway resolves only representable permission labels across sandbox callers", async () => {
     await withAgentPermissionState(async () => {
-      execApprovalsStore.updateExecApprovalsForMaintenance(() => ({ version: 1 }));
-      const agent = (await listAgentsForGateway(cfg)).agents.find((entry) => entry.id === "main");
-      expect(agent).toBeDefined();
-      expect(agent).not.toHaveProperty("defaultPermissionMode");
-    });
-  });
-
-  test("listAgentsForGateway shares one approvals read across agent permission labels", async () => {
-    await withAgentPermissionState(async () => {
-      const cfg: OpenClawConfig = {
-        tools: { exec: { mode: "ask" } },
-        agents: {
-          entries: {
-            guarded: {},
-            restricted: { tools: { exec: { mode: "allowlist" } } },
-            workspace: { tools: { exec: { mode: "auto" } } },
+      for (const mode of ["all", "off", "non-main", "all"] as const) {
+        using resolve = vi.spyOn(execDefaults, "resolveExecDefaults");
+        const cfg: OpenClawConfig = {
+          tools: { exec: { mode: "ask" } },
+          agents: {
+            defaults: { sandbox: { mode } },
+            entries: {
+              guarded: {},
+              restricted: { tools: { exec: { mode: "allowlist" } } },
+              workspace: { sandbox: { mode: "off" }, tools: { exec: { mode: "auto" } } },
+            },
           },
-        },
-      };
-      expect(
-        (await listAgentsForGateway(cfg)).agents.map(({ id, defaultPermissionMode }) => [
-          id,
-          defaultPermissionMode,
-        ]),
-      ).toEqual([
-        ["guarded", "guarded"],
-        ["restricted", undefined],
-        ["workspace", "workspace"],
-      ]);
+        };
+        const { agents } = await listAgentsForGateway(cfg);
+        expect(agents.map(({ id, defaultPermissionMode }) => [id, defaultPermissionMode])).toEqual([
+          ["guarded", mode === "off" ? "guarded" : undefined],
+          ["restricted", undefined],
+          ["workspace", "workspace"],
+        ]);
+        expect(resolve).toHaveBeenCalledTimes(mode === "off" ? 3 : 1);
+      }
     });
   });
 

@@ -11,6 +11,26 @@ import {
   joinJsonlFrames,
 } from "./cli-output.test-helpers.js";
 
+function toolResultFrame(
+  toolUseId: string,
+  content: unknown[],
+  extra: Record<string, unknown> = {},
+) {
+  return {
+    type: "user",
+    message: { content: [{ type: "tool_result", tool_use_id: toolUseId, content }] },
+    ...extra,
+  };
+}
+
+function imageResultFrame(id: string, data: string, extra: Record<string, unknown> = {}) {
+  return toolResultFrame(
+    id,
+    [{ type: "image", source: { type: "base64", media_type: "image/png", data } }],
+    extra,
+  );
+}
+
 describe("createCliJsonlStreamingParser framing", () => {
   it("frames coalesced Claude image and PDF lines before omitting retained binary bytes", () => {
     const results: CliToolResultDelta[] = [];
@@ -108,27 +128,9 @@ describe("createCliJsonlStreamingParser framing", () => {
       },
       onAssistantDelta: (delta) => assistantDeltas.push(delta.delta),
     });
-    const semanticLine = JSON.stringify({
-      type: "user",
-      message: {
-        content: [
-          {
-            type: "tool_result",
-            tool_use_id: "claimed-image",
-            content: [
-              {
-                type: "image",
-                source: {
-                  type: "base64",
-                  media_type: "image/png",
-                  data: padded ? "YQ==" : "a".repeat(4_300_000),
-                },
-              },
-            ],
-          },
-        ],
-      },
-    });
+    const semanticLine = JSON.stringify(
+      imageResultFrame("claimed-image", padded ? "YQ==" : "a".repeat(4_300_000)),
+    );
     const rawLine = padded ? `${" ".repeat(4_300_000)}${semanticLine}` : semanticLine;
 
     parser.push(`${rawLine}\n${rawLine}\n`);
@@ -167,23 +169,10 @@ describe("createCliJsonlStreamingParser framing", () => {
     {
       name: "formatting inside a compacted media record",
       createLine: () =>
-        JSON.stringify({
-          type: "user",
-          message: {
-            content: [
-              {
-                type: "tool_result",
-                tool_use_id: "padded-image",
-                content: [
-                  {
-                    type: "image",
-                    source: { type: "base64", media_type: "image/png", data: "YQ==" },
-                  },
-                ],
-              },
-            ],
-          },
-        }).replace('"message":', `"message":${" ".repeat(4_300_000)}`),
+        JSON.stringify(imageResultFrame("padded-image", "YQ==")).replace(
+          '"message":',
+          `"message":${" ".repeat(4_300_000)}`,
+        ),
     },
   ])("charges $name against the Claude raw-output budget", ({ createLine }) => {
     const parser = createClaudeParser();
@@ -200,25 +189,7 @@ describe("createCliJsonlStreamingParser framing", () => {
       onToolResult: (result) => results.push(result),
     });
 
-    parser.push(
-      `${JSON.stringify({
-        type: "user",
-        message: {
-          content: [
-            {
-              type: "tool_result",
-              tool_use_id: "empty-image",
-              content: [
-                {
-                  type: "image",
-                  source: { type: "base64", media_type: "image/png", data: "" },
-                },
-              ],
-            },
-          ],
-        },
-      })}\n`,
-    );
+    parser.push(`${JSON.stringify(imageResultFrame("empty-image", ""))}\n`);
 
     expect(results[0]?.result).toEqual([
       {
@@ -282,24 +253,11 @@ describe("createCliJsonlStreamingParser framing", () => {
     const parser = createClaudeParser();
     const base64 = "A".repeat(600_000);
     const readLine = (index: number) =>
-      `${JSON.stringify({
-        type: "user",
-        message: {
-          content: [
-            {
-              type: "tool_result",
-              tool_use_id: `read-${index}`,
-              content: [
-                {
-                  type: "image",
-                  source: { type: "base64", media_type: "image/png", data: base64 },
-                },
-              ],
-            },
-          ],
-        },
-        tool_use_result: { type: "image", file: { base64, type: "image/png", originalSize: 1 } },
-      })}\n`;
+      `${JSON.stringify(
+        imageResultFrame(`read-${index}`, base64, {
+          tool_use_result: { type: "image", file: { base64, type: "image/png", originalSize: 1 } },
+        }),
+      )}\n`;
 
     for (let index = 0; index < 20; index += 1) {
       parser.push(readLine(index));
@@ -365,27 +323,7 @@ describe("createCliJsonlStreamingParser framing", () => {
     const createParser = createClaudeParser;
     const oversizedLineParser = createParser();
     oversizedLineParser.push(
-      `${JSON.stringify({
-        type: "user",
-        message: {
-          content: [
-            {
-              type: "tool_result",
-              tool_use_id: "oversized-image",
-              content: [
-                {
-                  type: "image",
-                  source: {
-                    type: "base64",
-                    media_type: "image/png",
-                    data: "a".repeat(8 * 1024 * 1024),
-                  },
-                },
-              ],
-            },
-          ],
-        },
-      })}\n`,
+      `${JSON.stringify(imageResultFrame("oversized-image", "a".repeat(8 * 1024 * 1024)))}\n`,
     );
     expect(oversizedLineParser.getErrorText()).toContain("JSONL line exceeded");
 
@@ -398,18 +336,9 @@ describe("createCliJsonlStreamingParser framing", () => {
     const oversizedTextParser = createParser();
     for (const toolCallId of ["first", "second"]) {
       oversizedTextParser.push(
-        `${JSON.stringify({
-          type: "user",
-          message: {
-            content: [
-              {
-                type: "tool_result",
-                tool_use_id: toolCallId,
-                content: [{ type: "text", text: "a".repeat(4_300_000) }],
-              },
-            ],
-          },
-        })}\n`,
+        `${JSON.stringify(
+          toolResultFrame(toolCallId, [{ type: "text", text: "a".repeat(4_300_000) }]),
+        )}\n`,
       );
     }
     expect(oversizedTextParser.getErrorText()).toContain("JSONL output exceeded");

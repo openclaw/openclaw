@@ -4,7 +4,7 @@ import type { SessionsDiffResult } from "../../../../../packages/gateway-protoco
 import { localEditorFilePath } from "../../../app/native-editor-locality.runtime.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { pairSessionDiffLines } from "../../../lib/chat/session-diff-split.ts";
 import type { DiffLine } from "../../../lib/chat/tool-call-diff.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -19,7 +19,7 @@ import { SessionDiffFileBody } from "./session-diff-render.tsx";
 import { ReviewFilename } from "./session-diff-tree.tsx";
 import type { FileView } from "./session-diff-types.ts";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 export function createSessionDiffFileView(bindings: SessionDiffViewBindings) {
   const {
@@ -362,7 +362,9 @@ export function createSessionDiffFileView(bindings: SessionDiffViewBindings) {
                   desktop() &&
                   Boolean(props.openFileView) &&
                   file().status !== "deleted" &&
-                  file().binary !== true,
+                  file().binary !== true
+                    ? props.canEditFile?.(file().path)
+                    : false,
               });
             }}
           >

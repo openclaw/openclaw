@@ -3,12 +3,18 @@
  * node --import ./scripts/tsx.mjs scripts/perf/startup-recovery-admission-measure.ts \
  *   --checkout /absolute/built-checkout --port 45100 --output "$PWD/.local/restart-base"
  *
- * Defaults: 10,000 retained sessions / 128 MiB transcripts in retired main, five
+ * Defaults: 10,000 retained sessions / 128 MiB transcripts in active main, five
  * configured agents with interrupted turns, five reconnecting clients, 40 empty
  * startup plugins. The mock provider holds streaming responses until SIGKILL.
  * Before restart, an owned offline writer leaves 16 MiB WAL per configured agent
  * (--wal-mib) using existing cache rows, then is killed without closing SQLite.
- * Reports actual WAL sizes, admission timing, startup phases and durable replies.
+ * The first reconnect probes read RPCs immediately after hello, before readiness.
+ * Reconnecting clients request only operator.read; negotiated scopes are recorded.
+ * Reports file sizes, read latency/errors, startup phases and durable replies.
+ * Add --workboard to load the bundled plugin and probe its scoped cards list.
+ * Add --resources to collect three fresh diagnostic memory samples after durable
+ * recovery (120s limit), with list/Workboard reads every 5s. This enables the
+ * bundled Prometheus exporter; heaps are live samples, not forced-GC retention.
  * This is a restart proof, not the canonical steady-state Team stress campaign.
  * Empty plugins and streamed turns do not model plugin work or interrupted tools.
  * A small observed WAL or no deferred admission means the incident was not fully
@@ -48,6 +54,8 @@ const { values } = parseArgs({
     agents: { type: "string", default: "5" },
     clients: { type: "string", default: "5" },
     plugins: { type: "string", default: "40" },
+    workboard: { type: "boolean" },
+    resources: { type: "boolean" },
     "timeout-seconds": { type: "string", default: "600" },
     "wal-mib": { type: "string", default: "16" },
     "prepare-wal-agent": { type: "string" },
@@ -114,8 +122,8 @@ const previousTmpdir = process.env.TMPDIR;
 process.env.TMPDIR = path.join(output, "tmp");
 await mkdir(process.env.TMPDIR);
 const scenarios = Array.from({ length: number(values.agents) }, (_, index) => ({
-  agentId: `recovery${index}`,
-  key: `agent:recovery${index}:main`,
+  agentId: index === 0 ? "main" : `recovery${index}`,
+  key: `agent:${index === 0 ? "main" : `recovery${index}`}:main`,
   marker: `RESTART_PROOF_TASK_${index}`,
   final: `RESTART_PROOF_COMPLETE_${index}`,
   sessionId: "",
@@ -212,6 +220,19 @@ const instance = await createOpenClawTestInstance({
   env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1", OPENCLAW_GATEWAY_STARTUP_TRACE: "1" },
 });
 const clients: GatewayClient[] = [];
+const earlyReadProbes: Array<{
+  method: string;
+  startedAt: number;
+  startedAfterLaunchMs: number;
+  completedAt?: number;
+  elapsedMs?: number;
+  success?: boolean;
+  gatewayCode?: string;
+  retryable?: boolean;
+  error?: string;
+}> = [];
+let earlyReads: Promise<void> | undefined;
+let mainIntegrityFinishedAt: number | undefined;
 const report: Record<string, unknown> = {
   checkout,
   port,
@@ -219,17 +240,87 @@ const report: Record<string, unknown> = {
   transcriptMiB: number(values["transcript-mib"]),
   agentCount: scenarios.length,
   clientCount: number(values.clients),
-  pluginCount: number(values.plugins),
+  pluginCount: number(values.plugins) + (values.workboard ? 1 : 0) + (values.resources ? 1 : 0),
+  workboard: values.workboard ?? false,
   offlineWalMiBPerAgent: number(values["wal-mib"]),
+  earlyReadProbes,
   minimalGateway: false,
   limitations: [
     "Empty synthetic startup plugins",
     "Streaming interruption, no tool side effects",
     "No steady-state load metrics",
+    ...(values.resources
+      ? ["Resource samples follow recovery; worker heaps may lag one heartbeat"]
+      : []),
+    "One request per early-read method, issued by the first reconnecting client",
+    ...(values.workboard ? [] : ["Workboard is not loaded by the empty plugin fixture"]),
     "WAL pressure is produced by an offline cache writer after Gateway death",
     "Child spawn is observed by 5ms polling; launch-request timing includes fixture preparation",
   ],
 };
+async function probeEarlyReads(client: GatewayClient, launchedAt: number): Promise<void> {
+  const { agentId, key, sessionId, marker } = scenarios[0]!;
+  const probes: Array<{ method: string; params: Record<string, unknown> }> = [
+    { method: "sessions.list", params: { agentId } },
+    { method: "sessions.resolve", params: { agentId, key } },
+    { method: "sessions.describe", params: { agentId, key } },
+    { method: "board.get", params: { agentId, sessionKey: key } },
+    { method: "sessions.messages.subscribe", params: { agentId, key } },
+    { method: "models.list", params: { agentId, preparedOnly: true } },
+    { method: "chat.metadata", params: { agentId, sessionKey: key } },
+    { method: "chat.history", params: { sessionKey: key, limit: 10 } },
+    ...(values.workboard ? [{ method: "workboard.cards.list", params: { sessionKey: key } }] : []),
+  ];
+  await Promise.all(
+    probes.map(async ({ method, params }) => {
+      const startedAt = Date.now();
+      const result: (typeof earlyReadProbes)[number] = {
+        method,
+        startedAt,
+        startedAfterLaunchMs: startedAt - launchedAt,
+      };
+      earlyReadProbes.push(result);
+      try {
+        const payload = await client.request(method, params, { timeoutMs });
+        if (method === "sessions.list") {
+          assert(
+            Array.isArray(payload.sessions) &&
+              payload.sessions.some((row) => asRecord(row).sessionId === sessionId),
+            "Early list must contain the persisted session",
+          );
+        } else if (method === "sessions.describe") {
+          assert.equal(
+            asRecord(payload.session).sessionId,
+            sessionId,
+            "Early description must identify the persisted session",
+          );
+        } else if (method === "sessions.resolve") {
+          assert.equal(payload.ok, true, "Early resolution must find the persisted session");
+          assert.equal(payload.key, key, "Early resolution must return the requested key");
+        } else if (method === "chat.history") {
+          assert(
+            Array.isArray(payload.messages) &&
+              payload.messages.some((message) =>
+                extractTextFromChatContent(asRecord(message).content)?.includes(marker),
+              ),
+            "Early history must contain the persisted input",
+          );
+        }
+        result.success = true;
+      } catch (error) {
+        result.success = false;
+        result.error = toErrorObject(error, "Early read failed").message;
+        if (isGatewayProtocolResponseError(error)) {
+          result.gatewayCode = error.gatewayCode;
+          result.retryable = error.retryable;
+        }
+      } finally {
+        result.completedAt = Date.now();
+        result.elapsedMs = result.completedAt - startedAt;
+      }
+    }),
+  );
+}
 const until = async (check: () => boolean | Promise<boolean>, label: string) => {
   const deadline = Date.now() + timeoutMs;
   while (true) {
@@ -262,6 +353,7 @@ function startClient(index: number, startedAt: number) {
     interruptedHandshakes: 0,
     transportCloses: 0,
     errors: [] as string[],
+    grantedScopes: [] as string[],
   };
   const client = new GatewayClient({
     url: instance.url,
@@ -269,15 +361,19 @@ function startClient(index: number, startedAt: number) {
     env: instance.env,
     clientName: "gateway-client",
     mode: "backend",
-    scopes: ["operator.admin", "operator.read", "operator.write"],
+    scopes: recovering ? ["operator.read"] : ["operator.admin", "operator.read", "operator.write"],
     deviceIdentity: loadOrCreateDeviceIdentity({
       path: instance.state.path("device", `client-${index}`, "client", "credentials.sqlite"),
     }),
     notifyOnStartupRetry: true,
-    onHelloOk: () => {
+    onHelloOk: (hello) => {
       if (!result.admittedAt) {
+        result.grantedScopes = hello.auth.scopes;
         result.admittedAt = Date.now();
         result.admissionMs = result.admittedAt - startedAt;
+        if (recovering && !earlyReads) {
+          earlyReads = probeEarlyReads(client, startedAt);
+        }
       }
     },
     onConnectError: (error) => {
@@ -329,10 +425,19 @@ try {
     browser: { enabled: false },
     discovery: { mdns: { mode: "off" } },
     logging: { file: path.join(output, "server.log") },
+    ...(values.resources ? { diagnostics: { enabled: true } } : {}),
     session: { maintenance: { maxEntries: sessionCount * 2 } },
     plugins: {
       enabled: true,
-      allow: plugins.pluginIds,
+      allow: [
+        ...plugins.pluginIds,
+        ...(values.workboard ? ["workboard"] : []),
+        ...(values.resources ? ["diagnostics-prometheus"] : []),
+      ],
+      entries: {
+        ...(values.workboard ? { workboard: { enabled: true } } : {}),
+        ...(values.resources ? { "diagnostics-prometheus": { enabled: true } } : {}),
+      },
       load: { paths: [plugins.pluginsDir] },
       slots: { memory: "none" },
     },
@@ -450,24 +555,29 @@ try {
       await writeFile(path.join(output, `wal-writer-${scenario.agentId}.log`), stderr);
     }
   }
-  report.walBytesAfterCrash = Object.fromEntries(
-    await Promise.all(
-      ["main", ...scenarios.map((entry) => entry.agentId)].map(async (agentId) => {
-        const file = path.join(instance.state.agentDir(agentId), "openclaw-agent.sqlite-wal");
-        return [
-          agentId,
-          await stat(file).then(
+  const fileSizes = await Promise.all(
+    scenarios.map(async ({ agentId }) => {
+      const sizes = await Promise.all(
+        ["openclaw-agent.sqlite", "openclaw-agent.sqlite-wal"].map((name) =>
+          stat(path.join(instance.state.agentDir(agentId), name)).then(
             (entry) => entry.size,
             (error: unknown) => {
               if (hasErrnoCode(error, "ENOENT")) {
                 return 0;
               }
-              throw toErrorObject(error, "Cannot inspect fixture WAL");
+              throw toErrorObject(error, "Cannot inspect fixture database files");
             },
           ),
-        ];
-      }),
-    ),
+        ),
+      );
+      return { agentId, databaseBytes: sizes[0]!, walBytes: sizes[1]! };
+    }),
+  );
+  report.databaseBytesAfterCrash = Object.fromEntries(
+    fileSizes.map(({ agentId, databaseBytes }) => [agentId, databaseBytes]),
+  );
+  report.walBytesAfterCrash = Object.fromEntries(
+    fileSizes.map(({ agentId, walBytes }) => [agentId, walBytes]),
   );
   recovering = true;
   const logOffset = (await readFile(path.join(output, "server.log"), "utf8")).length;
@@ -496,6 +606,14 @@ try {
       () => reconnects.every(({ result }) => result.admittedAt > 0),
       "all reconnects admitted",
     );
+    assert(
+      reconnects.every(
+        ({ result }) =>
+          result.grantedScopes.includes("operator.read") &&
+          !result.grantedScopes.includes("operator.admin"),
+      ),
+      "Reconnect proof requires non-admin read scopes",
+    );
   } finally {
     clearInterval(observeSpawn);
     restart.observedSpawnAt = observedSpawnAt;
@@ -505,6 +623,8 @@ try {
     admissionFromObservedSpawnMs:
       observedSpawnAt === null ? null : result.admittedAt - observedSpawnAt,
   }));
+  assert(earlyReads, "First reconnect must start the early read probes");
+  await earlyReads;
   const client = reconnects[0]!.client;
   for (const scenario of scenarios) {
     await until(async () => {
@@ -550,11 +670,33 @@ try {
     }, `durable resumed reply for ${scenario.key}`);
   }
   const restartLogs = (await readFile(path.join(output, "server.log"), "utf8")).slice(logOffset);
-  const restartMessages = restartLogs
+  const restartRecords = restartLogs
     .split("\n")
     .slice(0, -1)
-    .map((line) => asRecord(JSON.parse(line)).message)
+    .map((line) => asRecord(JSON.parse(line)));
+  const restartMessages = restartRecords
+    .map((record) => record.message)
     .filter((message): message is string => typeof message === "string");
+  report.startupMeasurements = restartRecords.flatMap((record) =>
+    typeof record.message === "string" &&
+    [
+      "agent database integrity gate",
+      "slow OpenClaw agent database open",
+      "agent database reads ready while writable inspection continues",
+      "agent database recovered after background inspection and preparation",
+      "agent database remains degraded",
+    ].includes(record.message)
+      ? [{ time: record.time, message: record.message, details: asRecord(record["1"]) }]
+      : [],
+  );
+  const mainIntegrity = restartRecords.find(
+    (record) =>
+      record.message === "agent database integrity gate" &&
+      asRecord(record["1"]).agentId === "main",
+  );
+  if (typeof mainIntegrity?.time === "string") {
+    mainIntegrityFinishedAt = Date.parse(mainIntegrity.time);
+  }
   const recoveryDurations = restartMessages.flatMap((message) => {
     const match = /startup (?:phase|trace): sidecars\.main-session-recovery (\d+(?:\.\d+)?)ms/.exec(
       message,
@@ -566,6 +708,81 @@ try {
   report.backgroundAdmissionRecoveries = restartMessages.filter((message) =>
     message.includes("agent database recovered after background inspection and preparation"),
   ).length;
+  if (values.resources) {
+    const startedAt = Date.now();
+    const samples: Array<Record<string, unknown>> = [];
+    report.resources = { startedAt, samples, scope: "Live post-recovery samples; no forced GC" };
+    let previousCount: number | null = null;
+    let scrape = 0;
+    while (samples.length < 3 && Date.now() - startedAt < 120_000) {
+      await client.request(
+        "sessions.list",
+        { agentId: scenarios[0]!.agentId },
+        { timeoutMs: 5000 },
+      );
+      if (values.workboard) {
+        await client.request(
+          "workboard.cards.list",
+          { sessionKey: scenarios[0]!.key },
+          { timeoutMs: 5000 },
+        );
+      }
+      const response = await fetch(`http://127.0.0.1:${port}/api/diagnostics/prometheus`, {
+        headers: { Authorization: `Bearer ${instance.gatewayToken}` },
+        signal: AbortSignal.timeout(5000),
+      });
+      assert(response.ok, `Resource scrape failed: HTTP ${response.status}`);
+      const prometheus = await response.text();
+      const capturedAt = Date.now();
+      const file = `resources-${scrape++}.prom`;
+      await writeFile(path.join(output, file), prometheus);
+      const lines = prometheus.split("\n");
+      const metric = (key: string): number | null => {
+        const line = lines.find((entry) => entry.startsWith(`${key} `));
+        const value = Number.parseFloat(line?.slice(key.length) ?? "");
+        return Number.isFinite(value) ? value : null;
+      };
+      const count = metric("openclaw_memory_rss_bytes_count");
+      if (
+        count !== null &&
+        previousCount !== null &&
+        count > previousCount &&
+        capturedAt - startedAt <= 120_000
+      ) {
+        const workers = metric("openclaw_worker_count");
+        const sampled = metric("openclaw_worker_heap_sampled_count");
+        const sqlite = '{script="sqlite-store.worker.js"}';
+        const sqliteWorkers = metric(`openclaw_worker_count${sqlite}`);
+        const sqliteSampled = metric(`openclaw_worker_heap_sampled_count${sqlite}`);
+        samples.push({
+          capturedAt,
+          elapsedMs: capturedAt - startedAt,
+          file,
+          hostLoad: os.loadavg(),
+          memorySampleCount: count,
+          rssBytes: metric('openclaw_memory_bytes{kind="rss"}'),
+          mainHeapUsedBytes: metric('openclaw_memory_bytes{kind="heap_used"}'),
+          workerCount: workers,
+          workerHeapSampledCount: sampled,
+          workerHeapUsedBytes:
+            workers !== null && workers === sampled
+              ? metric('openclaw_memory_bytes{kind="worker_heap_used"}')
+              : null,
+          sqliteWorkerCount: sqliteWorkers,
+          sqliteWorkerHeapSampledCount: sqliteSampled,
+          sqliteWorkerHeapUsedBytes:
+            sqliteWorkers !== null && sqliteWorkers === sqliteSampled
+              ? metric(`openclaw_worker_heap_used_bytes${sqlite}`)
+              : null,
+        });
+      }
+      previousCount = count;
+      if (samples.length < 3) {
+        await delay(Math.min(5000, Math.max(0, 120_000 - (Date.now() - startedAt))));
+      }
+    }
+    assert.equal(samples.length, 3, "Three fresh post-recovery memory samples within 120s");
+  }
   restart.hostLoadAtFinish = os.loadavg();
   report.success = true;
 } catch (error) {
@@ -573,6 +790,13 @@ try {
   report.error = error instanceof Error ? error.stack : String(error);
   process.exitCode = 1;
 }
+await earlyReads;
+report.mainIntegrityFinishedAt = mainIntegrityFinishedAt;
+report.earlyReadsSuccess =
+  earlyReadProbes.length > 0 &&
+  earlyReadProbes.every(
+    (probe) => probe.success && (probe.completedAt ?? Infinity) < (mainIntegrityFinishedAt ?? 0),
+  );
 report.sessions = scenarios;
 await writeFile(path.join(output, "gateway.log"), instance.logs());
 await writeFile(path.join(output, "report.json"), `${JSON.stringify(report, null, 2)}\n`);

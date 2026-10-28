@@ -171,7 +171,13 @@ describe("incremental history build equivalence", () => {
 
     const groups = warmPrepended.filter((item) => item.kind === "group");
     const entries = groups.flatMap((group) => group.messages);
-    expect(entries.some((entry) => entry.duplicateCount === 2)).toBe(true);
+    expect(
+      entries.filter((entry) =>
+        normalizeMessage(entry.message).content.some(
+          (block) => block.type === "text" && block.text === "Needle repeated update",
+        ),
+      ),
+    ).toHaveLength(2);
     expect(
       entries.some((entry) =>
         normalizeMessage(entry.message).content.some((block) => block.type === "canvas"),
@@ -339,6 +345,7 @@ it("keeps one owned canvas while its answer shortcode streams", () => {
         "assistant",
         2,
         [
+          { type: "toolCall", id: "yield", name: "sessions_yield", arguments: {} },
           {
             type: "canvas",
             preview: {

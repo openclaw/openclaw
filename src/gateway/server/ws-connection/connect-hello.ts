@@ -42,7 +42,7 @@ import { projectHealthSummary } from "../../health/presentation.js";
 import { getRemoteControlUiIngressContext } from "../../ingress-attribution.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
-import { operatorSessionCap } from "../../operator-role-policy.js";
+import { resolveOperatorRolePolicy } from "../../operator-role-policy.js";
 import { broadcastRejectedNodePairing } from "../../pairing-events.js";
 import { MAX_PAYLOAD_BYTES } from "../../payload-limits.js";
 import { resolveBrowserAuthOrigin } from "../../provider-browser-auth.js";
@@ -165,10 +165,11 @@ export async function sendGatewayHello(
     ? ("configured" as const)
     : ("bundled" as const);
   const serverBuildId = resolveRuntimeServiceBuildId();
-  const sessionCap =
+  const rolePolicy =
     role === "operator"
-      ? operatorSessionCap(context.handler.getClient(), context.configSnapshot)
+      ? resolveOperatorRolePolicy(context.handler.getClient(), context.configSnapshot)
       : undefined;
+  const sessionCap = rolePolicy?.sessions.others;
   const helloOk = {
     type: "hello-ok",
     // Admission already verified range overlap; this field reports the server's current protocol.
@@ -254,6 +255,9 @@ export async function sendGatewayHello(
       method: authMethod,
       role,
       scopes,
+      ...(role === "operator"
+        ? { roleAllowsAdmin: !rolePolicy || rolePolicy.scopes.includes(ADMIN_SCOPE) }
+        : {}),
       ...(sessionCap !== undefined ? { sessionCap } : {}),
       ...(recoveryScope ? { recoveryScope } : {}),
       ...(canMigrateRecovery ? { recoveryMigrationAllowed: true as const } : {}),

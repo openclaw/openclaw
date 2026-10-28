@@ -53,27 +53,39 @@ export function collectCanvasTurns(
   });
 }
 
-export function collectOwnedCanvasPreviews(items: readonly (ChatItem | MessageGroup)[]) {
-  const messages = items.flatMap((item) =>
-    item.kind === "group"
-      ? item.messages.map((entry) => entry.message)
-      : item.kind === "message"
-        ? [item.message]
-        : [],
-  );
+function collectMessageCanvasPreviews(messages: readonly unknown[]) {
   return messages.flatMap((source) => {
     if (readLiveTerminalRunId(source)) {
       return [];
     }
     const runId = transcriptRunId(source);
     const message = runId ? safeNormalizeMessage(source) : null;
-    if (!message || normalizeRoleForGrouping(message.role) !== "assistant") {
+    // Assistant rows can carry tools; normalization classifies those as tool results.
+    // Canvas rendering still follows their source role.
+    const sourceRole = asRecord(source)?.role;
+    if (
+      !message ||
+      normalizeRoleForGrouping(typeof sourceRole === "string" ? sourceRole : message.role) !==
+        "assistant"
+    ) {
       return [];
     }
     return message.content.flatMap((block) =>
       block.type === "canvas" ? [{ runId, preview: block.preview }] : [],
     );
   });
+}
+
+export function collectOwnedCanvasPreviews(items: readonly (ChatItem | MessageGroup)[]) {
+  return collectMessageCanvasPreviews(
+    items.flatMap((item) =>
+      item.kind === "group"
+        ? item.messages.map((entry) => entry.message)
+        : item.kind === "message"
+          ? [item.message]
+          : [],
+    ),
+  );
 }
 
 export function stripOwnedCanvasShortcodes(
@@ -91,6 +103,66 @@ export function stripOwnedCanvasShortcodes(
   ).text;
 }
 
+function projectTerminalCanvasMessage(
+  source: unknown,
+  ownedCanvas: ReturnType<typeof collectOwnedCanvasPreviews>,
+): unknown {
+  const runId = readLiveTerminalRunId(source);
+  const terminal = runId ? asRecord(source) : null;
+  if (!terminal) {
+    return source;
+  }
+  const sourceContent =
+    typeof terminal.content === "string"
+      ? [{ type: "text", text: terminal.content }]
+      : terminal.content;
+  if (!Array.isArray(sourceContent)) {
+    return source;
+  }
+  const isOwned = (preview: Pick<CanvasToolPreview, "viewId" | "url">) =>
+    ownedCanvas.some(
+      (entry) => entry.runId === runId && canvasPreviewsMatch(entry.preview, preview),
+    );
+  let changed = false;
+  const content = sourceContent.flatMap((value) => {
+    const preview = readCanvasContentPreview(value);
+    if (preview && isOwned(preview)) {
+      changed = true;
+      return [];
+    }
+    const block = asRecord(value);
+    if (block?.type === "text" && typeof block.text === "string") {
+      const extracted = extractCanvasShortcodes(block.text, isOwned);
+      if (extracted.previews.length > 0) {
+        changed = true;
+        return [{ ...block, text: extracted.text }];
+      }
+    }
+    return [value];
+  });
+  if (!changed) {
+    return source;
+  }
+  const projection = { ...terminal, content };
+  copyLiveTerminalIdentity(terminal, projection);
+  return projection;
+}
+
+/** Apply the same display projection before a snapshot loses the live run identity. */
+export function reconcileTerminalCanvasMessages(messages: unknown[]): unknown[] {
+  const ownedCanvas = collectMessageCanvasPreviews(messages);
+  let changed = false;
+  const projected = messages.flatMap((message) => {
+    const next = projectTerminalCanvasMessage(message, ownedCanvas);
+    if (next === message) {
+      return [message];
+    }
+    changed = true;
+    return hasRenderableNormalizedMessage(next) ? [next] : [];
+  });
+  return changed ? projected : messages;
+}
+
 /** Reconcile live copies after the owned previews and stream rows have been placed. */
 export function reconcileLiveCanvasPreviews(
   items: ChatItem[],
@@ -103,41 +175,8 @@ export function reconcileLiveCanvasPreviews(
   for (const item of items) {
     if (item.kind === "stream") {
       item.text = stripOwnedCanvasShortcodes(item.text, item.runId, ownedCanvas);
-      continue;
-    }
-    if (item.kind !== "message") {
-      continue;
-    }
-    const runId = readLiveTerminalRunId(item.message);
-    const terminal = runId ? asRecord(item.message) : null;
-    if (!terminal || !Array.isArray(terminal.content)) {
-      continue;
-    }
-    const isOwned = (preview: Pick<CanvasToolPreview, "viewId" | "url">) =>
-      ownedCanvas.some(
-        (entry) => entry.runId === runId && canvasPreviewsMatch(entry.preview, preview),
-      );
-    let changed = false;
-    const content = terminal.content.flatMap((value) => {
-      const preview = readCanvasContentPreview(value);
-      if (preview && isOwned(preview)) {
-        changed = true;
-        return [];
-      }
-      const block = asRecord(value);
-      if (block?.type === "text" && typeof block.text === "string") {
-        const extracted = extractCanvasShortcodes(block.text, isOwned);
-        if (extracted.previews.length > 0) {
-          changed = true;
-          return [{ ...block, text: extracted.text }];
-        }
-      }
-      return [value];
-    });
-    if (changed) {
-      const projection = { ...terminal, content };
-      copyLiveTerminalIdentity(terminal, projection);
-      item.message = projection;
+    } else if (item.kind === "message") {
+      item.message = projectTerminalCanvasMessage(item.message, ownedCanvas);
     }
   }
   return items.filter((item) =>
