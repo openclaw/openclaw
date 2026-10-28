@@ -1248,6 +1248,7 @@ against the current SQLite owners before the import can rename profiles.
 
     | Legacy key                                                                                    | Current key                                                                 |
     | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+    | `gateway.controlUi.experimental.claws` | `gateway.controlUi.experimental.templates` (an existing `templates` value wins) |
     | `tools.toolSearch.mode: "code"` | `tools.toolSearch.mode: "tools"` (structured Tool Search) |
     | `tools.toolSearch.codeTimeoutMs` | removed (Tool Search activation is preserved) |
     | `tools.codeMode.runtime: "quickjs-wasi"` (global and per-agent)                                | `tools.codeMode.executor: "quickjs"` (an existing executor selection wins) |
@@ -1312,6 +1313,8 @@ against the current SQLite owners before the import can rename profiles.
     | Runtime and channel tuning knobs retired in 2026.7                                               | removed (built-in production defaults apply)                               |
     | `diagnostics.memoryPressureSnapshot`, legacy `diagnostics.memoryPressureBundle`                  | removed (automatic critical-memory snapshots were retired; no replacement automatic capture) |
     | `skills.workshop.autonomous.enabled`, `skills.workshop.approvalPolicy`, `skills.workshop.maxPending` | `autonomous.mode` (`true` → `"propose"`, `false` → `"off"`); proposal queue settings removed |
+
+    Doctor renames `gateway.controlUi.experimental.claws` to `templates`, preserving the boolean. If both keys exist, `templates` wins and `claws` is removed. Candidate update admission previews this repair without changing the config; the update-time Doctor pass persists it with the normal backup. External deployments that only run `openclaw config validate` must run the candidate's `openclaw doctor --fix` through their maintenance workflow before validation.
 
     Doctor migrates MCP `type: "http"` to `transport: "streamable-http"` and `type: "sse"` to `transport: "sse"` in both server maps. An existing `transport` wins. For command-based servers, Doctor removes `type: "stdio"`; the command still selects stdio. The update-time Doctor pass uses the same backed-up config repair. Plugin bundle files keep their external `type` format: bundle loading translates recognized types, and CLI exports use the destination's required format. An unknown bundle HTTP transport is rejected instead of being treated as SSE; its original `type` remains available to the destination CLI.
 
