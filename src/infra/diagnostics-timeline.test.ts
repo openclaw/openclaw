@@ -55,9 +55,15 @@ it.each(["synthetic", "reported", "billed", "unavailable"] as const)(
   "preserves %s zero-usage provenance",
   (kind) => {
     const usage = makeZeroUsageSnapshot();
-    if (kind === "reported") usage.usageReport = { state: "available" };
-    if (kind === "billed") usage.cost.totalOrigin = "provider-billed";
-    if (kind === "unavailable") usage.usageReport = { state: "unavailable" };
+    if (kind === "reported") {
+      usage.usageReport = { state: "available" };
+    }
+    if (kind === "billed") {
+      usage.cost.totalOrigin = "provider-billed";
+    }
+    if (kind === "unavailable") {
+      usage.usageReport = { state: "unavailable" };
+    }
     const attributes = modelUsageTimelineAttributes(normalizeUsage(usage));
     expect(attributes).toMatchObject({
       usageState:

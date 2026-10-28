@@ -76,8 +76,11 @@ it.each(["success", "returned-error", "thrown"])(
       errorMessage: outcome === "success" ? undefined : "fixture error",
     });
     message.usage.usageReport = { state: "available" };
-    if (outcome === "thrown") mocks.complete.mockRejectedValueOnce(new Error("before usage"));
-    else mocks.complete.mockResolvedValueOnce(message);
+    if (outcome === "thrown") {
+      mocks.complete.mockRejectedValueOnce(new Error("before usage"));
+    } else {
+      mocks.complete.mockResolvedValueOnce(message);
+    }
     await withEnvAsync(
       {
         OPENCLAW_DIAGNOSTICS: "timeline",
@@ -85,8 +88,11 @@ it.each(["success", "returned-error", "thrown"])(
       },
       async () => {
         const result = complete({ model: baseModel });
-        if (outcome === "thrown") await expect(result).rejects.toThrow("before usage");
-        else await expect(result).resolves.toBe(message);
+        if (outcome === "thrown") {
+          await expect(result).rejects.toThrow("before usage");
+        } else {
+          await expect(result).resolves.toBe(message);
+        }
         flushDiagnosticsTimeline();
       },
     );

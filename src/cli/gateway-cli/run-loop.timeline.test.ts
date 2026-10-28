@@ -49,7 +49,9 @@ it.each(["drained", "retained", "failed"])(
         usageReport: { state: "available" },
         usage: { input: 3, output: 2 },
       });
-      if (outcome === "failed") throw new Error("fixture retained cleanup failure");
+      if (outcome === "failed") {
+        throw new Error("fixture retained cleanup failure");
+      }
     });
     await fixture.withRunningGateway(async ({ captureSignal, loopPromise }) => {
       captureSignal("SIGTERM")();

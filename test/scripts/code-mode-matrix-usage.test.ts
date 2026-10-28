@@ -193,18 +193,42 @@ describe("matrix logical model accounting", () => {
     "schema",
   ])("does not certify %s damage", async (damage) => {
     const rows = timeline();
-    if (damage === "close") rows.pop();
-    if (damage === "start") rows.shift();
-    if (damage === "terminal") rows.splice(2, 1);
-    if (damage === "unmatched") rows.splice(1, 1);
-    if (damage === "duplicate") rows.splice(3, 0, rows[2]!);
-    if (damage === "conflict") rows[2]!.provider = "other";
-    if (damage === "loss") rows[3]!.attributes.failedWrites = 1;
-    if (damage === "sequence") rows[2]!.attributes.sequence = 20;
-    if (damage === "process") rows[2]!.pid = 456;
-    if (damage === "retained") rows[3]!.attributes.complete = false;
-    if (damage === "late") rows.push({ ...rows[2]!, name: "model.usage", type: "mark" });
-    if (damage === "schema") rows[2]!.schemaVersion = "unrecognized";
+    if (damage === "close") {
+      rows.pop();
+    }
+    if (damage === "start") {
+      rows.shift();
+    }
+    if (damage === "terminal") {
+      rows.splice(2, 1);
+    }
+    if (damage === "unmatched") {
+      rows.splice(1, 1);
+    }
+    if (damage === "duplicate") {
+      rows.splice(3, 0, rows[2]!);
+    }
+    if (damage === "conflict") {
+      rows[2]!.provider = "other";
+    }
+    if (damage === "loss") {
+      rows[3]!.attributes.failedWrites = 1;
+    }
+    if (damage === "sequence") {
+      rows[2]!.attributes.sequence = 20;
+    }
+    if (damage === "process") {
+      rows[2]!.pid = 456;
+    }
+    if (damage === "retained") {
+      rows[3]!.attributes.complete = false;
+    }
+    if (damage === "late") {
+      rows.push({ ...rows[2]!, name: "model.usage", type: "mark" });
+    }
+    if (damage === "schema") {
+      rows[2]!.schemaVersion = "unrecognized";
+    }
     const damaged = rows.map((row, index) => ({
       ...row,
       attributes: {

@@ -119,29 +119,42 @@ export async function readMatrixModelAccounting(params: {
   let sequence = 0;
   let started = false;
   let closed = false;
-  if (!params.joined) issues.add("Gateway child did not join cleanly.");
-  if (!foreground.size) issues.add("Foreground run identity is unavailable.");
+  if (!params.joined) {
+    issues.add("Gateway child did not join cleanly.");
+  }
+  if (!foreground.size) {
+    issues.add("Foreground run identity is unavailable.");
+  }
   try {
     const file = await fs.open(params.file, "r");
     let text: string;
     try {
-      if ((await file.stat()).size > MAX_BYTES) throw new Error("Timeline exceeds byte bound.");
+      if ((await file.stat()).size > MAX_BYTES) {
+        throw new Error("Timeline exceeds byte bound.");
+      }
       text = await file.readFile("utf8");
     } finally {
       await file.close();
     }
     const lines = text.split("\n");
-    if (lines.pop() !== "") issues.add("Timeline has an incomplete final line.");
-    if (lines.length > MAX_ROWS) throw new Error("Timeline exceeds row bound.");
+    if (lines.pop() !== "") {
+      issues.add("Timeline has an incomplete final line.");
+    }
+    if (lines.length > MAX_ROWS) {
+      throw new Error("Timeline exceeds row bound.");
+    }
     for (const line of lines) {
       const row: unknown = JSON.parse(line);
       if (
         !isRecord(row) ||
         row.schemaVersion !== "openclaw.diagnostics.v1" ||
         !isRecord(row.attributes)
-      )
+      ) {
         throw new Error("Invalid timeline row.");
-      if (closed) issues.add("Timeline activity follows the terminal capture receipt.");
+      }
+      if (closed) {
+        issues.add("Timeline activity follows the terminal capture receipt.");
+      }
       const attrs = row.attributes;
       const captureId = readNonEmptyStringPreservingWhitespace(attrs.captureId);
       const currentIdentity = JSON.stringify([captureId, row.pid]);
@@ -170,7 +183,9 @@ export async function readMatrixModelAccounting(params: {
         row.name === "provider.request.started" ||
         row.type === "provider.request"
       ) {
-        if (!started || closed) issues.add("Model activity is outside the captured lifetime.");
+        if (!started || closed) {
+          issues.add("Model activity is outside the captured lifetime.");
+        }
         if (row.name === "model.usage") {
           // These may mirror terminal call usage or summarize several calls. Never add them.
           usageObservations.push({ provider: row.provider, ...attrs });
@@ -186,9 +201,11 @@ export async function readMatrixModelAccounting(params: {
         }
         const key = JSON.stringify([runId, callId]);
         if (row.name === "provider.request.started") {
-          if (calls.has(key)) issues.add("Duplicate logical call start.");
-          else
+          if (calls.has(key)) {
+            issues.add("Duplicate logical call start.");
+          } else {
             calls.set(key, { runId, callId, provider, model, foreground: foreground.has(runId) });
+          }
           continue;
         }
         const call = calls.get(key);
@@ -216,9 +233,13 @@ export async function readMatrixModelAccounting(params: {
   } catch {
     issues.add("Timeline is unavailable, malformed, or exceeds the capture bound.");
   }
-  if (!started || !closed) issues.add("Gateway capture start or terminal receipt is missing.");
+  if (!started || !closed) {
+    issues.add("Gateway capture start or terminal receipt is missing.");
+  }
   const observed = [...calls.values()];
-  if (observed.some((call) => !call.outcome)) issues.add("Logical calls remain unterminated.");
+  if (observed.some((call) => !call.outcome)) {
+    issues.add("Logical calls remain unterminated.");
+  }
   const complete = issues.size === 0;
   const summarize = (selected: typeof observed) => ({
     observedCalls: selected.length,
