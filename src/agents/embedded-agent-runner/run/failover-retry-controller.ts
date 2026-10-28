@@ -217,11 +217,21 @@ export function createEmbeddedRunFailoverRetryController(input: {
         },
       );
     }
+    const profileBefore = preparedRuntime.snapshot().lastProfileId;
     const rotated = await preparedRuntime.advanceAttemptAuthProfile();
-    if (rotated) {
-      rateLimitProfileRotations += 1;
+    if (!rotated) {
+      return false;
     }
-    return rotated;
+    const profileAfter = preparedRuntime.snapshot().lastProfileId;
+    if (fallbackConfigured && profileBefore !== undefined && profileAfter === profileBefore) {
+      // The rotation re-selected the profile that just hit the quota. A quota-class
+      // failure does not clear by re-running the same profile, so report no rotation
+      // and let the caller advance the model chain instead of spending an attempt on
+      // the exhausted profile.
+      return false;
+    }
+    rateLimitProfileRotations += 1;
+    return true;
   };
 
   return {
