@@ -662,7 +662,7 @@ export function scheduleRequesterSettleWake(
               return;
             }
             if (error instanceof SubagentCompletionSourceChangedError && !settleObserved) {
-              // The rejected admission is terminal. A deduplicated local notice never reruns a model.
+              const noticeScope = admittedWake?.batchRunIds ? scope : `${scope}\0${runId}`;
               try {
                 const { appendAssistantMessageToSessionTranscript } =
                   await import("../../../config/sessions/transcript.js");
@@ -672,7 +672,7 @@ export function scheduleRequesterSettleWake(
                   storePath: entry.requesterStorePath,
                   expectedSessionId: entry.completionRequesterSessionId,
                   expectedLifecycleRevision: entry.completionRequesterLifecycleRevision,
-                  idempotencyKey: JSON.stringify(["subagent-settle-rejected", scope]),
+                  idempotencyKey: JSON.stringify(["subagent-settle-rejected", noticeScope]),
                   text: "Subagent result could not be delivered because its completion owner changed. Inspect the subagent result before continuing.",
                   assertCurrent: () => {
                     if (!isSourceCurrent() || requesterSettleWakeScope(entry) !== scope) {
@@ -693,15 +693,14 @@ export function scheduleRequesterSettleWake(
               }
             }
             // Delivery may have succeeded before its bookkeeping failed. Preserve that result.
-            const settle =
-              settleObserved ??
-              (() =>
-                completeBatch(admittedBatch, admittedWake?.rearmGeneration, {
-                  delivered: false,
-                  path: "none",
-                  error: safeError.message,
-                }));
-            await settle().catch((settleError: unknown) => {
+            await (
+              settleObserved?.() ??
+              completeBatch(admittedBatch, admittedWake?.rearmGeneration, {
+                delivered: false,
+                path: "none",
+                error: safeError.message,
+              })
+            ).catch((settleError: unknown) => {
               params.warn("failed to persist requester settle wake rejection", {
                 error: buildSafeLifecycleErrorMeta(settleError),
                 runId,

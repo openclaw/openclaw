@@ -160,67 +160,69 @@ describe("persisted subagent requester wakes", () => {
   it.each([true, false])(
     "settles the current wake after child lifecycle turnover across reopen (delivered=%s)",
     async (delivered) => {
-      const input = armRequesterWake(records());
-      input.subagent.execution.lifecycleGeneration = "original-lifecycle";
-      input.subagent.requesterSettleWake!.status = "dispatching";
-      input.subagent.requesterSettleWake!.attemptCount = 1;
-      input.subagent.completionRequesterSessionId = "requester-session";
-      input.subagent.requesterStorePath = path.join(
-        process.env.OPENCLAW_STATE_DIR!,
-        "sessions.json",
-      );
-      const scope = {
-        sessionKey: input.subagent.requesterSessionKey,
-        agentId: input.subagent.requesterAgentId,
-        storePath: input.subagent.requesterStorePath,
-        sessionId: "requester-session",
-      };
-      await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
-      persistOwner(input);
-      // Old dispatching rows must converge on their next evaluation without a migration.
-      db.value = await reopenOwners();
-      input.subagent = subagentRuns.get(input.subagent.runId)!;
-      using driver = requesterWakeDriver([input]);
-      driver.wake.mockImplementation(async (params) => {
-        await updateCompletionOwner(input.subagent.runId, (current) => ({
-          ...current,
-          execution: { ...current.execution, lifecycleGeneration: "cleaned-lifecycle" },
-        }));
-        if (delivered) {
-          await params.completeBatch([params.settledEntry], 1, {
-            delivered: true,
-            path: "direct",
-            requesterVisibleFinalDelivered: true,
-          });
-        } else {
-          await params.transitionBatch(
-            [params.settledEntry],
-            {
-              ...params.settledEntry.requesterSettleWake!,
-              status: "dispatching",
-              attemptCount: 1,
-              nextAttemptAt: Date.now() + 30_000,
-            },
-            () => {},
-          );
-        }
-        return delivered;
-      });
-      await driver.run();
-      expectNoRejection(driver);
-      expect(currentRun(input).requesterSettleWake).toBeUndefined();
-      expect(currentRun(input).delivery?.status).toBe(delivered ? "delivered" : "failed");
-      db.value = await reopenOwners();
-      await driver.sweep();
-      expect(subagentRuns.get(input.subagent.runId)?.requesterSettleWake).toBeUndefined();
-      expect(subagentRuns.get(input.subagent.runId)?.execution.lifecycleGeneration).toBe(
-        "cleaned-lifecycle",
-      );
-      expect(driver.wake).toHaveBeenCalledOnce();
-      const notices = (await loadTranscriptEvents(scope)).filter((event) =>
-        JSON.stringify(event).includes("Subagent result could not be delivered"),
-      );
-      expect(notices).toHaveLength(delivered ? 0 : 1);
+      for (const wave of [1, 2]) {
+        const input = armRequesterWake(records());
+        input.subagent.runId += `-${wave}`;
+        input.subagent.execution.lifecycleGeneration = "original-lifecycle";
+        input.subagent.requesterSettleWake = { status: "dispatching", attemptCount: 1 };
+        input.subagent.completionRequesterSessionId = "requester-session";
+        input.subagent.requesterStorePath = path.join(
+          process.env.OPENCLAW_STATE_DIR!,
+          "sessions.json",
+        );
+        const scope = {
+          sessionKey: input.subagent.requesterSessionKey,
+          agentId: input.subagent.requesterAgentId,
+          storePath: input.subagent.requesterStorePath,
+          sessionId: "requester-session",
+        };
+        await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
+        persistOwner(input);
+        // Old dispatching rows must converge on their next evaluation without a migration.
+        db.value = await reopenOwners();
+        input.subagent = subagentRuns.get(input.subagent.runId)!;
+        using driver = requesterWakeDriver([input]);
+        driver.wake.mockImplementation(async (params) => {
+          await updateCompletionOwner(input.subagent.runId, (current) => ({
+            ...current,
+            execution: { ...current.execution, lifecycleGeneration: "cleaned-lifecycle" },
+          }));
+          if (delivered) {
+            await params.completeBatch([params.settledEntry], undefined, {
+              delivered: true,
+              path: "direct",
+              requesterVisibleFinalDelivered: true,
+            });
+          } else {
+            await params.transitionBatch(
+              [params.settledEntry],
+              {
+                ...params.settledEntry.requesterSettleWake!,
+                status: "dispatching",
+                attemptCount: 1,
+                nextAttemptAt: Date.now() + 30_000,
+              },
+              () => {},
+            );
+          }
+          return delivered;
+        });
+        await driver.run();
+        expectNoRejection(driver);
+        expect(currentRun(input).requesterSettleWake).toBeUndefined();
+        expect(currentRun(input).delivery?.status).toBe(delivered ? "delivered" : "failed");
+        db.value = await reopenOwners();
+        await driver.sweep();
+        expect(subagentRuns.get(input.subagent.runId)?.requesterSettleWake).toBeUndefined();
+        expect(subagentRuns.get(input.subagent.runId)?.execution.lifecycleGeneration).toBe(
+          "cleaned-lifecycle",
+        );
+        expect(driver.wake).toHaveBeenCalledOnce();
+        const notices = (await loadTranscriptEvents(scope)).filter((event) =>
+          JSON.stringify(event).includes("Subagent result could not be delivered"),
+        );
+        expect(notices).toHaveLength(delivered ? 0 : wave);
+      }
     },
   );
 
