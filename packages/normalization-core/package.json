@@ -155,6 +155,6 @@
   },
   "dependencies": {
     "libphonenumber-js": "1.13.15",
-    "typebox": "1.4.1"
+    "typebox": "1.4.2"
   }
 }

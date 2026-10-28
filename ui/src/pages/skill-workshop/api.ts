@@ -5,17 +5,11 @@ import type {
 } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
-export type WorkshopSnapshot = {
-  list: SkillsWorkshopListResult;
-  changes: SkillWorkshopChange[];
-};
+export type WorkshopSnapshot = Awaited<ReturnType<typeof loadWorkshopSnapshot>>;
 
 const CHANGE_FEED_LIMIT = 50;
 
-export async function loadWorkshopSnapshot(
-  client: GatewayBrowserClient,
-  agentId: string,
-): Promise<WorkshopSnapshot> {
+export async function loadWorkshopSnapshot(client: GatewayBrowserClient, agentId: string) {
   const [list, { changes }] = await Promise.all([
     client.request<SkillsWorkshopListResult>("skills.workshop.list", { agentId }),
     client.request<SkillsWorkshopChangesResult>("skills.workshop.changes", {

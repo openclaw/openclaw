@@ -21,6 +21,7 @@ import { a2aChannelPlugin } from "./channel.js";
 import { createA2aGatewayFixture } from "./gateway.test-support.js";
 import type { dispatchA2aInbound } from "./inbound.js";
 import type { A2aTaskStore } from "./task-store.js";
+import { createTerminalStoreFixture } from "./task-store.test-support.js";
 import type { A2aChannelConfig } from "./types.js";
 
 type HttpReply = { status: number; json(): Promise<unknown>; text(): Promise<string> };
@@ -75,8 +76,8 @@ vi.mock("./task-store.js", async (importOriginal) => {
   return {
     ...actual,
     A2aTaskStore: class extends actual.A2aTaskStore {
-      constructor() {
-        super();
+      constructor(...args: ConstructorParameters<typeof actual.A2aTaskStore>) {
+        super(...args);
         createdStores.push(this);
       }
     },
@@ -99,6 +100,7 @@ afterEach(async () => {
 });
 
 async function startHttpHarness(options?: {
+  terminalStore?: ReturnType<typeof createTerminalStoreFixture>;
   config?: OpenClawConfig;
   a2aConfig?: Partial<A2aChannelConfig>;
   onDispatch?: (message: Parameters<typeof dispatchA2aInbound>[0]) => Promise<void>;
@@ -106,6 +108,7 @@ async function startHttpHarness(options?: {
   const { registry, controller, ctx } = createA2aGatewayFixture({
     cfg: options?.config ?? {},
     version: VERSION,
+    terminalStore: options?.terminalStore,
     config: {
       peers: { alpha: { token: "alpha-secret" }, beta: { token: "beta-secret" } },
       ...options?.a2aConfig,
@@ -113,6 +116,9 @@ async function startHttpHarness(options?: {
   });
   const lifecycle = Promise.resolve(a2aChannelPlugin.gateway!.startAccount!(ctx));
   activeAccounts.push({ controller, lifecycle });
+  await vi.waitFor(() =>
+    expect(registry.httpRoutes.some((route) => route.path === "/a2a/v1")).toBe(true),
+  );
   const taskStore = createdStores.pop();
   const handler = registry.httpRoutes.find((route) => route.path === "/a2a/v1")?.handler;
   if (!taskStore || !handler) {
@@ -122,7 +128,7 @@ async function startHttpHarness(options?: {
     taskStore,
     options?.onDispatch ??
       (async (message) => {
-        taskStore.complete(message.taskId, `echo: ${message.text}`);
+        await taskStore.complete(message.taskId, `echo: ${message.text}`);
       }),
   );
   const baseUrl = "http://gateway.example.test";
@@ -168,6 +174,10 @@ async function startHttpHarness(options?: {
 
   return {
     baseUrl,
+    stop: async () => {
+      controller.abort();
+      await lifecycle;
+    },
     taskStore,
     handler,
     get: (endpoint: string) => dispatchRequest({ method: "GET", endpoint }),
@@ -210,6 +220,22 @@ function sendRequest({
   );
 }
 
+it("serves the same retained terminal task only to its owner after an account restarts", async () => {
+  const terminalStore = createTerminalStoreFixture();
+  const first = await startHttpHarness({ terminalStore });
+  const sent = await first.post(
+    sendRequest({ messageId: "restart-message", text: "durable answer" }),
+  );
+  const {
+    result: { task },
+  } = (await sent.json()) as { result: { task: { id: string } } };
+  await first.stop();
+  const reopened = await startHttpHarness({ terminalStore });
+  await expectReply(reopened.post(taskRequest(task.id)), { result: task });
+  await expectReply(reopened.post(taskRequest(task.id), "beta-secret"), rpcError(-32001));
+  await expectReply(reopened.post(sendRequest({ messageId: "restart-message" })), taskResult(task));
+});
+
 describe("A2A message replay", () => {
   it("returns the existing task for a peer message ID before and after completion", async () => {
     const dispatch = vi.fn(async () => {});
@@ -222,7 +248,7 @@ describe("A2A message replay", () => {
     expect(replay).toEqual(first);
     expect(dispatch).toHaveBeenCalledTimes(1);
 
-    harness.taskStore.fail(first.result.task.id, "provider unavailable");
+    await harness.taskStore.fail(first.result.task.id, "provider unavailable");
     expect(await (await harness.post(request)).json()).toMatchObject({
       result: { task: { id: first.result.task.id, status: { state: "TASK_STATE_FAILED" } } },
     });
@@ -421,8 +447,8 @@ describe("A2A HTTP authentication and request limits", () => {
     const harness = await startHttpHarness();
     const taskA = harness.taskStore.create("ctx-large-a", "alpha", "large-a");
     const taskB = harness.taskStore.create("ctx-large-b", "alpha", "large-b");
-    harness.taskStore.complete(taskA.id, "a".repeat(600 * 1024));
-    harness.taskStore.complete(taskB.id, "b".repeat(600 * 1024));
+    await harness.taskStore.complete(taskA.id, "a".repeat(600 * 1024));
+    await harness.taskStore.complete(taskB.id, "b".repeat(600 * 1024));
     const stringifySpy = vi.spyOn(JSON, "stringify");
 
     const response = await harness.post([
@@ -613,7 +639,7 @@ describe("A2A SendMessage task references", () => {
   it("accepts a context-only follow-up as a new task", async () => {
     const harness = await startHttpHarness();
     const original = harness.taskStore.create("shared-context", "alpha", "original-message");
-    harness.taskStore.complete(original.id, "original reply");
+    await harness.taskStore.complete(original.id, "original reply");
 
     await expectReply(
       harness.post(sendRequest({ contextId: original.contextId, text: "follow up" })),

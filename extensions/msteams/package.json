@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/msteams",
-  "version": "2026.10.7",
+  "version": "2026.10.8",
   "description": "OpenClaw Microsoft Teams channel plugin for bot conversations.",
   "repository": {
     "type": "git",
@@ -12,7 +12,7 @@
     "@microsoft/teams.api": "2.1.1",
     "@microsoft/teams.apps": "2.1.1",
     "express": "5.3.0",
-    "typebox": "1.4.1",
+    "typebox": "1.4.2",
     "zod": "4.6.7"
   },
   "devDependencies": {
@@ -22,7 +22,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.10.7"
+    "openclaw": ">=2026.10.8"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -124,10 +124,10 @@
       "minHostVersion": ">=2026.4.10"
     },
     "compat": {
-      "pluginApi": ">=2026.10.7"
+      "pluginApi": ">=2026.10.8"
     },
     "build": {
-      "openclawVersion": "2026.10.7",
+      "openclawVersion": "2026.10.8",
       "runtimeFormat": "cjs"
     },
     "release": {

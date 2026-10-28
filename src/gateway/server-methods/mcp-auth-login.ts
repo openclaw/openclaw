@@ -27,13 +27,13 @@ import {
   ProviderBrowserSignInError,
   ProviderBrowserSignInUnavailableError,
 } from "../provider-browser-auth.js";
-import { rejectExistingSetupWizardSession } from "./system-agent-setup-wizard.js";
+import { startGatewayWizard } from "./setup-admission.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
-import { startWizardLogin } from "./wizard-login.js";
 
 export const mcpAuthLoginHandlers: GatewayRequestHandlers = {
-  "mcp.authLogin": async ({ params, respond, context, client }) => {
+  "mcp.authLogin": async (request) => {
+    const { params, respond, context, client } = request;
     if (!assertValidParams(params, validateMcpAuthLoginParams, "mcp.authLogin", respond)) {
       return;
     }
@@ -41,9 +41,6 @@ export const mcpAuthLoginHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
     if (!client || !client.connect.scopes?.includes("operator.admin")) {
       reject("Sign-in requires an administrator connection.");
-      return;
-    }
-    if (rejectExistingSetupWizardSession({ sessionId: params.sessionId, context, respond })) {
       return;
     }
     const metadata = getGatewayPluginMetadataSnapshot();
@@ -82,8 +79,7 @@ export const mcpAuthLoginHandlers: GatewayRequestHandlers = {
       return;
     }
     const initialServer = structuredClone(connection.server);
-    const assertCurrent = () => {
-      client.connectionSignal?.throwIfAborted();
+    const assertServerCurrent = () => {
       if (client.invalidated || !client.connect.scopes?.includes("operator.admin")) {
         throw new Error("Sign-in authority is no longer active.");
       }
@@ -97,13 +93,12 @@ export const mcpAuthLoginHandlers: GatewayRequestHandlers = {
         );
       }
     };
-    await startWizardLogin({
-      client,
-      context,
+    await startGatewayWizard({
+      request,
       sessionId: params.sessionId,
-      respond,
-      assertCurrent,
-      createSession: () =>
+      connectionBound: true,
+      assertCurrent: assertServerCurrent,
+      createSession: (assertCurrent) =>
         new WizardSession(async (prompter, signal, runner) => {
           let attemptState: string | undefined;
           let saved = false;

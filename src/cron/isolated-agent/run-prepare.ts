@@ -183,6 +183,8 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
     agentConfigOverride,
   });
   const baseSessionKey = (input.sessionKey?.trim() || `cron:${input.job.id}`).trim();
+  // A `current` job is a child run of its creating conversation: it keeps its own
+  // `cron:<jobId>` run key, and the conversation's resources come from the admission.
   const currentBoundSourceKey =
     input.job.sessionTarget === "current" ? input.job.sessionKey?.trim() : undefined;
   const usesDetachedRunSession =
@@ -248,6 +250,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
       forceNew: usesDetachedRunSession,
       exactRunSession: usesExactRunSession,
       hookExternalContentSource,
+      inferenceCaptured: Boolean(input.job.inferenceBinding?.runtime),
     });
     const sourceEntry = sourceSessionKey ? cronSession.store[sourceSessionKey] : undefined;
     const completionSource = input.job.sourceConversation ?? sourceEntry;

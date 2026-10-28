@@ -25,8 +25,9 @@ describe("transport stream shared helpers", () => {
     ["makeAssistantMessageFixture", makeAssistantMessageFixture],
     ["makeAgentAssistantMessage", makeAgentAssistantMessage],
   ] as const)("%s owns usage across transcript and transport lifetimes", (_name, builder) => {
+    // An accepted request (it has a response id) that fails without usage stays unavailable.
     const buildMessage = (usage?: AssistantMessage["usage"]) =>
-      builder({ content: [], ...(usage ? { usage } : {}) });
+      builder({ content: [], responseId: "resp_fixture", ...(usage ? { usage } : {}) });
     const stored = buildMessage();
     normalizeTranscriptJsonValue({ message: stored }, "entry");
 

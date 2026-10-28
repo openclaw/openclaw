@@ -6,6 +6,7 @@ import {
   readPositiveIntegerParam,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
+import type { DecisionRuntimeV2 } from "openclaw/plugin-sdk/decisions";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import {
   asNullableRecord,
@@ -15,6 +16,7 @@ import {
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import type { createBrowserToolSessionTabs } from "./browser-tool-session-tabs.js";
+import { judgeBrowserPage } from "./browser-tool.judge.js";
 import type { BrowserToolCapabilities } from "./browser-tool.schema.js";
 import {
   executeScreenshotAction,
@@ -184,6 +186,7 @@ export async function executeBrowserTabAction(context: {
   requestedTimeoutMs?: number;
   signal?: AbortSignal;
   opts?: BrowserScreenshotOptions;
+  judgment?: { decisions: DecisionRuntimeV2; agentId: string };
   onTabActivity: (targetId: string | undefined, openedProfile?: string) => void | Promise<void>;
 }): Promise<AgentToolResult<unknown>> {
   const {
@@ -584,6 +587,21 @@ export async function executeBrowserTabAction(context: {
       const canonicalTargetId = readStringValue(asNullableRecord(result.details)?.targetId);
       await touchTab(canonicalTargetId ?? targetId);
       return result;
+    }
+    case "judge": {
+      if (!context.judgment) {
+        throw new Error("Browser judgment requires this agent's bound Decision runtime.");
+      }
+      const result = await judgeBrowserPage({
+        target,
+        targetId: normalizeOptionalString(params.targetId),
+        profile,
+        signal,
+        ...context.judgment,
+      });
+      await touchTab(result.targetId);
+      const wrapped = wrapBrowserExternalJson({ kind: "judge", payload: result });
+      return textResult(wrapped.wrappedText, { ...wrapped.safeDetails, ...result });
     }
     case "requests":
     case "errors":

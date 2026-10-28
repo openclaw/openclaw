@@ -1,6 +1,7 @@
 import { createMemo, lazy, Show, untrack } from "solid-js";
 import { projectPresentation } from "../../../lib/reactive/presentation.ts";
 import { isChatRunWorking } from "../chat-run-working.ts";
+import { projectProgressCardRuntime } from "../chat-subagent-wait.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
@@ -78,6 +79,12 @@ export function ComposerProgress(view: { composer: ChatComposerProps; shown: boo
             startedAt={view.composer.selectedSession?.startedAt}
             endedAt={view.composer.selectedSession?.endedAt}
             hasActiveRun={isChatRunWorking(view.composer)}
+            runtime={projectProgressCardRuntime(
+              view.composer.selectedSession,
+              view.composer,
+              view.composer.progressCard!.updatedAt,
+              view.composer.connected,
+            )}
             collapseComposerByDefault={view.composer.collapseTaskProgress}
             composerDisclosureContext={{
               presented: view.shown,

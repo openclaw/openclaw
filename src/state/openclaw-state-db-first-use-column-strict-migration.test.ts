@@ -19,18 +19,34 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(closeState);
 
-function legacyFixture(bootstrap: boolean) {
+function legacyFixture(tableName: string) {
   const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("state-first-use-") } };
   const databasePath = openState(options).path;
   closeState();
   const { DatabaseSync } = requireNodeSqlite();
   using legacy = new DatabaseSync(databasePath);
+  const version = tableName === "user_profile_identities" ? 6 : 2;
   addPreCutoverClientCredentialTablesForTest(legacy);
   legacy.exec(`
     DROP INDEX idx_worker_session_placements_environment;
     ${
-      bootstrap
+      tableName === "user_profile_identities"
         ? `
+      CREATE TABLE user_profiles (id TEXT NOT NULL PRIMARY KEY, display_name TEXT,
+        avatar BLOB, avatar_mime TEXT, avatar_sha256 TEXT, merged_into TEXT,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL) STRICT;
+      CREATE TABLE user_profile_emails (email TEXT NOT NULL PRIMARY KEY,
+        profile_id TEXT NOT NULL, created_at INTEGER NOT NULL) STRICT;
+      CREATE TABLE user_profile_identities (provider TEXT NOT NULL, subject TEXT NOT NULL,
+        profile_id TEXT NOT NULL, created_at INTEGER NOT NULL,
+        PRIMARY KEY (provider, subject)) STRICT;
+      INSERT INTO user_profiles (id, display_name, created_at, updated_at)
+        VALUES ('profile', 'Synthetic', 1, 1);
+      INSERT INTO user_profile_emails VALUES ('synthetic@example.invalid', 'profile', 1);
+      INSERT INTO user_profile_identities VALUES ('tailscale', 'subject', 'profile', 1);
+    `
+        : tableName === "device_bootstrap_tokens"
+          ? `
       DROP TABLE device_bootstrap_tokens;
       CREATE TABLE device_bootstrap_tokens (
         token_key TEXT NOT NULL PRIMARY KEY, token TEXT NOT NULL, ts INTEGER NOT NULL,
@@ -40,16 +56,23 @@ function legacyFixture(bootstrap: boolean) {
       INSERT INTO device_bootstrap_tokens (token_key, token, ts, issued_at_ms)
         VALUES ('bootstrap', 'retained-token', 1000, 1000);
     `
-        : `
+          : `
       DROP TABLE session_groups;
       CREATE TABLE session_groups (name TEXT NOT NULL PRIMARY KEY,
         position INTEGER NOT NULL, created_at INTEGER NOT NULL);
     `
     }
-    PRAGMA user_version = 2;
-    UPDATE schema_meta SET schema_version = 2 WHERE meta_key = 'primary';
+    PRAGMA user_version = ${version};
+    UPDATE schema_meta SET schema_version = ${version} WHERE meta_key = 'primary';
   `);
-  return options;
+  const retained =
+    tableName === "user_profile_identities"
+      ? ["user_profiles", "user_profile_emails", tableName].map((table) => ({
+          table,
+          rows: readRows(legacy, `SELECT * FROM ${table}`),
+        }))
+      : [];
+  return { options, retained };
 }
 
 // Existing rows require bare nullable columns: constraints/defaults could rewrite or reject them.
@@ -88,10 +111,15 @@ it.each([
   { tableName: "device_bootstrap_tokens", doctor: true },
   { tableName: "session_groups", doctor: true },
   { tableName: "device_bootstrap_tokens", doctor: false },
-])("migrates $tableName to STRICT (doctor: $doctor)", async ({ tableName, doctor }) => {
+  { tableName: "user_profile_identities", doctor: true },
+])("migrates legacy $tableName (doctor: $doctor)", async ({ tableName, doctor }) => {
   const bootstrap = tableName === "device_bootstrap_tokens";
-  const options = legacyFixture(bootstrap);
-  const columnNames = bootstrap ? ["setup_id"] : ["cwd", "worktree"];
+  const { options, retained } = legacyFixture(tableName);
+  const columnNames = bootstrap
+    ? ["setup_id"]
+    : tableName === "session_groups"
+      ? ["cwd", "worktree"]
+      : ["canonical_login"];
   // Regression: STRICT rebuild rolled back and reported an unrelated audit migration.
   if (!doctor) {
     expect(() => openState(options)).toThrow(/backed-up migration custody/);
@@ -115,5 +143,12 @@ it.each([
     expectRows(db, "SELECT token_key, token, setup_id FROM device_bootstrap_tokens", [
       { token_key: "bootstrap", token: "retained-token", setup_id: null },
     ]);
+  }
+  for (const { table, rows } of retained) {
+    expect(readRows(db, `SELECT * FROM ${table}`)).toMatchObject(rows);
+  }
+  if (retained.length > 0) {
+    expectRow(db, "SELECT canonical_login FROM user_profile_identities", { canonical_login: null });
+    expectRows(db, "PRAGMA integrity_check", [{ integrity_check: "ok" }]);
   }
 });

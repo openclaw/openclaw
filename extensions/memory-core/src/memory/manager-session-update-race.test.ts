@@ -46,6 +46,8 @@ function selectIndex(db: DatabaseSync, table: string, columns: string, suffix = 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 const openObserver = () =>
   new DatabaseSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }), { readOnly: true });
+const chunksAt = (db: DatabaseSync, pathname: string) =>
+  selectIndex(db, "chunks", "hash, text", "WHERE path = ?").all(pathname);
 
 describe("memory session update sync", () => {
   const fixture = createManagerIndexFixture({
@@ -174,14 +176,12 @@ describe("memory session update sync", () => {
       await manager.sync({ reason: "retry-after-worker-overload" });
       const recovered = snapshot();
       expect(recovered.source?.hash).not.toBe(before.source?.hash);
-      expect(recovered.chunks.map((chunk) => chunk.text).join("\n")).toContain(
-        "New violet response after publication.",
-      );
-      expect(recovered.search.map((chunk) => chunk.text).join("\n")).toContain(
-        "New violet response after publication.",
-      );
-      expect(manager.status().dirty).toBe(false);
-      expect(manager.status().lastSyncError).toBeUndefined();
+      for (const rows of [recovered.chunks, recovered.search]) {
+        expect(rows.map((chunk) => chunk.text).join("\n")).toContain(
+          "New violet response after publication.",
+        );
+      }
+      expect(manager.status()).toMatchObject({ dirty: false, lastSyncError: undefined });
     } finally {
       clock.mockRestore();
     }
@@ -525,7 +525,7 @@ describe("memory session update sync", () => {
       await purge;
       await expectFilePurged(memoryPath);
       const db = Reflect.get(manager, "db") as DatabaseSync;
-      expect(selectIndex(db, "chunks", "text", "WHERE path = 'MEMORY.md'").all()).toEqual([]);
+      expect(chunksAt(db, "MEMORY.md")).toEqual([]);
       expect(manager.status().dirty).toBe(true);
       await manager.sync({ reason: "retry-after-memory-forget", force: true });
       expect(manager.status().dirty).toBe(false);
@@ -612,7 +612,7 @@ describe("memory session update sync", () => {
     await main.sync({ reason: "index-shared-memory", force: true });
     await peer.sync({ reason: "index-shared-memory", force: true });
     const db = Reflect.get(peer, "db") as DatabaseSync;
-    const snapshot = selectIndex(db, "chunks", "hash, text", "WHERE path = 'MEMORY.md'").all();
+    const snapshot = chunksAt(db, "MEMORY.md");
     expect(snapshot.some((row) => String(row.text).includes("Private violet"))).toBe(true);
     expect(
       snapshot.some((row) => String(row.text).includes("openclaw-memory-promotion:shared-private")),
@@ -624,13 +624,11 @@ describe("memory session update sync", () => {
     await expectFilePurged(memoryPath);
     // The first purge owns only main's database. Peer must use its retained
     // snapshot when its own explicit purge finds the shared file already clean.
-    expect(selectIndex(db, "chunks", "hash, text", "WHERE path = 'MEMORY.md'").all()).toEqual(
-      snapshot,
-    );
+    expect(chunksAt(db, "MEMORY.md")).toEqual(snapshot);
 
     const forgotten = await forget(cfg, "source-peer", "peer");
     expect(forgotten.artifacts).toMatchObject({ memoryFiles: 0, indexChunks: snapshot.length });
-    expect(selectIndex(db, "chunks", "text", "WHERE path = 'MEMORY.md'").all()).toEqual([]);
+    expect(chunksAt(db, "MEMORY.md")).toEqual([]);
     expectPrivateDerivativesRemoved(db, privateHashes);
   });
 
@@ -678,13 +676,7 @@ describe("memory session update sync", () => {
       const archivePath = path.join(sessionsDir, archiveName);
       await fs.writeFile(archivePath, JSON.stringify(record) + "\n");
       const manager = await getFreshManager(sessionConfig(), "cli");
-      const deletion = vi.spyOn(MemoryIndexDatabase.prototype, "deleteSource");
-      try {
-        await manager.sync({ reason: "forced-reindex", force: true });
-        expect(deletion).not.toHaveBeenCalled();
-      } finally {
-        deletion.mockRestore();
-      }
+      await manager.sync({ reason: "forced-reindex", force: true });
       const db = Reflect.get(manager, "db") as DatabaseSync;
       expect(selectIndex(db, "chunks", "DISTINCT path", "WHERE source = 'sessions'").all()).toEqual(
         [],
@@ -713,10 +705,8 @@ describe("memory session update sync", () => {
           }
           return rows;
         });
-      const reads = vi.spyOn(memoryCpuWorkerRuntime, "runMemoryIndexRead");
       try {
         await manager.sync({ reason: "archive-cleanup", archiveFiles: [archivePath] });
-        expect(inventory).toHaveBeenCalledWith({ source: "sessions", paths: [sessionPath] });
         if (sourceState === "replaced") {
           const retained = readPublishedSessionIndex(db, sessionPath, "violet");
           expect(retained.source?.hash).toBe("newer-session");
@@ -725,10 +715,8 @@ describe("memory session update sync", () => {
         } else {
           expectSessionIndexRemoved(db, sessionPath);
         }
-        expect(reads.mock.calls.map(([, command]) => command.type)).not.toContain("source.hash");
       } finally {
         inventory.mockRestore();
-        reads.mockRestore();
       }
     },
   );

@@ -55,10 +55,10 @@ Reloading or leaving the app does not preserve this in-memory draft.
 
 ## Automatic session names
 
-New Dashboard conversations receive a title from their opening task. After six more
-user messages, the Gateway makes one attempt to refine that title using recent
-conversation context. A failed attempt keeps the existing title. Manually named
-sessions and conversations created before this feature keep their names.
+New Dashboard conversations receive a title from their opening task. Later messages
+keep that title. Only an explicit rename by you or the agent through `sessions.patch`
+changes it. The open conversation URL updates when its name arrives or changes,
+without reloading the page or adding a browser-history entry.
 
 ## Temporary disconnections
 
@@ -70,6 +70,10 @@ left shows the connection state; retained data may be out of date until reconnec
 While automatic reconnection is running, the indicator shows **Reconnecting…**
 with the sidebar's standard spinner and without a Retry button. **Retry** remains available when automatic recovery stops.
 A required page refresh keeps its separate refresh action.
+
+A saved chat can restore its archived or read-only composer and parent breadcrumb
+while reconnecting. These saved display facts never authorize actions; live session
+state replaces them when the connection returns.
 
 If a chat side panel fails to load, its Close control remains available independently of the failed panel. Closing it keeps the conversation and its draft in place without reloading the page. Retry still respects unsaved work that blocks document reloads.
 
@@ -110,7 +114,7 @@ The saved sidebar also retains unread marks, activity and attention glyphs, pull
 
 Message reactions share the message footer. Desktop Chat Details lists automations after session information and task progress so arriving automation results keep those sections in place. The mobile composer reserves one activity row so arriving task and subagent status does not move the transcript.
 
-A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen. While older messages load, **Show earlier** keeps keyboard focus and ignores repeated activation.
+A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen. A reader action checks up to three consecutive pages when entries are empty, overlapping, or hidden by display preferences; longer hidden intervals remain available through another action. Transient read failures retry within the existing one-minute history-recovery budget, honoring the server’s backoff. Permission denials are not automatically retried. The touch-friendly history control keeps keyboard focus during loading and ignores repeated activation. Failed reads show **Retry earlier messages** at that same boundary without removing the loaded conversation. While disconnected, the control shows **Waiting for connection…** instead of accepting a click that cannot load history.
 
 GitHub item URLs and repository-qualified references such as `owner/repo#126` render as compact links. Use `PR owner/repo#126` for a pull request or `issue owner/repo#126` for an issue. References identified by keywords, such as `PR #126`, remain plain text without a repository qualifier. Project display names, the checkout, the project catalog, and other messages do not supply a destination. A standalone hash token that is also a valid hexadecimal color, such as `#126`, retains its color preview without a GitHub link.
 
@@ -126,7 +130,11 @@ Inline widgets and MCP Apps reserve their last rendered height when a cached con
 
 On a dashboard reload, a saved widget with an unexpired view ticket can load its document while the first Gateway connection is pending. Gateway-backed actions still wait for the connection, and loading pauses if the Gateway goes offline. Expired tickets require a fresh ticket from the Gateway.
 
+Fixed-height Board reports render their content as you scroll near them, while reserving their full card size. Once loaded, reports stay mounted when you switch tabs. Auto-sized reports render immediately so their content determines their size.
+
 Transcript history loads in parallel with the browser cache. An unchanged history response keeps the cached message rows and widget sizes in place. The transcript restores its saved reading position, or opens at the end, before showing its initial measured rows. Measured rows become visible once their selected geometry is committed, without an extra layout frame.
+
+When saved row sizes match the current content, appearance, and pane width, the initial viewport and its nearby rows mount together. Rows without matching saved sizes are measured incrementally.
 
 Consecutive informational system, recovery, and model-fallback events appear as a collapsed **system events** row in chat. Expand it with a click, Enter, or Space to read the original events in order. An amber **Updates not delivered** summary stays visible when delivery needs attention; event counts do not imply a count of undelivered updates. Human and assistant messages, actionable notices, and search results remain separate. This changes presentation only, not retry or delivery behavior.
 
@@ -143,6 +151,8 @@ If the Gateway's request queue is full, automatic sidebar session discovery keep
 While the initial connection or a route loads, shimmer placeholders reserve the chat layout. Home and System busyness open directly in their destination panels, with working headers and Close controls while the content loads. Brief loads do not flash placeholders; slower loads show placeholders inside the panel, and load errors offer Retry in the same place. The rest of the page stays usable. Drag the System busyness title bar to move the panel; its position is remembered in this browser. You can also focus the title bar and use the arrow keys (Shift moves farther). Compact/expanded transitions animate briefly, respect reduced motion, and keep the panel inside the window. Loading indicators respect your theme and reduced-motion preference; Gateway startup progress remains visible when available.
 
 The selected chat loads before automatic sidebar session lists refresh. Live events remain subscribed during startup, and explicit sidebar actions remain available. Background lists resume after the transcript loads or reports an error. Accepted new sessions refresh the visible sidebar immediately, including **Involving me** and owner filters, without waiting for the chat to finish loading or the agent to finish working.
+
+A foreground create uses its reply to keep the confirmed title and an actionless current-session display row available independently of the sidebar refresh. This display row does not add the session to filtered membership or counts; those still come from the Gateway. The first message and run status appear from local submission facts and live events without waiting for the list refresh.
 
 After the current page and transcript are ready, the browser can prepare code for
 Pages, New Session, and common dialogs during idle time. Hovering or focusing a
@@ -401,6 +411,10 @@ Opening a file collapses the file tree to make room for its preview. Use **Toggl
 file tree** to browse another file, or **Show in Files** to reveal the current file
 in its folder with the **All** filter.
 
+The **Review** file menu offers **Edit file** when the file reader confirms editing
+is available. Readable files keep **Open File** and their supported Markdown and
+source views when editing is unavailable; downloads remain available from the preview.
+
 If the **Files** panel shows a listing error, select **Retry** to load the current
 folder or search again. This keeps the session and query in place; access checks
 still apply, and a failed retry displays its error.
@@ -500,7 +514,7 @@ An embedder that supplies linked Gateways adds them to the identity menu's **Gat
 
 If you paste a setup code from **Devices → Pair device → Copy setup code** into **Gateway secret**, the UI shows an inline hint before you connect. Paste that code into **Settings → Gateway** in the OpenClaw mobile app. For the Control UI, run `openclaw gateway auth-token --show` in an interactive terminal on the Gateway host and paste the shared token instead. If a connection with a setup code is rejected for a token or password mismatch, the login screen repeats this guidance.
 
-Local onboarding generates a Gateway secret in token mode by default, without a token/password picker, and preserves existing password mode. Use `--gateway-auth password` or `--gateway-password <value>` for explicit password setup; Tailscale Funnel requires password mode. If the Gateway starts in token mode without a configured token, it generates an ephemeral runtime token for that process instead. The runtime token is not written to config, so it cannot be recovered and a loopback browser without that token is rejected. Run `openclaw doctor --generate-gateway-token`, restart the Gateway, then run `openclaw gateway auth-token --show` in an interactive terminal and paste the output into **Gateway secret**.
+Local onboarding generates a Gateway secret in token mode by default, without a token/password picker, and preserves existing password mode. Use `--gateway-auth password` or `--gateway-password <value>` for explicit password setup; Tailscale Funnel requires password mode. If the Gateway starts in token mode without a configured token, it generates an ephemeral runtime token for that process instead. The runtime token is not written to config, so it cannot be recovered and a loopback browser without that token is rejected. Run `openclaw doctor --generate-gateway-token`, restart the Gateway, then run `openclaw gateway auth-token --show` in an interactive terminal and paste the output into **Gateway secret**. If Windows PowerShell reports that running scripts is disabled, start those commands through [npm's `openclaw.cmd`](/platforms/windows#powershell-execution-policy) instead of changing the execution policy.
 
 <a id="agents-home" />
 

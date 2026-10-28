@@ -122,12 +122,11 @@ the page topbar while the drawer is closed. Opening the drawer moves that action
 back to the rail, without a second header button. In team mode, creation opens the
 same agent picker as the rail. Native apps keep their native creation controls.
 
-When an owner filter already identifies a row's owner, standalone activity and
-unread indicators stay at the far-right edge in grouped, ungrouped, pinned, and
-child rows, including when hover or keyboard focus reveals pin and archive
-actions. Other rows keep their leading indicator slot. Owner avatars, session
-artwork, and their activity rings keep their leading attribution slot; team mode
-keeps its compact status layout.
+Session activity and unread indicators stay in the leading column across owner
+filters, grouping modes, pinned sessions, and child rows. Idle rows reserve the
+same column so titles stay aligned when status changes or hover and keyboard
+focus reveal row actions. Shared-owner activity traces around the avatar pair;
+team mode keeps its compact status layout.
 
 The owner filter is the only control for this selection. Its saved value belongs
 to the current Gateway and your profile in this browser. A signed-in profile
@@ -302,9 +301,11 @@ cancellation or a Gateway restart interrupts that wait,
 the message stays readable with its recorded disposition and is never resent
 automatically. Stopped messages stay at their original time in the conversation,
 before messages sent later; only inputs still waiting to run stay at the live edge.
-Copy a stopped message into the composer to start a new attempt. **Show earlier
-messages** pages through messages that are still waiting or were stopped before
-processing; **Show latest messages** returns to the newest page. Incoming activity
+Copy a stopped message into the composer to start a new attempt. When there are
+more of these messages than fit on one page, **Show earlier unsent messages**
+appears at the top of the conversation once all earlier history has loaded; it
+pages through messages that are still waiting or were stopped before processing,
+and **Show latest unsent messages** returns to the newest page. Incoming activity
 refreshes the page you are reading without changing your selection. A long message
 uses the normal full-message reader without becoming a transcript reply, fork,
 or rewind target.
@@ -369,7 +370,10 @@ enablement and sizing.
 The **Filter & sort** popover keeps **Filters** and **Display** in one panel.
 **Filters** controls status, automation, and system sessions. **Display**
 controls grouping, sorting, message previews, and empty groups. Choices take
-effect immediately. The filter button shows a dot only when **Status** differs from **Active**. **Reset** appears at the right of the Filters header
+effect immediately. The filter button names the current **Status**, including the
+default **Active**. Choose **All** under **Status** to include archived and snoozed
+conversations without clearing the current owner or agent selection. The button
+also shows a dot when Status differs from Active. **Reset** appears at the right of the Filters header
 whenever any visible Filters or Display setting differs from its default. It restores
 all visible panel settings: Active status, automation and system sessions off,
 Custom groups, Created sort, When filtering for empty groups, and message previews off.
@@ -443,7 +447,7 @@ To inspect Home’s subagents, open **Home** and select **Subagents**. The side 
 
 Follow-up turns in an existing subagent session keep the parent’s activity ring running, even after the original task has finished. Opening the parent refreshes its hidden subagent activity without adding subagent rows to the sidebar. The ring clears when no work remains active.
 
-When a child run fails or publishes an attention request, the parent chat shows the child’s name and full diagnostic above the composer, even if the parent has no new reply. **Open session** opens that child’s details. Opening the parent does not acknowledge a child’s active attention request; its notice follows the child’s read state, explicit clearing, and expiry.
+Child failures and attention requests stay in **Subagents**, where you can open the child’s details. They do not add banners above the parent composer. The parent’s own errors, approvals, and input requests remain in the parent chat. Opening the parent or sending another prompt does not acknowledge a child’s failure or active attention request.
 
 Hover a session to see its project and branch. Repository details and the working directory stay in the hovercard and tooltip, leaving sidebar rows clear for session titles and activity indicators. Associated pull requests appear in the same hovercard, with titles, repository references, state, available diff totals, and CI status. Open and draft PRs appear before merged and closed history. The sidebar also counts pull requests published by the session and its accessible descendants, including delegated work on other branches. The hovercard combines those recorded publications with up to three PRs for the current branch, deduplicates links, and identifies each task branch. Recorded links remain available after a checkout changes or the Gateway restarts; unavailable GitHub metadata is labeled **Status unavailable**, never guessed from a publication receipt. The preview shows up to 20 recorded publications and indicates when more exist. Merely mentioning a PR in chat does not associate it with the task. Keyboard users can focus the session row and Tab into its PR links. A warning identifies retained GitHub data that could not be refreshed. An open hovercard refreshes its channel avatar after the Gateway reconnects, without requiring you to close and reopen it.
 
@@ -513,6 +517,8 @@ During text composition, the command palette pauses searches and leaves Enter, E
 After token or device-token authentication, the sidebar can show its cached session roster on reload only when the browser will present the Gateway token that authenticated the previous connection, or the paired device token retained from that connection. The cached roster has no live run state and is replaced by the live list after connecting. Other authentication methods wait for the connection; see [Warm reload](/web/control-ui/offline-and-reconnect#warm-reload).
 
 Switching agents refreshes the session list even while other conversations are active. A session action finishing for another agent keeps the selected agent’s filtered sidebar and pagination active. Confirmed permission changes remain visible if their follow-up list refresh fails. Read acknowledgments for known sessions update unread and attention state from their committed receipt without reloading the roster. Older responses cannot undo confirmed read state; newer activity or a later manual unread mark still takes effect.
+
+Reading a parent acknowledges its hidden subagent runs in sequential batches of up to 100. Each run keeps its conditional unread guard, so a manual reminder added during acknowledgement survives. Pending reads clear optimistically and settle from acknowledgement outcomes and admitted Gateway row events. Failed implicit hidden-run reads stay silent; an explicit **Mark as read** action reports its hidden-run failures together.
 
 **Load more sessions** stays disabled while the sidebar list is refreshing or loading another page. It becomes available again when the read finishes and more sessions remain.
 
@@ -783,6 +789,10 @@ The folder defaults to the agent workspace. Write-scoped connections can browse,
 Leave **From** empty to fetch `origin` when creating the worktree and use its default branch. The placeholder is a suggestion, not a saved branch selection. Explicitly selected or saved branches and commits are used as entered without fetching; selecting local `main` uses that local branch, which can lag behind `origin/main`. If fetching or resolving the remote default fails, the Gateway falls back to the source checkout's `HEAD`.
 
 ### Start a native coding CLI
+
+The actions beside **Codex** and **Claude Code** appear on hover or keyboard
+focus, and stay visible on touch screens. The main **Filter & sort** button
+stays visible independently of these catalog actions.
 
 The **+** beside **Codex** or **Claude Code** opens a native CLI draft, not an
 OpenClaw Chat. Choose the machine and folder, optionally enter a first prompt,

@@ -95,7 +95,7 @@ Notes:
 - Quoted `--client-cert` and `--client-key` values preserve leading and trailing whitespace in certificate and key paths. Whitespace-only values are treated as absent.
 - `set` expects one JSON object value on the command line.
 - `configure` updates enablement, tool filters, timeouts, OAuth, TLS, Codex approval mode, and parallel-tool-call hints without replacing the whole server definition. Add `--probe` to verify the updated server before saving.
-- `tools` updates per-server tool filters. Include/exclude entries are MCP tool names and simple `*` globs.
+- `tools` updates per-server tool filters. Include/exclude entries accept raw MCP tool names, unambiguous unsuffixed tool names copied from `probe` (such as `docs__search`), and simple `*` globs. Globs match raw MCP tool names only; exact raw names take precedence over probe aliases. Use raw names for tools whose probe names collide or receive a collision suffix such as `-2`; such a probe name selects nothing in `include` and hides every tool that could carry it in `exclude`.
 - `login` runs the OAuth flow for HTTP servers configured with `auth: "oauth"`. For a loopback redirect, OpenClaw listens for the browser callback and completes login automatically. The printed `--code` command remains the fallback for remote, headless, or unreachable callbacks.
 - `logout` clears stored OAuth credentials for the named server without removing the saved server definition.
 - `reload` disposes cached in-process MCP runtimes for the current CLI process only. Gateway or agent processes in another process still need their own reload or restart path.

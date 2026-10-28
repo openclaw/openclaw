@@ -178,7 +178,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
       state: sessionPromptState,
       routeKey: promptRouteKey,
       enabled: transcriptPolicy.inHistorySystemUpdates === true,
-      entries: sessionManager.getBranch(),
+      getEntries: () => sessionManager.getBranch(),
     })
   ) {
     await retireSystemPromptUpdates();
@@ -196,6 +196,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
             routeKey: promptRouteKey,
             systemPrompt: freshSystemPrompt,
             entries: sessionManager.getBranch(),
+            historyBoundaryCount: sessionManager.getBoundaryCount(),
           });
           // Keep an attempt's restart visible through subsequent continuation preparations.
           if (prepared.restart || state.systemPromptSeries === undefined) {
@@ -222,6 +223,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     stableStringify([
       attempt.config?.tools,
       attempt.config?.agents?.entries?.[sessionAgentId]?.tools,
+      attempt.config?.plugins,
+      attempt.config?.desktop,
     ]),
   );
   const pinTools = usesSystemPromptSeries
@@ -232,6 +235,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
           routeKey: promptRouteKey,
           toolPolicy: toolPolicyDigest,
           entries: sessionManager.getBranch(),
+          historyBoundaryCount: sessionManager.getBoundaryCount(),
           tools,
         });
         if (sessionPromptState.pendingToolSurface !== pending) {

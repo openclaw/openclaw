@@ -5,25 +5,13 @@ import { hashCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
 import type { CliSessionReseedReceipt, SessionEntry } from "../config/sessions.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import type { CliHistoryIndex } from "./cli-session-history-index-policy.js";
 import { CliSessionHistoryIndex } from "./cli-session-history-index.worker.js";
 import {
   resolveClaudeCliHistorySource,
   visitClaudeCliSessionMessages,
   type ClaudeCliHistoryParams,
 } from "./cli-session-history.claude-snapshot.js";
-
-// Preserve saved transcript bytes independently of the retired exec prompt builder.
-export const LEGACY_EXEC_COMPLETION_PROMPT =
-  "An async command you ran earlier has completed. The command completion details are:\n\n" +
-  "Exec completed (example, code 0) :: done\n\n" +
-  "Treat this completion as an internal continuation, not a new user request. " +
-  "Reconcile it with the conversation and continue any outstanding authorized work. " +
-  "Notify the user only if this provides a requested result not yet delivered, a meaningful change to the outcome, " +
-  "or a new unresolved failure, blocker, or decision they need to know about. " +
-  "Stay silent for routine output, duplicate or superseded results, and failures already recovered from; " +
-  "do not recap them or announce that nothing changed. " +
-  "If no user-facing update is needed, reply with exactly NO_REPLY as the entire final answer. " +
-  "NO_REPLY discards anything written this turn that was not sent, so send confirmations before ending silently.";
 
 export async function readClaudeCliSessionMessagesAsync(
   params: ClaudeCliHistoryParams,
@@ -37,11 +25,13 @@ export async function readClaudeCliSessionMessagesAsync(
   return messages;
 }
 
-export function mergeImportedChatHistoryMessages(params: {
-  localMessages: unknown[];
-  importedMessages: unknown[];
-}): unknown[] {
-  const index = new CliSessionHistoryIndex();
+export function mergeImportedChatHistoryMessages(
+  params: {
+    localMessages: unknown[];
+    importedMessages: unknown[];
+  },
+  index: CliHistoryIndex = new CliSessionHistoryIndex(),
+): unknown[] {
   try {
     index.appendLocal(
       params.localMessages.map((message, position) => ({ message, seq: position + 1 })),

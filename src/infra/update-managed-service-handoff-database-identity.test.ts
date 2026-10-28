@@ -179,7 +179,9 @@ it("preserves a bound ordinary-path receipt when native resolution expands its p
   const identity = captureManagedUpdateLeaseDatabaseIdentity(alias);
   expect(identity.databasePath).toBe(alias);
   const pinned = await prepareManagedHandoffLeaseDatabase(alias, identity);
-  pinned(true, () => undefined);
+  const canonical = await prepareManagedHandoffLeaseDatabase(databasePath);
+  // A pinned alias must inherit this call chain's writer as well as original acquisition.
+  canonical(true, () => pinned(true, () => undefined));
   expect(captureManagedUpdateLeaseDatabaseIdentity(alias)).toEqual(identity);
   expect(fs.existsSync(databasePath + ".lock")).toBe(false);
 });

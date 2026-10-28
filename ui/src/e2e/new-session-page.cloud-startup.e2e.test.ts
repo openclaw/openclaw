@@ -1,6 +1,8 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e-contract.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { holdModuleResponse } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -48,6 +50,104 @@ async function openCloudPage(page: Page, overrides: Record<string, unknown>) {
 }
 
 suite.define(() => {
+  it.each(["optimistic", "persisted"] as const)(
+    "keeps the acknowledged cloud first turn working while history and roster replies are held (%s user receipt)",
+    async (firstMessage) => {
+      await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+        const sessionKey = "agent:cloud:acknowledged-first-turn";
+        const sessionId = "session-acknowledged-first-turn";
+        const message = "Show first-turn progress from the delivery receipt";
+        const gateway = await openCloudPage(page, {
+          "sessions.create": { key: sessionKey, sessionId },
+          "sessions.dispatch": { sessionId, placement: { state: "active", generation: 1 } },
+          "chat.history": { messages: [], sessionId },
+        });
+        await chooseCloud(page);
+        await gateway.deferNext("chat.send");
+        await page.locator(".new-session-page__message").fill(message);
+        await page.getByRole("button", { name: "Start session" }).click();
+        const send = await gateway.waitForRequest("chat.send");
+        const runId = (send.params as { idempotencyKey: string }).idempotencyKey;
+        await waitForCommittedChatRoute(page);
+        await page.evaluate(() => {
+          const mock = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+          for (const method of [
+            "chat.history",
+            "chat.startup",
+            "sessions.list",
+            "sessions.describe",
+          ]) {
+            mock.setRequestHandler(method, () => {});
+          }
+        });
+        if (firstMessage === "persisted") {
+          await gateway.emitGatewayEvent("session.message", {
+            sessionKey,
+            sessionId,
+            messageId: "published-first-message",
+            messageSeq: 1,
+            message: chatMessage("user", message, {
+              __openclaw: {
+                id: "published-first-message",
+                idempotencyKey: `${runId}:user`,
+              },
+            }),
+          });
+        }
+        await gateway.resolveDeferred("chat.send", { runId, status: "started" });
+        await expect
+          .poll(() =>
+            evaluateControlUiContext(
+              page,
+              (application, key) => application.placementStartup.get(key),
+              sessionKey,
+            ),
+          )
+          .toBeNull();
+        const working = page.locator(".chat-working-indicator");
+        await expect.poll(() => working.textContent()).toContain("Working");
+        await expect
+          .poll(() =>
+            evaluateControlUiContext(
+              page,
+              (application, scope) =>
+                application.chatSubmissions.readInitial(
+                  scope.sessionKey,
+                  application.gateway.snapshot.client ?? null,
+                  scope.sessionId,
+                )?.pending,
+              { sessionKey, sessionId },
+            ),
+          )
+          .toBe(firstMessage === "optimistic");
+        await gateway.emitGatewayEvent("chat", {
+          sessionKey,
+          runId,
+          state: "status",
+          phase: "preparing_context",
+          seq: 1,
+        });
+        await expect
+          .poll(() => working.textContent())
+          .toContain(firstMessage === "optimistic" ? "Preparing this turn" : "Working");
+        await gateway.emitGatewayEvent("chat", {
+          sessionKey,
+          runId,
+          state: "delta",
+          seq: 2,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "First assistant token" }],
+          },
+        });
+        await page.locator(".chat-group.assistant", { hasText: "First assistant token" }).waitFor();
+        expect(await page.locator(".chat-group.user", { hasText: message }).count()).toBe(1);
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      });
+    },
+  );
+
   it("clears cloud placement when the selected agent changes", async () => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       const gateway = await openCloudPage(page, {

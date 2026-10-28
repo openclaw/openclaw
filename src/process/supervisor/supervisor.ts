@@ -10,6 +10,7 @@ import {
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatChildRuntimeSpawnWarning } from "../../infra/child-runtime-viability.js";
+import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { watchChildMemory } from "../child-memory.js";
@@ -45,6 +46,8 @@ function requiresProcessTree(scope: ScopeCleanupOwner, external: boolean): boole
 }
 
 function recordScopeCleanupFailure(cleanupOwners: ScopeCleanupOwner[], error: unknown): void {
+  // The scope and process-wide supervisor can outlive the failing callback's context.
+  materializeErrorStack(error);
   for (const cleanupOwner of cleanupOwners) {
     cleanupOwner.failure ??= { error };
   }
@@ -166,6 +169,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
           cancelScope(scopeKey);
           await waitForRuns(scopeKey);
         } catch (error) {
+          materializeErrorStack(error);
           cleanupOwner.failure ??= { error };
         } finally {
           owners.delete(cleanupOwner);

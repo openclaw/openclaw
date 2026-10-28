@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { createStore } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
@@ -246,6 +247,63 @@ describe("chat attachment read failures", () => {
       });
     });
   }
+
+  it.each([
+    [0, 1],
+    [1, 0],
+  ])(
+    "preserves admission order when read %i finishes before read %i and preview props lag",
+    async (first, second) => {
+      const files = [imageFile("first.png", "a"), imageFile("second.png", "b")];
+      StubFileReader.heldNames = new Set(files.map((file) => file.name));
+      const h = readFixture([], () => redraw());
+      let renderedAttachments: ChatAttachment[] = [];
+      const view = () => ({
+        attachments: renderedAttachments,
+        readRevision: h.reads.revision,
+      });
+      const [rendered, setRendered] = createStore(view());
+      const preview = mountSolid(
+        () => (
+          <AttachmentPreview
+            {...h.props}
+            attachments={rendered.attachments}
+            readRevision={rendered.readRevision}
+          />
+        ),
+        {},
+      );
+      const redraw = () => {
+        setRendered(() => view());
+        flush();
+      };
+      onTestFinished(preview.dispose);
+
+      h.append(files);
+      await vi.waitFor(() => expect(StubFileReader.heldReads).toHaveLength(2));
+      StubFileReader.heldReads[first]!();
+      await waitForSolid(() => expect(h.reads.pendingReads).toBe(1));
+      StubFileReader.heldReads[second]!();
+      await h.done.promise;
+      expect(h.attachments.map(({ fileName }) => fileName)).toEqual(["first.png", "second.png"]);
+      await waitForSolid(() =>
+        expect(
+          Array.from(preview.container.querySelectorAll(".chat-attachment-thumb img"), (image) =>
+            image.getAttribute("alt"),
+          ),
+        ).toEqual(["first.png", "second.png"]),
+      );
+      renderedAttachments = [h.attachments[1]!];
+      h.props.onAttachmentsChange(renderedAttachments);
+      await waitForSolid(() =>
+        expect(
+          Array.from(preview.container.querySelectorAll(".chat-attachment-thumb img"), (image) =>
+            image.getAttribute("alt"),
+          ),
+        ).toEqual(["second.png"]),
+      );
+    },
+  );
 
   it.each([false, true])(
     "retains published payload custody when remaining reads abort (presented=%s)",

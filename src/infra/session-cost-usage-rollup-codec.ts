@@ -6,7 +6,7 @@ import { resolveZstdCodec } from "./zstd-codec.js";
 
 // Cache data is rebuildable. Semantic changes get a new version; old rows are
 // ignored and rebuilt instead of normalized through a runtime compatibility path.
-export const USAGE_COST_ROLLUP_VERSION = 8;
+export const USAGE_COST_ROLLUP_VERSION = 9;
 const USAGE_COST_ROLLUP_FORMAT_VERSION = 1;
 export const USAGE_COST_ROLLUP_SCOPE = "session-cost-usage-rollup-v3";
 const zstd = resolveZstdCodec();
@@ -91,6 +91,38 @@ export function encodeUsageCostRollup(entry: UsageCostRollupEntry): {
 export type UsageCostFreshnessCheckpoint =
   | Pick<UsageCostJsonlCheckpoint, "kind" | "observedSize" | "observedMtimeMs" | "device" | "inode">
   | Pick<UsageCostSqliteCheckpoint, "kind" | "maxSeq" | "eventCount" | "size" | "mtimeMs">;
+
+export function readUsageCostDeferredMetadata(
+  envelope: UsageCostRollupEnvelope,
+): { checkpoint: UsageCostFreshnessCheckpoint; scannedAt: number } | undefined {
+  const source = envelope.checkpoint;
+  const checkpoint: UsageCostFreshnessCheckpoint =
+    source.kind === "jsonl"
+      ? {
+          kind: source.kind,
+          observedSize: source.observedSize,
+          observedMtimeMs: source.observedMtimeMs,
+          device: source.device,
+          inode: source.inode,
+        }
+      : {
+          kind: source.kind,
+          maxSeq: source.maxSeq,
+          eventCount: source.eventCount,
+          size: source.size,
+          mtimeMs: source.mtimeMs,
+        };
+  // Only numeric freshness facts fit the reserved descriptor allowance.
+  if (
+    Object.entries(checkpoint).every(
+      ([key, value]) => key === "kind" || (typeof value === "number" && Number.isFinite(value)),
+    ) &&
+    Number.isFinite(envelope.scannedAt)
+  ) {
+    return { checkpoint, scannedAt: envelope.scannedAt };
+  }
+  return undefined;
+}
 
 export function decodeUsageCostRollupEnvelope(
   valueJson: string,

@@ -31,6 +31,25 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  // Spawned directly by native-allocation-profile.test.ts.
+  "test/scripts/fixtures/native-profile-census.mjs!",
+  // Their source headers document standalone benchmark and measurement commands.
+  "scripts/bench-duplicate-paragraphs.mts!",
+  "scripts/perf/auth-file-watch-events-measure.ts!",
+  "scripts/perf/completion-payload-bytes-measure.ts!",
+  "scripts/perf/connect-profile-binding-measure.ts!",
+  "scripts/perf/cron-reader-reuse-measure.ts!",
+  "scripts/perf/cron-registry-read-measure.ts!",
+  "scripts/perf/local-workspace-refresh-measure.ts!",
+  "scripts/perf/plugin-state-claims-measure.ts!",
+  "scripts/perf/session-append-reload-measure.ts!",
+  "scripts/perf/session-membership-retention-measure.ts!",
+  "scripts/perf/session-message-custody-payload-measure.mjs!",
+  "scripts/perf/session-patch-response-measure.ts!",
+  "scripts/perf/transcript-pool-idle-measure.ts!",
+  "scripts/perf/worktree-creation-measure.ts!",
+  // The source header documents this matched Code Mode engine probe by path.
+  "scripts/perf/code-mode-engine-measure.ts!",
   // The prepublish registry executes this shared build-and-pack lifetime by path.
   "scripts/lib/plugin-npm-build-and-pack.mts!",
   // Package scripts execute the PostgreSQL schema generator, which consumes state declarations.
@@ -67,6 +86,9 @@ const repositoryScriptEntries = [
   // Its header documents the paired operator-role currency-check benchmark.
   "scripts/perf/operator-role-source-policy-measure.mjs!",
   "scripts/perf/access-authority-callback-measure.mjs!",
+  "scripts/perf/plugin-registry-binding-measure.mjs!",
+  // Its header documents the config-wide admission metadata benchmark.
+  "scripts/perf/config-wide-metadata-measure.ts!",
   // Its header documents the sandbox/workspace ownership assertion benchmark.
   "scripts/perf/workspace-assertion-measure.mjs!",
   // Its header documents the paired workspace reconciliation benchmark.
@@ -75,6 +97,8 @@ const repositoryScriptEntries = [
   // Its header documents the full transcript-pairing repair benchmark.
   "scripts/perf/tool-result-pairing-measure.ts!",
   "scripts/perf/assistant-thinking-measure.ts!",
+  // Its header documents leaf SELF-byte attribution of sampled survivor profiles.
+  "scripts/perf/survivor-leaf-rank.mjs!",
   // db:postgres:gen/check invoke this generator through the source loader.
   "scripts/generate-postgres-schema.mts!",
   // CI preflight executes the manifest from its trusted harness checkout.
@@ -105,6 +129,8 @@ const repositoryScriptEntries = [
   "scripts/bench-control-ui-engines.ts!",
   // The opt-in projection benchmark builds its browser fixture through this CLI.
   "scripts/build-control-ui-projection-fixture.mts!",
+  // The reactive graph guide invokes this isolated diagnostic build by path.
+  "scripts/build-control-ui-reactive-graph.mts!",
   // scripts/README.md invokes these exact memory-search benchmarks by path.
   "scripts/bench-memory-search.mjs!",
   "scripts/bench-memory-search-sqlite.mjs!",
@@ -115,6 +141,8 @@ const repositoryScriptEntries = [
   "scripts/bench-plugin-registration.mts!",
   // The cold-load benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-control-ui-cold-load.ts!",
+  // scripts/perf/warm-reload-proof.md invokes this real-Gateway visual proof loop.
+  "scripts/perf/warm-reload-proof.ts!",
   // scripts/control-ui-retention/README.md invokes this opt-in production census.
   "scripts/control-ui-retention/retention-suite.ts!",
   // #179175 invokes this development-loop benchmark CLI by path.
@@ -136,14 +164,23 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-blob-registration-measure.ts!",
   "scripts/perf/session-reaction-quota-measure.ts!",
   // Maintained guides, source headers, and paired drivers invoke these roots by path.
+  "scripts/perf/audit-batch-write-measure.ts!",
+  "scripts/perf/audit-request-rate-measure.ts!",
+  "scripts/perf/prompt-suffix-turn-context-measure.ts!",
+  "scripts/perf/audit-context-write-measure.ts!",
   "scripts/perf/node-worker-journal-measure.ts!",
   "scripts/perf/orphan-recovery-observer.mjs!",
   "scripts/perf/pairing-channel-attribution.mts!",
   "scripts/perf/session-actor-residency-snapshot.mjs!",
   "scripts/perf/session-actor-retention-seed.ts!",
+  "scripts/perf/session-cold-selection.ts!",
+  "scripts/perf/session-entry-projection-measure.ts!",
+  "scripts/perf/session-row-index-measure.ts!",
   "scripts/perf/session-row-materialization-measure.ts!",
   "scripts/perf/session-row-refresh-measure.ts!",
+  "scripts/perf/session-row-consume-measure.ts!",
   "scripts/perf/session-row-lineage-measure.ts!",
+  "scripts/perf/session-event-ancestors-measure.ts!",
   "scripts/perf/tool-result-hash-measure.ts!",
   "scripts/perf/tool-result-size-measure.ts!",
   "scripts/perf/ws-counter-stress-preload.ts!",
@@ -167,6 +204,7 @@ const repositoryScriptEntries = [
   "scripts/perf/diagnostic-profile-measure.ts!",
   "scripts/perf/owned-directory-events-measure.ts!",
   "scripts/perf/plugin-gateway-scope-measure.ts!",
+  "scripts/perf/plugin-tool-resolution-measure.ts!",
   // pg-footprint.md and the pool proof commands execute these entries by path.
   "scripts/perf/pg-footprint.ts!",
   "scripts/perf/pg-footprint-preload.mjs!",
@@ -179,6 +217,7 @@ const repositoryScriptEntries = [
   // #181150 invokes this reproducible session-row owner probe by path.
   "scripts/perf/session-actor-row-facts-measure.ts!",
   "scripts/perf/session-catalog-selection-measure.ts!",
+  "scripts/perf/session-selection-facts-measure.ts!",
   // The offline health-cron measurement invokes this synthetic fixture by path.
   "scripts/perf/health-cron-fixture.ts!",
   // #183020 invokes this synthetic category-registration workload by path.
@@ -190,13 +229,26 @@ const repositoryScriptEntries = [
   "scripts/perf/session-tool-surface-measure.ts!",
   "scripts/perf/subagent-maintenance-capture-measure.ts!",
   "scripts/perf/subagent-sweep-measure.ts!",
+  "scripts/perf/subagent-timing-write-measure.ts!",
+  // Its source header documents the shutdown workload; the literal URL links its preload.
+  "scripts/perf/gateway-shutdown-sweep-measure.ts!",
   "scripts/perf/tool-schema-preparation-measure.ts!",
+  "scripts/perf/terminal-assistant-snapshot-measure.ts!",
+  // Their source headers and retained guide document standalone Node commands.
+  "scripts/perf/cheaper-retry-logging.ts!",
+  "scripts/perf/hook-message-loader-retention.ts!",
+  "scripts/perf/jiti-stack-format.ts!",
+  "scripts/perf/pr-restore-memory.mjs!",
+  "scripts/perf/session-cold-restore-memory.ts!",
+  "scripts/perf/subagent-custody-abort-retention.ts!",
+  "scripts/perf/worker-lifecycle-message-measure.ts!",
   // Retained source commands and selectable preloads execute directly by exact path.
   "scripts/perf/after-turn-context-measure.ts!",
   "scripts/perf/agent-runtime-dispatch-measure.ts!",
   "scripts/perf/approval-replay-burst-measure.ts!",
   "scripts/perf/channels-status-inventory.ts!",
   "scripts/perf/extension-handler-lookup-measure.ts!",
+  "scripts/perf/extension-context-copy-measure.ts!",
   "scripts/perf/knowledge-git-transactions.ts!",
   "scripts/perf/reply-tool-authority-measure.ts!",
   "scripts/perf/select-environment-scale.ts!",
@@ -204,6 +256,9 @@ const repositoryScriptEntries = [
   "scripts/perf/session-delete-measure.ts!",
   "scripts/perf/session-history-prewarm-measure.mjs!",
   "scripts/perf/session-prepared-list-measure.ts!",
+  "scripts/perf/session-list-search-measure.ts!",
+  "scripts/perf/session-list-partition-measure.ts!",
+  "scripts/perf/session-list-transmit-measure.mjs!",
   "scripts/perf/transcript-boot-preload.mjs!",
   "scripts/perf/worker-pool-churn-preload.mjs!",
   "scripts/perf/worktree-prompt-native-measure.ts!",
@@ -215,6 +270,7 @@ const repositoryScriptEntries = [
   "scripts/perf/session-catalog-pairing-measure.ts!",
   "scripts/perf/session-involvement-measure.ts!",
   "scripts/perf/sqlite-native-lease-measure.mjs!",
+  "scripts/perf/agent-db-close-receipt-measure.mjs!",
   "scripts/perf/sqlite-owner-dispatch-measure.mjs!",
   "scripts/perf/sqlite-wal-scan-measure.mjs!",
   "scripts/perf/state-engine-schema-bench.ts!",
@@ -232,6 +288,7 @@ const repositoryScriptEntries = [
   "scripts/perf/provider-prompt-state-worker-measure.mjs!",
   "scripts/perf/session-diff-metadata-measure.ts!",
   "scripts/perf/session-file-workspace-measure.ts!",
+  "scripts/perf/session-files-list-measure.ts!",
   // The performance guide and transcript driver invoke these tools and preloads by path.
   "scripts/lib/gateway-bench-transport-preload.ts!",
   "scripts/perf/async-store-measure.mjs!",
@@ -245,6 +302,8 @@ const repositoryScriptEntries = [
   "scripts/perf/provider-request-prepare-measure.ts!",
   // Invoked directly with Node as documented in its header.
   "scripts/perf/attempt-stream-options-measure.ts!",
+  "scripts/perf/attempt-prompt-context-measure.ts!",
+  "scripts/perf/current-prompt-history-measure.ts!",
   "scripts/perf/session-profile-reference-measure.ts!",
   "scripts/perf/worker-task-metrics-measure.ts!",
   // scripts/perf/README.md invokes this worker protocol benchmark by path.
@@ -267,6 +326,10 @@ const repositoryScriptEntries = [
   "scripts/perf/cron-delivery-gateway-entry.ts!",
   "scripts/perf/plugin-policy-read-measure.mjs!",
   "scripts/perf/prompt-cache-observation-measure.ts!",
+  // Invoked directly with Node as documented in their headers.
+  "scripts/perf/prompt-cache-drops-measure.ts!",
+  "scripts/perf/prompt-cache-request-cost.ts!",
+  "scripts/perf/live-history-observation-measure.ts!",
   "scripts/perf/reconnect-read-wave-measure.ts!",
   "scripts/perf/session-actor-receipt-measure.ts!",
   "scripts/perf/session-actor-retention-measure.ts!",
@@ -331,6 +394,7 @@ const repositoryScriptEntries = [
   "scripts/perf/queued-input-retention.ts!",
   "scripts/perf/queued-input-retention-preload.mjs!",
   "scripts/perf/pty-session-scan-measure.mjs!",
+  "scripts/perf/publication-empty-recovery-measure.ts!",
   "scripts/perf/publication-spawn-measure.ts!",
   "scripts/perf/replay-history-measure.ts!",
   "scripts/perf/run-tool-validation-retention.ts!",
@@ -384,6 +448,7 @@ const repositoryScriptEntries = [
   "scripts/perf/agent-roster-ids-measure.ts!",
   "scripts/perf/agent-roster-validation-measure.mjs!",
   "scripts/perf/attempt-abort-retention.ts!",
+  "scripts/perf/board-get-measure.mjs!",
   "scripts/perf/board-layout-measure.mjs!",
   "scripts/perf/channel-run-admission-measure.mjs!",
   "scripts/perf/chat-history-param-validation-measure.mjs!",
@@ -393,6 +458,8 @@ const repositoryScriptEntries = [
   "scripts/perf/cron-history-plan-measure.ts!",
   "scripts/perf/cron-list-projection-measure.mjs!",
   "scripts/perf/cron-list-revision-measure.ts!",
+  "scripts/perf/cron-delivery-context-measure.mjs!",
+  "scripts/perf/cron-refresh-measure.ts!",
   "scripts/perf/cron-session-bindings-measure.ts!",
   "scripts/perf/embedded-runner-array-copies.ts!",
   "scripts/perf/gateway-clone-measure.ts!",
@@ -412,6 +479,7 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-config-publication-measure.mjs!",
   "scripts/perf/plugin-metadata-frame-measure.ts!",
   "scripts/perf/plugin-sdk-defensive-measure.ts!",
+  "scripts/perf/plugin-session-action-measure.ts!",
   "scripts/perf/presence-delivery-measure.ts!",
   "scripts/perf/project-publication-fetch-measure.ts!",
   "scripts/perf/provider-rate-limit-http-retention.ts!",
@@ -434,6 +502,7 @@ const repositoryScriptEntries = [
   "scripts/perf/stream-dispatch-scope-measure.ts!",
   "scripts/perf/subagent-mutation-clone-measure.ts!",
   "scripts/perf/telegram-entity-sort-measure.mjs!",
+  "scripts/perf/telegram-token-owner-measure.mjs!",
   "scripts/perf/tool-result-owned-freeze-measure.ts!",
   "scripts/perf/tool-search-allowlist-measure.ts!",
   "scripts/perf/tools-catalog-copy-measure.ts!",
@@ -450,10 +519,13 @@ const repositoryScriptEntries = [
   "scripts/perf/worker-request-diagnostics-measure.ts!",
   "scripts/perf/worker-transcript-batch-measure.ts!",
   // Maintained source headers invoke these standalone measurement commands by exact path.
+  "scripts/perf/active-node-turn-prepare-measure.ts!",
   "scripts/perf/agent-fresh-array-copy-measure.ts!",
   "scripts/perf/agent-object-copy-measure.ts!",
   "scripts/perf/agent-stream-update-measure.ts!",
   "scripts/perf/agent-turn-taint-measure.ts!",
+  "scripts/perf/auth-availability-invalidation-measure.ts!",
+  "scripts/perf/chat-admission-freshness-measure.ts!",
   "scripts/perf/chat-display-admission-measure.mjs!",
   "scripts/perf/core-fresh-array-copies-measure.mjs!",
   "scripts/perf/delivery-info-measure.ts!",
@@ -462,6 +534,7 @@ const repositoryScriptEntries = [
   "scripts/perf/host-cpu-sample-measure.mjs!",
   "scripts/perf/identifier-renormalization-measure.ts!",
   "scripts/perf/ingress-ip-measure.ts!",
+  "scripts/perf/inter-session-steering-measure.ts!",
   "scripts/perf/memory-ranking-copies.ts!",
   "scripts/perf/memory-prompt-copy-measure.ts!",
   "scripts/perf/misc-fresh-array-copies-measure.mjs!",
@@ -469,24 +542,35 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-fresh-arrays-measure.mjs!",
   "scripts/perf/placement-session-evidence-measure.ts!",
   "scripts/perf/plugin-registry-normalizer-measure.ts!",
+  "scripts/perf/prompt-image-sanitation-measure.ts!",
   "scripts/perf/provider-auth-lookup-maps-measure.ts!",
   "scripts/perf/provider-request-preparation-measure.ts!",
   "scripts/perf/quadratic-report-measure.ts!",
   "scripts/perf/reef-device-sign-measure.ts!",
   "scripts/perf/session-actor-admission-measure.ts!",
+  "scripts/perf/session-input-custody-measure.ts!",
+  "scripts/perf/chat-send-persist-measure.ts!",
   "scripts/perf/session-pin-policy-measure.ts!",
+  "scripts/perf/session-prompt-begin-measure.ts!",
   "scripts/perf/session-store-target-inventory-measure.ts!",
+  "scripts/perf/session-discovery-payload-measure.mjs!",
   "scripts/perf/state-read-transport-bench.ts!",
   "scripts/perf/subagent-run-retention-gateway.ts!",
   "scripts/perf/subagent-run-retention-measure.ts!",
   "scripts/perf/subagent-runtime-registry-measure.ts!",
+  "scripts/perf/transcript-payload-prepare-measure.ts!",
   "scripts/perf/transcript-resident-hydration-measure.ts!",
+  "scripts/perf/transcript-selected-payload-measure.ts!",
+  "scripts/perf/transcript-active-read-measure.ts!",
   "scripts/perf/worker-task-input-measure.mjs!",
+  "scripts/perf/worktree-provisioning-gateway-measure.ts!",
+  "scripts/perf/worktree-provisioning-measure.ts!",
   // Maintained source headers and a dedicated guide invoke these standalone commands by exact path.
   "scripts/perf/attempt-tool-context-measure.ts!",
   "scripts/perf/catalog-retained-data-measure.ts!",
   "scripts/perf/disk-budget-scan.ts!",
   "scripts/perf/git-operation-allocation-measure.ts!",
+  "scripts/perf/long-lived-error-stacks-measure.ts!",
   "scripts/perf/mcp-http-dispatcher-measure.ts!",
   "scripts/perf/mcp-namespace-result-measure.ts!",
   "scripts/perf/model-catalog-read-startup-measure.mjs!",
@@ -502,11 +586,14 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-preparation-boot.mjs!",
   "scripts/perf/plugin-preparation-boot-preload.mjs!",
   "scripts/perf/plugin-relative-path-measure.ts!",
+  "scripts/perf/plugin-capture-stat-measure.ts!",
   "scripts/perf/plugin-source-preparation.ts!",
   "scripts/perf/plugin-transform-preload.mjs!",
   "scripts/perf/prepared-gateway-startup-measure.mjs!",
   "scripts/perf/sandbox-paths-measure.ts!",
+  "scripts/perf/sandbox-skills-sync-measure.ts!",
   "scripts/perf/sandbox-start-measure.ts!",
+  "scripts/perf/sandbox-status-measure.ts!",
   "scripts/perf/session-projection-stream-measure.ts!",
   "scripts/perf/session-sharing-key-measure.ts!",
   "scripts/perf/session-store-key-measure.ts!",
@@ -525,12 +612,25 @@ const repositoryScriptEntries = [
   "scripts/perf/ui-streaming-render-measure.ts!",
   // Their source headers document these standalone performance commands.
   "scripts/perf/active-run-projector-measure.ts!",
+  "scripts/perf/cron-definition-publication-measure.ts!",
   "scripts/perf/cron-store-context-measure.ts!",
   "scripts/perf/diagnostic-frozen-trace-measure.ts!",
   "scripts/perf/image-worker-buffers-measure.mjs!",
   "scripts/perf/installed-plugin-index-fingerprint-measure.ts!",
   "scripts/perf/knowledge-worker-diagnostics-measure.mjs!",
   "scripts/perf/knowledge-worker-heap-measure.mjs!",
+  // These source headers document standalone measurement commands.
+  "scripts/perf/agent-deletion-blocked-measure.ts!",
+  "scripts/perf/agent-list-read-measure.ts!",
+  "scripts/perf/chat-history-response-page-measure.mjs!",
+  "scripts/perf/chat-history-tool-text-measure.mjs!",
+  "scripts/perf/chat-metadata-auth-check-measure.ts!",
+  "scripts/perf/config-schema-retention-measure.ts!",
+  "scripts/perf/sandbox-retirement-authority.ts!",
+  "scripts/perf/subagent-registration-retention.ts!",
+  "scripts/perf/system-prompt-request-measure.ts!",
+  "scripts/perf/worktree-index-metadata-measure.ts!",
+  "scripts/perf/worktree-preparation-index-measure.ts!",
   // Maintained source headers invoke these standalone commands by exact path.
   "scripts/perf/archive-worker-startup-measure.mjs!",
   "scripts/perf/archive-canonical-worker-measure.ts!",
@@ -542,19 +642,34 @@ const repositoryScriptEntries = [
   "scripts/perf/placement-identity-recovery-bench.ts!",
   "scripts/perf/provider-tool-normalization-measure.ts!",
   "scripts/perf/session-entry-patch-prepare-measure.ts!",
+  "scripts/perf/session-internal-patch-measure.ts!",
+  "scripts/perf/session-lifecycle-prepare-measure.ts!",
+  "scripts/perf/session-replacement-write-measure.ts!",
+  "scripts/perf/session-patch-label-owner-measure.ts!",
+  "scripts/perf/session-patch-result-measure.mjs!",
   "scripts/perf/session-event-audience-measure.ts!",
   "scripts/perf/transcript-snapshot-copy-measure.ts!",
   "scripts/perf/turn-start-phases.ts!",
   "scripts/perf/update-manager-measure.ts!",
   "scripts/perf/worker-spawn-measure.mjs!",
   "scripts/perf/worktree-size-measure.ts!",
-  // Maintained source headers and callers invoke these commands and selectable preloads by path.
+  // Maintained source headers and callers invoke these commands, module entries, and preloads by path.
   "scripts/perf/agent-directory-recovery-measure.ts!",
   "scripts/perf/agent-event-frame-census-preload.mjs!",
+  "scripts/perf/artifacts-block-measure.ts!",
+  "scripts/perf/attachment-header-measure.ts!",
+  "scripts/perf/chat-history-activity-transfer-measure.mjs!",
   "scripts/perf/chat-send-attachments-measure.ts!",
+  "scripts/perf/stage-media-measure.ts!",
   "scripts/perf/codex-catalog-lines.ts!",
   "scripts/perf/codex-request-imports.ts!",
   "scripts/perf/empty-checkout-diff-measure.ts!",
+  "scripts/perf/exec-approvals-idle-measure.ts!",
+  "scripts/perf/exec-approvals-receipt-measure.ts!",
+  "scripts/perf/knowledge-resume.ts!",
+  "scripts/perf/local-workspace-manifest-contention-measure.ts!",
+  "scripts/perf/matrix-idle-persistence.ts!",
+  "scripts/perf/project-checkout-options-measure.ts!",
   "scripts/perf/main-module-census-report.mjs!",
   "scripts/perf/module-import-measure.mjs!",
   "scripts/perf/plugin-resolve-hooks-measure.ts!",
@@ -562,13 +677,20 @@ const repositoryScriptEntries = [
   "scripts/perf/plugins-list-catalog-preload.mjs!",
   "scripts/perf/presence-projection-measure.ts!",
   "scripts/perf/prepared-catalog-handoff-measure.ts!",
+  "scripts/perf/prompt-cache-facts-measure.ts!",
+  "scripts/perf/provider-policy-import.mjs!",
+  "scripts/perf/sandbox-setup-waits-measure.ts!",
   "scripts/perf/session-actor-participant-hydration-measure.ts!",
+  "scripts/perf/session-lifecycle-finish-measure.ts!",
   "scripts/perf/session-row-retention-measure.ts!",
   "scripts/perf/session-snapshot-measure.ts!",
   "scripts/perf/session-source-preparation.ts!",
   "scripts/perf/sqlite-worker-dispatch-measure.ts!",
   "scripts/perf/team-shape-module-census-preload.mjs!",
   "scripts/perf/tool-schema-request-admission-measure.ts!",
+  "scripts/perf/trajectory-runtime-append.ts!",
+  "scripts/perf/visitor-welcome-lookup-measure.ts!",
+  "scripts/perf/worker-operation-registry-measure.ts!",
   "scripts/perf/worker-task-transfer-list-measure.mjs!",
   // The dynamic-consumer compiler follows the computed child launches of these command roots.
   "scripts/perf/archive-worker-churn-measure.ts!",
@@ -577,15 +699,18 @@ const repositoryScriptEntries = [
   // Maintained source headers invoke these standalone commands and external preload by exact path.
   "scripts/bench-control-ui-talk.ts!",
   "scripts/perf/agent-catalog-display-measure.ts!",
+  "scripts/perf/mention-target-preparation-measure.ts!",
   "scripts/perf/agent-event-routing-measure.ts!",
   "scripts/perf/archive-record-framing-measure.mjs!",
   "scripts/perf/board-grid-measure.ts!",
   "scripts/perf/bootstrap-import-preload.mjs!",
   "scripts/perf/branch-summary-identity-measure.ts!",
+  "scripts/perf/session-branches-cache-measure.ts!",
   "scripts/perf/catalog-static-preparation-measure.ts!",
   "scripts/perf/channel-presence-suppression.ts!",
   "scripts/perf/config-guard-startup-measure.ts!",
   "scripts/perf/connect-device-identity-measure.ts!",
+  "scripts/perf/connect-link-readers-measure.ts!",
   "scripts/perf/core-object-copy-measure.ts!",
   "scripts/perf/core-quadratic-scans-measure.ts!",
   "scripts/perf/diff-baseline-measure.ts!",
@@ -598,6 +723,7 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-object-copy-measure.ts!",
   "scripts/perf/plugin-recovery-transport-measure.ts!",
   "scripts/perf/plugin-startup-install-records.ts!",
+  "scripts/perf/plugin-metadata-read-measure.ts!",
   "scripts/perf/plugins-list-measure.ts!",
   "scripts/perf/plugins-list-owner-measure.ts!",
   "scripts/perf/provider-prompt-worker-bytes-measure.mjs!",
@@ -636,6 +762,7 @@ const repositoryScriptEntries = [
   "scripts/perf/session-skill-snapshot-intern.ts!",
   "scripts/perf/session-skill-snapshot-intern.preload.mjs!",
   "scripts/perf/git-read-sharing-measure.ts!",
+  "scripts/perf/worktree-git-config-measure.ts!",
   // Live proof and test owners spawn or preload these children through computed paths.
   "scripts/perf/bench-ingress-bridge.mjs!",
   "scripts/perf/child-memory-fixture.cjs!",
@@ -666,11 +793,13 @@ const repositoryScriptEntries = [
   "scripts/perf/crabbox-state-polling.mts!",
   "scripts/perf/local-workspace-manifest-equivalence.ts!",
   "scripts/perf/local-workspace-manifest-measure.ts!",
+  "scripts/perf/local-workspace-lookup-measure.ts!",
   "scripts/perf/operator-model-policy-list-probe.mjs!",
   "scripts/perf/operator-model-policy-load.mjs!",
   "scripts/perf/operator-model-policy-measure.ts!",
   "scripts/perf/provider-rate-limit-retention.ts!",
   "scripts/perf/provider-rate-limit-stream-measure.ts!",
+  "scripts/perf/provider-error-projection-measure.mjs!",
   "scripts/perf/session-cost-refresh-measure.ts!",
   "scripts/perf/sqlite-operation-receive-measure.ts!",
   "scripts/perf/tool-search-lexical-measure.ts!",
@@ -683,10 +812,12 @@ const repositoryScriptEntries = [
   // The transcript broadcast benchmark loads the stall recorder through --gateway-preload.
   "scripts/bench-filesystem-preconditions.mts!",
   "scripts/perf/github-tool-selection-measure.ts!",
+  "scripts/perf/github-preview-authority-measure.ts!",
   "scripts/perf/github-conditional-json-measure.ts!",
   "scripts/perf/session-transcript-code-measure.mjs!",
   "scripts/perf/stall-recorder-cost-preload.mjs!",
   "scripts/perf/trajectory-preparation-retention.ts!",
+  "scripts/perf/usage-cache-write-measure.ts!",
   "scripts/perf/transcript-session-list-measure.ts!",
   "scripts/perf/transport-pull-allocation-measure.mjs!",
   // Source headers and maintained benchmark contributions invoke these workloads by exact path.
@@ -697,10 +828,14 @@ const repositoryScriptEntries = [
   "scripts/bench-team-reports-snapshots.mts!",
   "scripts/perf/async-work-scope-measure.ts!",
   "scripts/perf/local-workspace-callers-measure.ts!",
+  "scripts/perf/local-workspace-checkpoint-measure.ts!",
+  "scripts/perf/local-workspace-stopped-stream-measure.ts!",
   "scripts/perf/local-workspace-retention.ts!",
   "scripts/perf/plugin-iterator-membrane-measure.ts!",
   "scripts/perf/plugin-generation-retention.ts!",
   "scripts/perf/placement-startup-wake-measure.ts!",
+  "scripts/perf/startup-agent-preparation-measure.ts!",
+  "scripts/perf/startup-recovery-admission-measure.ts!",
   "scripts/perf/response-decode-measure.mts!",
   "scripts/perf/text-projection-append-measure.ts!",
   "scripts/perf/text-projection-rope-measure.mjs!",
@@ -715,6 +850,7 @@ const repositoryScriptEntries = [
   // Maintainers invoke this isolated transcript-rewrite benchmark by path.
   "scripts/bench-session-manager-rewrite.ts",
   // The team-shaped fixture README invokes these measurement CLIs by path.
+  "scripts/perf/team-shape-stress.ts",
   "scripts/perf/team-shape-measure.ts",
   "scripts/perf/transcript-broadcast-measure.ts",
   "scripts/perf/post-restart-burst-measure.ts",
@@ -746,6 +882,20 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-scope-attribution-preload.mjs!",
   // The documented placement shutdown reproduction is invoked as a standalone CLI.
   "scripts/perf/worker-placement-reconcile-shutdown-measure.ts!",
+  // Their headers document these standalone measurement CLIs by path.
+  "scripts/perf/agent-db-inspection-close-measure.mjs!",
+  "scripts/perf/agent-prepare-write-measure.mjs!",
+  "scripts/perf/config-health-restart-measure.ts!",
+  "scripts/perf/connect-tail-measure.ts!",
+  "scripts/perf/device-token-snapshot-measure.ts!",
+  "scripts/perf/paired-row-encoding-measure.ts!",
+  "scripts/perf/session-patch-projection-measure.ts!",
+  "scripts/perf/session-actor-writer-append-measure.ts!",
+  "scripts/perf/session-cost-usage-cold-read.ts!",
+  "scripts/perf/worker-warm-floor-measure.mjs!",
+  "scripts/perf/worktree-branches-measure.ts!",
+  // connect-tail-measure.ts loads this diagnostics preload through --gateway-preload.
+  "scripts/perf/connect-tail-preload.mjs!",
   // The standalone build guide invokes this builder by path.
   "scripts/build-bun-standalone.mjs!",
   // Maintainers invoke the isolated macOS standalone Doctor proof by path.
@@ -815,8 +965,9 @@ const repositoryScriptEntries = [
   // The Docker custody shell copies the server and mounts the scenario by path.
   "scripts/e2e/lib/mcp-docker-custody/scenario.mjs!",
   "scripts/e2e/lib/mcp-docker-custody/server.cjs!",
-  // Muse Docker shells invoke auth directly and select deterministic/live by mode.
+  // Muse Docker shells invoke auth directly and select deterministic/consent/live by mode.
   "scripts/e2e/lib/muse-runtime/auth.mjs!",
+  "scripts/e2e/lib/muse-runtime/consent.mjs!",
   "scripts/e2e/lib/muse-runtime/deterministic.mjs!",
   "scripts/e2e/lib/muse-runtime/live.mjs!",
   // test:e2e:node-auto-update runs the installed-package proof against a frozen tarball.
@@ -863,6 +1014,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/missing-configured-plugin-migration.mjs!",
   // run.sh starts this persistent native peer as a separate process.
   "scripts/e2e/lib/upgrade-survivor/native-assignment-app-server.mjs!",
+  // native-plugin-ui.sh invokes fixture creation and packaged upgrade probes through Node.
+  "scripts/e2e/lib/upgrade-survivor/native-plugin-ui.mjs!",
   // package-activation-recovery.sh preloads this observer into the released updater.
   "scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs!",
   // run.sh preloads this fixture adapter through NODE_OPTIONS by path.
@@ -877,6 +1030,8 @@ const repositoryScriptEntries = [
   // The compiler below exposes the runner's inline Node imports.
   "scripts/e2e/lib/upgrade-survivor/run.sh!",
   "scripts/e2e/lib/upgrade-survivor/schema-expectation.mjs!",
+  // The upgrade-survivor runner invokes the session-share baseline and checks by path.
+  "scripts/e2e/lib/upgrade-survivor/session-share.mjs!",
   // update-restart-auth.sh installs this manager/launch adapter into the fixture bin directory.
   "scripts/e2e/lib/upgrade-survivor/systemd-fixture.mjs!",
   // The first-hop shell executes the packaged admission entry probe by path.
@@ -983,6 +1138,8 @@ const repositoryScriptEntries = [
   "scripts/github/security-review.mjs!",
   "scripts/sync-labels.ts!",
   "scripts/test-built-bundled-channel-entry-smoke.mts!",
+  // The artifact producer invokes this shared test compiler owner by path.
+  "scripts/test-built-source-verifiers.mts",
   // CI launches the desktop resize proof through its bootstrap path.
   "scripts/test-desktop-resize-real.mts!",
   // Native shell UI tests connect to this manually launched loopback Gateway fixture.
@@ -1630,12 +1787,13 @@ const config = {
     // production uses them through their owning module/controller.
     "ui/src/pages/chat/chat-state-refresh.{ts,tsx}": ["exports"],
     "ui/src/pages/chat/composer-persistence.{ts,tsx}": ["exports"],
+    // Focused link tests build the resolver directly; production reaches it through projectSubagentStatus.
+    "ui/src/pages/chat/chat-subagent-wait.ts": ["exports"],
     // The presentation fixture and focused UI tests consume these seams;
     // the full-tree companion scan continues to audit their actual consumers.
     "ui/src/components/terminal/terminal-panel.ts": ["types"],
     "ui/src/pages/chat/components/chat-attachment-card-solid.tsx": ["exports"],
     "ui/src/pages/chat/components/chat-camera-capture.tsx": ["types"],
-    "ui/src/pages/chat/components/chat-child-attention.tsx": ["types"],
     "ui/src/pages/chat/components/chat-ci-automation-control.tsx": ["types"],
     "ui/src/pages/chat/components/chat-ci-details.tsx": ["types"],
     "ui/src/pages/chat/components/chat-clawhub-card.tsx": ["exports"],
@@ -1733,6 +1891,7 @@ const config = {
         "openclaw",
         "sleep",
         "swiftlint",
+        "uptime",
         "xcrun",
       ],
       // The stylelint config lives under config/, not a root default path.
@@ -1849,6 +2008,11 @@ const config = {
     "packages/net-policy": workspacePackage("net-policy"),
     "packages/markdown-core": workspacePackage("markdown-core"),
     "packages/media-core": workspacePackage("media-core"),
+    "packages/mermaid-renderer": {
+      // Vite selects the native adapter and classic compiler by file path, not imports.
+      entry: ["src/renderer.ts!", "src/native.ts!", "src/pele.min.ts!"],
+      project: ["src/**/*.ts!"],
+    },
     "packages/acp-core": workspacePackage("acp-core"),
     "packages/terminal-core": workspacePackage("terminal-core"),
     "packages/retry": workspacePackage("retry"),
@@ -1895,6 +2059,10 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/cloudflare-ai-gateway`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/chutes`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/clawrouter`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/code-mode-quickjs`]: bundledPluginWorkspace([
+      // The source header documents this opt-in engine attribution probe by path.
+      "bench/engine-attribution.ts!",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/cohere`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/comfy`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/copilot`]: bundledPluginWorkspace([

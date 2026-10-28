@@ -107,6 +107,14 @@ export const GatewayOperatorRoleDefinitionSchema = z.strictObject({
       deny: z.array(z.string().trim().min(1)).optional(),
     })
     .optional(),
+  /** Nonstandard Access requires an explicit grant, independent of model membership. */
+  accessPrograms: z
+    .strictObject({
+      cyber: z
+        .array(z.enum(["daybreak_blue", "daybreak_red"]))
+        .transform((programs) => uniqueValues(programs)),
+    })
+    .optional(),
   /** Ceiling applied to the authenticated profile's granted operator scopes. */
   scopes: z.array(OperatorScopeSchema).transform((scopes) => uniqueValues(scopes)),
   /** Required access-policy plugin; availability is checked at admission, not config parsing. */
@@ -205,7 +213,7 @@ export const GatewayConfigSchema = z
         basePath: z.string().optional(),
         experimental: z
           .strictObject({
-            /** Allow native UI from user-installed plugins (default false; bundled UI stays available). */
+            /** Advanced native UI opt-out (default true; existing false stays off, bundled UI unaffected). */
             customPlugins: z.boolean().optional(),
             /** Show the official Claw catalog and Add flow in Control UI (default false). */
             claws: z.boolean().optional(),

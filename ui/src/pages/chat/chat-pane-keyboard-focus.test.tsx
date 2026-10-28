@@ -122,6 +122,7 @@ it("distinguishes an open disclosure from an open overlay", () => {
 });
 
 it("does not steal typing focus from a shadow-root confirmation", async () => {
+  await import("../../components/modal-dialog.tsx");
   onTestFinished(installDialogPolyfill());
   const { press, focus } = createFocusedPane();
   const container = bodyElement("div");

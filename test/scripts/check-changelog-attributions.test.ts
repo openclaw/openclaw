@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -30,6 +30,24 @@ function createRepoWithPrChangelogDiff(entry: string): string {
 }
 
 describe("check-changelog-attributions", () => {
+  it.each([false, true])("rejects forbidden CLI credit through a symlink: %s", (symlink) => {
+    const repo = createRepoWithPrChangelogDiff("- Fix. Thanks @codex.");
+    const scripts = path.resolve("scripts");
+    const alias = path.join(repo, "script-alias");
+    symlinkSync(scripts, alias, "junction");
+    const entry = path.join(symlink ? alias : scripts, "check-changelog-attributions.mts");
+    const result = spawnSync(process.execPath, [entry], {
+      cwd: repo,
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("Forbidden changelog thanks attribution:");
+    expect(result.stderr).toContain("- CHANGELOG.md:7 uses Thanks @codex");
+  });
+
   it("flags forbidden bot, org, and maintainer thanks attributions", () => {
     const handles = [
       "codex",

@@ -141,13 +141,9 @@ export function WikiPreviewOverlay(props: DreamingProps) {
   );
 }
 
-type ImportedInsightItem = WikiImportInsights["clusters"][number]["items"][number];
-
-type WikiPageItem = WikiOverview["clusters"][number]["items"][number];
-
 type WikiInsightCard =
-  | { kind: "import"; item: ImportedInsightItem }
-  | { kind: "wiki"; item: WikiPageItem };
+  | { kind: "import"; item: WikiImportInsights["clusters"][number]["items"][number] }
+  | { kind: "wiki"; item: WikiOverview["clusters"][number]["items"][number] };
 
 function renderInsightList(labelKey: string, entries: string[]) {
   return entries.length > 0 ? (

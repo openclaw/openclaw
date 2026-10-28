@@ -71,6 +71,7 @@ import { bindReplyOperationQueueDisposition, resolveFollowupAbortSignal } from "
 import { prepareReplyAgentTurn } from "./reply-agent-turn-preparation.js";
 import * as replyRunState from "./reply-operation-run-state.js";
 import { bindReplyOperationTyping } from "./reply-run-typing.js";
+import { enqueueReplySourceAdmission } from "./reply-source-admission.js";
 import { bindReplySourceToFollowup, retireUnadoptedReplySource } from "./reply-source-binding.js";
 import { prepareReplyRunToolAuthority } from "./reply-tool-authority.js";
 import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission-lifecycle.js";
@@ -251,7 +252,11 @@ export async function runReplyAgent(
     const activeReplyOperation = controllerInput.mailbox.owner.active;
     const steeringRequesterMismatch =
       isActiveSteer && hasReplySteeringRequesterMismatch(followupRun, activeReplyOperation);
-    if (messageInjectionDisposition === "collaborative-steering-disabled") {
+    const collaborationBlocked = messageInjectionDisposition === "collaborative-steering-disabled";
+    if (
+      collaborationBlocked &&
+      followupRun.run.config.messages?.queue?.collaborativeSteeringFallback === "reject"
+    ) {
       try {
         await refuseCollaborativeSteering(followupRun, replyOperationRunState);
       } finally {
@@ -263,7 +268,8 @@ export async function runReplyAgent(
     // independently of whether the incoming requester could collaborate.
     const shouldQueueUnavailableSteer =
       isActiveSteer &&
-      (messageInjectionDisposition === "rejected" ||
+      (collaborationBlocked ||
+        messageInjectionDisposition === "rejected" ||
         (messageInjectionDisposition === "none" && !activeReplyOperation));
     const typingSignals = createTypingSignaler({
       typing,
@@ -377,14 +383,22 @@ export async function runReplyAgent(
     });
     if (activeRunQueueAction === "enqueue-followup") {
       bindReplyOperationQueueDisposition(followupRun, replyOperationRunState);
-      const enqueued = enqueueFollowupRun(
-        queueKey,
+      const enqueued = await enqueueReplySourceAdmission({
+        options: explicitFollowup ? opts : undefined,
+        input: controllerInput,
         followupRun,
-        resolvedQueue,
-        "message-id",
-        queuedRunFollowupTurn,
-        false,
-      );
+        runId,
+        assertCurrent: assertReadCurrent,
+        enqueue: () =>
+          enqueueFollowupRun(
+            queueKey,
+            followupRun,
+            resolvedQueue,
+            "message-id",
+            queuedRunFollowupTurn,
+            false,
+          ),
+      });
       if (shouldQueueTerminalReceiptSteer || shouldQueueUnavailableSteer) {
         diagnosticLogger.warn("steering rejected; applying follow-up policy", {
           reason: shouldQueueTerminalReceiptSteer
@@ -415,6 +429,7 @@ export async function runReplyAgent(
       replyRunState.recordReplyFollowupAdmission(replyOperationRunState, {
         explicitFollowup,
         requesterMismatch: questionRequesterMismatch,
+        collaborationBlocked,
         unavailableSteer:
           effectiveShouldSteer && (isActive || messageInjectionDisposition === "rejected"),
         followupRun,
@@ -651,6 +666,7 @@ export async function runReplyAgent(
           returnWithQueuedFollowupDrain,
           runFollowupTurn,
           preflightCompactionApplied: turn.preflightCompactionApplied,
+          recoveryMemoryFlushAttempted: turn.memoryFlushAttempted,
           setRunFollowupTurn: (runner) => {
             runFollowupTurn = runner;
           },

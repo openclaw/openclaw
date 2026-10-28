@@ -19,38 +19,37 @@ export function createTranscriptSearch(host: {
     state.transcriptSearchQuery = query;
     state.transcriptSearch = null;
   }
-  async function run() {
-    const query = state.transcriptSearchQuery.trim();
-    if (!query) {
-      reset("");
-      return;
-    }
-    const scope = host.captureScope();
-    if (!scope) {
-      return;
-    }
-    state.transcriptSearchQuery = query;
-    // Replacing or clearing the receipt retires its results without cancelling the transport.
-    const isCurrent = () => state.transcriptSearch === result && host.isCurrent(scope);
-    const result: Promise<TranscriptSearchResult | null> = searchVisibleSessionTranscripts({
-      client: scope.client,
-      query,
-      listOptions: host.listOptions(scope),
-    })
-      .catch((error: unknown) => {
-        if (isCurrent()) {
-          throw error;
-        }
-        return null;
-      })
-      .then((value) => (isCurrent() ? value : null));
-    state.transcriptSearch = result;
-    // Rendering owns errors; command callers still await the admitted request.
-    await result.catch(() => undefined);
-  }
   return {
     reset,
-    run,
+    run: async () => {
+      const query = state.transcriptSearchQuery.trim();
+      if (!query) {
+        reset("");
+        return;
+      }
+      const scope = host.captureScope();
+      if (!scope) {
+        return;
+      }
+      state.transcriptSearchQuery = query;
+      // Replacing or clearing the receipt retires its results without cancelling the transport.
+      const isCurrent = () => state.transcriptSearch === result && host.isCurrent(scope);
+      const result: Promise<TranscriptSearchResult | null> = searchVisibleSessionTranscripts({
+        client: scope.client,
+        query,
+        listOptions: host.listOptions(scope),
+      })
+        .catch((error: unknown) => {
+          if (isCurrent()) {
+            throw error;
+          }
+          return null;
+        })
+        .then((value) => (isCurrent() ? value : null));
+      state.transcriptSearch = result;
+      // Rendering owns errors; command callers still await the admitted request.
+      await result.catch(() => undefined);
+    },
     update(this: void, query: string) {
       if (query !== state.transcriptSearchQuery) {
         reset(query);

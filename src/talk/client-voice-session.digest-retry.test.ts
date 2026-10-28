@@ -458,7 +458,7 @@ describe("client voice session lifecycle", () => {
         const successor = path.join(harness.stateDir, "successor");
         const env = captureEnv(["OPENCLAW_STATE_DIR"]);
         const lookup = voiceSessionReads.lookupClientVoiceSessions;
-        const read = vi
+        using _ = vi
           .spyOn(voiceSessionReads, "lookupClientVoiceSessions")
           .mockImplementationOnce(async (...args) => {
             const candidates = await lookup(...args);
@@ -478,7 +478,6 @@ describe("client voice session lifecycle", () => {
             closed === "original" ? "open" : "closed",
           );
         } finally {
-          read.mockRestore();
           env.restore();
           await Promise.all([originalClose.drain(), successorClose?.drain()]);
           await cleanupSessionStateForTest({ stateDir: successor, rootPath: successor });
@@ -510,7 +509,7 @@ describe("client voice session lifecycle", () => {
       const release = createDeferred();
       // oxlint-disable-next-line typescript/unbound-method -- Invoked below with the original registry receiver.
       const close = VoiceTranscriptOperationRegistry.prototype.close;
-      const barrier = vi
+      using _ = vi
         .spyOn(VoiceTranscriptOperationRegistry.prototype, "close")
         .mockImplementationOnce(function (this: VoiceTranscriptOperationRegistry, key, operation) {
           return close.call(this, key, async () => {
@@ -530,7 +529,6 @@ describe("client voice session lifecycle", () => {
       } finally {
         release.resolve();
         await stale;
-        barrier.mockRestore();
       }
     });
   });

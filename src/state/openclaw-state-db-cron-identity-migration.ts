@@ -213,6 +213,7 @@ export type CronIdentityMigrationOptions = {
 
 export type StateCronIdentityMigrationOptions = {
   env: NodeJS.ProcessEnv;
+  legacyCronDefaultStoreKey?: string;
 };
 
 export const stateCronIdentityMigration = {
@@ -226,7 +227,9 @@ export const stateCronIdentityMigration = {
   ) =>
     migrateCronDefaultStoreIdentity(db, {
       previousVersion,
-      legacyDefaultStoreKey: resolveCronIdentityMigrationDefaultStoreKey(options.env),
+      legacyDefaultStoreKey:
+        options.legacyCronDefaultStoreKey ??
+        resolveCronIdentityMigrationDefaultStoreKey(options.env),
     }),
   applied: "Introduced durable default cron partition selection (v34)",
 };

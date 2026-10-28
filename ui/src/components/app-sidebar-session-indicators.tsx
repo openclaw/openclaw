@@ -101,7 +101,7 @@ export function renderSidebarSessionIndicators(
       password: gateway()?.connection.password,
     }),
   );
-  const { running, leadingIndicator, hasContent, renderedIdentities } = renderSessionLeadingState({
+  const { running, leadingIndicator, renderedIdentities } = renderSessionLeadingState({
     get session() {
       return readSession();
     },
@@ -145,15 +145,7 @@ export function renderSidebarSessionIndicators(
     !team() && stateDescription() ? sidebarSessionStateId(readSession().key) : undefined,
   );
   const persistentIndicator = (
-    <span
-      class={[
-        "sidebar-session-indicator",
-        {
-          "sidebar-session-indicator--state-only":
-            !team() && !hasContent() && ownerRepeatedByFilter(),
-        },
-      ]}
-    >
+    <span class="sidebar-session-indicator">
       {leadingIndicator}
       {readSession().visibility === "draft" ? (
         <span class="session-row-draft-indicator" title={t("chat.sessionSharing.draft")}>

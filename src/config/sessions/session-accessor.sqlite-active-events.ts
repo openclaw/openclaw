@@ -220,7 +220,8 @@ export function readRecentSessionTranscriptActiveEvents(
       withRecentSessionTranscriptActiveEventsInSnapshot(projection, maxEvents, (visit) => {
         const events: TranscriptEvent[] = [];
         visit((event) => events.push(event));
-        return events.toReversed();
+        // oxlint-disable-next-line unicorn/no-array-reverse -- The visitor array is owned by this read.
+        return events.reverse();
       }),
     options,
   );

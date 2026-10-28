@@ -37,7 +37,7 @@ Model-facing input:
 
 ```typescript
 type CodeModeExecInput = {
-  title: string;
+  title?: string;
   code: string;
   restartSafe?: boolean;
   awaitResults?: boolean;
@@ -46,11 +46,12 @@ type CodeModeExecInput = {
 
 Rules:
 
-- Every new cell requires a nonblank `title` of at most 120 characters. Use a
-  short purpose, usually 3–7 words, such as "Inspect the dependency graph".
+- `title` is optional. When provided, it must be nonblank and at most 120
+  characters. Use a short purpose, usually 3–7 words, such as "Inspect the dependency graph".
   Describe intended work without claiming success or including secrets. The
-  Control UI displays this title on the execution row. Nested tools retain their
-  own summaries; `wait` needs no title and resumes activity under the original cell.
+  Control UI displays this title on the execution row, or "run JavaScript" when
+  omitted. Nested tools retain their own summaries; `wait` needs no title and
+  resumes activity under the original cell.
 - `code` is the required model-facing JavaScript field and must be non-empty.
 - `command` is accepted as an exec-compatible alias for hook policies and
   trusted rewrites (the normal OpenClaw shell exec tool also uses a `command`

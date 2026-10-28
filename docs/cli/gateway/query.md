@@ -324,6 +324,8 @@ openclaw gateway probe --port 18789
 connections, and read checks. Known targets are checked while discovery runs.
 When the budget expires, unfinished checks report a timeout; connection and SSH
 process cleanup can briefly extend the elapsed command time.
+Accepted budgets above the native timer limit retain their full duration rather
+than timing out immediately.
 
 <a id="param-port-2"></a>
 

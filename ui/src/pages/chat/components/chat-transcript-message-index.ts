@@ -1,4 +1,3 @@
-import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { nativeHistoryMessageIdentity } from "../../../lib/chat/history-message-identity.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
@@ -9,6 +8,7 @@ import {
   coalesceAgentRunFrames,
 } from "../chat-agent-run-grouping.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
+import { isHandoffBoundaryItem } from "../chat-sessions-yield.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import { coalesceSystemEvents } from "../chat-system-event-grouping.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
@@ -157,10 +157,8 @@ export function projectTranscriptChain(
     bubbleMode?: boolean;
     messages?: readonly unknown[];
     activeRunId?: string | null;
-    session?: Pick<GatewaySessionRow, "key" | "lastRunId" | "status" | "runtimeMs">;
   },
 ): TranscriptChain {
-  const { session } = options;
   const liveIndex = findLiveStreamIndex(chatItems);
   const liveStream = chatItems[liveIndex];
   const key = [
@@ -172,10 +170,6 @@ export function projectTranscriptChain(
     options.bubbleMode,
     options.messages,
     options.activeRunId,
-    session?.key,
-    session?.lastRunId,
-    session?.status,
-    session?.runtimeMs,
     readLiveTerminalRevision(),
   ];
   const cached = chains.get(chatItems);
@@ -195,7 +189,7 @@ export function projectTranscriptChain(
   const continuations = new Map<string, StreamGroupPart[]>();
   const transcriptItems = collapsedItems.filter((item, index) => {
     // A handoff boundary only shapes the grouping above; it has no row of its own.
-    if (item.kind === "notice" && item.handoffBoundary) {
+    if (isHandoffBoundaryItem(item)) {
       return false;
     }
     const previous = collapsedItems[index - 1];
@@ -330,12 +324,17 @@ export function projectTranscriptIndex(
             transcriptMessageKeys.set(source.key, rowKey);
             const sourceMessageId = persistedMessageEntryId(source.message);
             if (sourceMessageId) {
-              messageRowKeysById.set(sourceMessageId, rowKey);
-              loadedReplySources.set(sourceMessageId, {
-                message: source.message,
-                messageId: source.key,
-                senderLabel,
-              });
+              // Split fragments share a persisted ID. Prefer a visible anchor and
+              // resolve actions against the original recorded envelope.
+              const previous = loadedReplySources.get(sourceMessageId);
+              if (!previous || source.hasVisibleContent) {
+                messageRowKeysById.set(sourceMessageId, rowKey);
+                loadedReplySources.set(sourceMessageId, {
+                  message: source.actionMessage ?? source.message,
+                  messageId: source.actionKey ?? source.key,
+                  senderLabel,
+                });
+              }
             }
           }
         }

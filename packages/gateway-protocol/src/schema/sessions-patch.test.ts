@@ -2,6 +2,27 @@ import { describe, expect, it } from "vitest";
 import { validateSessionsPatchParams, validateSessionsPatchManyParams } from "../index.js";
 
 describe("session patch schema", () => {
+  it.each([null, 42])("accepts a per-target unread marker guard (%s)", (expectedMarkedUnreadAt) => {
+    expect(
+      validateSessionsPatchManyParams({
+        targets: [{ key: "agent:main:read", expectedMarkedUnreadAt }],
+        patch: { unread: false },
+      }),
+    ).toBe(true);
+  });
+
+  it.each([-1, "42"])(
+    "rejects an invalid per-target unread marker guard (%s)",
+    (expectedMarkedUnreadAt) => {
+      expect(
+        validateSessionsPatchManyParams({
+          targets: [{ key: "agent:main:read", expectedMarkedUnreadAt }],
+          patch: { unread: false },
+        }),
+      ).toBe(false);
+    },
+  );
+
   it.each([[null, true]] as const)(
     "validates snoozedUntil %j for single and batch patches",
     (snoozedUntil, valid) => {

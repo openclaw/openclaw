@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { openRootFile, type RootFileOpenResult } from "../infra/boundary-file-read.js";
 import { FsSafeError, root as fsRoot } from "../infra/fs-safe.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 import {
   captureAgentToolSourceExecutionGuard,
   runWithAgentToolSourceExecutionScope,
@@ -15,7 +16,6 @@ import {
 import { toRelativeSandboxPath } from "./path-policy.js";
 import { isPathBoundaryEscapeError, markHostRootEscape } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
-import { decodeUtf8File } from "./utf8-file.js";
 import { resolveHostWorkspaceRoot } from "./workspace-write-scope.js";
 
 export type SandboxApplyPatchConfig = {
@@ -70,7 +70,7 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
         runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
           const buf = await bridge.readFile({ filePath, cwd: root });
           assertCurrent();
-          return decodeUtf8File(buf, filePath);
+          return decodeUtf8Input(buf, `File ${filePath}`);
         }),
       writeFile: (filePath, content) =>
         runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
@@ -107,7 +107,7 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
         runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
           const buffer = await fs.readFile(filePath);
           assertCurrent();
-          return decodeUtf8File(buffer, filePath);
+          return decodeUtf8Input(buffer, `File ${filePath}`);
         }),
       writeFile: async (filePath, content) => {
         await writeHostFile(filePath, content, options.signal);
@@ -172,7 +172,7 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
         assertBoundaryRead(opened, filePath);
         try {
           assertCurrent();
-          return decodeUtf8File(syncFs.readFileSync(opened.fd), filePath);
+          return decodeUtf8Input(syncFs.readFileSync(opened.fd), `File ${filePath}`);
         } finally {
           syncFs.closeSync(opened.fd);
         }

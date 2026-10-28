@@ -125,6 +125,8 @@ In textual CLI/TUI commands, starting a second goal still fails with
   objective and records the error as a status note; sending an ordinary message
   does not automatically resume the goal. Errors that recover through a retry
   do not pause it.
+  A definitive restart-recovery failure also pauses an active goal and records
+  its reason, rather than leaving stopped work labeled as pursuing the goal.
 - `blocked`: the agent or operator reported a real blocker. `/goal resume`
   makes it active again when new information or state is available.
 - `budget_limited`: the configured token budget was reached. `/goal resume`
@@ -271,7 +273,11 @@ input or recreate authority after a Gateway restart.
 
 The web Control UI shows the goal as a compact pill above the chat composer:
 a status icon, the status label (for example `Pursuing goal`), the truncated
-objective, and a live elapsed timer.
+objective, and a live elapsed timer. Seconds appear only below one minute;
+longer durations use whole minutes (`4m`) or hours and minutes (`2h 5m`).
+Day and week durations retain the remaining hours and minutes, including zeros
+(for example `1d 0h 0m` or `1wk 5d 17h 15m`), so long-running goals stay precise
+without a seconds counter.
 
 Active goals use a green target icon. Paused goals use a neutral pause icon,
 the normal card surface, and a frozen elapsed timer. Blocked or limited goals
@@ -294,6 +300,9 @@ The pill carries inline controls:
   note, token usage, and elapsed time.
 
 Resume stays visible in the collapsed pill, including on narrow mobile screens.
+It is disabled while the session is sending, queued, or running another turn;
+Pause, Edit, and Clear remain available. A saved Resume request can still be
+checked to reconcile its outcome without starting another turn.
 Expand the pill to reveal the other compact labeled controls above the full
 objective. Token usage and elapsed time remain below the objective and status note.
 

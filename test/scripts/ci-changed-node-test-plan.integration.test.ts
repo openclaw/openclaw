@@ -189,8 +189,16 @@ it.each(["node", "bun-all"])("keeps exact UI and core owners with %s timings", (
   ).toBe(true);
   expect(shards?.some((shard) => shard.requiresDist)).toBe(false);
   // Resource projection is covered by the unit suite's precise-process ownership and >96-target cases.
-  expect(createChangedNodeTestShards([paths[1]!, "ui/src/AGENTS.md"], options)).toEqual(
-    createChangedNodeTestShards([paths[1]!], options),
+  // Missing ui/src/AGENTS.md models a deleted path, so retain its QA reference check.
+  const deletedDocumentationPaths = [paths[1]!, "ui/src/AGENTS.md"];
+  expect(createChangedNodeTestShards(deletedDocumentationPaths, options)).toEqual(
+    createChangedNodeTestShards(deletedDocumentationPaths, {
+      ...options,
+      selectedTestTargets: [
+        ...resolveChangedNodeTestTargets([paths[1]!], options),
+        "extensions/qa-lab/src/scenario-catalog.test.ts",
+      ],
+    }),
   );
   for (const hub of ["package.json", "tsconfig.json"]) {
     const withHub = createChangedNodeTestShards([...paths, hub], options);

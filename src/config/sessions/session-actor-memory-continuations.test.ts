@@ -28,8 +28,8 @@ import {
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { commitMemory, readMemory } from "./session-actor-memory-publication.test-support.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import {
-  acquireSessionActorStorage,
   runWithSessionActorStorage,
   type SessionActorStorageBinding,
 } from "./session-actor-storage-binding.js";

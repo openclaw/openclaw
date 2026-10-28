@@ -52,6 +52,7 @@ it.each(["error", "data"] as const)(
     expect(logWarn).toHaveBeenCalledWith("provider-error", "Model request failed", {
       provider: "openai",
       model: "fixture-model",
+      name: "Error",
       status: 400,
       code: "invalid_prompt",
       type: "invalid_request_error",
@@ -65,6 +66,21 @@ it.each(["error", "data"] as const)(
     expect(JSON.stringify(logWarn.mock.calls)).not.toMatch(/PRIVATE (?:OUTPUT|PROMPT|CAUSE)/u);
   },
 );
+
+it("does not collect log-only failure labels when warnings are disabled", () => {
+  const name = vi.fn(() => "Error");
+  const logWarn = vi.fn();
+  configureAiTransportHost({ ...initialHost, logWarn, isLogEnabled: () => false });
+  assignTransportErrorDetails(createOpenAIResponsesAssistantOutput(model), {
+    get name() {
+      return name();
+    },
+    message: "private response",
+    code: "rate_limit_exceeded",
+  });
+  expect(name).not.toHaveBeenCalled();
+  expect(logWarn).not.toHaveBeenCalled();
+});
 
 function captureError(run: () => unknown): Error & { errorCode?: string; errorBody?: string } {
   try {
@@ -348,7 +364,15 @@ describe("model stream cooperative scheduler", { concurrent: false }, () => {
     const stream = iterateModelStream(["first", "second", "third"]);
     await expect(stream.next()).resolves.toEqual({ done: false, value: "first" });
     now = 6;
+    // Chaining a native promise consults species; awaiting the shared promise does not.
+    const species = vi.spyOn(Promise, Symbol.species, "get");
     const second = stream.next();
+    // Let the upstream read reach admission without advancing the shared timer.
+    await Promise.resolve();
+    await Promise.resolve();
+    const chainedWaits = species.mock.calls.length;
+    species.mockRestore();
+    expect(chainedWaits).toBe(0);
     let delivered = false;
     void second.then(() => {
       delivered = true;

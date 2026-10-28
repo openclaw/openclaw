@@ -2,6 +2,7 @@ import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host
 import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+import { withProviderRateLimitRetryDeadline } from "../../llm/provider-rate-limit.js";
 import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import {
   getAdmittedRunDelegatedAuthority,
@@ -327,7 +328,7 @@ export async function runPreparedEmbeddedLoop(
       });
       let dispatch: Awaited<ReturnType<typeof prepareAndDispatchEmbeddedRunAttempt>>;
       try {
-        dispatch = await sessionPromptState.withSessionWriterContext(() =>
+        const dispatchAttempt = () =>
           prepareAndDispatchEmbeddedRunAttempt(
             {
               permissionChange: permissionChanges.forAttempt(),
@@ -381,7 +382,10 @@ export async function runPreparedEmbeddedLoop(
                 captureContext,
               );
             },
-          ),
+          );
+        dispatch = await withProviderRateLimitRetryDeadline(
+          failoverRetryController.sharedTpmRetryDeadline,
+          () => sessionPromptState.withSessionWriterContext(dispatchAttempt),
         );
       } catch (error) {
         accounting.close();

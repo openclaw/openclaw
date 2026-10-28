@@ -16,6 +16,8 @@
  * --client-reads requires --corpus and runs only the instrumented corpus, skipping
  * timing/allocation. Stable client proxies record plain-object/array reads; opaque
  * branded or invariant-protected properties are listed separately for source audit.
+ * --without-ancestors exercises the shared empty-ancestor encoding; --profile-dir
+ * saves allocation profiles for per-recipient attribution before and after audience lookup.
  * This measures owner work only, not whole-Gateway latency or throughput.
  */
 import assert from "node:assert/strict";
@@ -45,6 +47,8 @@ const { values } = parseArgs({
     "reuse-envelope": { type: "boolean", default: false },
     corpus: { type: "string" },
     "client-reads": { type: "boolean", default: false },
+    "without-ancestors": { type: "boolean", default: false },
+    "profile-dir": { type: "string" },
   },
 });
 assert(!values["client-reads"] || values.corpus, "--client-reads requires --corpus");
@@ -115,15 +119,22 @@ const clientCount = integer("clients", 1);
 const samplingInterval = integer("sampling-interval", 1024);
 const ownerUrl = new URL("../../src/gateway/session-event-projection.ts", import.meta.url);
 const baselineUrl = `${ownerUrl.href}?field-order-baseline`;
+const candidateUrl = `${ownerUrl.href}?field-order-candidate`;
 assert(values["baseline-source"], "--baseline-source is required");
 const baselineSource = readFileSync(values["baseline-source"], "utf8");
+const candidateSource = readFileSync(ownerUrl, "utf8");
 let baselineLoaded = false;
+let candidateLoaded = false;
 const sourceHash = (source: string) => createHash("sha256").update(source).digest("hex");
 const hook = registerHooks({
   load(url, context, nextLoad) {
     if (url === baselineUrl) {
       baselineLoaded = true;
       return { format: "module-typescript", source: baselineSource, shortCircuit: true };
+    }
+    if (url === candidateUrl) {
+      candidateLoaded = true;
+      return { format: "module-typescript", source: candidateSource, shortCircuit: true };
     }
     return nextLoad(url, context);
   },
@@ -132,9 +143,9 @@ const baseline: typeof import("../../src/gateway/session-event-projection.js") =
   baselineUrl
 );
 assert(baselineLoaded, "baseline owner was not loaded");
+const { prepareSessionEventProjection }: typeof baseline = await import(candidateUrl);
+assert(candidateLoaded, "candidate owner was not loaded");
 hook.deregister();
-const { prepareSessionEventProjection } =
-  await import("../../src/gateway/session-event-projection.js");
 const { createGatewayConnectionState } =
   await import("../../src/gateway/server-connection-state.js");
 const { prepareGatewayRecipientProfile } = await import("../../src/gateway/expected-profile.js");
@@ -220,7 +231,7 @@ try {
         totalTokens: 16000,
         updatedAt: 1,
         visibility: "shared",
-        parentSessionKey: parent,
+        parentSessionKey: values["without-ancestors"] ? undefined : parent,
         createdActor: { type: "human", source: "profile", id: profiles[0]!.id },
       },
     );
@@ -534,6 +545,13 @@ try {
                   ? (await inspector.post("HeapProfiler.stopSampling")).profile
                   : undefined;
               const allocatedBytes = profile?.samples.reduce((sum, sample) => sum + sample.size, 0);
+              if (profile && values["profile-dir"]) {
+                mkdirSync(values["profile-dir"], { recursive: true });
+                writeFileSync(
+                  path.join(values["profile-dir"], `${history}-${pair}-${variant.name}.json`),
+                  JSON.stringify(profile),
+                );
+              }
               measurements.push({
                 phase,
                 pair,
@@ -576,13 +594,14 @@ try {
           pairs,
           samplingInterval,
           reuseEnvelope: values["reuse-envelope"],
+          withoutAncestors: values["without-ancestors"],
           clientReadInstrumentation: values["client-reads"],
           ...(corpusPath
             ? { corpusPath, corpusFrames, corpusSha256: corpusDigest.digest("hex") }
             : {}),
           sourceSha256: {
             base: sourceHash(baselineSource),
-            candidate: sourceHash(readFileSync(ownerUrl, "utf8")),
+            candidate: sourceHash(candidateSource),
           },
           results,
         },

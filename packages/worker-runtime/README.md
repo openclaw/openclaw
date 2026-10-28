@@ -157,6 +157,11 @@ cleanup. Failed retirement retains custody for a later retry. Neither a rejected
 result nor a cancellation request alone proves that execution or resources have
 settled.
 
+Workers without retained native resources use one supervisor receipt for execution
+and cleanup completion. The host still emits execution exit before final exit.
+Resource-owning workers retain separate receipts so execution capacity can be
+released while resource cleanup is pending or has failed.
+
 When queued work competes with a task waiting for a host response, `yieldSignal`
 requests a cooperative checkpoint. The host operation retains its own lifetime;
 queue pressure does not grant permission to cancel its underlying work. A

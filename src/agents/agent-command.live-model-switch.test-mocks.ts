@@ -55,11 +55,12 @@ export function createTestAgentScope(
   params: {
     hasLegacyAutoFallbackWithoutOriginMock: (entry: unknown) => boolean;
     resolveAutoFallbackPrimaryProbeMock: (params: unknown) => unknown;
-    resolveEffectiveModelFallbacksMock: (...args: unknown[]) => unknown;
   },
   native: Pick<
     typeof import("./agent-scope.js"),
-    "resolveAgentModelFallbacksOverride" | "resolveSubagentSpawnModelFallbacksOverride"
+    | "resolveAgentModelFallbacksOverride"
+    | "resolveSessionAgentIds"
+    | "resolveSubagentSpawnModelFallbacksOverride"
   >,
 ) {
   return {
@@ -83,8 +84,7 @@ export function createTestAgentScope(
       return typeof raw === "string" ? raw : raw?.primary;
     },
     resolveDefaultAgentId: () => "default",
-    resolveEffectiveModelFallbacks: params.resolveEffectiveModelFallbacksMock,
-    resolveSessionAgentIds: () => ({ defaultAgentId: "default", sessionAgentId: "default" }),
+    resolveSessionAgentIds: native.resolveSessionAgentIds,
     resolveSessionAgentId: () => "default",
     resolveAgentSkillsFilter: () => undefined,
     resolveAgentWorkspaceDir: () => "/tmp/workspace",

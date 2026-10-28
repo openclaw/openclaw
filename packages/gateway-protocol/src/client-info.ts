@@ -88,6 +88,7 @@ export const GATEWAY_CLIENT_CAPS = {
   AGENT_KIND: "agent-kind",
   APPROVALS: "approvals",
   CHAT_ONLY_ASSISTANT_TEXT: "chat-only-assistant-text",
+  CHAT_QUEUE_STATUS: "chat-queue-status",
   EXEC_APPROVALS: "exec-approvals",
   HEALTH_SUMMARY: "health-summary",
   HELLO_HEALTH_ON_DEMAND: "hello-health-on-demand",

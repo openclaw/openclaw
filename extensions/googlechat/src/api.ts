@@ -286,10 +286,14 @@ export async function findGoogleChatDirectMessage(params: {
 export async function getGoogleChatSpace(params: {
   account: ResolvedGoogleChatAccount;
   spaceName: string;
+  assertDirectAdapterHandoff?: () => void;
 }): Promise<GoogleChatSpace> {
-  return await fetchJson<GoogleChatSpace>(params.account, `${CHAT_API_BASE}/${params.spaceName}`, {
-    method: "GET",
-  });
+  return await fetchJson<GoogleChatSpace>(
+    params.account,
+    `${CHAT_API_BASE}/${params.spaceName}`,
+    { method: "GET" },
+    { assertDirectAdapterHandoff: params.assertDirectAdapterHandoff },
+  );
 }
 
 export async function probeGoogleChat(account: ResolvedGoogleChatAccount): Promise<{

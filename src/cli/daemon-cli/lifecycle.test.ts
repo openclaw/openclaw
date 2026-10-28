@@ -211,6 +211,9 @@ function expectListenerHealth(
   });
 }
 const restartTarget = { pid: 4200, ownerId: "gateway-owner-old", port: 18_789 };
+function gatewayCommand(port: number, environment: Record<string, string> = {}) {
+  return { programArguments: ["openclaw", "gateway", "--port", String(port)], environment };
+}
 
 describe("runDaemonRestart health checks", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
@@ -291,10 +294,7 @@ describe("runDaemonRestart health checks", () => {
     probePortUsage.mockReset().mockResolvedValue("free");
     mockSystemAccountHome();
 
-    service.readCommand.mockResolvedValue({
-      programArguments: ["openclaw", "gateway", "--port", "18789"],
-      environment: {},
-    });
+    service.readCommand.mockResolvedValue(gatewayCommand(18789));
     readActiveGatewayLockIdentity.mockResolvedValue(createGatewayLockIdentity());
     findInstalledSystemdGatewayScope.mockReset().mockResolvedValue(null);
     restartSystemdService.mockReset().mockResolvedValue({ outcome: "completed" });
@@ -352,17 +352,15 @@ describe("runDaemonRestart health checks", () => {
     process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-caller-state";
     process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway-maintenance.service";
     service.readCommand
-      .mockResolvedValueOnce({
-        programArguments: ["openclaw", "gateway", "--port", "18789"],
-        environment: { OPENCLAW_STATE_DIR: "/tmp/openclaw-stale-state" },
-      })
-      .mockResolvedValue({
-        programArguments: ["openclaw", "gateway", "--port", "19001"],
-        environment: {
+      .mockResolvedValueOnce(
+        gatewayCommand(18789, { OPENCLAW_STATE_DIR: "/tmp/openclaw-stale-state" }),
+      )
+      .mockResolvedValue(
+        gatewayCommand(19001, {
           OPENCLAW_STATE_DIR: "/tmp/openclaw-repaired-state",
           OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
-        },
-      });
+        }),
+      );
     repairLoadedGatewayServiceForStart.mockResolvedValue({
       result: "restarted",
       message: "Gateway service definition repaired and restarted.",

@@ -203,6 +203,15 @@ The four explicit codecs are `decisionBatchV1ToV2`,
 `DecisionContractError`. They preserve values rather than performing inference,
 thresholding, argmax, probability normalization, or accounting estimates.
 
+System One adapters can share `encodeSystemOneQuestions` and
+`decodeSystemOneResponse` from the same entrypoint. Encoding renames Boolean
+questions to native `noul`; the caller still owns input and question admission.
+The strict decoder preserves native labels, scores, distributions, model identity,
+and usage, requiring token counts and bounded confidence for Choice/Score/Box.
+It returns an untrusted candidate, not an admitted result: always call
+`validateDecisionResultV2(batch, candidate, capabilities)` before returning it.
+These helpers perform no HTTP, auth, retries, or accounting.
+
 For example, an explicit V2 JSON string cannot become V1 text without losing its
 evidence kind. Rich answers, abstention, or accounting that V1 cannot represent
 also cannot be silently downgraded. Compatible conversions may share readonly

@@ -1,10 +1,7 @@
-import type {
-  OpenClawStateDatabase,
-  OpenClawStateDatabaseOptions,
-} from "../state/openclaw-state-db.js";
+import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { isOpenClawStateWriteContentionError } from "../state/openclaw-state-ownership.js";
 import type {
-  WorkerOperationContext,
   WorkerOperationHandlers,
   WorkerOperations,
 } from "../state/worker-operation-registry.js";
@@ -37,15 +34,11 @@ import {
 
 // Opening can also encounter contention, so it shares the write retry boundary.
 function executeAuditAttempt(
-  { stateOptions, open }: WorkerOperationContext,
-  execute: (
-    database: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
-  ) => AuditWriterResult,
+  execute: () => AuditWriterResult,
   formatError: (error: unknown) => string,
 ): AuditWriterResult {
-  const options = stateOptions();
   try {
-    return execute({ ...options, database: open() });
+    return execute();
   } catch (error) {
     if (isOpenClawStateWriteContentionError(error)) {
       return { status: "retry" };
@@ -67,8 +60,12 @@ export const auditOperations = {
       pruneExpiredOutboundMessageProgressInDatabase,
     ]) {
       const result = executeAuditAttempt(
-        context,
-        (database) => ({ status: "settled", deleted: maintenance({ database }) }),
+        () => ({
+          status: "settled",
+          deleted: maintenance({
+            database: { ...context.stateOptions(), database: context.open() },
+          }),
+        }),
         formatAuditWriterError,
       );
       results.push(result);
@@ -79,37 +76,57 @@ export const auditOperations = {
     return results;
   },
   "audit.writer.process": (requests: AuditWriterRequest[], context) => {
-    const results: AuditWriterResult[] = [];
-    // Keep independent commits and FIFO order; contention leaves the suffix unattempted.
-    for (const request of requests) {
-      const result = executeAuditAttempt(
-        context,
-        (database) => {
-          if (request.type === "record-event") {
-            if (isOutboundMessageProgressInput(request.input)) {
-              recordOutboundMessageProgressInDatabase(request.input, database);
-            } else {
-              recordAuditEventInDatabase(request.input, database, request.eventId);
-            }
-          } else if (request.type === "record-run") {
-            recordAuditRunInDatabase(request.start, request.finish, database, request.eventIds);
-          } else if (request.type === "record-execution-identity") {
-            processExecutionIdentityAdmissionWorkInDatabase(request.work, database);
-          } else if (request.type === "record-execution-decision-work") {
-            processExecutionDecisionWorkInDatabase(request.work, database);
-          } else {
-            recordExecutionDecisionFactInDatabase(request.receipt, database);
-          }
-          return { status: "settled" };
-        },
-        (error) => formatAuditWriterRequestError(request, error),
-      );
-      results.push(result);
-      if (result.status === "retry") {
-        break;
-      }
+    if (requests.length === 0) {
+      return [];
     }
-    return results;
+    const results: AuditWriterResult[] = [];
+    try {
+      const database = { ...context.stateOptions(), database: context.open() };
+      const process = () => {
+        for (const request of requests) {
+          const result = executeAuditAttempt(
+            () => {
+              if (request.type === "record-event") {
+                if (isOutboundMessageProgressInput(request.input)) {
+                  recordOutboundMessageProgressInDatabase(request.input, database);
+                } else {
+                  recordAuditEventInDatabase(request.input, database, request.eventId);
+                }
+              } else if (request.type === "record-run") {
+                recordAuditRunInDatabase(request.start, request.finish, database, request.eventIds);
+              } else if (request.type === "record-execution-identity") {
+                processExecutionIdentityAdmissionWorkInDatabase(request.work, database);
+              } else if (request.type === "record-execution-decision-work") {
+                processExecutionDecisionWorkInDatabase(request.work, database);
+              } else {
+                recordExecutionDecisionFactInDatabase(request.receipt, database);
+              }
+              return { status: "settled" };
+            },
+            (error) => formatAuditWriterRequestError(request, error),
+          );
+          assertTransactionUsable(database.database.db);
+          results.push(result);
+          if (result.status === "retry") {
+            break;
+          }
+        }
+        return results;
+      };
+      // Coalesce only queued neighbors; a lone item keeps its owner's autocommit.
+      // Savepoints isolate rejections, and results leave only after outer commit.
+      return requests.length === 1
+        ? process()
+        : runOpenClawStateWriteTransaction(process, database);
+    } catch (error) {
+      // A failed outer commit invalidates every tentative per-item settlement.
+      return isOpenClawStateWriteContentionError(error)
+        ? [{ status: "retry" as const }]
+        : requests.map((request) => ({
+            status: "settled" as const,
+            error: formatAuditWriterRequestError(request, error),
+          }));
+    }
   },
 } satisfies WorkerOperationHandlers;
 

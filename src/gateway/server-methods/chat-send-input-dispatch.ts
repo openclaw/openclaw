@@ -520,6 +520,7 @@ export async function handleChatSendWithStorage(
       return;
     }
     const beginCapturedMessageInjection = createChatSendMessageInjectionStarter({
+      diagnostics,
       operatorAuthority: admission.operatorAuthority,
       target: messageInjectionTarget,
       sourceRef: admission.sourceRef,

@@ -77,6 +77,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     sessionKey: initialParams.sessionKey,
     runId: initialParams.runId,
     requesterSessionKey: initialParams.spawnedBy ?? undefined,
+    modelFallbackCandidate: initialParams.isFinalFallbackAttempt !== undefined,
   };
   const sessionLanePolicy = resolveEmbeddedRunSessionLanePolicy(
     initialParams.trigger,

@@ -1,18 +1,24 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   SessionEventOutcome,
   SessionEventReceipt,
 } from "../auto-reply/reply/session-event-contract.js";
 import * as handoff from "../auto-reply/reply/session-event-handoff.js";
+import { readSessionEventTargetCommandOwner } from "../auto-reply/reply/session-event-target.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { stageSessionPendingInput } from "../config/sessions/session-accessor.pending-inputs.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import {
+  getAgentEventLifecycleGeneration,
+  rotateAgentEventLifecycleGeneration,
+} from "../infra/agent-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createAgentDatabaseInspectionRefusal,
@@ -39,6 +45,7 @@ import {
   recoverExecExitNotifications,
 } from "./bash-tools.exec-notify.js";
 import { createProcessTool } from "./bash-tools.process.js";
+import type { RequesterOrigin } from "./requester-origin.js";
 import { isRuntimeToolAllowed } from "./tool-policy-match.js";
 import { attachToolAllowlistIntersection } from "./tool-policy-shared.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
@@ -80,6 +87,7 @@ async function withFixture(
       notifyOnExit?: boolean;
       id?: string;
       toolsAllow?: string[];
+      requesterOrigin?: RequesterOrigin;
     }) => Promise<ReturnType<typeof createProcessSessionFixture>>;
     recover: (config?: OpenClawConfig) => Promise<void>;
   }) => Promise<void>,
@@ -140,7 +148,12 @@ async function withFixture(
           });
           addSession(process);
           await withGatewayToolCallerIdentity(
-            { agentId, sessionKey: key, sessionEventToolsAllow: options.toolsAllow },
+            {
+              agentId,
+              sessionKey: key,
+              sessionEventToolsAllow: options.toolsAllow,
+              requesterOrigin: options.requesterOrigin,
+            },
             () => prepareExecExitNotification(process, false),
           );
           markBackgrounded(process);
@@ -289,7 +302,7 @@ describe("background exec completion obligations", () => {
         sessionKey,
         source: "exec",
         contextKey: `exec:${processSessionInstanceId(process)}`,
-        sourceTurnId: `exec:${processSessionInstanceId(process)}`,
+        sourceTurnId: `exec:${processSessionInstanceId(process)}:restart:${getAgentEventLifecycleGeneration()}`,
         expectedTarget: { sessionId: "original-session", lifecycleRevision: "original-revision" },
       });
       await options.onAdopted?.();
@@ -297,6 +310,58 @@ describe("background exec completion obligations", () => {
       rotateAgentEventLifecycleGeneration();
       await recover();
       expect(enqueue).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("wakes again after restarts interrupt the accepted completion and restart notice", async () => {
+    await withFixture(async ({ background, read, recover }) => {
+      const process = await background();
+      // Like the session-event handoff: stage under the source turn with a fresh run id,
+      // then let a restart interrupt the queued input before adoption.
+      const acceptThenInterrupt = async () => {
+        const { text, options } = lastNotification();
+        const target = options.expectedTarget!;
+        const receipt = await stageSessionPendingInput(
+          {
+            agentId: "main",
+            sessionKey: target.sessionKey!,
+            sessionId: target.sessionId,
+            storePath: target.storePath,
+          },
+          {
+            runId: randomUUID(),
+            message: {
+              role: "user",
+              content: text,
+              timestamp: Date.now(),
+              idempotencyKey: options.sourceTurnId,
+            },
+            trackCompletion: true,
+            assertCurrent: () => {},
+          },
+        );
+        receipt?.finish("interrupted");
+        await receipt?.settled?.();
+        settlements.at(-1)?.resolve({
+          status: "failed",
+          executionStarted: false,
+          delivered: false,
+          error: "Session event was abandoned before execution",
+        });
+      };
+      process.exitCode = 0;
+      await maybeNotifyOnExit(process, "completed", false);
+      await acceptThenInterrupt();
+      rotateAgentEventLifecycleGeneration();
+      await recover();
+      await acceptThenInterrupt();
+      rotateAgentEventLifecycleGeneration();
+      await recover();
+      await acceptThenInterrupt();
+      expect(enqueue).toHaveBeenCalledTimes(3);
+      expect((await read())?.pendingExecNotifications).toHaveProperty(
+        processSessionInstanceId(process),
+      );
     });
   });
 
@@ -474,6 +539,27 @@ describe("background exec completion obligations", () => {
       expect(() => options.assertCurrent?.()).toThrow("notifications are disabled");
     });
   });
+
+  it.each([
+    ["456", true],
+    ["789", false],
+  ] as const)(
+    "retains requester %s's owner authority for its completion: %s",
+    async (senderId, owner) => {
+      await withFixture(async ({ background }) => {
+        const commands = { ownerAllowFrom: ["456"] };
+        setRuntimeConfigSnapshot({ ...initialConfig, channels: { telegram: {} }, commands });
+        const requesterOrigin = { sessionKey, messageProvider: "telegram", senderId };
+        const process = await background({ requesterOrigin });
+        process.exitCode = 0;
+        await maybeNotifyOnExit(process, "completed", false);
+        const target = lastNotification().options.expectedTarget!;
+        expect(readSessionEventTargetCommandOwner(target)?.requester.senderId).toBe(
+          owner ? senderId : undefined,
+        );
+      });
+    },
+  );
 
   it("preserves intersected tool restrictions through durable recovery", async () => {
     await withFixture(async ({ background, read, recover }) => {

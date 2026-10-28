@@ -25,7 +25,6 @@ import { runOpenClawStateWorkerOperation } from "../../../state/openclaw-state-w
 import {
   compactSubagentRunForMemory,
   immutableSubagentRun,
-  isSubagentRunPayloadEvicted,
   restoreSubagentRunPayload,
   subagentRuns,
 } from "./subagent-registry-memory.js";
@@ -61,6 +60,7 @@ import {
   isSameSubagentRunOwner,
   retainSubagentRunRuntimeOwner,
 } from "./subagent-run-generation.js";
+import { isSubagentRunPayloadEvicted } from "./subagent-run-payload-facts.js";
 
 type Admission = OpenClawStateWorkerContext["admission"];
 const pendingWrites = new Set<PendingRegistryWrite>();
