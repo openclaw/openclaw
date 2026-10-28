@@ -14,8 +14,8 @@ vi.mock("@openclaw/media-core/mime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/media-core/mime")>()),
   detectMime: detect,
 }));
-
-vi.mock("./image-ops.js", () => ({
+vi.mock("./image-ops.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./image-ops.js")>()),
   convertImageToJpeg: jpeg,
   convertImageToPng: png,
 }));
