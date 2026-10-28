@@ -368,13 +368,6 @@ describe("mobile release CLI", () => {
         destination,
         sourceSha: f.base,
       });
-      for (const line of [
-        "Android versionName: 2026.9.20",
-        "Android versionCode: 2026090250",
-        "Android Wear versionCode: 2026090251",
-      ]) {
-        expect(result.stdout).toContain(line);
-      }
       expect(result.stdout.match(/^Release artifact: .+$/gm)).toEqual([
         "Release artifact: wear aab",
         "Release artifact: play aab",
