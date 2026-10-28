@@ -82,6 +82,13 @@ it("renders gateway DNS-SD records", () => {
   }
 });
 
+it("drops a trailing hyphen when a host label is cut to 63 characters", () => {
+  vi.spyOn(os, "hostname").mockReturnValue(`${"a".repeat(62)}-${"b".repeat(20)}`);
+  const txt = renderZoneText();
+  const hostLine = txt.split("\n").find((line) => line.startsWith("a"));
+  expect(hostLine).toBe(`${"a".repeat(62)} IN A 100.123.224.76`);
+});
+
 it.each(["EACCES", "EIO"])("preserves the zone on %s", async (code) => {
   const error = Object.assign(new Error("cannot read existing zone"), { code });
   vi.spyOn(fs, "readFileSync").mockImplementationOnce(() => {

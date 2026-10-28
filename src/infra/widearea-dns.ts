@@ -76,7 +76,13 @@ function dnsLabel(raw: string, fallback: string): string {
     .replace(/^-+/, "")
     .replace(/-+$/, "");
   const out = normalized.length > 0 ? normalized : fallback;
-  return out.length <= 63 ? out : out.slice(0, 63);
+  // Truncation can land on a hyphen. A label must not start or end with one.
+  const clipped = (out.length <= 63 ? out : out.slice(0, 63)).replace(/-+$/u, "");
+  if (clipped.length > 0) {
+    return clipped;
+  }
+  const fallbackLabel = fallback.replace(/-+$/u, "").slice(0, 63);
+  return fallbackLabel.length > 0 ? fallbackLabel : "openclaw";
 }
 
 function txtQuote(value: string): string {
