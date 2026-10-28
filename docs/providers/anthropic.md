@@ -827,6 +827,22 @@ See Anthropic's [refusals and fallback
 guide](https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback)
 for the underlying behavior.
 
+## Streaming output for Claude 5 models
+
+For direct Anthropic Messages requests to Claude 5 models (Opus 5 and 5.5,
+Sonnet 5 and 5.5, Haiku 5.5, Fable 5 and 5.1, and Mythos 5), OpenClaw holds
+streamed text and thinking until Anthropic returns the final stop reason, then
+delivers them together. A mid-stream safety refusal therefore never exposes
+partial text.
+
+- This applies to every auth method, including token and OAuth logins. It is
+  separate from the [safety refusal fallback](/providers/anthropic#safety-refusal-fallback-claude-opus-5-and-fable-5),
+  which only API-key requests use.
+- Chat clients see no progressive text for these models. The first text
+  arrives when the answer is complete, so a higher thinking effort means a
+  longer wait before anything appears.
+- There is no setting to turn it off. Earlier Claude models stream as usual.
+
 ## Prompt caching
 
 OpenClaw supports Anthropic's prompt caching feature for API-key auth.
