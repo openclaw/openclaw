@@ -577,10 +577,7 @@ it("identifies a config failure after credentials are saved and preserves its ca
     cause,
   });
   expect(mocks.persistProviderAuthProfilesAfterLogin).toHaveBeenCalledOnce();
-  // The saved credential still reaches the running Gateway.
-  expect(mocks.callGateway).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ method: "models.authRefresh" }),
-  );
+  expect(mocks.callGateway.mock.calls.map(([call]) => call.method)).toEqual(["models.authRefresh"]);
 });
 
 it("creates store order for relogin when configured profiles would shadow the new profile", async () => {
