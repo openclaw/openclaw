@@ -304,6 +304,15 @@ CREATE TABLE "session_conversations" (
   CHECK (("role" IN ('primary', 'participant', 'related')))
 );
 
+CREATE TABLE "session_creation_operations" (
+  "operation_digest" text COLLATE "C" NOT NULL,
+  "request_fingerprint" text COLLATE "C" NOT NULL,
+  "session_id" text COLLATE "C" NOT NULL,
+  "expires_at" bigint NOT NULL,
+  PRIMARY KEY ("operation_digest"),
+  UNIQUE ("session_id")
+);
+
 CREATE TABLE "session_entry_snapshots" (
   "session_key" text COLLATE "C" NOT NULL,
   "field" text COLLATE "C" NOT NULL,
@@ -711,6 +720,8 @@ CREATE INDEX "idx_agent_message_tool_run_outcomes_occurred" ON "message_tool_run
 CREATE INDEX "idx_agent_session_conversations_conversation" ON "session_conversations" (("conversation_id") ASC, ("last_seen_at") DESC, ("session_id") ASC);
 
 CREATE UNIQUE INDEX "idx_agent_session_conversations_primary" ON "session_conversations" (("session_id") ASC) WHERE ("role" = 'primary');
+
+CREATE INDEX "idx_agent_session_creation_operations_expiry" ON "session_creation_operations" (("expires_at") ASC);
 
 CREATE INDEX "idx_agent_session_goal_operations_expiry" ON "session_goal_operations" (("expires_at") ASC);
 

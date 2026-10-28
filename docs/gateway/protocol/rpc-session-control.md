@@ -79,6 +79,51 @@ and pull request before requesting a new publication: the earlier request may
 already have succeeded. Pending requests continue to block overtaking recovery;
 a terminal result no longer blocks a new request.
 
+## Durable session creation
+
+Automation clients can opt into restart-safe creation by supplying all three fields:
+
+- `agentId`: the canonical ID selected by the existing session-creation default owner.
+- `creationOperationId`: `v1:<issuance-epoch-ms>:<32-lowercase-hex-random-nonce>`
+  (the same components separated by hyphens are also accepted).
+- `sessionId`: a canonical lowercase UUIDv7 whose timestamp equals the operation's issuance time.
+
+This mode requires a verified human profile and the existing session-write authority.
+The operation binds that profile and the immutable request to one physical session;
+retain the exact fields when retrying. Optional `label` is part of that original intent.
+A transport `idempotencyKey` can change without changing the durable operation.
+There is no fallback to another agent or the ambient main session.
+
+Durable creation starts an empty conversation, never an initial task or turn. Its
+allowed inputs are the three fields above, `label`, `idempotencyKey`, and optionally
+`purpose`/`repository`. `purpose: "coding"` requires a repository selection;
+`purpose: "investigation"` creates an empty owned workspace. Both purposes require
+a configured `cloudWorkers.requiredProfile`. Other creation settings, explicit
+keys, initial messages/tasks, forks, catalogs, and incognito are rejected in this mode.
+
+On SQLite and PostgreSQL, the existing session writer commits the receipt, row,
+and initial transcript together. A successful response includes the original
+`creationOperationId`, physical `sessionId`, and `creationReplayed`. After a lost
+response or Gateway restart, retry returns the original live session and its
+current metadata without renaming it, repeating workspace/worker preparation,
+or starting a turn. A failed worker preparation remains owned by its normal
+placement recovery path; creation replay is not a preparation restart command.
+
+A changed intent or reused physical identity returns `creation-operation-conflict`.
+Deletion or reset retires the original incarnation: retry returns
+`creation-session-unavailable` rather than reviving it. Existing session/profile
+access checks still apply on every retry.
+
+Operations expire exactly thirty days after issuance. Expiry is checked before
+receipt lookup, including after expired receipts have been pruned by a later new
+creation. A timestamp more than sixty seconds ahead of the Gateway is invalid.
+These bounds use the Gateway's UTC wall clock, like other bounded operation
+receipts; keep it synchronized. Treat `creation-operation-expired` as terminal:
+discard that intent rather than retrying it after a clock correction. Replay
+protection does not extend past the retention window or across restoration of an
+older database backup. A new session after expiry requires a new explicit intent
+and a freshly issued physical UUID.
+
 ## Session control
 
 - `sessions.catalog.list` lists external session catalogs. Pass `metadataOnly: true` when a client needs catalog IDs, labels, capabilities, and share-route metadata without enumerating hosts or sessions. This mode returns the normal catalog objects with `hosts: []`; it retains agent and catalog selection, skips row filtering/pagination, and emits no host progress events. Omit the flag for full listing, including the host availability needed for terminal selection. The Control UI uses metadata-only discovery for the new-session picker and hidden-source labels in Settings.

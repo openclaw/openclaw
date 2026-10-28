@@ -964,6 +964,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-trajectory-storage-migration.test.ts",
   "src/state/openclaw-agent-memory-revision-migration.test.ts",
   "src/state/openclaw-agent-cold-archive-chunks-migration.test.ts",
+  "src/state/openclaw-agent-creation-operations-migration.test.ts",
+  "src/infra/database-engine/session-creation.conformance.test.ts",
   "src/state/openclaw-agent-vector-decoder-migration.test.ts",
   "src/state/openclaw-agent-write-layout-migration.test.ts",
   "src/state/openclaw-agent-index-retirement-migration.test.ts",

@@ -218,14 +218,17 @@ export async function readSessionCreateTarget(
       );
       const requestedNode = normalizeOptionalString(params.execNode);
       const requestedExecCwd = normalizeOptionalString(params.execCwd);
+      // Durable creation can only reconcile this incarnation, never alter its root.
       const changesFilesystemBinding =
-        params.prepareLifecycle !== undefined ||
-        (requestedCwd !== undefined && requestedCwd !== currentTargetEntry.spawnedCwd) ||
-        (requestedRoot !== undefined && requestedRoot !== currentTargetEntry.sessionRoot) ||
-        (requestedNode !== undefined &&
-          (currentTargetEntry.execHost !== "node" ||
-            requestedNode !== currentTargetEntry.execNode ||
-            (requestedExecCwd !== undefined && requestedExecCwd !== currentTargetEntry.execCwd)));
+        !params.creationOperation &&
+        (params.prepareLifecycle !== undefined ||
+          (requestedCwd !== undefined && requestedCwd !== currentTargetEntry.spawnedCwd) ||
+          (requestedRoot !== undefined && requestedRoot !== currentTargetEntry.sessionRoot) ||
+          (requestedNode !== undefined &&
+            (currentTargetEntry.execHost !== "node" ||
+              requestedNode !== currentTargetEntry.execNode ||
+              (requestedExecCwd !== undefined &&
+                requestedExecCwd !== currentTargetEntry.execCwd))));
       if (changesFilesystemBinding) {
         // The fence queues new work; it cannot move a checkout underneath an admitted turn.
         // Preparation can allocate before returning, so reject before invoking it.

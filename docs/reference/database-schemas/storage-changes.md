@@ -3163,6 +3163,33 @@ Other retained tables and planner statistics stay unchanged. Older binaries
 require the verified pre-upgrade backup and matching schema; manually lowering
 version markers cannot restore their revision-update contract.
 
+## Durable session creation receipts
+
+Agent schema 39 adds `session_creation_operations` and its expiry index on SQLite
+and PostgreSQL. The receipt is authoritative request-intent state, not a cache of
+an RPC response. Its unique physical session identity prevents another operation
+from adopting the same UUID. There is intentionally no cascading session foreign
+key: deleting or resetting a session must not erase its replay refusal.
+
+The existing session writer commits each receipt with the session row and initial
+transcript. Existing lifecycle identity distinguishes a reset even when the
+physical UUID is retained. Requests never install schema on first use; startup
+and Doctor own the versioned migration and canonical schema validation. The
+PostgreSQL migration retains the exact schema-38 predecessor and updates its
+metadata in the same transaction. Engine-port and backup descriptors preserve
+receipts when exporting schema 39 and omit them for older representations.
+
+Validity is thirty days from caller issuance using the Gateway wall clock. Later
+new creations prune expired receipts; no background scheduler or new database is
+introduced. The [RPC contract](/gateway/protocol/rpc-session-control#durable-session-creation)
+defines immutable retries, terminal expiry, clock bounds, and worker preparation.
+
+Upgrade preserves existing session/transcript content. A schema-38 migration has
+a scoped backup covering the new table and schema metadata; older migration
+paths retain their existing full-file backup contract. Older binaries cannot open
+schema 39. Rollback requires the matching pre-upgrade backup, not a package-only
+downgrade; restoring that backup also restores its earlier operation history.
+
 ## Review checkpoint for material changes
 
 An explicit maintainer repair-and-land request covers internal scheduling,

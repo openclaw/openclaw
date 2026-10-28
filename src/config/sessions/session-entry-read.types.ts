@@ -14,6 +14,7 @@ import type {
   SessionTranscriptRuntimeTarget,
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import type { SessionCreationOperation } from "./session-creation-operation.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type { SessionEntrySnapshotField } from "./session-entry-snapshot-values.js";
 import type { SessionMember } from "./session-membership-facts.types.js";
@@ -137,6 +138,7 @@ export type SessionExactEntriesWorkerRequest = (
   includeAuthorization?: boolean;
   replacementSelection?: SessionEntryReplacementSelection;
   creationLabel?: string;
+  creationOperation?: SessionCreationOperation;
   continuation?: CanonicalSessionReaderContinuation;
   transcript?: Omit<SessionTranscriptAnchorSelection, "afterSeq" | "includeMessagesForRunId"> & {
     sessionKey: string;

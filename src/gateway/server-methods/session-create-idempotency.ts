@@ -37,7 +37,13 @@ export function idempotentSessionCreate(handler: GatewayRequestHandler): Gateway
       request.respond(...args);
     };
     const idempotencyKey = request.params.idempotencyKey;
-    if (typeof idempotencyKey !== "string" || !idempotencyKey) {
+    // Durable retries must recheck expiry and the physical target in the store.
+    if (
+      request.params.creationOperationId !== undefined ||
+      request.params.sessionId !== undefined ||
+      typeof idempotencyKey !== "string" ||
+      !idempotencyKey
+    ) {
       await handler(
         bindGatewayRequestHandlerMutationAuthority(request, { ...request, respond }, undefined),
       );

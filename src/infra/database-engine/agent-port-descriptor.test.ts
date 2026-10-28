@@ -136,3 +136,21 @@ it("preserves raw trajectories and refuses malformed compressed values", async (
     decode({ ...legacy, event_codec: "br", event_payload: "not a blob", event_utf8_bytes: 20 }),
   ).toThrow("Invalid compressed trajectory payload");
 });
+
+it.each([38, currentVersion])(
+  "keeps creation receipts in only the matching v%s backup descriptor",
+  async (version) => {
+    const descriptor = await loadAgentPortDescriptor(version);
+    const hasReceipts = version >= 39;
+    expect(descriptor.tables.some(({ name }) => name === "session_creation_operations")).toBe(
+      hasReceipts,
+    );
+    expect(
+      descriptor.expectedCatalog.some((fact) => fact.table === "session_creation_operations"),
+    ).toBe(hasReceipts);
+    expect(descriptor.preData.includes('CREATE TABLE "session_creation_operations"')).toBe(
+      hasReceipts,
+    );
+    expect(descriptor.postData.includes('ON "session_creation_operations"')).toBe(hasReceipts);
+  },
+);

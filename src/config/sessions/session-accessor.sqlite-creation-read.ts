@@ -5,6 +5,8 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readSelectedSessionEntriesInDatabase } from "./session-accessor.sqlite-entry-selected.read.js";
 import { projectSqliteSessionParticipantsBatch } from "./session-accessor.sqlite-participant-projection.js";
 import type { SessionEntryCreateWithTranscriptContext } from "./session-accessor.types.js";
+import type { SessionCreationOperation } from "./session-creation-operation.js";
+import { inspectSessionCreationReceipt } from "./session-creation-receipts.js";
 import {
   collectSessionEntryLookupKeys,
   normalizeStoreSessionKey,
@@ -33,6 +35,7 @@ export function assertSessionCreationLabelAvailable(
 export type SessionCreationSnapshot = SessionEntryCreateWithTranscriptContext & {
   normalizedKey: string;
   legacyKeys: string[];
+  creationOperationMatched?: boolean;
 };
 
 /** Target payload and the indexed label claim share one snapshot on the executing owner. */
@@ -40,6 +43,7 @@ export function readSessionCreationSnapshotInDatabase(
   database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
   sessionKey: string,
   label?: string,
+  creationOperation?: SessionCreationOperation,
 ): SessionCreationSnapshot {
   return withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
     runSqliteReadSnapshotSync(database.db, () => {
@@ -65,6 +69,15 @@ export function readSessionCreationSnapshotInDatabase(
       const targetEntry = entries.get(normalizedKey);
       return {
         normalizedKey,
+        ...(creationOperation
+          ? {
+              creationOperationMatched: inspectSessionCreationReceipt(
+                database,
+                normalizedKey,
+                creationOperation,
+              ),
+            }
+          : {}),
         legacyKeys: resolved.legacyKeys,
         existingEntry: resolved.existing ? { ...resolved.existing.entry } : undefined,
         targetEntry: targetEntry ? { ...targetEntry } : undefined,

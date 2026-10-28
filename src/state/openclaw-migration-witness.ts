@@ -14,6 +14,7 @@ import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { LEGACY_CANONICAL_VALIDATION_TRIGGER_NAMES } from "./openclaw-agent-canonical-validation-migration.js";
 import {
   AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION,
+  AGENT_CREATION_OPERATIONS_SCHEMA_VERSION,
   AGENT_INDEX_RETIREMENT_SCHEMA_VERSION,
   AGENT_MEMORY_REVISION_SCHEMA_VERSION,
   AGENT_WRITE_LAYOUT_SCHEMA_VERSION,
@@ -86,7 +87,7 @@ function parseOpenClawMigrationWitness(value: unknown): OpenClawMigrationWitness
   if (
     (witness.role === "agent" &&
       (witness.agentId === null ||
-        ![24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38].includes(
+        ![24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39].includes(
           witness.schemaVersion,
         ))) ||
     (witness.role !== "agent" && witness.agentId !== null) ||
@@ -107,6 +108,9 @@ function parseOpenClawMigrationWitness(value: unknown): OpenClawMigrationWitness
           "transcript_events",
           "session_key_contract",
           "session_canonical_validation_pending",
+          ...(witness.schemaVersion >= AGENT_CREATION_OPERATIONS_SCHEMA_VERSION
+            ? ["session_creation_operations"]
+            : []),
           ...(witness.schemaVersion >= AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION
             ? ["session_transcript_cold_archive_chunks"]
             : []),
@@ -401,7 +405,9 @@ export function captureOpenClawMigrationWitness(
         throw new Error("Migration witness database owner does not match the backup inventory");
       }
       if (owner.role === "agent") {
-        if (![24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38].includes(schemaVersion)) {
+        if (
+          ![24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39].includes(schemaVersion)
+        ) {
           throw new Error(`Unsupported agent migration witness schema: ${schemaVersion}`);
         }
         assertOpenClawAgentSchemaContains(
@@ -479,12 +485,14 @@ export function captureOpenClawMigrationWitness(
         continue;
       }
       schemaHash.update(JSON.stringify(object)).update("\n");
-      // Schema 37 adds only this empty companion. Admission validates its canonical
-      // definition; the crossing comparison below still rejects added chunk rows.
+      // New companion tables are empty on migration. Admission validates their
+      // definitions; the crossing comparison below still rejects added rows.
       if (
         role === "agent" &&
-        schemaVersion >= AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION &&
-        object.tbl_name === "session_transcript_cold_archive_chunks"
+        ((schemaVersion >= AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION &&
+          object.tbl_name === "session_transcript_cold_archive_chunks") ||
+          (schemaVersion >= AGENT_CREATION_OPERATIONS_SCHEMA_VERSION &&
+            object.tbl_name === "session_creation_operations"))
       ) {
         continue;
       }
@@ -659,8 +667,10 @@ export function assertOpenClawMigrationWitnessPreserved(
         (table) =>
           !(
             crossing &&
-            original.schemaVersion < AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION &&
-            table.name === "session_transcript_cold_archive_chunks" &&
+            ((original.schemaVersion < AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION &&
+              table.name === "session_transcript_cold_archive_chunks") ||
+              (original.schemaVersion < AGENT_CREATION_OPERATIONS_SCHEMA_VERSION &&
+                table.name === "session_creation_operations")) &&
             table.rowCount === 0
           ),
       )

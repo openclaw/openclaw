@@ -6,7 +6,6 @@ import {
   validateSessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
-import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import { resolveSessionPublicShare } from "../../config/sessions/session-public-share.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -53,8 +52,13 @@ import {
   dispatchSessionCreateInitialTurn,
   resolveSessionCreateInitialTurn,
   validateSessionCreateInitialMentions,
-  isFreshChatSendStarted,
 } from "./session-create-initial-turn.js";
+import {
+  projectSessionCreateResponse,
+  prepareDurableSessionCreate,
+  durableSessionCreateAgentError,
+  sessionCreationOperationErrorShape,
+} from "./session-create-operation.js";
 import {
   normalizeSessionProjectGitUrl,
   prepareSessionRepositoryWorkspace,
@@ -124,6 +128,21 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const operatorRoleActor = client?.internal?.operatorRoleActor
       ? { ...client.internal.operatorRoleActor }
       : undefined;
+    const preparedOperation = prepareDurableSessionCreate(
+      params,
+      requestingOperatorProfileId,
+      requiredProfile,
+      getCurrentConfig(),
+    );
+    if (!preparedOperation.ok) {
+      respond(false, undefined, preparedOperation.error);
+      return;
+    }
+    const durableCreation = preparedOperation.value;
+    if (durableCreation) {
+      // The physical UUID selects a child, never an ambient main-session fallback.
+      p.key = "dashboard:" + durableCreation.sessionId;
+    }
     const emptyWorkspace = p.worktreeSource === "empty";
     const worktreeSelectionError = validateSessionWorktreeSelection(p);
     if (worktreeSelectionError) {
@@ -180,6 +199,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const assertSessionCreateCurrent = Object.assign(
       bindGatewayDeviceRevocation(() => {
         requestAuthority.assertCurrent();
+        if (durableCreation && durableSessionCreateAgentError(params, getCurrentConfig())) {
+          throw new Error("Durable creation default agent changed; retry with the original agent.");
+        }
         assertRequiredWorkerSessionCreateCurrent(getCurrentConfig(), requiredProfile, p);
         authority.commitGuard?.();
         sessionMutationAuthorization?.assertCurrent();
@@ -492,6 +514,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       onPhase: diagnostics?.mark,
       operatorAuthority: operatorCapture.preparation,
       key: sessionKey,
+      creationOperation: durableCreation,
       agentId: sessionAgentId,
       label: p.label,
       displayName: preparedDisplayName,
@@ -629,6 +652,11 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       },
     };
     const created = await createGatewaySession(createParams).catch((error: unknown) => {
+      const creationFailure = sessionCreationOperationErrorShape(error);
+      if (creationFailure) {
+        respond(false, undefined, creationFailure);
+        return undefined;
+      }
       if (error === catalogWait.unavailable) {
         respond(false, undefined, catalogWait.unavailable.error);
         return undefined;
@@ -646,43 +674,32 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       respond(false, undefined, created.error);
       return;
     }
-    if (created.postCommit.status === "failed") {
-      runError = errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(created.postCommit.error));
-    }
-    const createdWorktree = preparedWorktree?.worktree
-      ? {
-          id: preparedWorktree.worktree.id,
-          path: preparedWorktree.sessionRoot,
-          branch: preparedWorktree.worktree.branch,
-        }
-      : undefined;
-    const responseEntry = sessionEntryForkedFromParent(created.entry)
-      ? { ...created.entry, forkedFromParent: true as const }
-      : created.entry;
-    const runStarted =
-      !created.resetExisting &&
-      isFreshChatSendStarted({
-        payload: runPayload,
-        cached: runMeta?.cached === true,
-      });
-
-    diagnostics?.mark("response");
-    respond(true, {
-      ok: true,
-      key: created.key,
-      sessionId: created.entry.sessionId,
-      entry: responseEntry,
-      runStarted,
-      publicRead,
-      ...(!created.resetExisting && runPayload ? runPayload : {}),
-      ...(!created.resetExisting && runError ? { runError } : {}),
-      resolved: created.resolved,
-      ...(createdWorktree ? { worktree: createdWorktree } : {}),
+    const response = projectSessionCreateResponse(created, {
+      lifecycle: preparedWorktree,
+      runPayload,
+      runMeta,
+      runError,
+      publicRead: created.creationReplayed
+        ? Boolean(resolveSessionPublicShare(created.entry))
+        : publicRead,
+      creationOperationId: durableCreation ? p.creationOperationId : undefined,
+      creationReplayed: created.creationReplayed === true,
     });
+    if (durableCreation) {
+      // Replay is disclosure, not a cached authorization grant. The service
+      // has released target custody, but this request still owns its caller.
+      (await operatorCapture.preparation)?.authority.assertCurrent();
+      commitGuard();
+    }
+    diagnostics?.mark("response");
+    respond(true, response);
     diagnostics?.mark("handlerExit");
+    if (created.creationReplayed) {
+      return;
+    }
     for (const reason of [
       created.resetExisting ? "new" : "create",
-      ...(runStarted ? ["send"] : []),
+      ...(response.runStarted ? ["send"] : []),
     ]) {
       emitSessionsChanged(context, {
         sessionKey: created.key,

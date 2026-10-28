@@ -397,6 +397,7 @@ export function readExactSessionEntriesWithLifecycle(
                       database,
                       sessionKey,
                       request.creationLabel,
+                      request.creationOperation,
                     ),
                     databaseIdentity: identity,
                     databasePath: canonicalPath,

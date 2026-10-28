@@ -56,7 +56,6 @@ import {
   runSessionMutation,
 } from "../sessions/session-controller.lifecycle.js";
 import { recordSessionCreated } from "../sessions/session-created.js";
-import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import {
@@ -97,6 +96,11 @@ import {
   resolveSessionForkMaxTokens,
 } from "./session-create-model-selection.js";
 import { tryResetGatewaySessionForCreation } from "./session-create-reset.js";
+import {
+  initializeSessionCreationIdentity,
+  projectSessionCreationResult,
+  reconcileSessionCreation,
+} from "./session-create-result.js";
 import type {
   CreatedGatewaySession,
   CreateGatewaySessionParams,
@@ -511,6 +515,10 @@ async function createGatewaySessionInScope(
       return targetRead;
     }
     const currentTargetEntry = targetRead.value;
+    const replay = await reconcileSessionCreation(params, target, commitGuard);
+    if (replay) {
+      return replay;
+    }
     // Delegated isolation survives changes to the creator's current role.
     const creationSandbox =
       creation?.sandbox ?? (creation ? resolveCreatorSandbox(params.cfg, creation) : undefined);
@@ -748,7 +756,11 @@ async function createGatewaySessionInScope(
           ? resolveSessionModelRef(params.cfg, patched.entry, target.agentId)
           : undefined;
         const initializedEntry: InternalSessionEntry = {
-          ...patched.entry,
+          ...initializeSessionCreationIdentity(
+            patched.entry,
+            params.creationOperation,
+            existingEntry,
+          ),
           ...inheritedWorkspace,
           ...(createdNewEntry && displayName ? { displayName } : {}),
           ...projectSessionCreateSpawnModelSelection({
@@ -757,11 +769,6 @@ async function createGatewaySessionInScope(
             requestedModel,
             createdNewEntry,
           }),
-          // New rows must expose the same canonical delivery shape to callbacks
-          // that the SQLite writer persists, or guarded finalization sees its own write as drift.
-          ...(existingEntry === undefined && patched.entry.delivery === undefined
-            ? { delivery: normalizeSessionDeliveryState() }
-            : {}),
           // Stamp provenance only for genuinely new rows: adopting an existing key
           // must not restamp write-once node facts (this direct store write bypasses
           // the merge-level write-once guard), and legacy rows stay "unknown".
@@ -992,6 +999,7 @@ async function createGatewaySessionInScope(
       },
       {
         onPhase,
+        creationOperation: params.creationOperation,
         label,
         ...(params.initialEntry
           ? {
@@ -1100,19 +1108,7 @@ async function createGatewaySessionInScope(
       });
     }
 
-    const selectedModel = resolveSessionModelRef(params.cfg, created.entry, target.agentId);
-
-    return {
-      ok: true,
-      key: target.canonicalKey,
-      agentId: target.agentId,
-      entry: projectPublicSessionEntry(created.entry),
-      resolved: {
-        modelProvider: selectedModel.provider,
-        model: selectedModel.model,
-      },
-      resetExisting: false,
-    };
+    return projectSessionCreationResult(params, target, created.entry);
   };
 
   const targetLifecycleIdentities = [

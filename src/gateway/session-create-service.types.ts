@@ -91,6 +91,7 @@ export type GatewaySessionCommitResult =
       entry: SessionEntry;
       resolved: { modelProvider: string; model: string };
       resetExisting: boolean;
+      creationReplayed?: boolean;
     }
   | { ok: false; error: ErrorShape };
 
@@ -101,6 +102,8 @@ export type CreateGatewaySessionResult =
   | Extract<GatewaySessionCommitResult, { ok: false }>;
 
 export type CreateGatewaySessionParams = {
+  /** Verified intent, committed with the row and transcript by the existing writer. */
+  creationOperation?: import("../config/sessions/session-creation-operation.js").SessionCreationOperation;
   onPhase?: (phase: SessionCreatePhase) => void;
   cfg: OpenClawConfig;
   operatorAuthority?: Promise<

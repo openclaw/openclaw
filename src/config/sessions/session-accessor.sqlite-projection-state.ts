@@ -33,7 +33,9 @@ import {
 import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
 import { appendSessionResetBoundary } from "./session-accessor.sqlite-reset-boundary.js";
 import type { ResolvedSqliteReadScope } from "./session-accessor.sqlite-scope.js";
+import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { commitSessionCreationReceipt } from "./session-creation-receipts.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import { SessionEntryLifecycleUpsertConflictError } from "./session-mutation-conflict-error.js";
 import type { SessionEntry } from "./types.js";
@@ -113,6 +115,37 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
     }
     return true;
   });
+  if (options.creation?.creationOperation) {
+    const upsert = projected.upsertedEntries[0];
+    const operation = options.creation.creationOperation;
+    if (
+      projected.upsertedEntries.length !== 1 ||
+      !upsert ||
+      upsert.entry.sessionId !== operation.sessionId ||
+      upsert.entry.lifecycleRevision !== operation.sessionId
+    ) {
+      throw new Error("Creation receipt requires its exact single physical target");
+    }
+    if (commitSessionCreationReceipt(database, upsert.sessionKey, operation)) {
+      return {
+        archivedTranscripts: [],
+        beforeCount,
+        afterCount,
+        maintenancePlans: [],
+        removedSessionKeys: [],
+        pendingArchives: false,
+      };
+    }
+    ensureTranscriptHeader(
+      database,
+      {
+        ...options.resetScope,
+        sessionKey: upsert.sessionKey,
+        sessionId: operation.sessionId,
+      },
+      undefined,
+    );
+  }
   const archivedTranscripts = deleteMaterializedSessionStatePlans(
     database,
     removalPlans,

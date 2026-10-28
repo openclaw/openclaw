@@ -20,6 +20,16 @@ export const SESSION_CREATE_IDEMPOTENCY_RETENTION_MS = 5 * 60_000;
 export const SessionsCreateParamsSchema = closedObject({
   key: Type.Optional(NonEmptyString),
   idempotencyKey: Type.Optional(NonEmptyString),
+  /** Immutable caller operation identity; expires thirty days after its encoded issue time. */
+  creationOperationId: Type.Optional(NonEmptyString),
+  /** Caller-selected physical UUID; requires creationOperationId. */
+  sessionId: Type.Optional(NonEmptyString),
+  purpose: Type.Optional(
+    Type.Union([Type.Literal("investigation"), Type.Literal("coding")], {
+      description:
+        "Durable worker session intent; requires creationOperationId, sessionId, and a configured required worker profile. Coding requires repository; investigation uses an empty workspace. Does not start a turn.",
+    }),
+  ),
   agentId: Type.Optional(NonEmptyString),
   surface: Type.Optional(
     Type.Literal("plugin-dock", {

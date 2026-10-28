@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
+// v39 retains caller-bound session creation receipts across restart and deletion.
 // v38 splits punctuation-joined PostgreSQL full-text tokens like SQLite FTS5.
 // v37 stores cold transcript windows in ordered, independently bounded archive chunks.
 // v36 indexes PostgreSQL memory exact-path candidates without changing ranking.
@@ -7,7 +8,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // v34 aligns non-null PostgreSQL index keys with default query ordering.
 // v33 adds a stored PostgreSQL binary vector candidate projection.
 // v32 replaces the PostgreSQL vector decoder without rewriting canonical rows.
-export const OPENCLAW_AGENT_SCHEMA_VERSION = 38;
+export const OPENCLAW_AGENT_SCHEMA_VERSION = 39;
 
 // v36 migrates released starter tables and provenance to canonical Template names.
 // v35 replaces per-worktree workspace nodes with shared immutable trees and scan fingerprints.

@@ -455,6 +455,8 @@ export const SessionsCreateResultSchema = Type.Object(
     ok: Type.Literal(true),
     key: NonEmptyString,
     sessionId: Type.Optional(NonEmptyString),
+    creationOperationId: Type.Optional(NonEmptyString),
+    creationReplayed: Type.Optional(Type.Boolean()),
     entry: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
     runStarted: Type.Optional(Type.Boolean()),
     runId: Type.Optional(NonEmptyString),

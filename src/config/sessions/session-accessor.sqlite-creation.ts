@@ -78,7 +78,7 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
       const reader = retained.owner;
       const read = async () => {
         const facts =
-          options.label === undefined
+          options.label === undefined && !options.creationOperation
             ? readRetainedSessionEntryFacts(databaseOptions, { sessionKeys: [scope.sessionKey] })
             : undefined;
         if (facts) {
@@ -102,6 +102,7 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
           await reader.readExactEntries({
             projection: "creation",
             creationLabel: options.label,
+            creationOperation: options.creationOperation,
             sessionKeys: [scope.sessionKey],
             env: { ...scope.env },
           })
@@ -142,6 +143,7 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
         database,
         scope.sessionKey,
         options.label,
+        options.creationOperation,
       );
       source = {
         kind: "native",
@@ -200,7 +202,8 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
           sessionId: created.entry.sessionId,
           cwd: options.cwd,
         };
-        const separateHeader = source.kind === "native" || legacyKeys.length > 0;
+        const separateHeader =
+          !options.creationOperation && (source.kind === "native" || legacyKeys.length > 0);
         if (separateHeader) {
           options.onPhase?.("transcript");
           const initialize = async (assertSourceCurrent?: () => void) => {
@@ -282,6 +285,7 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
               assertSessionCreationLabelAvailable(source.database, normalizedKey, options.label);
             },
             creation: {
+              creationOperation: options.creationOperation,
               preparedTranscript,
               ownerAssignment: owner ? { sessionKey: normalizedKey, owner } : undefined,
             },
@@ -307,6 +311,7 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
             assertCommitAllowed: assertCurrent,
             withCommit,
             ownerAssignment: owner ? { sessionKey: normalizedKey, owner } : undefined,
+            creationOperation: options.creationOperation,
             labelClaim:
               options.label === undefined
                 ? undefined
