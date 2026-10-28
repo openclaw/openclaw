@@ -10,10 +10,10 @@ import { callGateway } from "../gateway/call.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
 import { openUrlPrivately } from "../infra/browser-handoff.js";
 import type { SystemPresence } from "../infra/system-presence.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { sleep } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { monotonicNow } from "../shared/monotonic-time.js";
 import {
   hasVerifiedControlUiLoopbackAlias,
   issueControlUiBrowserHandoff,

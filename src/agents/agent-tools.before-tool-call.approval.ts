@@ -24,8 +24,8 @@ import {
   type PluginApprovalResolution,
   type PluginHookBeforeToolCallResult,
 } from "../plugins/types.js";
-import { isPlainObject } from "../utils.js";
 import { monotonicNow } from "../shared/monotonic-time.js";
+import { isPlainObject } from "../utils.js";
 import { resolveToolErrorDiagnostic } from "./agent-tools.before-tool-call.diagnostics.js";
 import type {
   BeforeToolCallFailureDisposition,

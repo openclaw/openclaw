@@ -1,4 +1,3 @@
-import { monotonicNow } from "openclaw/plugin-sdk/time-runtime";
 import { type ChildProcess, spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
@@ -11,6 +10,7 @@ import { ensurePortAvailable, type SsrFPolicy } from "openclaw/plugin-sdk/securi
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { CONFIG_DIR, sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { monotonicNow } from "openclaw/plugin-sdk/time-runtime";
 import { createBoundedUtf8Tail } from "./bounded-utf8-tail.js";
 import { hasChromeProxyControlArg, omitChromeProxyEnv } from "./browser-proxy-mode.js";
 import { assertManagedProxyAllowsCdpUrl } from "./cdp-proxy-bypass.js";

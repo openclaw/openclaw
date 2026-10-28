@@ -1,4 +1,5 @@
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import type {
   TranscriptStartRequest,
   TranscriptsStartResult,
@@ -6,7 +7,6 @@ import type {
   TranscriptsStopResult,
 } from "../transcripts/provider-types.js";
 import { sleep } from "../utils/sleep.js";
-import { monotonicNow } from "../shared/monotonic-time.js";
 import {
   meetingCaptionParticipationSources,
   snapshotMeetingObservation,

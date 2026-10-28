@@ -19,8 +19,8 @@ import {
 } from "../../plugin-sdk/browser-profiles.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { defaultRuntime } from "../../runtime.js";
-import { sleep } from "../../utils/sleep.js";
 import { monotonicNow } from "../../shared/monotonic-time.js";
+import { sleep } from "../../utils/sleep.js";
 import {
   BROWSER_BRIDGES,
   stopCachedBrowserBridge,

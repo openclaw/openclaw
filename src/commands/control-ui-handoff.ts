@@ -20,8 +20,8 @@ import { isSameProcessSpecificIpv4WithLoopbackListeners } from "../infra/ports-f
 import { inspectPortUsage } from "../infra/ports-inspect.js";
 import { inspectGatewayTlsCertificate } from "../infra/tls/gateway.js";
 import { CONTROL_UI_OWNER_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
-import { sleep } from "../utils.js";
 import { monotonicNow } from "../shared/monotonic-time.js";
+import { sleep } from "../utils.js";
 
 const CONTROL_UI_DOCUMENT_REQUEST_TIMEOUT_MS = 2_000;
 const CONTROL_UI_DOCUMENT_ERROR_MAX_BYTES = 2_048;

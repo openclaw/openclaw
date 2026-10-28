@@ -1,5 +1,4 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { monotonicNow } from "../../shared/monotonic-time.js";
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
@@ -45,6 +44,7 @@ import {
   type SessionTarget,
 } from "../../sessions/session-controller.target.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 import { settlesWithin } from "../../shared/settle-within.js";
 import { SessionControllerAdmissionRequiredError } from "../harness/errors.js";
 import {

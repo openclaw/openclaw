@@ -16,9 +16,7 @@ export function startMemoryRecall(params: {
     task: async (deadlineAtMs) => {
       let vector: number[];
       try {
-        vector = await params.embed(() =>
-          Math.max(1, Math.floor(deadlineAtMs - monotonicNow())),
-        );
+        vector = await params.embed(() => Math.max(1, Math.floor(deadlineAtMs - monotonicNow())));
       } catch (error) {
         throw new MemoryRecallEmbeddingError(error);
       }

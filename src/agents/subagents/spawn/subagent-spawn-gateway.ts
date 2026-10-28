@@ -1,6 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
-import { monotonicNow } from "../../../shared/monotonic-time.js";
 import {
   asOptionalObjectRecord,
   asOptionalRecord,
@@ -18,6 +17,7 @@ import { isGatewayRpcUnavailableError } from "../../../gateway/transport-error.j
 import type { WorkerTurnExecutionIdentity } from "../../../gateway/worker-environments/placement-turn-claim-events.js";
 import { getActiveAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
+import { monotonicNow } from "../../../shared/monotonic-time.js";
 import { captureRequesterOrigin, requesterCreatorProfileId } from "../../requester-origin.js";
 import {
   getGatewayToolCallerIdentity,

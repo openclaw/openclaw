@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { monotonicNow } from "../shared/monotonic-time.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import type { NodeHostStats } from "../shared/node-host-stats.js";
 import type { NodeSession } from "./node-session.types.js";
 

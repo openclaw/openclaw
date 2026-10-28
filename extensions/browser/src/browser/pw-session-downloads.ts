@@ -1,7 +1,7 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { Page } from "playwright-core";
 import { monotonicNow } from "openclaw/plugin-sdk/time-runtime";
+import type { Page } from "playwright-core";
 import { BROWSER_ACTION_NAVIGATION_GRACE_MS } from "./act-policy.js";
 import type { BrowserDownloadCandidate, BrowserDownloadResult } from "./download-types.js";
 import type { ActionDownloadCapture } from "./pw-session-contracts.js";

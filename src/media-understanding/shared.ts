@@ -1,6 +1,5 @@
 import path from "node:path";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { monotonicNow } from "../shared/monotonic-time.js";
 import { omitNullRequestHeaders } from "../../packages/llm-core/src/utils/request-headers.js";
 import type {
   ProviderRequestCapability,
@@ -29,6 +28,7 @@ import {
   type ProviderOperationRetryStage,
   type TransientProviderRetryConfig,
 } from "../provider-runtime/operation-retry.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { truncateOptionalText } from "../shared/text-truncate.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import type { AudioTranscriptionRequest } from "./types.js";

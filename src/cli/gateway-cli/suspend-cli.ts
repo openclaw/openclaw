@@ -1,12 +1,12 @@
 import { randomBytes } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import { monotonicNow } from "../../shared/monotonic-time.js";
 import type {
   GatewaySuspendPrepareResult,
   GatewaySuspendResumeResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { OutputRuntimeEnv } from "../../runtime.js";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 import { formatCliCommand } from "../command-format.js";
 import type { callGatewayFromCliWithTransport } from "../gateway-rpc.js";
 
