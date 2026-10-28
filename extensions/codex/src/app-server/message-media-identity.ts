@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { collectAgentHarnessMessagingMediaUrls } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
+import { isPathStrictlyInside, root } from "openclaw/plugin-sdk/file-access-runtime";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { normalizeMediaReferenceForComparison } from "openclaw/plugin-sdk/media-store";
 import {
@@ -32,12 +32,13 @@ function localMediaPath(value: string): string | undefined {
 }
 
 /**
- * Hashes the local files a message() call is about to send, before delivery reads
- * them. Only regular files within the generated-image size cap can match a
- * generated image, so larger files, links and non-local references are skipped.
+ * Hashes the workspace files a message() call is about to send, before delivery
+ * reads them. Generated-image copies live in the agent workspace, so only regular
+ * files inside it are opened, without following links; other paths are never read.
  */
-export async function digestLocalMessageMedia(
+async function digestWorkspaceMessageMedia(
   args: Record<string, unknown>,
+  workspaceRoot: string,
   signal?: AbortSignal,
 ): Promise<ReadonlyMap<string, MediaDigest>> {
   const maxBytes = resolveGeneratedMediaMaxBytes(undefined, "image");
@@ -45,14 +46,22 @@ export async function digestLocalMessageMedia(
   for (const value of collectAgentHarnessMessagingMediaUrls(args)) {
     const filePath = localMediaPath(value);
     const key = normalizeMediaReferenceForComparison(value);
-    if (!filePath || digests.has(key)) {
+    if (!filePath || !isPathStrictlyInside(workspaceRoot, filePath) || digests.has(key)) {
       continue;
     }
     signal?.throwIfAborted();
     try {
-      const stat = await fs.lstat(filePath);
-      if (stat.isFile() && stat.size <= maxBytes) {
-        digests.set(key, digestMedia(await fs.readFile(filePath, { signal })));
+      const workspace = await root(workspaceRoot, { symlinks: "reject" });
+      const opened = await workspace.open(path.relative(workspaceRoot, filePath), {
+        symlinks: "reject",
+      });
+      try {
+        const stat = await opened.handle.stat();
+        if (stat.isFile() && stat.size <= maxBytes) {
+          digests.set(key, digestMedia(await opened.handle.readFile({ signal })));
+        }
+      } finally {
+        await opened[Symbol.asyncDispose]();
       }
     } catch {
       // Delivery reports its own read failures; identity stays path-only.
@@ -67,9 +76,16 @@ export async function prepareCodexMessageMedia(
 ) {
   const prepared = await prepareCodexRemoteWorkspaceMessageMedia(params);
   // Remote sources are staged copies; generated-image matching stays path-only there.
-  return params.remoteWorkspaceRoot
+  return params.remoteWorkspaceRoot || !params.localWorkspaceRoot
     ? prepared
-    : { ...prepared, digestsBySource: await digestLocalMessageMedia(prepared.args, params.signal) };
+    : {
+        ...prepared,
+        digestsBySource: await digestWorkspaceMessageMedia(
+          prepared.args,
+          params.localWorkspaceRoot,
+          params.signal,
+        ),
+      };
 }
 
 /** Immutable content identity, carried in each confirmed delivery's own source URLs. */
