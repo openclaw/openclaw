@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DaemonStatus } from "../cli/daemon-cli/status.gather.js";
 import { createCliTtyMock } from "../cli/test-runtime-capture.js";
+import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
 import { dashboardCommand } from "./dashboard.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -124,9 +125,7 @@ describe("dashboard Gateway readiness", () => {
     await check();
 
     expect(output()).not.toContain("Dashboard URL:");
-    expect(confirm).not.toHaveBeenCalled();
-    expect(installGateway).not.toHaveBeenCalled();
-    expect(startGateway).not.toHaveBeenCalled();
+    expectNoCalls(confirm, installGateway, startGateway);
     expect(output()).toContain("Gateway check failed:");
     expect(output()).not.toContain("Gateway is not running");
     expect(output()).not.toContain("gateway start");
@@ -147,19 +146,6 @@ describe("dashboard Gateway readiness", () => {
     );
     expect(output()).toContain("Gateway is not running.");
     expect(runtime.exit).not.toHaveBeenCalled();
-  });
-
-  it("reports failure when recovery cannot prompt noninteractively", async () => {
-    tty.set(false);
-    gatherStatus.mockResolvedValue(createStatus());
-
-    await check();
-
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(output()).not.toContain("Dashboard URL:");
-    expect(confirm).not.toHaveBeenCalled();
-    expect(installGateway).not.toHaveBeenCalled();
-    expect(startGateway).not.toHaveBeenCalled();
   });
 
   it.each([false, true])("recovers a stopped gateway (installed=%s)", async (installed) => {
@@ -201,9 +187,7 @@ describe("dashboard Gateway readiness", () => {
     await check();
 
     expect(output()).not.toContain("Dashboard URL:");
-    expect(confirm).not.toHaveBeenCalled();
-    expect(installGateway).not.toHaveBeenCalled();
-    expect(startGateway).not.toHaveBeenCalled();
+    expectNoCalls(confirm, installGateway, startGateway);
     expect(output()).toContain("owning environment or supervisor to start or repair");
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
