@@ -253,4 +253,27 @@ describe.skipIf(process.platform === "win32")("verified package cleanup", () => 
       expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
     });
   });
+
+  it("settles under a repair claim only while that claim is current", async () => {
+    const f = await fixtures.prepare();
+    const before = openPackageActivationJournal(f.anchor).read();
+    const lost = new Error("repair claim is no longer current");
+    let current = false;
+    const repairClaim = {
+      assertCurrent: () => {
+        if (!current) {
+          throw lost;
+        }
+      },
+    };
+    const settle = () =>
+      settlePendingPackageActivation(f.packageRoot, undefined, undefined, { repairClaim });
+
+    await expect(settle()).rejects.toBe(lost);
+    expect(openPackageActivationJournal(f.anchor).read()).toEqual(before);
+    expect(fs.existsSync(path.join(f.anchor, "candidate"))).toBe(true);
+    current = true;
+    await expect(settle()).resolves.toMatchObject({ reason: "publication-not-started" });
+    expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+  });
 });
