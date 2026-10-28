@@ -176,3 +176,13 @@ it("an omitted subject is inferred only from one named entity page with no compe
   ).toBe(undefined);
   expect(out.message).toMatch(/4 linked by inference/);
 });
+
+it("keeps a shortened claim title well-formed when the cap lands inside a surrogate pair", async () => {
+  const f = await fixture();
+  // 198 ASCII units place the emoji pair across the 199-unit shortening cut.
+  const text = `${"A".repeat(198)}😀 trailer`;
+  const out = await f.remember([{ text, kind: "fact" }]);
+  const read = await f.service.record({ id: out.items[0]!.id }, f.owner);
+  expect(read.record!.title).toBe(`${"A".repeat(198)}…`);
+  expect(read.record!.title.isWellFormed()).toBe(true);
+});
