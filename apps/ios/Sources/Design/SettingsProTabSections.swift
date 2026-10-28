@@ -19,6 +19,12 @@ extension SettingsProTab {
     var offlineDeviceSection: some View {
         Section {
             self.settingsListRow(
+                icon: "heart.fill",
+                iconColor: .pink,
+                title: "Apple Health Summaries",
+                route: .healthSummary)
+                .accessibilityIdentifier("settings-health-row")
+            self.settingsListRow(
                 icon: "applewatch",
                 iconColor: .green,
                 title: "Apple Watch",
@@ -68,6 +74,8 @@ extension SettingsProTab {
             switch route {
             case .gateway:
                 self.gatewayDestination
+            case .healthSummary:
+                AppleHealthSettingsSection()
             case .appleWatch:
                 self.appleWatchDestination
             case .approvals:

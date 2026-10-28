@@ -251,6 +251,37 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(resetOnboarding.isHittable)
     }
 
+    func testAppleHealthConsentIsReachableWithoutDashboardAndCancelKeepsSharingOff() throws {
+        self.launchApp(for: Self.settingsFallbackTarget)
+        let app = try XCTUnwrap(self.app)
+        XCTAssertTrue(app.descendants(matching: .any)["SettingsHub.Fallback"].waitForExistence(timeout: 8))
+        let watch = app.buttons["settings-watch-row"]
+        for _ in 0..<12 where !watch.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(watch.isHittable)
+        self.attachScreenshot(named: "health-fallback-device-section")
+        let health = app.buttons["settings-health-row"]
+        XCTAssertTrue(health.isHittable, "Local Health consent must remain reachable without the Dashboard")
+        health.tap()
+        XCTAssertTrue(app.navigationBars["Apple Health Summaries"].waitForExistence(timeout: 5))
+        self.attachScreenshot(named: "health-fallback-local-sharing")
+        XCTAssertFalse(app.webViews.firstMatch.exists)
+        let enable = app.buttons["settings-health-enable"]
+        XCTAssertTrue(enable.waitForExistence(timeout: 5))
+        XCTAssertTrue(enable.isEnabled)
+        enable.tap()
+        let disclosure = app.alerts["Share Apple Health summaries with the Gateway?"]
+        XCTAssertTrue(disclosure.waitForExistence(timeout: 5))
+        XCTAssertTrue(disclosure.staticTexts.matching(NSPredicate(
+            format: "label CONTAINS %@", "Only the aggregate leaves this device")).firstMatch.exists)
+        self.attachScreenshot(named: "health-fallback-native-disclosure")
+        disclosure.buttons["Cancel"].tap()
+        XCTAssertTrue(disclosure.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(enable.isEnabled)
+        XCTAssertFalse(app.buttons["settings-health-disable"].exists)
+    }
+
     func testWatchMessageDeliveryIsReachableFromSettings() throws {
         self.launchApp(for: Self.settingsFallbackTarget)
         let app = try XCTUnwrap(self.app)
