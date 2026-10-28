@@ -182,6 +182,25 @@ describe("install.ps1 failure handling", () => {
     }
     return spawnSync(powershell, args, { encoding: "utf8" });
   };
+  const runWithWindowsPowerShell = process.platform === "win32" ? runIfPowerShell : it.skip;
+  runWithWindowsPowerShell.each(["launch", "failure"])(
+    "hands onboarding to the npm batch shim (%s)",
+    (scenario) => {
+      const result = runPowerShell([
+        "-NoLogo",
+        "-NoProfile",
+        "-File",
+        "test/scripts/install-ps1-handoff.ps1",
+        "-InstallerPath",
+        join(process.cwd(), SCRIPT_PATH),
+        "-FixtureRoot",
+        harness.createTempDir("openclaw-install-handoff-"),
+        "-Scenario",
+        scenario,
+      ]);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+    },
+  );
   const runInstallerFile = (args: string[], env: NodeJS.ProcessEnv = {}) => {
     if (!powershell) {
       throw new Error("PowerShell is not available");
