@@ -7,9 +7,11 @@ import { appendRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { hasObservedModelUsage } from "../agents/usage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { DiagnosticEventInput } from "./diagnostic-events.js";
+import type { DiagnosticBaseEvent } from "./diagnostic-event-snapshot.js";
 import { isDiagnosticFlagEnabled } from "./diagnostic-flags.js";
 import type { DiagnosticModelCallUsage } from "./diagnostic-model-call-types.js";
+import type { DiagnosticModelUsageFields } from "./diagnostic-model-usage-types.js";
+import type { DiagnosticRunScopeFields } from "./diagnostic-run-types.js";
 import { getActiveDiagnosticTraceContext } from "./diagnostic-trace-context.js";
 import { isTruthyEnvValue } from "./env.js";
 import { runWithMainThreadTask } from "./main-thread-stall.js";
@@ -55,8 +57,12 @@ export function modelUsageTimelineAttributes(
   return attributes;
 }
 
-export function recordDiagnosticModelUsageTimeline(event: DiagnosticEventInput): void {
-  if (event.type !== "model.usage" || !isDiagnosticsTimelineEnabled()) {
+export function recordDiagnosticModelUsageTimeline(
+  event: DiagnosticModelUsageFields &
+    Pick<DiagnosticBaseEvent, "trace"> &
+    Pick<DiagnosticRunScopeFields, "sessionId">,
+): void {
+  if (!isDiagnosticsTimelineEnabled()) {
     return;
   }
   // The process-lifetime sink survives plugin disposal and async diagnostic queue loss.

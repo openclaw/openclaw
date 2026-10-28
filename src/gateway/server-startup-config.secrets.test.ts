@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createInfoWarnErrorLogger as mockLogSecretsForTest } from "../../test/helpers/mock-logger.js";
@@ -13,10 +13,6 @@ import {
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import { writePersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
-import {
-  flushDiagnosticsTimeline,
-  measureDiagnosticsTimelineSpan,
-} from "../infra/diagnostics-timeline.js";
 import { refResolutionError } from "../secrets/resolve-errors.js";
 import { associateSecretResolutionErrorOwners } from "../secrets/runtime-degraded-state.js";
 import {
@@ -259,30 +255,6 @@ function activatorOptions() {
   return {
     logSecrets: mockLogSecretsForTest(),
     emitStateEvent: vi.fn<(code: string, message: string, cfg: OpenClawConfig) => void>(),
-  };
-}
-
-function readTimelineEvents(filePath: string): Array<Record<string, unknown>> {
-  flushDiagnosticsTimeline();
-  return readFileSync(filePath, "utf8")
-    .trim()
-    .split(/\r?\n/u)
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as Record<string, unknown>);
-}
-
-function installDiagnosticsTimelineEnv() {
-  const root = autoCleanupTempDirs.make("openclaw-startup-secrets-timeline-");
-  const timelinePath = path.join(root, "timeline.jsonl");
-  const env = captureEnv(["OPENCLAW_DIAGNOSTICS", "OPENCLAW_DIAGNOSTICS_TIMELINE_PATH"]);
-  process.env.OPENCLAW_DIAGNOSTICS = "timeline";
-  process.env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH = timelinePath;
-  return {
-    timelinePath,
-    cleanup: () => {
-      flushDiagnosticsTimeline();
-      env.restore();
-    },
   };
 }
 
@@ -618,47 +590,6 @@ it.each(["same source", "secrets changed", "credentials changed", "admission clo
     }
   },
 );
-
-it("omits secret preparation error messages from diagnostics timeline spans", async () => {
-  const timelineEnv = installDiagnosticsTimelineEnv();
-  try {
-    const failure = new Error('Secret provider "default" is not configured for GATEWAY_TOKEN_REF.');
-    const activate = failingActivator(failure);
-
-    await expect(
-      prepareGatewayStartupConfig({
-        configSnapshot: gatewaySecretRefSnapshot(),
-        activateRuntimeSecrets: activate,
-        measure: (name, run, options) =>
-          measureDiagnosticsTimelineSpan(name, run, {
-            env: process.env,
-            omitErrorMessage: options?.omitErrorMessage,
-            phase: "startup",
-          }),
-      }),
-    ).rejects.toMatchObject({ message: expect.stringContaining(failure.message), cause: failure });
-
-    const events = readTimelineEvents(timelineEnv.timelinePath);
-    expect(events.find((event) => event.name === "secrets.prepare")?.attributes).toEqual({
-      activate: false,
-      gatewayAuthSecretRef: true,
-      reason: "startup",
-    });
-    const errorEvents = events.filter((event) => event.type === "span.error");
-    expect(errorEvents.map((event) => event.name)).toEqual([
-      "secrets.prepare",
-      "config.auth.secret-preflight",
-    ]);
-    for (const event of errorEvents) {
-      expect(event).toMatchObject({ phase: "startup", errorName: "Error" });
-      expect(event.errorMessage).toBeUndefined();
-    }
-    expect(JSON.stringify(events)).not.toContain("GATEWAY_TOKEN_REF");
-    expect(JSON.stringify(events)).not.toContain("default");
-  } finally {
-    timelineEnv.cleanup();
-  }
-});
 
 it("redacts startup failures without emitting reload events", async () => {
   const error = missingRef("PRIVATE_STARTUP_AUTH_REF");

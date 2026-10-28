@@ -39,21 +39,27 @@ describe("matrix logical model accounting", () => {
       },
       ...extra,
       { name: "timeline.capture.completed", attributes: { complete: true } },
-    ].map<TimelineRow>((row, index) => ({
-      schemaVersion: "openclaw.diagnostics.v1",
-      pid: 123,
-      provider: "fixture",
-      type: "mark",
-      ...row,
-      attributes: {
-        captureId: "capture",
-        sequence: index + 1,
-        failedWrites: 0,
-        model: "model",
-        observationUnit: "logical-call",
-        ...(typeof row.attributes === "object" && row.attributes ? row.attributes : {}),
-      },
-    }));
+    ].map<TimelineRow>((row, index) =>
+      Object.assign(
+        {
+          schemaVersion: "openclaw.diagnostics.v1",
+          pid: 123,
+          provider: "fixture",
+          type: "mark",
+        },
+        row,
+        {
+          attributes: {
+            captureId: "capture",
+            sequence: index + 1,
+            failedWrites: 0,
+            model: "model",
+            observationUnit: "logical-call",
+            ...(typeof row.attributes === "object" && row.attributes ? row.attributes : {}),
+          },
+        },
+      ),
+    );
   }
   async function read(rows: unknown[], suffix = "\n", joined = true) {
     const file = path.join(tempDirs.make("matrix-model-accounting-"), "timeline.jsonl");
@@ -229,13 +235,14 @@ describe("matrix logical model accounting", () => {
     if (damage === "schema") {
       rows[2]!.schemaVersion = "unrecognized";
     }
-    const damaged = rows.map((row, index) => ({
-      ...row,
-      attributes: {
-        ...row.attributes,
-        ...(damage === "sequence" ? {} : { sequence: index + 1 }),
-      },
-    }));
+    const damaged = rows.map((row, index) =>
+      Object.assign({}, row, {
+        attributes: {
+          ...row.attributes,
+          ...(damage === "sequence" ? {} : { sequence: index + 1 }),
+        },
+      }),
+    );
     expect(await read(damaged)).toMatchObject({
       complete: false,
       foreground: { tokens: { input: null } },

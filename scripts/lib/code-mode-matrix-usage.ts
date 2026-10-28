@@ -222,9 +222,9 @@ export async function readMatrixModelAccounting(params: {
         call.outcome = row.ok ? "completed" : "error";
         if (attrs.usageState === "available") {
           call.usage = Object.fromEntries(
-            MODEL_TOKEN_BUCKETS.flatMap((key) => {
-              const value = count(attrs[key]);
-              return value === undefined ? [] : [[key, value]];
+            MODEL_TOKEN_BUCKETS.flatMap((bucket) => {
+              const value = count(attrs[bucket]);
+              return value === undefined ? [] : [[bucket, value]];
             }),
           );
         }

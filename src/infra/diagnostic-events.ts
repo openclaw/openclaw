@@ -29,9 +29,10 @@ import {
   createDiagnosticValueForListeners,
 } from "./diagnostic-event-snapshot.js";
 import type {
-  DiagnosticModelCallPromptStats,
-  DiagnosticModelCallTerminalFields,
-  DiagnosticModelCallUsage,
+  DiagnosticModelCallCompletedEvent,
+  DiagnosticModelCallErrorEvent,
+  DiagnosticModelCallStartedEvent,
+  DiagnosticModelResponseObservedEvent,
 } from "./diagnostic-model-call-types.js";
 import {
   consumeCoreModelRequestLifecycleDiagnosticEvent,
@@ -594,54 +595,6 @@ export type DiagnosticHarnessRunErrorEvent = DiagnosticHarnessRunBaseEvent & {
   phase: DiagnosticHarnessRunPhase;
   errorCategory: string;
   cleanupFailed?: boolean;
-};
-
-type DiagnosticModelCallBaseEvent = DiagnosticSessionEvent & {
-  runId: string;
-  agentId?: string;
-  callId: string;
-  provider: string;
-  model: string;
-  api?: string;
-  transport?: string;
-  /** Defaults to request for emitters created before turn-level CLI diagnostics. */
-  observationUnit?: "request" | "turn";
-  contextTokenBudget?: number;
-  contextWindowSource?: "model" | "modelsConfig" | "agentContextTokens" | "default";
-  contextWindowReferenceTokens?: number;
-  upstreamRequestIdHash?: string;
-  promptStats?: DiagnosticModelCallPromptStats;
-};
-
-type DiagnosticModelCallStartedEvent = DiagnosticModelCallBaseEvent & {
-  type: "model.call.started";
-};
-
-type DiagnosticModelCallEndedEvent = DiagnosticModelCallBaseEvent &
-  DiagnosticModelCallTerminalFields;
-
-type DiagnosticModelCallCompletedEvent = DiagnosticModelCallEndedEvent & {
-  type: "model.call.completed";
-};
-
-type DiagnosticModelCallErrorEvent = DiagnosticModelCallEndedEvent & {
-  type: "model.call.error";
-  errorCategory: string;
-  failureKind?: "aborted" | "connection_closed" | "connection_reset" | "terminated" | "timeout";
-  memory?: DiagnosticMemoryUsage;
-};
-
-type DiagnosticModelResponseObservedEvent = Omit<
-  DiagnosticModelCallBaseEvent,
-  "observationUnit" | "promptStats" | "upstreamRequestIdHash"
-> & {
-  type: "model.response.observed";
-  upstreamRequestIdHash: string;
-  /** The event timestamp is receipt time, not a provider completion boundary. */
-  timestampSource: "receipt";
-  usageSource: "native-normalized";
-  usageScope: "response";
-  usage?: DiagnosticModelCallUsage;
 };
 
 type DiagnosticContextAssembledEvent = DiagnosticSessionEvent & {
@@ -1298,7 +1251,9 @@ export function getInternalDiagnosticEventSequence(): number {
 
 /** Emits a trusted diagnostic event from core/runtime-owned instrumentation. */
 export function emitTrustedDiagnosticEvent(event: DiagnosticEventInput) {
-  recordDiagnosticModelUsageTimeline(event);
+  if (event.type === "model.usage") {
+    recordDiagnosticModelUsageTimeline(event);
+  }
   const toolExecutionLiveness = consumeToolExecutionLivenessDiagnosticEvent(event);
   const hostPluginId = consumeHostPluginUsageDiagnosticEvent(event);
   const coreSemanticRunProgress = consumeCoreSemanticRunProgressDiagnosticEvent(event);
