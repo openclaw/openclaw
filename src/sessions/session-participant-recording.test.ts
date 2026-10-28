@@ -83,7 +83,7 @@ it.each([false, true])(
       const onError = rooted
         ? () => reportedActiveRoots.push(getActiveGatewayRootWorkCount({ excludeCurrent: true }))
         : undefined;
-      recordSessionParticipantBestEffort({ ...target, onError });
+      void recordSessionParticipantBestEffort({ ...target, onError });
       await waitForSessionParticipantRecording(target);
     };
     if (root) {
@@ -107,7 +107,7 @@ it.each(["resolve", "reject"] as const)(
     const reported: unknown[] = [];
     await root.run(async () =>
       work.run(() => {
-        recordSessionParticipantBestEffort({
+        void recordSessionParticipantBestEffort({
           ...target,
           onError: (error) => reported.push(error),
         });
@@ -145,7 +145,9 @@ it.each(["resolve", "reject"] as const)(
 it("keeps unrooted participant work unrooted while Gateway admission is closed", async () => {
   await using fixture = new PendingRecording();
   markGatewayRestartDraining();
-  fixture.work.run(() => recordSessionParticipantBestEffort(target));
+  fixture.work.run(() => {
+    void recordSessionParticipantBestEffort(target);
+  });
   await fixture.started.promise;
   expect(getActiveGatewayRootWorkCount()).toBe(0);
   expect(isGatewayWorkAdmissionClosed()).toBe(true);

@@ -8,15 +8,25 @@ import { recordSessionParticipantBestEffort } from "./session-participant-record
 export function recordAcceptedSessionParticipantInput(
   ctx: SessionParticipantInputContext,
   target: Omit<Parameters<typeof recordSessionParticipantBestEffort>[0], "identity" | "promptedAt">,
-): void {
+): Promise<void>[] {
+  const writes: Promise<void>[] = [];
   for (const input of ctx[sessionParticipantInput] ?? []) {
     if (!input.recorded) {
       input.recorded = true;
-      recordSessionParticipantBestEffort({
-        ...target,
-        identity: input.identity,
-        promptedAt: input.promptedAt,
-      });
+      writes.push(
+        Promise.resolve(
+          recordSessionParticipantBestEffort({
+            ...target,
+            identity: input.identity,
+            promptedAt: input.promptedAt,
+          }),
+        ).then((result) => {
+          if (result !== "inserted" && result !== "updated") {
+            input.recorded = false;
+          }
+        }),
+      );
     }
   }
+  return writes;
 }

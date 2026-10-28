@@ -50,7 +50,7 @@ export async function launchAcpChildThroughGateway(params: {
       },
     ),
   );
-  recordSessionParticipantBestEffort({
+  void recordSessionParticipantBestEffort({
     promptedAt,
     identity: { type: "agent", id: params.lineage.parentAgentId },
     agentId: params.lineage.targetAgentId,

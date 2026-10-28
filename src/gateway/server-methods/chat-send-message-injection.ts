@@ -401,7 +401,7 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
     // dispatch retains the source run's abort signal and skips canceled input.
     return false;
   }
-  recordAcceptedSessionParticipantInput(ctx, { agentId, sessionKey, storePath });
+  void recordAcceptedSessionParticipantInput(ctx, { agentId, sessionKey, storePath });
   const channel = normalizeLowercaseStringOrEmpty(
     finalizedCtx.Surface ?? finalizedCtx.Provider ?? "unknown",
   );

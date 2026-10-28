@@ -8,7 +8,10 @@ import { DEFAULT_ECHO_TRANSCRIPT_FORMAT } from "../../media-understanding/echo-t
 import { readPersistedMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import { formatAudioTranscriptForAgent } from "../../plugin-sdk/media-understanding-runtime.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
-import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
+import {
+  prepareSessionParticipantInput,
+  type SessionParticipantInputContext,
+} from "../../sessions/session-participant-input.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -171,6 +174,7 @@ export function prepareChatSendUserTurn(params: {
   userTurn: {
     baseInput: UserTurnInput;
     setInputPromise: (input: Promise<UserTurnInput>) => void;
+    bindAcceptedSessionParticipant?: (ctx: SessionParticipantInputContext) => void;
   };
 }) {
   const { request, session, admission, attachments, client, logGateway, userTurn } = params;
@@ -389,6 +393,7 @@ export function prepareChatSendUserTurn(params: {
   if (participant) {
     prepareSessionParticipantInput(ctx, participant, userTurn.baseInput.timestamp);
   }
+  userTurn.bindAcceptedSessionParticipant?.(ctx);
   return {
     prepareSessionCreation: async (library?: PreparedSkillLibrarySession) => {
       if (!request.systemInputProvenance) {

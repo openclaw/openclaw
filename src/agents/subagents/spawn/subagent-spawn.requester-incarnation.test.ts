@@ -347,14 +347,14 @@ it("inherits accepted human credit when participant persistence is still queued"
   const work = new AsyncWorkScope();
   const errors: unknown[] = [];
   try {
-    work.run(() =>
-      recordSessionParticipantBestEffort({
+    work.run(() => {
+      void recordSessionParticipantBestEffort({
         ...scope,
         identity: { type: "profile", id: "human-requester" },
         promptedAt: 1,
         onError: (error) => errors.push(error),
-      }),
-    );
+      });
+    });
     // The real recorder defers its write to the next microtask. Keep that original order.
     await Promise.resolve();
     expect(loadSessionEntryReadOnly(scope)?.participants ?? []).toEqual([]);

@@ -239,7 +239,7 @@ export async function tryDispatchAcpReplyCore(
         () => assertPreparedConversationBindingRouteCurrent(params.ctx),
       ))
     ) {
-      recordAcceptedSessionParticipantInput(params.ctx, participantTarget);
+      void recordAcceptedSessionParticipantInput(params.ctx, participantTarget);
       const counts = params.dispatcher.getQueuedCounts();
       params.recordProcessed("completed", { reason: "acp_question_answer" });
       params.markIdle("message_completed");
@@ -576,7 +576,7 @@ export async function tryDispatchAcpReplyCore(
       evidence: readChannelContextAdmissionEvidence(params.ctx),
       gatewayLocalUserIngress: getGatewayLocalUserIngress(params.ctx),
     }).admit("acp");
-    recordAcceptedSessionParticipantInput(params.ctx, participantTarget);
+    void recordAcceptedSessionParticipantInput(params.ctx, participantTarget);
     const turnAdmission = admittedRunContext;
     const elicitationParams = {
       sourceSessionKey: sessionKey,

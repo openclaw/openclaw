@@ -14,11 +14,14 @@ import { resolveSessionResetCommand } from "../../auto-reply/reply/session-reset
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   listSessionParticipantsReadOnly,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
 import {
   isSessionPersonalBootstrapTurn,
@@ -26,13 +29,19 @@ import {
 } from "../../sessions/session-participant-input.js";
 import { waitForSessionParticipantRecording } from "../../sessions/session-participant-recording.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
+import { createSqliteTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as chatAttachments from "../chat-attachments.js";
+import type { AdmittedChatSend } from "./chat-send-admission.js";
+import type { NormalizedChatSendRequest } from "./chat-send-request.js";
+import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { prepareTurn } from "./chat-send-user-turn-family.test-support.js";
-import { applyChatSendManagedMedia } from "./chat-send-user-turn.js";
+import { applyChatSendManagedMedia, prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 import { createClientInfo, createAttachments } from "./chat-send-user-turn.test-support.js";
+import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
+import type { GatewayClient } from "./shared-types.js";
 
 function uiClientInfo(mode: typeof GATEWAY_CLIENT_MODES.UI | typeof GATEWAY_CLIENT_MODES.WEBCHAT) {
   return createClientInfo({ id: GATEWAY_CLIENT_IDS.CONTROL_UI, mode });
@@ -66,6 +75,113 @@ function requesterProfile(text: string) {
     ? (JSON.parse(json) as { requester_profile?: { id: string; display_name: string } })
         .requester_profile
     : undefined;
+}
+
+async function acceptWebchatAuthor(params: {
+  env: NodeJS.ProcessEnv;
+  directory: string;
+  profileId: string;
+  provenance?: InputProvenance;
+  accept: "persist" | "stage";
+  sessionKey?: string;
+  cfg?: { session: { threadBindings: { enabled: true } } };
+}) {
+  const transcript = createSqliteTranscriptTarget({
+    dir: params.directory,
+    sessionId: "session-b",
+    sessionKey: params.sessionKey ?? "agent:main:shared",
+  });
+  const scope = {
+    agentId: "main",
+    env: params.env,
+    sessionKey: transcript.sessionKey,
+    storePath: transcript.storePath,
+  };
+  await upsertSessionEntryCore(scope, { sessionId: transcript.sessionId, updatedAt: 1 });
+  const clientInfo = createClientInfo({
+    id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+    mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+  });
+  const client = {
+    authenticatedUserProfile: clientProfile(params.profileId, "Bee"),
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: clientInfo,
+      scopes: ["operator.write"],
+    },
+  };
+  const session = {
+    agentId: "main",
+    clientRunId: "run-b",
+    sessionKey: transcript.sessionKey,
+    storePath: transcript.storePath,
+    now: 1,
+    resolvedSessionModel: { provider: "openai", model: "gpt-test" },
+    sessionTarget: { storePath: transcript.storePath, storeKey: transcript.sessionKey },
+    ...(params.cfg ? { cfg: params.cfg } : {}),
+  };
+  const request = {
+    chatSendReceivedAtMs: 1,
+    clientInfo,
+    inboundMessage: "hello from B",
+    rawMessage: "hello from B",
+    suppressCommandInterpretation: false,
+    supportsTaskSuggestions: false,
+    stopCommand: false,
+    turnKind: "main" as const,
+    normalizedAttachments: [],
+    reconnectResumeRequested: false,
+    systemInputProvenance: params.provenance,
+    p: {
+      sessionKey: transcript.sessionKey,
+      message: "hello from B",
+      idempotencyKey: "run-b",
+    },
+  };
+  const admission = {
+    admittedSessionId: transcript.sessionId,
+    acquireInputActor: async () => undefined,
+    originatingRoute: {
+      originatingChannel: "webchat" as const,
+      originatingTo: transcript.sessionKey,
+      explicitDeliverRoute: false,
+    },
+    sourceRef: {
+      input: {
+        sourceSessionId: transcript.sessionId,
+        mailbox: { key: transcript.sessionKey },
+      },
+    },
+  };
+  const userTurn = createGatewayChatUserTurnController({
+    admission: admission as AdmittedChatSend,
+    client: client as GatewayClient,
+    request: request as NormalizedChatSendRequest,
+    session: session as PreparedChatSendSession,
+    startedAt: 1,
+    warn: () => {},
+  });
+  const prepared = prepareChatSendUserTurn({
+    admission,
+    attachments: createAttachments({ parsedMessage: "hello from B" }),
+    client: client as GatewayClient,
+    logGateway: { warn: () => {} } as never,
+    request,
+    session,
+    userTurn,
+  });
+  const readParticipants = () => listSessionParticipantsReadOnly(scope).get(scope.sessionKey);
+  expect(readParticipants()).toBeUndefined();
+  if (params.accept === "stage") {
+    await expect(
+      userTurn.recorder.stageApproved?.({ runId: "run-b", assertCurrent: () => {} }),
+    ).resolves.toBe(true);
+  } else {
+    await expect(userTurn.recorder.persistApproved()).resolves.toMatchObject({ appended: true });
+  }
+  await waitForSessionParticipantRecording(scope);
+  return { prepared, readParticipants, scope };
 }
 
 describe("prepareChatSendUserTurn", () => {
@@ -160,8 +276,8 @@ describe("prepareChatSendUserTurn", () => {
           kind === "profile" || kind === "profileless" || kind === "system",
         );
         prepareChannelParticipantObservation(prepared.ctx);
-        recordAcceptedSessionParticipantInput({ ...prepared.ctx }, target);
-        recordAcceptedSessionParticipantInput(prepared.ctx, target);
+        void recordAcceptedSessionParticipantInput({ ...prepared.ctx }, target);
+        void recordAcceptedSessionParticipantInput(prepared.ctx, target);
         await waitForSessionParticipantRecording(target);
         const identity =
           kind === "profile"
@@ -586,5 +702,150 @@ describe("prepareChatSendUserTurn", () => {
     } finally {
       await fs.rm(imagePath, { force: true });
     }
+  });
+
+  it("records a webchat author when the accepted transcript never reaches reply init", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
+      const profile = ensureProfileForEmail("author-b@example.test", { env: state.env });
+      const accepted = await acceptWebchatAuthor({
+        accept: "persist",
+        directory: state.statePath("accepted-author-persist"),
+        env: state.env,
+        profileId: profile.id,
+      });
+      const row = [
+        {
+          identity: { type: "profile" as const, id: profile.id },
+          contributionCount: 1,
+          firstPromptedAt: 1,
+          lastPromptedAt: 1,
+        },
+      ];
+      expect(accepted.readParticipants()).toEqual(row);
+      void recordAcceptedSessionParticipantInput(accepted.prepared.ctx, accepted.scope);
+      await waitForSessionParticipantRecording(accepted.scope);
+      expect(accepted.readParticipants()).toEqual(row);
+    });
+  });
+
+  it("records a webchat author when accepted input is staged and reply init never runs", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
+      const profile = ensureProfileForEmail("staged-b@example.test", { env: state.env });
+      const accepted = await acceptWebchatAuthor({
+        accept: "stage",
+        directory: state.statePath("accepted-author-stage"),
+        env: state.env,
+        profileId: profile.id,
+      });
+      expect(accepted.readParticipants()).toEqual([
+        {
+          identity: { type: "profile", id: profile.id },
+          contributionCount: 1,
+          firstPromptedAt: 1,
+          lastPromptedAt: 1,
+        },
+      ]);
+    });
+  });
+
+  it("records a bound webchat author on the ACP session, not the dashboard session", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
+      const dashboardKey = "agent:main:dashboard:11111111-1111-4111-8111-111111111111";
+      const acpKey = "agent:claude:acp:22222222-2222-4222-8222-222222222222";
+      await getSessionBindingService().bind({
+        targetSessionKey: acpKey,
+        targetKind: "session",
+        placement: "current",
+        conversation: { channel: "webchat", accountId: "default", conversationId: dashboardKey },
+      });
+      const boundScope = {
+        agentId: "claude",
+        env: state.env,
+        sessionKey: acpKey,
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "claude" }),
+      };
+      await upsertSessionEntryCore(boundScope, {
+        sessionId: "22222222-2222-4222-8222-222222222222",
+        updatedAt: 1,
+      });
+      const profile = ensureProfileForEmail("bound-b@example.test", { env: state.env });
+      const accepted = await acceptWebchatAuthor({
+        accept: "persist",
+        cfg: { session: { threadBindings: { enabled: true } } },
+        directory: state.statePath("accepted-author-bound"),
+        env: state.env,
+        profileId: profile.id,
+        sessionKey: dashboardKey,
+      });
+      const row = [
+        {
+          identity: { type: "profile" as const, id: profile.id },
+          contributionCount: 1,
+          firstPromptedAt: 1,
+          lastPromptedAt: 1,
+        },
+      ];
+      expect(accepted.readParticipants()).toBeUndefined();
+      expect(listSessionParticipantsReadOnly(boundScope).get(acpKey)).toEqual(row);
+      void recordAcceptedSessionParticipantInput(accepted.prepared.ctx, boundScope);
+      await waitForSessionParticipantRecording(boundScope);
+      expect(listSessionParticipantsReadOnly(boundScope).get(acpKey)).toEqual(row);
+    });
+  });
+
+  it("leaves the author unrecorded when bound-session lookup fails", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
+      const dashboardKey = "agent:main:dashboard:33333333-3333-4333-8333-333333333333";
+      const acpKey = "agent:claude:acp:44444444-4444-4444-8444-444444444444";
+      await getSessionBindingService().bind({
+        targetSessionKey: acpKey,
+        targetKind: "session",
+        placement: "current",
+        conversation: { channel: "webchat", accountId: "default", conversationId: dashboardKey },
+      });
+      const boundScope = {
+        agentId: "claude",
+        env: state.env,
+        sessionKey: acpKey,
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "claude" }),
+      };
+      await upsertSessionEntryCore(boundScope, {
+        sessionId: "44444444-4444-4444-8444-444444444444",
+        updatedAt: 1,
+      });
+      const lookup = vi
+        .spyOn(getSessionBindingService(), "resolveByConversationAsync")
+        .mockRejectedValue(new Error("binding store unavailable"));
+      try {
+        const profile = ensureProfileForEmail("lookup-b@example.test", { env: state.env });
+        const accepted = await acceptWebchatAuthor({
+          accept: "persist",
+          cfg: { session: { threadBindings: { enabled: true } } },
+          directory: state.statePath("accepted-author-lookup-failed"),
+          env: state.env,
+          profileId: profile.id,
+          sessionKey: dashboardKey,
+        });
+        expect(accepted.readParticipants()).toBeUndefined();
+        expect(listSessionParticipantsReadOnly(boundScope).get(acpKey)).toBeUndefined();
+        lookup.mockRestore();
+        void recordAcceptedSessionParticipantInput(accepted.prepared.ctx, boundScope);
+        await waitForSessionParticipantRecording(boundScope);
+        expect(listSessionParticipantsReadOnly(boundScope).get(acpKey)).toEqual([
+          {
+            identity: { type: "profile", id: profile.id },
+            contributionCount: 1,
+            firstPromptedAt: 1,
+            lastPromptedAt: 1,
+          },
+        ]);
+      } finally {
+        lookup.mockRestore();
+      }
+    });
   });
 });

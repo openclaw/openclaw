@@ -94,7 +94,7 @@ function bundledRuntime(audit = createAudit()) {
   return createRuntimeBuilder({ origin: "bundled", audit });
 }
 function recordInput(context: Parameters<typeof recordAcceptedSessionParticipantInput>[0]) {
-  recordAcceptedSessionParticipantInput(context, {
+  void recordAcceptedSessionParticipantInput(context, {
     agentId: "main",
     sessionKey,
     storePath: "/unused",

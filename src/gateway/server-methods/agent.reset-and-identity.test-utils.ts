@@ -56,7 +56,7 @@ describe("gateway agent handler", () => {
       const profile = ensureProfileForEmail("agent-participant@example.test");
       const record = vi
         .spyOn(participantRecording, "recordSessionParticipantBestEffort")
-        .mockImplementation(() => {});
+        .mockImplementation(() => Promise.resolve(null));
       const context = makeContext();
       const params = {
         message: "accepted input",

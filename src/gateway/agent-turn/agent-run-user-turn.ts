@@ -137,7 +137,7 @@ export function recordAgentRunUserTurnParticipant(
     !params.suppressVisibleSessionEffects &&
     !userTurn.suppressPromptPersistence
   ) {
-    recordSessionParticipantBestEffort({
+    void recordSessionParticipantBestEffort({
       identity: participant,
       promptedAt: params.promptedAt,
       agentId: params.activeSessionAgentId,

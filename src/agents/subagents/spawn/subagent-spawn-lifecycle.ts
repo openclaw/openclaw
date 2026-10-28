@@ -34,8 +34,8 @@ export async function recordSubagentSessionSetup(params: {
       agentId: params.targetAgentId,
     });
   }
-  return () =>
-    recordSessionParticipantBestEffort({
+  return () => {
+    void recordSessionParticipantBestEffort({
       promptedAt: params.promptedAt,
       identity: { type: "agent", id: params.requesterAgentId },
       agentId: params.targetAgentId,
@@ -44,6 +44,7 @@ export async function recordSubagentSessionSetup(params: {
         agentId: params.targetAgentId,
       }),
     });
+  };
 }
 
 export function createSubagentSpawnLifecycleEmitter(params: {

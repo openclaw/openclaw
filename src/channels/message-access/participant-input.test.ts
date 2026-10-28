@@ -98,8 +98,8 @@ it.each([
       channelIngress: ingress,
     });
     const target = { agentId: "main", sessionKey: key, storePath: "/unused" };
-    recordAcceptedSessionParticipantInput({ ...context }, target);
-    recordAcceptedSessionParticipantInput(context, target);
+    void recordAcceptedSessionParticipantInput({ ...context }, target);
+    void recordAcceptedSessionParticipantInput(context, target);
     if (scenario === "qualified" || scenario === "mixed") {
       expect(recordParticipant.mock.calls).toEqual(
         identities

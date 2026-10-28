@@ -1,5 +1,6 @@
 import { recordSessionParticipant } from "../config/sessions/session-accessor.js";
 import type { SessionParticipantIdentity } from "../config/sessions/session-participant-identity.js";
+import type { RecordSessionParticipantResult } from "../config/sessions/session-sharing-store.types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
@@ -11,7 +12,7 @@ type ParticipantRecordingTarget = { agentId: string; sessionKey: string; storePa
 const log = createSubsystemLogger("sessions/participants");
 const pendingRecordings = resolveGlobalSingleton(
   Symbol.for("openclaw.pendingSessionParticipantRecordings"),
-  () => new Map<string, Set<Promise<void>>>(),
+  () => new Map<string, Set<Promise<unknown>>>(),
 );
 
 function participantSessionKey(target: ParticipantRecordingTarget): string {
@@ -22,6 +23,23 @@ function participantSessionKey(target: ParticipantRecordingTarget): string {
       ? normalized
       : toAgentStoreSessionKey({ agentId, requestKey: normalized });
   return JSON.stringify([agentId, sessionKey]);
+}
+
+function trackPendingSessionParticipantRecording(
+  target: ParticipantRecordingTarget,
+  work: Promise<unknown>,
+): void {
+  const key = participantSessionKey(target);
+  const pending = pendingRecordings.get(key) ?? new Set<Promise<unknown>>();
+  pending.add(work);
+  pendingRecordings.set(key, pending);
+  const settled = () => {
+    pending.delete(work);
+    if (pending.size === 0) {
+      pendingRecordings.delete(key);
+    }
+  };
+  void work.then(settled, settled);
 }
 
 /** Join accepted input before snapshotting its credit, outside any store/lifecycle hold. */
@@ -36,6 +54,14 @@ export async function waitForSessionParticipantRecording(
   await Promise.allSettled(pending);
 }
 
+/** Join destination lookup that has not registered its write yet. */
+export function trackSessionParticipantRecording(
+  target: ParticipantRecordingTarget,
+  work: Promise<unknown>,
+): void {
+  trackPendingSessionParticipantRecording(target, work);
+}
+
 /** Defers participant history persistence so it can never delay or abort an admitted turn. */
 export function recordSessionParticipantBestEffort(params: {
   identity: SessionParticipantIdentity;
@@ -44,7 +70,7 @@ export function recordSessionParticipantBestEffort(params: {
   storePath: string;
   promptedAt?: number;
   onError?: (error: unknown) => void;
-}): void {
+}): Promise<RecordSessionParticipantResult | null> {
   const promptedAt = params.promptedAt ?? Date.now();
   const reportFailure = (error: unknown) => {
     if (params.onError) {
@@ -57,7 +83,7 @@ export function recordSessionParticipantBestEffort(params: {
     runOutsideGatewayRootWorkAdmission(async () => {
       await Promise.resolve();
       try {
-        await recordSessionParticipant(
+        return await recordSessionParticipant(
           {
             agentId: params.agentId,
             sessionKey: params.sessionKey,
@@ -71,18 +97,13 @@ export function recordSessionParticipantBestEffort(params: {
         );
       } catch (error) {
         reportFailure(error);
+        return null;
       }
     }),
-  ).catch(reportFailure);
-  const key = participantSessionKey(params);
-  const pending = pendingRecordings.get(key) ?? new Set<Promise<void>>();
-  pending.add(work);
-  pendingRecordings.set(key, pending);
-  const settled = () => {
-    pending.delete(work);
-    if (pending.size === 0) {
-      pendingRecordings.delete(key);
-    }
-  };
-  void work.then(settled, settled);
+  ).catch((error: unknown) => {
+    reportFailure(error);
+    return null;
+  });
+  trackPendingSessionParticipantRecording(params, work);
+  return work;
 }

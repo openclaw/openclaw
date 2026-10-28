@@ -147,7 +147,7 @@ export async function runAgentStep(params: {
   }
 
   if (params.sourceAgentId && params.agentId) {
-    recordSessionParticipantBestEffort({
+    void recordSessionParticipantBestEffort({
       identity: { type: "agent", id: params.sourceAgentId },
       agentId: params.agentId,
       sessionKey: params.sessionKey,

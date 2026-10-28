@@ -887,7 +887,7 @@ async function initSessionStateAttemptLocked(
     !previousSessionEntry;
   const isFirstSessionTurn = isNewSession || createdByAdmission;
   if (!isSystemEvent && !isInterSession) {
-    recordAcceptedSessionParticipantInput(ctx, {
+    void recordAcceptedSessionParticipantInput(ctx, {
       ...sessionTarget,
       onError: (error) => log.warn("failed to record session participant", { error }),
     });

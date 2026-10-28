@@ -176,7 +176,7 @@ export function startSessionsSendReplyFlow(
             : deliver());
           const requester = params.requesterDeliveryGeneration;
           if (requester) {
-            recordSessionParticipantBestEffort({
+            void recordSessionParticipantBestEffort({
               agentId: requester.agentId,
               sessionKey: requester.sessionKey,
               storePath: requester.storePath,
@@ -350,7 +350,7 @@ export async function finishSessionsSendReply(params: {
     if (start.a2aSessionKey && !acceptedTarget.store[acceptedTarget.canonicalKey]) {
       throw new Error("Accepted Cron parent has no stored session entry.");
     }
-    recordSessionParticipantBestEffort({
+    void recordSessionParticipantBestEffort({
       identity: { type: "agent", id: requesterAgentId },
       promptedAt,
       agentId: acceptedTarget.agentId,
