@@ -79,32 +79,22 @@ describe("cron runtime row publication", () => {
     const changed = { ...jobs[0]!, name: "edited definition" };
     await saveCronStore(storePath, { version: 1, jobs: [changed, ...jobs.slice(2)] });
     await ensureLoaded(state, { forceReload: true });
-    expect(
-      onDefinitionChange.mock.calls.map(([previous, next]) => [previous?.id, next?.name]),
-    ).toEqual([
-      ["definition-0", "edited definition"],
-      ["definition-1", undefined],
-    ]);
-    onDefinitionChange.mockClear();
     await ensureLoaded(state, { forceReload: true });
-    expect(onDefinitionChange).not.toHaveBeenCalled();
 
     const current = state.store!.jobs[0]!;
     applyCronRuntimeRowsToState(state, [{ ...current, state: { lastRunAtMs: now } }]);
-    expect(onDefinitionChange).not.toHaveBeenCalled();
+    expect(onDefinitionChange).toHaveBeenCalledTimes(2);
     applyCronRuntimeRowsToState(state, [{ ...current, enabled: false }]);
-    expect(onDefinitionChange).toHaveBeenCalledTimes(1);
-    onDefinitionChange.mockClear();
     await ensureLoaded(state, { forceReload: true });
-    expect(onDefinitionChange).toHaveBeenCalledTimes(1);
-    onDefinitionChange.mockClear();
     await update(state, current.id, { name: "CRUD edit" });
     await remove(state, current.id);
-    expect(
-      onDefinitionChange.mock.calls.map(([previous, next]) => [previous?.id, next?.name]),
-    ).toEqual([
-      [current.id, "CRUD edit"],
-      [current.id, undefined],
+    expect(onDefinitionChange.mock.calls).toMatchObject([
+      [{ id: current.id }, { name: "edited definition", enabled: true }],
+      [{ id: "definition-1" }, undefined],
+      [{ id: current.id }, { name: "edited definition", enabled: false }],
+      [{ id: current.id }, { name: "edited definition", enabled: true }],
+      [{ id: current.id }, { name: "CRUD edit", enabled: true }],
+      [{ id: current.id }, undefined],
     ]);
   });
 
