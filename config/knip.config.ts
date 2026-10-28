@@ -31,6 +31,8 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  // Spawned directly by native-allocation-profile.test.ts.
+  "test/scripts/fixtures/native-profile-census.mjs!",
   // Their source headers document standalone benchmark and measurement commands.
   "scripts/bench-duplicate-paragraphs.mts!",
   "scripts/perf/auth-file-watch-events-measure.ts!",
