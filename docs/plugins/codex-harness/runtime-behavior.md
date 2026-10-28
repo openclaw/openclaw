@@ -175,8 +175,11 @@ transcript and attachment remain unchanged.
 
 Sending another attachment does not suppress generated images from the final
 reply. OpenClaw omits a generated image only when it can match confirmed delivery
-of that image to the reply destination. A partial delivery with uncertain
-attachment outcomes can leave a duplicate image rather than lose an unsent one.
+of that image to the reply destination. A confirmed send of a local file that
+had the same bytes when it was sent counts as delivery of that image, even
+from another path. A
+partial delivery with uncertain attachment outcomes can leave a duplicate image
+rather than lose an unsent one.
 
 ## Turn liveness and timeouts
 
