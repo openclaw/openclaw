@@ -88,23 +88,24 @@ cards; use catalog search to find offscreen plugins. `data-catalog-scroll` recor
 the mounted window and retained cards after scrolling to the final entry. The catalog
 `-100ms` variants delay only the browse RPC, not the whole network.
 
-| Scenario                      | Measured action and visible assertion                                         |
-| ----------------------------- | ----------------------------------------------------------------------------- |
-| `data-plugins-render`         | Open installed-plugin settings; assert 1,000 rows.                            |
-| `data-plugins-filter`         | Type a label prefix; assert 100 matching rows.                                |
-| `data-plugins-refresh`        | Deliver a plugin-change receipt; await the updated 1,000-row inventory.       |
-| `data-plugins-scroll`         | Scroll the final installed plugin into view.                                  |
-| `data-catalog-load-more`      | Append the final 100-item cursor page to 900 existing cards.                  |
-| `data-catalog-search`         | Search through the debounced Gateway query; assert 100 results.               |
-| `data-agent-selection`        | Reopen the hydrated 300-agent selector and select its final agent.            |
-| `data-agent-selection-100ms`  | Repeat hydrated selection with 100 ms simulated identity-RPC round trips.     |
-| `data-agent-reopen-retention` | Explicit-only diagnostic: close/reopen the hydrated selector ten times.       |
-| `data-agent-skills-render`    | Reveal the Skills panel; assert 1,000 skill rows.                             |
-| `data-agent-skills-filter`    | Filter to the final skill; assert one row.                                    |
-| `data-agent-skills-refresh`   | Refresh skills; await the report and preserved rows.                          |
-| `data-agent-skills-scroll`    | Scroll the final skill into view.                                             |
-| `data-agent-tools-render`     | Reveal Tools; assert 1,000 summaries and record mounted detail panels.        |
-| `data-agent-tool-disclosure`  | Open one tool; assert its effective-access details and record mounted panels. |
+| Scenario                      | Measured action and visible assertion                                                                 |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `data-plugins-render`         | Open installed-plugin settings; assert 1,000 rows.                                                    |
+| `data-plugins-filter`         | Type a label prefix; assert 100 matching rows.                                                        |
+| `data-plugins-refresh`        | Deliver a plugin-change receipt; await the updated 1,000-row inventory.                               |
+| `data-plugins-scroll`         | Scroll the final installed plugin into view.                                                          |
+| `data-catalog-load-more`      | Append the final 100-item cursor page to 900 existing cards.                                          |
+| `data-catalog-search`         | Search through the debounced Gateway query; assert 100 results.                                       |
+| `data-agent-selection`        | Reopen the hydrated 300-agent selector and select its final agent.                                    |
+| `data-agent-selection-100ms`  | Repeat hydrated selection with 100 ms simulated identity-RPC round trips.                             |
+| `data-agent-reopen-retention` | Explicit-only diagnostic: close/reopen the hydrated selector ten times.                               |
+| `data-agent-skills-render`    | Reveal the Skills panel; assert 1,000 skill rows.                                                     |
+| `data-agent-skills-filter`    | Filter to the final skill; assert one row.                                                            |
+| `data-agent-skills-refresh`   | Refresh skills; await the report and preserved rows.                                                  |
+| `data-agent-skills-scroll`    | Scroll the final skill into view.                                                                     |
+| `data-agent-tools-render`     | Reveal Tools; assert 40 groups and the 1,000-tool preview, recording mounted cards and detail panels. |
+| `data-agent-tool-group`       | Open one group; assert its 25 tool summaries and record mounted cards and detail panels.              |
+| `data-agent-tool-disclosure`  | Open one tool; assert its effective-access details and record mounted panels.                         |
 
 ## Activity and logs
 

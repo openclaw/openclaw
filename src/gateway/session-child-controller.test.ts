@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { resolveSubagentChildAuthority } from "../agents/subagents/registry/subagent-child-owner-match.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
@@ -133,36 +133,55 @@ test("keeps controller and native owners equivalent across generations, identiti
   }
 });
 
-test("resolves a queued controller through a replacement execution's scheduler slot", async () => {
-  const entry = run("accepted", {
-    collect: true,
-    schedulerSlotId: "slot",
-    execution: { status: "queued" },
-  });
-  subagentRuns.set(entry.runId, entry);
-  const session = { sessionId: "child", updatedAt: 1 };
-  const read = () => resolveSessionChildController(entry.childSessionKey, session);
-  expect(read()).toBeUndefined();
-  expect(
-    reserveSwarmRun({
-      runId: "slot",
-      groupId: "child-controller",
-      maxConcurrent: 1,
-      activeRunIds: [],
-    }),
-  ).toBe(true);
-  const hold = holdQueuedSwarmRun("slot")!;
-  try {
-    bindSwarmRunReservation("slot", getSubagentRunRuntimeKey(entry));
-    expect(read()).toBe(entry.requesterSessionKey);
-    subagentRuns.set(entry.runId, { ...entry, generation: 2 });
-    expect(read()).toBeUndefined();
+test.each(["subagent", "dashboard"])(
+  "resolves a parentless %s controller through a replacement scheduler slot",
+  async (kind) => {
+    const entry = run("accepted", {
+      childSessionKey: `agent:main:${kind}:child`,
+      collect: true,
+      schedulerSlotId: "slot",
+      execution: { status: "queued" },
+    });
     subagentRuns.set(entry.runId, entry);
-    expect(read()).toBe(entry.requesterSessionKey);
-    expect(hold.withdraw()).toBe(true);
+    const session = { sessionId: "child", updatedAt: 1 };
+    const retained = buildSubagentRunReadIndexFromRuns({ runs: new Map(), now: 1 });
+    using display = vi.spyOn(retained, "getDisplaySubagentRun");
+    using descendants = vi.spyOn(retained, "countActiveDescendantRuns");
+    const read = () => {
+      const controller = resolveSessionChildController(entry.childSessionKey, session);
+      const owners = resolveSessionChildOwners({
+        key: entry.childSessionKey,
+        entry: session,
+        now: 1,
+        subagentRuns: retained,
+      });
+      expect(owners).toEqual(controller ? [controller] : []);
+      return controller;
+    };
     expect(read()).toBeUndefined();
-  } finally {
-    hold.withdraw();
-    await hold.release();
-  }
-});
+    expect(
+      reserveSwarmRun({
+        runId: "slot",
+        groupId: "child-controller",
+        maxConcurrent: 1,
+        activeRunIds: [],
+      }),
+    ).toBe(true);
+    const hold = holdQueuedSwarmRun("slot")!;
+    try {
+      bindSwarmRunReservation("slot", getSubagentRunRuntimeKey(entry));
+      expect(read()).toBe(entry.requesterSessionKey);
+      subagentRuns.set(entry.runId, { ...entry, generation: 2 });
+      expect(read()).toBeUndefined();
+      subagentRuns.set(entry.runId, entry);
+      expect(read()).toBe(entry.requesterSessionKey);
+      expect(hold.withdraw()).toBe(true);
+      expect(read()).toBeUndefined();
+      expect(display).not.toHaveBeenCalled();
+      expect(descendants).not.toHaveBeenCalled();
+    } finally {
+      hold.withdraw();
+      await hold.release();
+    }
+  },
+);

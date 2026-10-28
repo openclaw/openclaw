@@ -42,6 +42,7 @@ const targetScopes = resolveGlobalSingleton(
       {
         env?: NodeJS.ProcessEnv;
         operatorAuthority?: AdmittedRunOperatorAuthority;
+        ownerContinuation?: true;
         deletion?: { agentId: string; isBlocked: () => boolean };
       }
     >(),
@@ -87,6 +88,8 @@ export async function captureSessionEventTargetForHost(
     producerPolicy?: Readonly<Pick<SessionEventTarget, "toolsAllow" | "settings">>;
     /** Original host-issued source; the producer owns its lifetime until enqueue. */
     operatorAuthority?: AdmittedRunOperatorAuthority;
+    /** The producing turn held command-owner authority under `operatorAuthority`. */
+    ownerContinuation?: true;
   } = {},
 ): Promise<SessionEventTarget> {
   const operatorAuthority = options.operatorAuthority;
@@ -192,7 +195,12 @@ export async function captureSessionEventTargetForHost(
         ? narrowSessionEventSettings(producerSettings, destinationSettings)
         : structuredClone(destinationSettings),
     };
-    targetScopes.set(target, { env, operatorAuthority, deletion });
+    targetScopes.set(target, {
+      env,
+      operatorAuthority,
+      ...(operatorAuthority && options.ownerContinuation ? { ownerContinuation: true } : {}),
+      deletion,
+    });
     return target;
   } finally {
     preparedCaller?.release();
@@ -330,6 +338,11 @@ export function readSessionEventTargetOperatorAuthority(
   return targetScopes.get(target)?.operatorAuthority;
 }
 
+/** Whether the producing turn was an owner under the target's captured operator source. */
+export function readSessionEventTargetOwnerContinuation(target: SessionEventTarget): boolean {
+  return targetScopes.get(target)?.ownerContinuation === true;
+}
+
 /** Coalesced work retains every producer's original destination and permission bound. */
 export function combineSessionEventTargetsForHost(
   targets: readonly SessionEventTarget[],
@@ -350,6 +363,8 @@ export function combineSessionEventTargetsForHost(
       target.chatType !== first.chatType ||
       readSessionEventTargetOperatorAuthority(target) !==
         readSessionEventTargetOperatorAuthority(first) ||
+      readSessionEventTargetOwnerContinuation(target) !==
+        readSessionEventTargetOwnerContinuation(first) ||
       channelRouteDedupeKey(target.deliveryContext) !== route
     ) {
       throw new Error(

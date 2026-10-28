@@ -123,7 +123,7 @@ it.each([
       expect(fs.existsSync(`${location}-wal`)).toBe(false);
       expect(fs.readFileSync(location)).toEqual(Buffer.alloc(65573, 19));
     } else {
-      await expect(image.fork(family)).rejects.toThrow("Retained SQLite snapshot changed");
+      await expect(image.fork(family)).rejects.toThrow("reason=retained-snapshot-changed");
     }
   },
 );
@@ -160,7 +160,7 @@ it.each(["same-size edit", "replacement", "journal"] as const)(
       fs.writeFileSync(`${image.source}-journal`, "pending rollback");
       expect(captureFamily(image.source, image.owned)).toBeUndefined();
     }
-    await expect(image.fork()).rejects.toThrow("Retained SQLite snapshot changed");
+    await expect(image.fork()).rejects.toThrow("reason=retained-snapshot-changed");
   },
 );
 

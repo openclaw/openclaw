@@ -21,6 +21,7 @@ export const MODEL_FIELD_LABELS: Record<string, string> = {
   "models.providers.*.agentRuntime": "Model Provider Runtime",
   "models.providers.*.agentRuntime.id": "Model Provider Runtime ID",
   "models.providers.*.localService": "Model Provider Local Service",
+  "models.providers.*.remote": "Model Provider Hosted Watchdog Timing",
   "models.providers.*.localService.command": "Model Provider Local Service Command",
   "models.providers.*.localService.args": "Model Provider Local Service Arguments",
   "models.providers.*.localService.cwd": "Model Provider Local Service Working Directory",

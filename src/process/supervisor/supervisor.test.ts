@@ -12,10 +12,7 @@ import type { SpawnInput } from "./types.js";
 const { child, pty, readMemory } = vi.hoisted(() => ({
   child: vi.fn(),
   pty: vi.fn(),
-  readMemory:
-    vi.fn<
-      (path: string, encoding: string, callback: (error: null, text: string) => void) => void
-    >(),
+  readMemory: vi.fn<(path: string, callback: (error: null, text: Buffer) => void) => void>(),
 }));
 vi.mock("./adapters/child.js", () => ({
   createChildAdapter: async (
@@ -126,8 +123,8 @@ describe("process supervisor", () => {
     async (mode) => {
       vi.useFakeTimers();
       mockProcessPlatform("linux");
-      const read = readMemory.mockImplementation((_path, _options, callback) => {
-        callback(null, "VmRSS:\t256 kB\n");
+      const read = readMemory.mockImplementation((_path, callback) => {
+        callback(null, Buffer.from("Name:\tfixture\nVmRSS:\t256 kB\n"));
       });
       const adapter = terminating();
       adapter.memoryRootPid = 4321;
@@ -148,7 +145,7 @@ describe("process supervisor", () => {
         adapter.settle(0);
       } else {
         expect(adapter.killMock).toHaveBeenCalledExactlyOnceWith("SIGKILL");
-        expect(read).toHaveBeenCalledWith("/proc/4321/status", "utf8", expect.any(Function));
+        expect(read).toHaveBeenCalledWith("/proc/4321/status", expect.any(Function));
         await expect(run.wait()).resolves.toMatchObject({
           reason: "memory-limit",
           timedOut: false,

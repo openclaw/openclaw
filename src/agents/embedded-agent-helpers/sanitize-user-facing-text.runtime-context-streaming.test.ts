@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, expect, it, vi } from "vitest";
 import { RUNTIME_CONTEXT_HEADER } from "../../llm/types.js";
+import { streamChunks } from "../../shared/text/streaming.test-support.js";
 import { createTextProjection } from "../../shared/text/text-projection.js";
 import {
   createAssistantVisibleStreamText,
@@ -15,38 +16,19 @@ const end = runtimeContext.INTERNAL_RUNTIME_CONTEXT_END;
 const secret = "private runtime context";
 const delimiters = [begin, end, RUNTIME_CONTEXT_HEADER];
 
-beforeEach(() => {
-  scrub.mockClear();
-});
-afterAll(() => {
-  scrub.mockRestore();
-});
+beforeEach(() => void scrub.mockClear());
+afterAll(() => scrub.mockRestore());
 
 function privateBlock(before: string, after: string, indent = "", newline = "\n"): string {
   return [before, indent + begin, secret, indent + end, after].filter(Boolean).join(newline);
 }
 
-function appendChunks(
-  stream: ReturnType<typeof createAssistantVisibleStreamText>,
-  text: string,
-  size: number,
-  onChunk?: (visible: string, prefix: string) => void,
-): string {
-  let visible = stream.text;
-  for (let offset = 0; offset < text.length; offset += size) {
-    const result = stream.append(text.slice(offset, offset + size));
-    visible = result.delta === null ? result.text : visible + result.delta;
-    onChunk?.(visible, text.slice(0, offset + size));
-  }
-  return visible;
-}
-
 function expectCanonicalStream(source: string, size: number, label?: string): void {
   const stream = createAssistantVisibleStreamText();
-  const visible = appendChunks(stream, source, size, (chunkVisible, prefix) => {
-    expect(chunkVisible, label).toBe(sanitizeAssistantVisibleStreamText(prefix));
+  const result = streamChunks(source, size, stream, (chunk, offset) => {
+    expect(chunk.text, label).toBe(sanitizeAssistantVisibleStreamText(source.slice(0, offset)));
   });
-  expect([visible, stream.text], label).toEqual(["Visible reply.", "Visible reply."]);
+  expect([result.delivered, result.text], label).toEqual(["Visible reply.", "Visible reply."]);
 }
 
 it.each([
@@ -64,9 +46,10 @@ it.each([
       .trimEnd();
     const stream = createAssistantVisibleStreamText();
     stream.replace(initial);
+    const prefix = stream.text;
     scrub.mockClear();
 
-    expect(appendChunks(stream, source, 4)).toBe(initial + source);
+    expect(prefix + streamChunks(source, 4, stream).delivered).toBe(initial + source);
     expect(scrub.mock.calls.reduce((sum, [text]) => sum + text.length, 0)).toBe(0);
   },
 );
@@ -81,7 +64,7 @@ it.each([1, 2, 3, 5, 7])("withholds every partial delimiter at %i-character delt
   for (const [shape, indent, newline] of shapes) {
     const source = privateBlock("Before.", "After.", indent, newline);
     const stream = createAssistantVisibleStreamText();
-    const visible = appendChunks(stream, source, size, (preview) => {
+    const result = streamChunks(source, size, stream, ({ text: preview }) => {
       expect(preview, shape).not.toContain(secret);
       const currentLine = preview.slice(preview.lastIndexOf("\n") + 1).trim();
       expect(
@@ -89,7 +72,10 @@ it.each([1, 2, 3, 5, 7])("withholds every partial delimiter at %i-character delt
         `${shape} line=${JSON.stringify(currentLine)}`,
       ).toBe(true);
     });
-    expect([visible, stream.text], shape).toEqual(["Before.\n\nAfter.", "Before.\n\nAfter."]);
+    expect([result.delivered, result.text], shape).toEqual([
+      "Before.\n\nAfter.",
+      "Before.\n\nAfter.",
+    ]);
   }
   expect(scrub.mock.calls.reduce((sum, [text]) => sum + text.length, 0)).toBeGreaterThan(0);
 });
@@ -102,13 +88,12 @@ it.each([1, 2, 3, 5, 7])(
     const stream = createTextProjection(userFacingTextFilters(false, true));
     const normalize = (text: string) => text.replace(/[ \t\r\n]+$/u, "");
 
-    for (let offset = 0; offset < source.length; offset += size) {
-      stream.append(source.slice(offset, offset + size));
-      const canonical = runtimeContext.stripInternalRuntimeContext(source.slice(0, offset + size), {
+    streamChunks(source, size, stream, (result, offset) => {
+      const canonical = runtimeContext.stripInternalRuntimeContext(source.slice(0, offset), {
         streaming: true,
       });
-      expect(normalize(stream.text)).toBe(normalize(canonical));
-    }
+      expect(normalize(result.text)).toBe(normalize(canonical));
+    });
 
     expect(stream.text).toBe("Intro.\n\nOutro.");
   },
@@ -118,8 +103,7 @@ it("keeps an unterminated block hidden after a replacement", () => {
   const stream = createAssistantVisibleStreamText();
   stream.replace(`${begin}\nsecret`);
 
-  expect(stream.text).toBe("");
-  expect(stream.append(" body\n").text).toBe("");
+  expect([stream.text, stream.append(" body\n").text]).toEqual(["", ""]);
   expect(stream.append(`${end}\nVisible`).text).toBe("Visible");
 });
 

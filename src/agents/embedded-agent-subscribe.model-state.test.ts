@@ -234,6 +234,7 @@ it.each(["error", "stop"] as const)(
         globalLane: "test",
         agentDir: "/tmp/async-progress",
         fallbackConfigured: false,
+        startedAtMs: nowMs,
       },
       preparedRuntime: {
         provider: "test-provider",
