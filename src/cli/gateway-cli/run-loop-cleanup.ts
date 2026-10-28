@@ -32,6 +32,8 @@ export function createGatewayRunCleanup(
   let cleanupFailed = false;
   let processResourcesDrained = false;
   let resourcesRetained = false;
+  const canClearRequestWatchdogs = () =>
+    !resourcesRetained && (!ownsProcessLifecycle || !cleanupFailed);
   const retainResources = (name: string, detail: string) => {
     resourcesRetained = true;
     onRetained();
@@ -106,6 +108,7 @@ export function createGatewayRunCleanup(
   };
   return {
     settleResource,
+    canClearRequestWatchdogs,
     classifyShutdownFailure(error: unknown, step: string): GatewayShutdownFailure | undefined {
       if (hasGatewayCleanupRetainedError(error)) {
         retainResources(step, formatErrorMessage(error));
@@ -251,7 +254,7 @@ export function createGatewayRunCleanup(
           "request-watchdogs",
           () => {
             // Retained native handles still need the owned process's hard-exit safety net.
-            if (!ownsProcessLifecycle || !cleanupFailed) {
+            if (canClearRequestWatchdogs()) {
               operations.clearRequestWatchdogs();
             }
           },
