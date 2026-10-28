@@ -335,6 +335,7 @@ export function getCommandPaletteModelItems(
     category: "models" as const,
     action: "nav:model-providers",
     description: model.provider,
+    search: `?provider=${encodeURIComponent(model.provider)}`,
     searchText: [model.id, model.provider, model.alias, model.tags?.join(" ")]
       .filter(Boolean)
       .join(" "),
