@@ -65,7 +65,12 @@ type ShutdownResult = {
   warnings: string[];
 };
 
-function createCloseSteps(reason: string, warnings: string[], cleanupWork: AsyncWorkScope) {
+function createCloseSteps(
+  reason: string,
+  warnings: string[],
+  cleanupWork: AsyncWorkScope,
+  exitAfterClose: boolean,
+) {
   const retainedErrors: unknown[] = [];
   const measureCloseStep = async <T>(
     name: string,
@@ -73,7 +78,7 @@ function createCloseSteps(reason: string, warnings: string[], cleanupWork: Async
     timeoutMs = RUNTIME_CLOSE_GRACE_MS,
   ) => {
     const work = measureGatewayCloseStep(`restart.close.${name}`, run, [["reason", reason]]);
-    if (!(await settlesWithin(work, timeoutMs))) {
+    if (exitAfterClose && !(await settlesWithin(work, timeoutMs))) {
       throw new GatewayShutdownCleanupRetainedError([], `${name} resources remain after grace`);
     }
     return await work;
@@ -91,7 +96,9 @@ function createCloseSteps(reason: string, warnings: string[], cleanupWork: Async
         recordShutdownWarning(warnings, name);
       }
     });
-    if (!(await settlesWithin(work, RUNTIME_CLOSE_GRACE_MS))) {
+    if (!exitAfterClose) {
+      await work;
+    } else if (!(await settlesWithin(work, RUNTIME_CLOSE_GRACE_MS))) {
       // The final persistence barrier still owns this exact operation after its grace.
       shutdownLog.warn(`${name}: resources remain after grace`);
       recordShutdownWarning(warnings, name);
@@ -239,7 +246,13 @@ export async function prepareGatewayClose(
   const restartExpectedMs = notice.restartExpectedMs ?? null;
   const restart = restartExpectedMs !== null;
   const cleanupWork = new AsyncWorkScope();
-  const { shutdownStep, retainedErrors } = createCloseSteps(reason, warnings, cleanupWork);
+  const exitAfterClose = opts?.exitAfterClose === true;
+  const { shutdownStep, retainedErrors } = createCloseSteps(
+    reason,
+    warnings,
+    cleanupWork,
+    exitAfterClose,
+  );
   // Fence async session-state writes before the first awaited shutdown step.
   fenceSessionSuspensionWritesForGatewayShutdown();
 
@@ -254,7 +267,9 @@ export async function prepareGatewayClose(
         measureGatewayCloseStep(`gateway-${action}-hook`, () => triggerInternalHook(event)),
       );
       void hookPromise.catch(() => undefined);
-      if (!(await settlesWithin(hookPromise, timeoutMs))) {
+      if (!exitAfterClose) {
+        await hookPromise;
+      } else if (!(await settlesWithin(hookPromise, timeoutMs))) {
         shutdownLog.warn(`${hookName} hook timed out after ${timeoutMs}ms; continuing shutdown`);
         recordShutdownWarning(warnings, hookName);
       }
@@ -307,10 +322,23 @@ export async function prepareGatewayClose(
       shutdownLog.warn(`memory preparation failed during shutdown: ${formatErrorMessage(error)}`);
       recordShutdownWarning(warnings, "memory-managers");
     });
-    return { start, notice, restart, warnings, cleanupWork, retainedErrors, failure };
+    return {
+      start,
+      notice,
+      restart,
+      warnings,
+      cleanupWork,
+      retainedErrors,
+      failure,
+      exitAfterClose,
+    };
   } catch (error) {
     if (!isGatewayCleanupRetainedError(error)) {
-      await settlesWithin(cleanupWork.drain(), RUNTIME_CLOSE_GRACE_MS);
+      if (exitAfterClose) {
+        await settlesWithin(cleanupWork.drain(), RUNTIME_CLOSE_GRACE_MS);
+      } else {
+        await cleanupWork.drain();
+      }
     }
     throw error;
   }
@@ -331,7 +359,9 @@ export function completeGatewayClose(
       // Resource close already gave retained work its grace; sealing keeps its custody.
       throw result.error;
     }
-    if (!(await settlesWithin(drain, RUNTIME_CLOSE_GRACE_MS))) {
+    if (!preparation.exitAfterClose) {
+      await drain;
+    } else if (!(await settlesWithin(drain, RUNTIME_CLOSE_GRACE_MS))) {
       throw new GatewayShutdownCleanupRetainedError([]);
     }
     return result.value;
@@ -361,6 +391,7 @@ async function closeGatewayResources(
     reason,
     warnings,
     cleanupWork,
+    preparation.exitAfterClose,
   );
   const disposeRuntime = async (
     label:
@@ -379,7 +410,9 @@ async function closeGatewayResources(
         recordShutdownWarning(warnings, label);
         resourceCleanupErrors.push(err);
       });
-    if (!(await settlesWithin(disposePromise, RUNTIME_CLOSE_GRACE_MS))) {
+    if (!preparation.exitAfterClose) {
+      await disposePromise;
+    } else if (!(await settlesWithin(disposePromise, RUNTIME_CLOSE_GRACE_MS))) {
       shutdownLog.warn(
         `${label} runtime disposal exceeded ${RUNTIME_CLOSE_GRACE_MS}ms; continuing shutdown`,
       );

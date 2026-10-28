@@ -239,7 +239,7 @@ describe("createGatewayCloseHandler", () => {
       });
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const closing = close({
-        reason: "actual cleanup proof",
+        exitAfterClose: true,
         ...(owner === "pre-restart" ? { restartExpectedMs: 1000 } : {}),
       }).catch((error: unknown) => error);
       try {

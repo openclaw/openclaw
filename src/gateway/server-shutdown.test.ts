@@ -38,6 +38,7 @@ it.for([false, true])(
         runClosePrelude: noWork,
         sealAndJoinRegisteredSidecarStops: noWork,
       },
+      exitAfterClose: true,
       close,
       onError,
     }).catch((error: unknown) => error);

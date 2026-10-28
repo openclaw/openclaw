@@ -69,6 +69,7 @@ export async function runGatewayCloseSteps(params: {
     runClosePrelude: GatewayShutdownStep["run"];
     sealAndJoinRegisteredSidecarStops: GatewayShutdownStep["run"];
   };
+  exitAfterClose?: boolean;
   close: GatewayShutdownStep["run"];
   disposeTerminalSessions?: GatewayShutdownStep["run"];
   runStopHooks?: GatewayShutdownStep["run"];
@@ -106,6 +107,11 @@ export async function runGatewayCloseSteps(params: {
       // Trace consumers parse one phase token; keep the human label for errors.
       const phase = `shutdown.${step.name.replace(/\s+/gu, "-")}`;
       const pending = measureGatewayCloseStep(phase, () => step.run());
+      // Embedded hosts retain the runtime and must join every owned cleanup operation.
+      if (!params.exitAfterClose) {
+        await pending;
+        continue;
+      }
       const graceMs = step.name === "gateway close" ? 10_000 : CLEANUP_GRACE_MS;
       if (!(await settlesWithin(pending, graceMs))) {
         const message = `${step.name} cleanup exceeded ${graceMs}ms; resources remain; pending: ${formatGatewayPendingCloseSteps()}`;

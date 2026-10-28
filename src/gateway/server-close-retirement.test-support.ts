@@ -47,7 +47,7 @@ export function registerGatewayResourceRetirementTests(
       cron: { stop: vi.fn(), stopAndDrain },
       lifecycleUnsub: () => cronCleanup.resolve(),
     });
-    const closing = close({ reason: "late cron cleanup" });
+    const closing = close({ reason: "late cron cleanup", exitAfterClose: true });
     try {
       await vi.advanceTimersByTimeAsync(5_000);
       const result = await closing;
@@ -94,7 +94,11 @@ export function registerGatewayResourceRetirementTests(
         clearSecretsRuntimeSnapshot,
         stopChannel,
       });
-      closing = close({ reason: "gateway restarting", restartExpectedMs: 1_500 });
+      closing = close({
+        reason: "gateway restarting",
+        restartExpectedMs: 1_500,
+        exitAfterClose: true,
+      });
       const failure = closing.catch((error: unknown) => error);
       await vi.advanceTimersByTimeAsync(5_000);
       expect(sharedStateLifecycle.has("open")).toBe(true);
@@ -128,7 +132,9 @@ export function registerGatewayResourceRetirementTests(
       const close = createGatewayCloseHandler({
         httpServer: { close: httpClose, closeIdleConnections: vi.fn() } as never,
       });
-      const closePromise = close({ reason: "test shutdown" }).catch((error: unknown) => error);
+      const closePromise = close({ reason: "test shutdown", exitAfterClose: true }).catch(
+        (error: unknown) => error,
+      );
       try {
         if (label === "bundle-mcp") {
           await vi.advanceTimersByTimeAsync(0);
