@@ -9,6 +9,7 @@ import {
   captureUiProofEnabled,
   chatMessage,
   createChatFlowE2eSuite,
+  expectDefined,
   expectRequestCountStable,
   installMockGateway,
   requireRecord,
@@ -85,31 +86,26 @@ suite.define(() => {
           const held = page.locator('.chat-send-status[data-send-state="held"]');
           await expectBrowser(held).toContainText("Needs review");
           await expectBrowser(button(held, "Discard")).toBeVisible();
-          // Enlarged text must not push recovery controls outside the conversation.
+          // Enlarged text must keep recovery controls in bounds as virtual rows change.
           await page.addStyleTag({ content: ".chat-send-status { font-size: 24px; }" });
           for (const theme of ["light", "dark"]) {
             await gateway.setOnline(false);
             await page.evaluate((mode) => {
               document.documentElement.dataset.themeMode = mode;
             }, theme);
-            // Recovery rows can unmount outside the virtualized transcript window.
             await scrollChatThreadToTop(page);
             for (const state of ["failed", "waiting-reconnect", "held"]) {
               const status = page.locator(`.chat-send-status[data-send-state="${state}"]`);
               await expectBrowser(status).toBeVisible({ timeout: 30_000 });
               await status.scrollIntoViewIfNeeded();
               await page.mouse.move(0, 0);
-              const footer = status.locator(
-                "xpath=ancestor::div[contains(@class, 'chat-group-footer--send-status')]",
-              );
-              await expectBrowser(footer).toHaveCSS("opacity", "1");
+              await expectBrowser(
+                page.locator(".chat-group-footer--send-status", { has: status }),
+              ).toHaveCSS("opacity", "1");
               for (const action of await status.getByRole("button").all()) {
                 await expectBrowser(action).toBeVisible();
                 await expectBrowser(action).toBeEnabled();
-                const bounds = await action.boundingBox();
-                if (!bounds) {
-                  throw new Error("Recovery action has no rendered bounds");
-                }
+                const bounds = expectDefined(await action.boundingBox(), "recovery action bounds");
                 expect(bounds.x).toBeGreaterThanOrEqual(0);
                 expect(bounds.x + bounds.width).toBeLessThanOrEqual(320);
               }
