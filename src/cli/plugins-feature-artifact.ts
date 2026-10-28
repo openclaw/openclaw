@@ -25,10 +25,6 @@ export type PluginsPackOptions = { root?: string; out?: string; json?: boolean }
 /** Produce one reviewable import: bundled code, immutable UI assets, no install scripts. */
 async function packFeaturePlugin(opts: PluginsPackOptions) {
   const rootDir = await fs.realpath(path.resolve(opts.root ?? process.cwd()));
-  const validation = await collectPluginsValidationResult({ root: rootDir });
-  if (!validation.valid) {
-    throw new Error(validation.errors.join("\n"));
-  }
   const source = await root(rootDir, { symlinks: "reject", hardlinks: "reject" });
   const packageManifest = await source.readJson("package.json");
   if (!isRecord(packageManifest) || !isRecord(packageManifest.openclaw)) {
@@ -63,6 +59,10 @@ async function packFeaturePlugin(opts: PluginsPackOptions) {
   const setupEntry = resolvePackageSetupSource(resolution);
   if (!entry || diagnostics.length > 0) {
     throw new Error(diagnostics.map((diagnostic) => diagnostic.message).join("\n"));
+  }
+  const validation = await collectPluginsValidationResult({ root: rootDir, runtimeEntry: entry });
+  if (!validation.valid) {
+    throw new Error(validation.errors.join("\n"));
   }
   const loaded = withPluginCache(createPluginCache(), () => loadPluginManifest(rootDir, false));
   if (!loaded.ok) {

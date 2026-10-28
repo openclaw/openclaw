@@ -25,12 +25,15 @@ id for the default output directory and package naming. Tool scaffolds use
 `defineToolPlugin` and generate `package.json` scripts `plugin:build` and
 `plugin:validate` that build then call `openclaw plugins build`/`validate`.
 
-`plugins build` imports the built entry, reads its static tool metadata, writes
-`openclaw.plugin.json`, and keeps `package.json`'s `openclaw.extensions` aligned.
-`plugins validate` checks that the generated manifest, package metadata, and
-current entry export still agree. Pass `--json` for a machine-readable
-validation result. See [Tool Plugins](/plugins/tool-plugins) for the full
-authoring workflow.
+`plugins build` and `plugins validate` require the generated authoring metadata
+exposed by tool and feature entries. Build imports the built entry, reads that
+metadata, writes `openclaw.plugin.json`, and keeps `package.json`'s
+`openclaw.extensions` aligned. Validate checks that the generated manifest,
+package metadata, and current entry export still agree. Pass `--json` for a
+machine-readable validation result. Ordinary plugins that author their own
+manifest use their own build and validation workflow; they can still use
+[`plugins pack`](#pack-a-plugin). See [Tool Plugins](/plugins/tool-plugins) for the
+generated-metadata workflow.
 
 Authoring metadata must be regular files containing valid UTF-8 JSON. Symlinks to
 regular files are supported; pipes and other special files are rejected before reading.
@@ -52,6 +55,11 @@ include their separate browser entry in TypeScript checks. All scaffolds pin
 TypeScript 7.0.2 and set `rootDir` to `src`, keeping the compiled entry at
 `dist/index.js`.
 
+TypeScript compilation leaves backend package imports such as `typebox` intact.
+`plugins build` generates backend metadata; it does not bundle backend dependencies.
+Use `plugins pack` for a bundled import archive, or add bundling to your project's
+own build when a linked installation loads its `dist/` files directly.
+
 ### Feature scaffold and artifacts
 
 Use `--type feature` for a typed backend operation, agent tool, native page,
@@ -64,18 +72,6 @@ Plugin APIs are [experimental](/plugins/sdk-overview#api-stability). The
 scaffold’s native browser UI is available by default once the plugin is enabled;
 there is no Labs opt-in. Existing advanced opt-outs remain honored. See
 [Enable custom plugin UI](/plugins/feature-plugins#enable-custom-plugin-ui).
-
-`plugins pack` validates a built project, bundles its backend dependencies, and
-writes an archive containing compiled code and UI with no install scripts or
-runtime package dependencies. `--json` returns its absolute path, SHA-256 digest,
-and exact `plugin_activate_artifact` request. The output file must not exist.
-The default filename is `<plugin-id>.tgz` in the project root, with `/` replaced
-by `__` for scoped ids (for example, `@author__tools.tgz`). Use `--out` to choose
-another path. Packing follows the package's runtime entry selection, including
-`runtimeExtensions`, and bundles a declared setup entry separately. Source/runtime
-entry paths are rewritten to the compiled files included in the archive.
-See [Feature plugins](/plugins/feature-plugins) for activation approval, reload,
-view lifecycle, and recovery.
 
 ### Provider scaffold
 
@@ -93,9 +89,45 @@ with API-key auth plumbing, a `npm run validate` script that runs
 `clawhub package validate`, ClawHub package metadata, and a manually
 dispatched GitHub Actions workflow for future trusted publishing via GitHub
 OIDC. Provider scaffolds do not generate skills and do not use
-`openclaw plugins build`/`validate`; those commands are for the tool
-scaffold's generated-metadata path.
+`openclaw plugins build`/`validate`; those commands are for tool and feature
+generated-metadata workflows.
 
 Before publishing, replace the placeholder API base URL, model catalog, docs
 route, credential text, and README copy with real provider details. Use the
 generated README for first-time ClawHub publishing and trusted-publisher setup.
+
+## Pack a plugin
+
+`plugins pack` accepts tool and feature entries with generated authoring metadata,
+and ordinary native plugins with an authored `openclaw.plugin.json` and runtime
+registration entry. Generated-metadata plugins still undergo the strict metadata
+checks used by `plugins validate`; packing does not regenerate a stale manifest.
+Install `esbuild` in the plugin project's development dependencies, then pack the
+built project:
+
+```bash
+npm install --save-dev esbuild
+openclaw plugins pack --root . --out ./my-plugin.tgz --json
+```
+
+Packing bundles backend dependencies such as TypeBox while leaving Node builtins
+and host `openclaw` SDK imports external. The archive contains compiled code,
+the manifest, and declared compiled UI, with no install scripts or runtime package
+dependencies. Packing follows the package's runtime entry selection, including
+`runtimeExtensions`, and bundles a declared setup entry separately. Source/runtime
+entry paths are rewritten to the compiled files included in the archive.
+
+The artifact must have one backend entry. Module-relative runtime resources and
+opaque dynamic loaders remain unsupported; use literal imports and embed resources,
+or use the normal package-install flow. See the full
+[artifact limits](/plugins/feature-plugins#approve-an-agent-built-artifact), including
+restrictions on `import.meta`, `__dirname`, `__filename`, and `require.resolve`.
+
+`--json` returns the archive's absolute path, SHA-256 digest, and exact
+`plugin_activate_artifact` request. The output file must not exist. Without `--out`,
+the filename is `<plugin-id>.tgz` in the project root, with `/` replaced by `__`
+for scoped ids (for example, `@author__tools.tgz`). Packing does not rewrite the
+project's `dist/` output or change an existing linked installation. To bundle the
+backend files loaded from a linked `dist/`, add that step to the project's own build.
+See [Feature plugins](/plugins/feature-plugins) for activation approval, reload,
+view lifecycle, and recovery.

@@ -22,8 +22,9 @@ or [Provider Plugins](/plugins/sdk-provider-plugins) instead.
 
 - Node 24.22.1+ or Node 26.12.1+.
 - TypeScript ESM package output.
-- `typebox` in `dependencies` (not just `devDependencies` - the generated
-  plugin imports it at runtime).
+- `typebox` in `dependencies` while the built JavaScript imports it at runtime,
+  as the default scaffold does. A build that bundles TypeBox may keep it in
+  `devDependencies` if published declarations do not require it.
 - `openclaw >=2026.5.17`, the first version that exports
   `openclaw/plugin-sdk/tool-plugin`.
 - A package root that ships `dist/`, `openclaw.plugin.json`, and
@@ -54,6 +55,14 @@ npm test
 `npm run plugin:build` runs `npm run build` (tsc) then
 `openclaw plugins build --entry ./dist/index.js`. `npm run plugin:validate`
 rebuilds and runs `openclaw plugins validate --entry ./dist/index.js`.
+These commands check generated tool/feature metadata. The scaffold's TypeScript
+compilation and native `plugins build` do not bundle backend dependencies: imports
+such as `typebox` remain runtime package imports. Use
+[`plugins pack`](/cli/plugins/authoring#pack-a-plugin) to produce a bundled archive.
+Packing requires `esbuild` in the plugin project's development dependencies and
+does not rewrite `dist/`. To bundle a linked installation's backend dependencies,
+add that step to the project's own build.
+
 Successful validation prints:
 
 ```text
@@ -629,7 +638,11 @@ entry:
 ```
 
 Ship built JavaScript (`./dist/index.js`), not a TypeScript source entry.
-Source entries only work for workspace-local development.
+Source entries only work for workspace-local development. Compiled JavaScript
+alone does not imply that its dependencies are bundled. For
+[bundled artifacts](/cli/plugins/authoring#pack-a-plugin), keep the host OpenClaw
+SDK and Node builtins external, and retain any dependencies needed by public
+TypeScript declarations.
 
 ## Validate in CI
 
@@ -735,8 +748,10 @@ package metadata with the entry you intend to ship.
 
 ### `Cannot find package 'typebox'`
 
-The built plugin imports `typebox` at runtime. Keep it in `dependencies`,
-reinstall, rebuild, and rerun validation.
+If the built plugin still imports `typebox` at runtime, keep it in `dependencies`,
+reinstall, rebuild, and rerun validation. If it is meant to be bundled, inspect the
+artifact that the Gateway actually loads; running `plugins pack` does not replace
+an existing linked `dist/` build.
 
 ### Tool does not appear after install
 

@@ -12,17 +12,19 @@ import {
   PLUGIN_MANIFEST_FILENAME,
   resolvePackageExtensionEntries,
 } from "../plugins/manifest.js";
-import { unwrapDefaultModuleExport } from "../plugins/module-export.js";
+import { resolvePluginModuleExport } from "../plugins/module-export.js";
 import { controlUiSource } from "../plugins/package-manifest.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
-import { getCachedPluginModuleLoader } from "../plugins/plugin-module-loader-cache.js";
-import { buildPluginLoaderAliasMap } from "../plugins/sdk-alias.js";
 import { defaultRuntime } from "../runtime.js";
-import { toSafeImportPath } from "../shared/import-specifier.js";
 import { shortenHomeInString } from "../utils.js";
 import { VERSION } from "../version.js";
 import { formatCliOperatorError } from "./failure-output.js";
 import { readPluginAuthoringJson as readJsonFile } from "./plugins-authoring-json.js";
+import {
+  loadPluginAuthoringModule,
+  loadToolPlugin,
+  normalizeRelativePath,
+} from "./plugins-authoring-loader.js";
 import {
   buildToolPluginManifest,
   buildToolPluginPackageManifest,
@@ -65,16 +67,6 @@ function writeJsonFile(filePath: string, value: unknown): void {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function normalizeRelativePath(rootDir: string, targetPath: string): string {
-  const relative = path
-    .relative(rootDir, path.resolve(rootDir, targetPath))
-    .replaceAll(path.sep, "/");
-  if (relative === ".." || relative.startsWith("../")) {
-    throw new Error(`entry must stay inside plugin root: ${targetPath}`);
-  }
-  return relative.startsWith(".") ? relative : `./${relative}`;
-}
-
 function resolveEntryPath(rootDir: string, entry: string | undefined): string {
   if (entry) {
     return path.resolve(rootDir, entry);
@@ -95,42 +87,6 @@ function readPackageManifest(rootDir: string): JsonObject {
     throw new Error(`package.json not found: ${packagePath}`);
   }
   return readJsonFile(packagePath);
-}
-
-export async function loadToolPlugin(params: { rootDir: string; entryPath: string }) {
-  // Tool and feature helpers publish the same static authoring metadata.
-  if (!fs.existsSync(params.entryPath)) {
-    throw new Error(
-      `plugin entry not found: ${normalizeRelativePath(params.rootDir, params.entryPath)}`,
-    );
-  }
-  const loader = getCachedPluginModuleLoader({
-    modulePath: params.entryPath,
-    importerUrl: import.meta.url,
-    loaderFilename: params.entryPath,
-    aliasMap: buildPluginLoaderAliasMap(params.entryPath, process.argv[1], import.meta.url),
-  });
-  const loaded = loader(toSafeImportPath(params.entryPath));
-  const mod =
-    loaded && typeof loaded === "object"
-      ? (loaded as { default?: unknown; createEntry?: unknown; entry?: unknown })
-      : undefined;
-  const candidate = unwrapDefaultModuleExport(
-    mod?.default ?? mod?.createEntry ?? mod?.entry ?? loaded,
-  );
-  const entry = await (typeof candidate === "function"
-    ? (candidate as () => unknown)()
-    : candidate);
-  const metadata = getToolPluginMetadata(entry);
-  if (!metadata) {
-    throw new Error(
-      `plugin entry does not expose tool or feature authoring metadata: ${normalizeRelativePath(
-        params.rootDir,
-        params.entryPath,
-      )}`,
-    );
-  }
-  return { entry, metadata };
 }
 
 export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise<void> {
@@ -208,7 +164,7 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
 }
 
 export async function collectPluginsValidationResult(
-  opts: PluginsValidateOptions,
+  opts: PluginsValidateOptions & { runtimeEntry?: string },
 ): Promise<PluginsValidationResult> {
   const rootDir = path.resolve(opts.root ?? process.cwd());
   const entryPath = resolveEntryPath(rootDir, opts.entry);
@@ -221,13 +177,30 @@ export async function collectPluginsValidationResult(
     return { valid: false, errors: [manifestResult.error] };
   }
   const manifest = readJsonFile(path.join(rootDir, PLUGIN_MANIFEST_FILENAME));
-  const { metadata } = await loadToolPlugin({ rootDir, entryPath });
-  const errors = validateToolPluginProject({
-    metadata,
-    manifest,
-    packageManifest,
-    entry: entryRelative,
-  });
+  // Pack validates the code it will ship. Callable runtime exports are register(api),
+  // whereas the generated-metadata authoring path also supports entry factories.
+  const runtimeEntry = opts.runtimeEntry
+    ? resolvePluginModuleExport(
+        loadPluginAuthoringModule({ rootDir, entryPath: opts.runtimeEntry }),
+      )
+    : undefined;
+  const metadata = runtimeEntry
+    ? getToolPluginMetadata(runtimeEntry.definition)
+    : (await loadToolPlugin({ rootDir, entryPath })).metadata;
+  const errors = metadata
+    ? validateToolPluginProject({ metadata, manifest, packageManifest, entry: entryRelative })
+    : [];
+  if (runtimeEntry) {
+    if (typeof runtimeEntry.register !== "function") {
+      errors.push("Plugin runtime entry must export a register function.");
+    }
+    if (runtimeEntry.definition?.id && runtimeEntry.definition.id !== manifestResult.manifest.id) {
+      errors.push(
+        `Plugin runtime entry id (${runtimeEntry.definition.id}) must match manifest id (${manifestResult.manifest.id}).`,
+      );
+    }
+  }
+  const pluginId = metadata?.id ?? manifestResult.manifest.id;
   const browserSource = controlUiSource(packageManifest);
   if (browserSource) {
     const declaration = await buildPluginControlUi({ rootDir, source: browserSource, check: true });
@@ -239,10 +212,10 @@ export async function collectPluginsValidationResult(
     }
   }
   if (errors.length > 0) {
-    return { valid: false, pluginId: metadata.id, errors };
+    return { valid: false, pluginId, errors };
   }
 
-  return { valid: true, pluginId: metadata.id, errors: [] };
+  return { valid: true, pluginId, errors: [] };
 }
 
 export async function runPluginsValidateCommand(opts: PluginsValidateOptions): Promise<void> {
