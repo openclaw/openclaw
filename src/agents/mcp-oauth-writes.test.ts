@@ -25,8 +25,13 @@ it("persists SDK callbacks and pending state across close without parent SQL or 
       refresh_token: "fixture-refresh",
       token_type: "Bearer",
       expires_in: 3600,
+      issuer: "https://issuer.example.test",
     };
     const discovery = { authorizationServerUrl: "https://issuer.example.test" };
+    const clientInformation = {
+      client_id: "fixture-client",
+      issuer: discovery.authorizationServerUrl,
+    };
     const redirectUrl = "https://gateway.example.test/oauth/mcp/callback";
     const authorizationUrl = new URL("https://issuer.example.test/authorize?state=fixture-state");
     const sql = observeMainThreadSql({ includeClose: true });
@@ -40,7 +45,7 @@ it("persists SDK callbacks and pending state across close without parent SQL or 
           config: { redirectUrl },
           allowAuthorizationRedirect: true,
         });
-        await provider.saveClientInformation?.({ client_id: "fixture-client" });
+        await provider.saveClientInformation?.(clientInformation);
         await provider.saveDiscoveryState?.(discovery);
         const supplied = { ...tokens };
         const saving = provider.saveTokens(supplied);
@@ -69,7 +74,7 @@ it("persists SDK callbacks and pending state across close without parent SQL or 
         expect(await readMcpOAuthPendingAuthorization("fixture-delete", context)).toBeUndefined();
         await provider.invalidateCredentials?.("tokens");
         expect(await provider.tokens()).toBeUndefined();
-        expect(await provider.clientInformation()).toEqual({ client_id: "fixture-client" });
+        expect(await provider.clientInformation()).toEqual(clientInformation);
         expect(await provider.codeVerifier()).toBe("fixture-verifier");
         await provider.saveTokens(tokens);
       });
@@ -82,6 +87,7 @@ it("persists SDK callbacks and pending state across close without parent SQL or 
         });
         expect(await provider.tokens()).toEqual(tokens);
         expect(await provider.discoveryState?.()).toEqual(discovery);
+        expect(await provider.clientInformation()).toEqual(clientInformation);
         expect(await provider.codeVerifier()).toBe("fixture-verifier");
         expect(provider.redirectUrl).toBe(redirectUrl);
         await clearMcpOAuthStore({ storeKey: identity.storeKey, lease, context });
