@@ -26,11 +26,12 @@ import {
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { projectChatSystemNotice } from "./chat-system-notice.ts";
-import { buildMessageItems } from "./chat-thread-items.ts";
+import { buildMessageItems, messageMatchesSearchQuery } from "./chat-thread-items.ts";
 import {
   getChatSessionProjection,
   readChatSessionProjectionScope,
   reconcileChatInputCustody,
+  selectChatInputDisplay,
 } from "./history-merge.ts";
 import type { PendingInputStatus } from "./system-notice-kinds.ts";
 
@@ -400,12 +401,22 @@ export function loadChatPendingInputs(state: ChatState, before?: number): Promis
   return requestPendingInputPage(state, before, "navigation");
 }
 
-/** Retired inputs on the displayed page that are not already being dismissed. */
-export function listDismissablePendingInputs(
+/** Use the transcript's identity, notice, and search projections, not raw custody. */
+export function listDismissablePendingInputIds(
   view: ChatPendingInputView,
-): ChatPendingInputsPage["items"] {
-  return view.page.items.filter(
-    (input) => isDismissablePendingInput(input) && !isPendingInputDismissHidden(view, input.id),
+  messages: readonly unknown[],
+  search: Readonly<{ open: boolean; query: string }>,
+): string[] {
+  return selectChatInputDisplay(messages, [], view.page.items).pendingInputs.flatMap((input) =>
+    !isPendingInputDismissHidden(view, input.id) &&
+    (!search.open ||
+      !search.query.trim() ||
+      messageMatchesSearchQuery(input.message, search.query)) &&
+    buildPendingInputItems([input]).some(
+      (item) => item.kind === "notice" && item.retiredPendingInput,
+    )
+      ? [input.id]
+      : [],
   );
 }
 
