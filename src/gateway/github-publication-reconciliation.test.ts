@@ -36,7 +36,10 @@ const isPullCreation = (argv: string[]) =>
   argv.includes("POST") && argv.some((arg) => arg.endsWith("/pulls"));
 const published = (url: string, headCommit: string) => ({ status: "published", url, headCommit });
 
-async function prepareExistingPullRequest(backend: Backend) {
+async function prepareExistingPullRequest(
+  backend: Backend,
+  { changeWorkspace = true }: { changeWorkspace?: boolean } = {},
+) {
   const f = await fixture(backend);
   const first = await f.coordinator.requestForSessionV2(f.request("first-publication", f.guest));
   if (first.status !== "published") {
@@ -54,10 +57,12 @@ async function prepareExistingPullRequest(backend: Backend) {
     baseRef: receipt.base_branch!,
   };
   expect(pullRequest.body).toContain(`<!-- openclaw-publication:${first.requestId} -->`);
-  if (f.local) {
-    await fs.writeFile(path.join(f.local.cwd, "artifact.txt"), "accepted second publication\n");
-  } else {
-    await f.repository!.capture("accepted second publication\n", "second-publication");
+  if (changeWorkspace) {
+    if (f.local) {
+      await fs.writeFile(path.join(f.local.cwd, "artifact.txt"), "accepted second publication\n");
+    } else {
+      await f.repository!.capture("accepted second publication\n", "second-publication");
+    }
   }
   return {
     f,
@@ -373,7 +378,6 @@ it.each(["local", "repository"] as const)(
     let pushed = false;
     let readbackAvailable = false;
     let unavailableLookups = 0;
-    let closedHead: string | undefined;
     mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
       if (argv.includes("state=all")) {
         if (pushed && !readbackAvailable) {
@@ -385,9 +389,6 @@ it.each(["local", "repository"] as const)(
       const response = await transport(argv, options);
       if (argv.includes("push") || argv.includes("graphql")) {
         await observePush();
-        if (closedHead) {
-          pullRequest.headSha = closedHead;
-        }
         pushed = true;
       }
       return response;
@@ -417,7 +418,6 @@ it.each(["local", "repository"] as const)(
     const acceptedWrites = [...f.externalWrites];
 
     pullRequest.state = "closed";
-    closedHead = pullRequest.headSha;
     readbackAvailable = true;
     await f.restart().resumeSessionRequests();
     expect(f.readReceipt(requestId)).toMatchObject({
@@ -429,24 +429,24 @@ it.each(["local", "repository"] as const)(
   },
 );
 
-it("creates a new local publication request after its original PR closes", async () => {
-    const { f, pullRequest, transport } = await prepareExistingPullRequest("local");
-    pullRequest.state = "closed";
-    mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
-      if (argv.includes("state=all")) {
-        return commandResult(JSON.stringify([pullRequest]));
-      }
-      return transport(argv, options);
-    });
+it("creates a new local publication request with unchanged content after its original PR closes", async () => {
+  const { f, pullRequest, transport } = await prepareExistingPullRequest("local", {
+    changeWorkspace: false,
+  });
+  pullRequest.state = "closed";
+  mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+    if (argv.includes("state=all")) {
+      return commandResult(JSON.stringify([pullRequest]));
+    }
+    return transport(argv, options);
+  });
 
-    const beforeNewRequest = mocks.runCommand.mock.calls.length;
-    const publication = await f.coordinator.requestForSessionV2(
-      f.request("new-publication-after-closure", f.guest),
-    );
-    expect(publication.status).toBe("published");
-    expect(
-      mocks.runCommand.mock.calls
-        .slice(beforeNewRequest)
-        .filter(([argv]) => isPullCreation(argv)),
-    ).toHaveLength(1);
+  const beforeNewRequest = mocks.runCommand.mock.calls.length;
+  const publication = await f.coordinator.requestForSessionV2(
+    f.request("new-publication-after-closure", f.guest),
+  );
+  expect(publication.status).toBe("published");
+  expect(
+    mocks.runCommand.mock.calls.slice(beforeNewRequest).filter(([argv]) => isPullCreation(argv)),
+  ).toHaveLength(1);
 });

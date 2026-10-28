@@ -291,6 +291,7 @@ export async function executeRepositoryGitHubPublication(params: {
         branch,
         baseBranch,
         headCommit: headCommit ?? snapshot.baseCommit,
+        acceptedRequestHeadCommit: row.head_commit ?? undefined,
         marker,
         host: identity.host ?? resolveGitHubHost(),
         refreshIdentity,

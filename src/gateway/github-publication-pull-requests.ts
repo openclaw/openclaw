@@ -130,9 +130,22 @@ function parseGitHubPublicationPullRequests(raw: string) {
   });
 }
 
+export function requestHeadFields(
+  headCommit: string,
+  requestHeadCommit: string | null | undefined,
+  sourceHeadCommit: string,
+): { headCommit: string; acceptedRequestHeadCommit: string | undefined } {
+  return {
+    headCommit,
+    acceptedRequestHeadCommit:
+      requestHeadCommit && requestHeadCommit !== sourceHeadCommit ? requestHeadCommit : undefined,
+  };
+}
+
 export async function findGitHubPublicationPullRequest(
   params: GitHubPublicationPullRequestLookup & {
     headCommit: string;
+    acceptedRequestHeadCommit?: string;
     recordObserved?: (url: string) => void | Promise<void>;
   },
 ): Promise<string | undefined> {
@@ -144,11 +157,13 @@ export async function findGitHubPublicationPullRequest(
       candidate.headRef === params.branch &&
       candidate.baseRef === params.baseBranch,
   );
-  // Updating a PR keeps its original body marker, so the accepted exact head identifies this request.
+  // A fresh request can start from a previous publication's unchanged head.
+  // Only the head already recorded for this request can settle against a closed PR.
   const found =
     exact.find((candidate) => candidate.state === "open") ??
     exact.find(
-      (candidate) => candidate.state === "closed",
+      (candidate) =>
+        candidate.state === "closed" && candidate.headSha === params.acceptedRequestHeadCommit,
     );
   if (found) {
     await params.recordObserved?.(found.url);

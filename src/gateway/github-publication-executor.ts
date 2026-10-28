@@ -43,6 +43,7 @@ import {
   runPublicationCommand as runCommand,
 } from "./github-publication-git-transport.js";
 import {
+  requestHeadFields,
   findGitHubPublicationPullRequest,
   reconcileGitHubPublicationPullRequest,
 } from "./github-publication-pull-requests.js";
@@ -333,7 +334,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         branch,
         baseBranch,
         host: githubHost,
-        headCommit,
+        ...requestHeadFields(headCommit, row.head_commit, sourceHeadCommit),
         marker: pullRequestMarker,
         refreshIdentity,
         recordObserved: async (url) => {
@@ -436,7 +437,6 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       workspaceTree,
       headCommit,
     });
-
     const content = await prepareGitHubPublicationContent({
       row,
       requesterProfileId: params.requesterProfileId?.(),
