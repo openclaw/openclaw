@@ -11,6 +11,7 @@ import type {
   SessionTranscriptTurnMutation,
   SessionTranscriptTurnMutationResult,
 } from "./goals-operations.types.js";
+import type { RecoveryNoticePredicate } from "./recovery-notice.js";
 import type { SessionLifecycleStoreTarget } from "./session-accessor.lifecycle-types.js";
 import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { SessionEntryCommitContext } from "./session-entry-commit-context.js";
@@ -424,7 +425,8 @@ export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<
   };
   predicate?:
     | { kind: "latest-assistant-differs"; runId: string; text: string }
-    | { kind: "active-entry"; entryId: string; errorMessage: string };
+    | { kind: "active-entry"; entryId: string; errorMessage: string }
+    | RecoveryNoticePredicate;
   /**
    * Runs inside the session writer queue before the SQLite transaction begins.
    * The commit phase revalidates session ownership and database idempotency

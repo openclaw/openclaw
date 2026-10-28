@@ -283,6 +283,7 @@ export async function finishGatewayStartup(params: {
             const { loadGatewayStartupPluginRuntime } = await import("./server-startup-plugins.js");
             return loadGatewayStartupPluginRuntime({
               cfg: gatewayPluginConfigAtStart,
+              signal: runtime.connectionWork.signal,
               activationSourceConfig: startupActivationSourceConfig,
               workspaceDir: runtime.pluginWorkspaceDir,
               log,

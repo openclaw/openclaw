@@ -12,7 +12,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { VERSION } from "../version.js";
 import { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
 
@@ -37,9 +37,8 @@ it.each([
   { backendLogsOnly: true, updateCanary: true },
 ])(
   "reports the bootstrap schema refusal before exit 78 (backend logs only: $backendLogsOnly, candidate: $updateCanary)",
-  async ({ backendLogsOnly, updateCanary }) => {
-    const state = await createOpenClawTestState({ label: "startup-schema-refusal" });
-    try {
+  ({ backendLogsOnly, updateCanary }) =>
+    withOpenClawTestState({ label: "startup-schema-refusal" }, async (state) => {
       await state.writeConfig({ plugins: { enabled: false } });
       const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
       closeOpenClawStateDatabaseForTest();
@@ -48,7 +47,7 @@ it.each([
         database.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
         database
           .prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'")
-          .run("2026.9.4");
+          .run("9999.1.0");
       }
       const errorLog = vi.fn();
       setLoggerOverride({ level: "silent", consoleLevel: "error", consoleStyle: "json" });
@@ -75,7 +74,7 @@ it.each([
         refusal = error;
       }
       expect(refusal).toBeInstanceOf(Error);
-      const facts = `uses schema ${OPENCLAW_STATE_SCHEMA_VERSION + 1}; this build supports ${OPENCLAW_STATE_SCHEMA_VERSION}. It was written by OpenClaw 2026.9.4, newer than this Gateway (${VERSION}).`;
+      const facts = `uses schema ${OPENCLAW_STATE_SCHEMA_VERSION + 1}; this build supports ${OPENCLAW_STATE_SCHEMA_VERSION}; It was written by OpenClaw 9999.1.0; it is newer than this Gateway (${VERSION}).`;
       await expect(handleGatewayStartupMaintenance(refusal)).rejects.toBe(exited);
       const output = runtimeError.mock.calls.flat().join("\n");
       expect(output).toContain(facts);
@@ -89,7 +88,7 @@ it.each([
             path: databasePath,
             foundVersion: OPENCLAW_STATE_SCHEMA_VERSION + 1,
             supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-            writerAppVersion: "2026.9.4",
+            writerAppVersion: "9999.1.0",
           },
         ],
         {
@@ -117,8 +116,5 @@ it.each([
       }
       expect(park).toHaveBeenCalledOnce();
       expect(exit).toHaveBeenCalledWith(78);
-    } finally {
-      await state.cleanup();
-    }
-  },
+    }),
 );

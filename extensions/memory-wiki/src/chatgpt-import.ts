@@ -151,7 +151,7 @@ function cleanMessageText(value: string): string {
       return trimmed;
     }
     if (part?.content_type === "text" && typeof part.text === "string") {
-      return normalizeWhitespace(part.text);
+      return part.text.trim();
     }
     if (part?.content_type === "image_asset_pointer") {
       return "";

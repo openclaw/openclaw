@@ -123,7 +123,11 @@ their own conversations, fork from a persisted user message in an owned settled
 conversation, use **Advanced → Fork conversation** on their own conversation,
 and stop their own active runs. Whole-conversation forks preserve the saved
 conversation history; while the source is working, they copy through its last
-completed reply. Forking does not grant access to another creator's conversation
+completed reply. A whole-conversation fork of a Draft stays Draft unless the
+creation request explicitly selects another audience. If new Draft creation is
+disabled, creating that Draft copy is refused; the existing Draft remains available
+for continued work.
+Forking does not grant access to another creator's conversation
 or change the source's workspace and isolation rules. Their model, effort,
 fast-mode, and non-full permission choices use the same session grant and the
 Gateway's allowed model catalog. Full permission mode, sandbox changes, and

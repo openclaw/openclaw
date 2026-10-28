@@ -3,6 +3,7 @@ import { mediaKindFromMime } from "@openclaw/media-core/constants";
 import { isAudioFileName, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
+import type { RecoveryNoticeDestination } from "../config/sessions/recovery-notice.js";
 import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -37,12 +38,14 @@ export type BackgroundPayloadsCommit =
 /** Inputs for committing delivered payloads into one conversation generation. */
 export type BackgroundPayloadsCommitParams = {
   agentId: string;
+  storePath?: string;
   sessionKey: string;
   expectedGeneration: { sessionId: string; lifecycleRevision: string | undefined };
   /** The payloads that were shown; the stored row is their transcript projection. */
   payloads: readonly ReplyPayload[];
   idempotencyKey: string;
   provenance?: BackgroundSessionResultProvenance;
+  acceptedDestination?: RecoveryNoticeDestination;
   config: OpenClawConfig;
   signal?: AbortSignal;
   assertCurrent?: () => void;
@@ -69,6 +72,7 @@ export async function commitBackgroundPayloadsToSession(
   try {
     return await commitBackgroundResultToSession({
       agentId: params.agentId,
+      storePath: params.storePath,
       sessionKey: params.sessionKey,
       expectedGeneration: params.expectedGeneration,
       text,
@@ -84,6 +88,7 @@ export async function commitBackgroundPayloadsToSession(
       },
       idempotencyKey: params.idempotencyKey,
       provenance: params.provenance,
+      acceptedDestination: params.acceptedDestination,
       config: params.config,
       signal: params.signal,
       assertCurrent: params.assertCurrent,

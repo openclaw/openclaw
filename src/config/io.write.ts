@@ -523,6 +523,7 @@ export async function writeConfigFileFromContext(
       dirMode: readExistingStateRootMode(path.dirname(configPath), stateDirectory.path, deps.fs),
       content: json,
       previousRaw: snapshot.raw,
+      warn: (message) => (options.skipOutputLogs ? undefined : deps.logger.warn(message)),
       fsModule: writeGuard.fileSystem,
       assertCurrent: writeGuard.assertCurrent,
       assertBeforeMutation: writeGuard.assertBeforeMutation,

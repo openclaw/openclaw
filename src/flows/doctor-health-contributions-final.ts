@@ -366,7 +366,7 @@ export function resolveFinalDoctorHealthContributions(params: {
           async detect(ctx) {
             const { collectHeartbeatScratchMigrationFindings } =
               await import("../commands/doctor-heartbeat-scratch-migration.js");
-            return collectHeartbeatScratchMigrationFindings(ctx.cfg);
+            return collectHeartbeatScratchMigrationFindings(ctx.cfg, ctx.env);
           },
         },
         async run(ctx) {

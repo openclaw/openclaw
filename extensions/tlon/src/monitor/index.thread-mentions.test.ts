@@ -240,6 +240,83 @@ it("fetches and prepends citations only after DM and channel sender admission", 
   });
 });
 
+const ownerNotices = () =>
+  JSON.stringify(
+    sseClientMock.poke.mock.calls.filter(([payload]) => payload.mark === "chat-dm-action"),
+  );
+
+const ownerReply = (id: string, text: string) =>
+  getSubscription("chat").event({
+    whom: "~nec",
+    id,
+    response: { add: { essay: messageEssay("~nec", text) } },
+  });
+
+it("does not guess which restricted channel mention a bare approval targets", async () => {
+  const nest = "chat/~host/general";
+  configureTlon({ ownerShip: "~nec", groupChannels: [nest] });
+  const channelRuleWrites = () =>
+    sseClientMock.poke.mock.calls
+      .map(([payload]) => payload.json?.["put-entry"])
+      .filter((entry) => entry?.["entry-key"] === "channelRules");
+  await runMonitor(async () => {
+    const subscription = getSubscription("channels");
+    await subscription.event({
+      nest,
+      response: {
+        post: { id: "mention-bus", "r-post": { set: { essay: messageEssay("~bus", "~zod hi") } } },
+      },
+    });
+    await subscription.event({
+      nest,
+      response: {
+        post: {
+          id: "mention-sampel",
+          "r-post": { set: { essay: messageEssay("~sampel", "~zod hello") } },
+        },
+      },
+    });
+    const approvalIds = [...new Set(ownerNotices().match(/channel-\d+-[a-f0-9]+/g) ?? [])];
+    expect(approvalIds).toHaveLength(2);
+
+    await ownerReply("bare-approve", "approve");
+    expect(ownerNotices()).toContain("Multiple approvals are pending");
+    expect(channelRuleWrites()).toEqual([]);
+    expect(inboundRuntimeMock.dispatch).not.toHaveBeenCalled();
+
+    await ownerReply("explicit-approve", `approve ${approvalIds[0]}`);
+    expect(channelRuleWrites()).toHaveLength(1);
+    expect(JSON.parse(String(channelRuleWrites()[0]?.value))).toEqual({
+      [nest]: { mode: "restricted", allowedShips: ["~bus"] },
+    });
+  });
+});
+
+it("does not guess which queued group invite a bare approval targets", async () => {
+  configureTlon({ ownerShip: "~nec" });
+  const groupJoins = () =>
+    sseClientMock.poke.mock.calls
+      .map(([payload]) => payload)
+      .filter((payload) => payload.mark === "group-join");
+  await runMonitor(async () => {
+    await getSubscription("groups", "/v1/foreigns").event({
+      "~bus/club": { invites: [{ valid: true, from: "~bus" }] },
+      "~sampel/club": { invites: [{ valid: true, from: "~sampel" }] },
+    });
+    const approvalIds = [...new Set(ownerNotices().match(/group-\d+-[a-f0-9]+/g) ?? [])];
+    expect(approvalIds).toHaveLength(2);
+
+    await ownerReply("bare-approve", "approve");
+    expect(ownerNotices()).toContain("Multiple approvals are pending");
+    expect(groupJoins()).toEqual([]);
+
+    await ownerReply("explicit-approve", `approve ${approvalIds[0]}`);
+    expect(groupJoins().map((payload) => payload.json)).toEqual([
+      { flag: "~bus/club", "join-all": true },
+    ]);
+  });
+});
+
 it("retires terminal group invites without forgetting unrelated foreigns deltas", async () => {
   configureTlon({
     autoAcceptGroupInvites: true,

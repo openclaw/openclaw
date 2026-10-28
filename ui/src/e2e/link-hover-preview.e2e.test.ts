@@ -182,6 +182,9 @@ suite.define(() => {
         );
         await assertBounds(card, width, height);
 
+        // Leave the repository preview before hovering the link underneath it.
+        await page.mouse.move(0, 0);
+        await expect.poll(() => card.count()).toBe(0);
         const github = page.getByRole("link", { name: "project update", exact: true });
         await github.hover();
         await page

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -28,17 +29,25 @@ import {
   StateDatabaseAdmissionPendingError,
   StateDatabaseOfflineMaintenanceError,
 } from "./gateway-state-owner-errors.js";
-import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
+import { inspectStaleLockOwner } from "./stale-lock-file.js";
 
-function isComparableStateOwnerStale(
+const ownerInspections = new AsyncLocalStorage<{ deadOwner?: { path: string; raw: string } }>();
+
+/** Retain only one exact dead owner, and only during this admission operation. */
+export function withPersistedStateOwnerInspection<T>(operation: () => T): T {
+  return ownerInspections.run({}, operation);
+}
+
+function comparableStateOwnerStaleReason(
   payload: Record<string, unknown>,
   namespace: "same" | "dead" | "unknown",
-): boolean {
-  return (
-    namespace === "dead" ||
-    (namespace === "same" &&
-      isLockOwnerDefinitelyStale({ payload: { pid: payload.pid, starttime: payload.startTime } }))
-  );
+): "owner-process-exited" | "owner-starttime-changed" | undefined {
+  return namespace === "dead"
+    ? "owner-process-exited"
+    : namespace === "same"
+      ? inspectStaleLockOwner({ payload: { pid: payload.pid, starttime: payload.startTime } })
+          ?.reason
+      : undefined;
 }
 
 /** Reclamation requires proof that the recorded owner stopped. */
@@ -52,7 +61,7 @@ export function isGatewayStateOwnerDefinitelyStale(value: unknown, lockPath: str
   if (namespace === "unknown") {
     throw new GatewayLockNamespaceError(payload, lockPath);
   }
-  return isComparableStateOwnerStale(payload, namespace);
+  return comparableStateOwnerStaleReason(payload, namespace) !== undefined;
 }
 
 export {
@@ -85,6 +94,10 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
     }
     throw new StateDatabaseAccessError(unavailable, { cause: error });
   }
+  const inspection = ownerInspections.getStore();
+  if (inspection?.deadOwner?.path === ownerPath && inspection.deadOwner.raw === raw) {
+    return;
+  }
   const owner = parseGatewayLockPayload(raw);
   if (!owner) {
     // Native exclusive creation precedes the payload write; cold admission may wait for publication.
@@ -96,7 +109,11 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
   // Ordinary SQLite access does not reclaim the owner or borrow schema custody.
   // Unknown namespaces retain maintenance contention without probing a local PID.
   const namespace = classifyGatewayLockProcessNamespace(owner, ownerPath);
-  if (isComparableStateOwnerStale(owner, namespace)) {
+  const staleReason = comparableStateOwnerStaleReason(owner, namespace);
+  if (staleReason) {
+    if (inspection && staleReason === "owner-process-exited") {
+      inspection.deadOwner = { path: ownerPath, raw };
+    }
     return;
   }
   // Workers share the process PID, but their schema authority still comes from

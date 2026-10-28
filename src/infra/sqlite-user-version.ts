@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { compareOpenClawVersions } from "../config/version.js";
 import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "../state/openclaw-state-db-contract.js";
 import { resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import { executeWithCachedStatement } from "./kysely-sync-cache-state.js";
@@ -65,6 +66,10 @@ export function describeRunningOpenClawBuild(): string {
   return root ? `${identity} installed at ${root}` : identity;
 }
 
+export function isNewerSqliteWriterVersion(writerAppVersion: string | undefined): boolean {
+  return (compareOpenClawVersions(writerAppVersion, VERSION) ?? 0) > 0;
+}
+
 export function createNewerSqliteSchemaVersionError(
   databaseLabel: string,
   pathname: string,
@@ -72,12 +77,17 @@ export function createNewerSqliteSchemaVersionError(
   supportedVersion: number,
   writerAppVersion?: string,
 ): Error {
+  const newerWriter = isNewerSqliteWriterVersion(writerAppVersion);
   return new SqliteSchemaVersionError(
     "This OpenClaw build cannot open your existing data.\n" +
       `${databaseLabel} ${pathname} uses newer schema version ${schemaVersion}; this build supports ${supportedVersion}.\n` +
-      `It was written by ${writerAppVersion ? `OpenClaw ${writerAppVersion}` : "an unknown OpenClaw build"}, newer than this Gateway (${VERSION}).\n` +
+      (writerAppVersion
+        ? `It was written by OpenClaw ${writerAppVersion}; ${newerWriter ? `it is newer than this Gateway (${VERSION}).` : "run openclaw doctor --fix to inspect this database."}\n`
+        : "") +
       `Refused by ${describeRunningOpenClawBuild()}.\n` +
-      `Use the newer install that supports schema ${schemaVersion} or newer, or run openclaw update to update this Gateway service before restarting. To use an older build, restore your pre-update backup created with openclaw backup create.\n` +
+      (newerWriter
+        ? `Use the newer install that supports schema ${schemaVersion} or newer, or run openclaw update to update this Gateway service before restarting. To use an older build, restore your pre-update backup created with openclaw backup create.\n`
+        : `Use a build that supports schema ${schemaVersion} or newer with this state directory. To use an older build, restore your pre-update backup created with openclaw backup create.\n`) +
       `See ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
   );
 }

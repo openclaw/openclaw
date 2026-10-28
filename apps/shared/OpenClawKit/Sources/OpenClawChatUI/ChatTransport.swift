@@ -72,6 +72,13 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
     public let kind: String?
     public let text: String?
     public let swarmPhase: String?
+    // Decoded events are partial patches; constructed roster snapshots are authoritative.
+    private typealias SessionPayload = [String: AnyCodable]
+    private let sessionPayload: SessionPayload?
+    var sessionFields: Set<String>? {
+        self.sessionPayload.map { Set($0.keys) }
+    }
+
     let colorPresent: Bool
     let agentStatusPresent: Bool
     let observerDigestPresent: Bool
@@ -118,6 +125,7 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         self.phase = phase
         self.runId = runId
         self.session = session
+        self.sessionPayload = nil
         self.updatedAt = updatedAt
         self.lastReadAt = lastReadAt
         self.color = colorPresent == true ? color : (color ?? session?.color)
@@ -143,7 +151,24 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.session = try container.decodeIfPresent(OpenClawChatSessionEntry.self, forKey: .session)
+        var session = try container.decodeIfPresent(OpenClawChatSessionEntry.self, forKey: .session)
+        var sessionPayload = try container.decodeIfPresent(SessionPayload.self, forKey: .session)
+        // The Gateway emits sidebar clearing receipts on the outer envelope. Carry their
+        // presence into the row patch so projection and replay do not restore stale values.
+        func overlay<T: Decodable>(
+            _ key: CodingKeys,
+            _ path: WritableKeyPath<OpenClawChatSessionEntry, T?>) throws
+        {
+            guard container.contains(key) else { return }
+            session?[keyPath: path] = try container.decodeIfPresent(T.self, forKey: key)
+            sessionPayload?[key.rawValue] = try container.decode(AnyCodable.self, forKey: key)
+        }
+        try overlay(.label, \.label)
+        try overlay(.icon, \.icon)
+        try overlay(.category, \.category)
+        try overlay(.snoozedUntil, \.snoozedUntil)
+        self.session = session
+        self.sessionPayload = sessionPayload
         let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .session)
 
         func decode<T: Decodable>(_ type: T.Type, forKey key: CodingKeys) throws -> T? {
@@ -200,7 +225,12 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         try container.encodeIfPresent(self.reason, forKey: .reason)
         try container.encodeIfPresent(self.phase, forKey: .phase)
         try container.encodeIfPresent(self.runId, forKey: .runId)
-        try container.encodeIfPresent(self.session, forKey: .session)
+        if let sessionPayload = self.sessionPayload {
+            // Keep omitted fields and explicit nulls distinct across event replay.
+            try container.encode(sessionPayload, forKey: .session)
+        } else {
+            try container.encodeIfPresent(self.session, forKey: .session)
+        }
         try container.encodeIfPresent(self.updatedAt, forKey: .updatedAt)
         try container.encodeIfPresent(self.lastReadAt, forKey: .lastReadAt)
         if self.colorPresent {
@@ -223,6 +253,10 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case label
+        case icon
+        case category
+        case snoozedUntil
         case session
         case key
         case sessionKey

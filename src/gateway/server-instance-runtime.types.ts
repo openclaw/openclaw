@@ -3,6 +3,8 @@ import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-contex
 import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
 import type { ReplyExpectation } from "../agents/reply-completion.js";
 import type { SubagentCompletionToolHandoffRegistration } from "../agents/subagents/announce/subagent-announce-handoff.js";
+import type { RecoveryNoticeProvenance } from "../config/sessions/recovery-notice.js";
+import type { SessionDeliveryGeneration } from "../config/sessions/session-delivery-generation.types.js";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
@@ -108,27 +110,17 @@ export type GatewayRecoveryRuntime = {
     timeoutMs?: number,
     signal?: AbortSignal,
   ) => Promise<T>;
-  sendRecoveryNotice: (
-    params: {
-      channel: string;
-      to: string;
-      accountId?: string;
-      threadId?: string | number;
-      text: string;
-      idempotencyKey: string;
-    } & (
-      | {
-          /** Main-session announcements cannot outlive their process-local owner. */
-          liveOnly: true;
-          isCurrent: (cfg: OpenClawConfig) => boolean;
-        }
-      | {
-          /** Existing callers retain durable retry and deduplication by default. */
-          liveOnly?: false;
-          isCurrent?: (cfg: OpenClawConfig) => boolean;
-        }
-    ),
-  ) => Promise<{
+  sendRecoveryNotice: (params: {
+    channel: string;
+    to: string;
+    accountId?: string;
+    threadId?: string | number;
+    text: string;
+    idempotencyKey: string;
+    generation: SessionDeliveryGeneration;
+    provenance: RecoveryNoticeProvenance;
+    isCurrent?: (cfg: OpenClawConfig) => boolean;
+  }) => Promise<{
     /** True when delivery produced zero platform results (policy/channel suppression). */
     suppressed: boolean;
   }>;

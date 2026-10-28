@@ -499,6 +499,9 @@ Prepare an idle Gateway for a cooperative host freeze or snapshot. Without
 ID. The value must be a non-negative number of seconds; an empty value is rejected.
 Use `--wait 0` for a single attempt without polling.
 
+Ctrl-C or SIGTERM stops further prepare attempts. An already dispatched prepare
+still settles and reports any acquired lease so you can resume it explicitly.
+
 ```bash
 openclaw gateway suspend
 openclaw gateway suspend --request-id snapshot-2026-08-11 --wait 30

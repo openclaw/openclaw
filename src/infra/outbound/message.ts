@@ -13,6 +13,7 @@ import type { DurableMessageSendIntent } from "../../channels/message/types.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelPollResult } from "../../channels/plugins/types.public.js";
 import { createChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
+import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizePollInput } from "../../polls.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
@@ -256,7 +257,10 @@ async function resolveDirectMessageTarget(
   return target;
 }
 
-export async function sendMessage(params: MessageSendParams): Promise<MessageSendResult> {
+export async function sendMessage(
+  params: MessageSendParams,
+  sessionGeneration?: SessionDeliveryGeneration,
+): Promise<MessageSendResult> {
   const cfg = await resolveMessageConfig(params.cfg);
   const reply = normalizeOutboundReplyFacts({ reply: params.reply, replyToId: params.replyToId });
   const { channel, plugin } = params.preparedPlugin
@@ -391,6 +395,8 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
         ...(params.onDeliveredPayload ? { onDeliveredPayload: params.onDeliveredPayload } : {}),
       },
       params.conversationDeliveryTarget,
+      undefined,
+      sessionGeneration,
     );
     const sendMayHaveReachedRecipient = durableMessageBatchMayHaveReachedRecipient(send);
     const handoffRejection =

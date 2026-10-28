@@ -42,7 +42,10 @@ import {
 } from "./compaction-notice.js";
 import { settleQueuedFollowupPresentation } from "./followup-presentation.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
-import { isGoalContinuationCurrent, isSupportedWorkerGoalPlacement } from "./goal-continuation.js";
+import {
+  isGoalContinuationCurrent,
+  isGoalContinuationPlacementCurrent,
+} from "./goal-continuation.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
 import { getFollowupQueueDepth } from "./queue/enqueue.js";
 import {
@@ -636,17 +639,16 @@ export async function prepareReplyAgentTurn<TConfigured>(
                 sessionKey: replySessionKey,
               })
             : session.current();
-        const workerPlacementCurrent =
-          !goalContinuation.workerGoal ||
-          (Boolean(params.queued.operatorAuthority) &&
-            (await isSupportedWorkerGoalPlacement({
-              agentId: run.agentId,
-              sessionKey: replySessionKey ?? "",
-              sessionId: goalContinuation.sessionId,
-            })));
+        const placementCurrent = await isGoalContinuationPlacementCurrent({
+          continuation: goalContinuation,
+          agentId: run.agentId,
+          sessionKey: replySessionKey ?? "",
+          hasOperatorAuthority: Boolean(params.queued.operatorAuthority),
+          requiresWorker: Boolean(run.config?.cloudWorkers?.requiredProfile),
+        });
         assertOperatorCurrent();
         if (
-          !workerPlacementCurrent ||
+          !placementCurrent ||
           operation.abortSignal.aborted ||
           !isGoalContinuationCurrent(goalContinuation, currentEntry) ||
           getFollowupQueueDepth(replySessionKey ?? "") > 0

@@ -560,7 +560,7 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
       expect(requireFirstWrite(write)).toContain("Restarted systemd service");
     } else {
       await expect(operation).rejects.toThrow(
-        /openclaw\.service is a system-scope unit \(\/etc\/systemd\/system\/openclaw\.service\); run `sudo systemctl restart openclaw\.service`/,
+        /openclaw\.service is a system-scope unit; run `sudo systemctl restart openclaw\.service` to restart it \(\/etc\/systemd\/system\/openclaw\.service\)/,
       );
       expect(execFileMock).not.toHaveBeenCalled();
       expect(write).not.toHaveBeenCalled();

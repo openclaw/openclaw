@@ -1131,7 +1131,7 @@ describe("gatherDaemonStatus", () => {
       database.exec(`
           PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};
           CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, app_version TEXT);
-          INSERT INTO schema_meta VALUES ('primary', '2026.9.4');
+          INSERT INTO schema_meta VALUES ('primary', '9999.1.0');
         `);
     } finally {
       database.close();
@@ -1154,7 +1154,7 @@ describe("gatherDaemonStatus", () => {
     expect(output).toContain("Gateway refused startup");
     expect(output).toContain(`schema ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
     expect(output).toContain(`this build supports ${OPENCLAW_STATE_SCHEMA_VERSION}`);
-    expect(output).toContain("was written by OpenClaw 2026.9.4");
+    expect(output).toContain("was written by OpenClaw 9999.1.0");
     expect(output).toContain(`Refused by OpenClaw ${VERSION}`);
     expect(output).toContain("pre-upgrade backup");
     expect(exit).toHaveBeenCalledWith(1);

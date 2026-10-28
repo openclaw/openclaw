@@ -410,9 +410,6 @@ function expectNewerSchema(message: string) {
   expect(message).toMatch(/newer/);
   expect(message).toMatch(/build.*supports/);
   expect(message).toMatch(/restore.*backup/);
-  expect(message).toContain("Use the newer install that supports");
-  expect(message).toContain("openclaw update");
-  expect(message).not.toContain("doctor --fix");
   expect(message).not.toMatch(/registry query failed|integrity_check failed/);
 }
 

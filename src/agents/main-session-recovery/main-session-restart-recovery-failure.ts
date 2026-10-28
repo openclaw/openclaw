@@ -412,6 +412,9 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
     !pending.intentId &&
     !pending.deliveries?.length;
   const capturedReply = retirePending ? stripInternalMetadataForDisplay(pending.text).trim() : "";
+  const noticeId = buildRestartRecoveryTombstoneNoticeKey(entry);
+  const noticeText = buildTombstonedSessionNotice(params.reason);
+  const recovery = tombstoned.mainRestartRecovery!;
   // Failed placements save an ownerless final before retiring its replay marker.
   // Other tombstones retain the saved delivery obligation.
   // Identified delivery remains with its owner; a new turn cannot discard it.
@@ -435,10 +438,27 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
       updatedAt: tombstoned.updatedAt,
     },
     expectedSessionId: entry.sessionId,
-    text:
-      buildTombstonedSessionNotice(params.reason) +
-      (capturedReply ? `\n\nSaved reply (delivery unconfirmed):\n${capturedReply}` : ""),
-    idempotencyKey: buildRestartRecoveryTombstoneNoticeKey(entry),
+    // The first block alone is sent. The saved reply remains an immutable local display artifact.
+    content: [
+      { type: "text", text: noticeText },
+      ...(capturedReply
+        ? [
+            {
+              type: "text" as const,
+              text: `\nSaved reply (delivery unconfirmed):\n${capturedReply}`,
+            },
+          ]
+        : []),
+    ],
+    deliveryMirror: {
+      kind: "restart-recovery-notice",
+      noticeId,
+      cycleId: recovery.cycleId,
+      revision: recovery.revision,
+      noticePart: 0,
+      destination: deliveryContext,
+    },
+    idempotencyKey: noticeId,
   }).catch((error: unknown) => ({ ok: false as const, reason: String(error) }));
   if (!result.ok) {
     mainSessionRecoveryLog.warn(
@@ -455,16 +475,32 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
   const { gatewayRuntime, reason, sessionKey } = params;
   try {
     params.assertCurrent?.();
-    await gatewayRuntime.sendRecoveryNotice({
+    if (!result.anchor) {
+      throw new Error("restart recovery notice transcript anchor is unavailable");
+    }
+    const { generation, entryId, rawSeq, effectiveParentId, activeMessagePosition } = result.anchor;
+    const outcome = await gatewayRuntime.sendRecoveryNotice({
       channel: deliveryContext.channel,
       to: deliveryContext.to,
       accountId: deliveryContext.accountId,
       threadId: deliveryContext.threadId,
-      text: buildTombstonedSessionNotice(reason),
-      idempotencyKey: buildRestartRecoveryTombstoneNoticeKey(tombstoned),
+      text: noticeText,
+      idempotencyKey: noticeId,
+      generation: {
+        agentId: params.agentId,
+        storePath: params.storePath,
+        sessionKey,
+        sessionId: entry.sessionId,
+        lifecycleRevision: entry.lifecycleRevision ?? null,
+      },
+      provenance: {
+        kind: "recovery-notice",
+        noticeId,
+        localNotice: { generation, entryId, rawSeq, effectiveParentId, activeMessagePosition },
+      },
     });
     mainSessionRecoveryLog.info(
-      `sent restart recovery tombstone notice: ${sessionKey} (${reason})`,
+      `${outcome.suppressed ? "did not send" : "sent"} restart recovery tombstone notice: ${sessionKey} (${reason})`,
     );
   } catch (error) {
     mainSessionRecoveryLog.warn(

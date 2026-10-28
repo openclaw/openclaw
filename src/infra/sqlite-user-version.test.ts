@@ -6,11 +6,11 @@ vi.mock("../version.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../version.js")>();
   return { ...actual, resolveRuntimeServiceCommit: () => "aaaaaaa" };
 });
+import { OpenClawDatabaseSchemaPreflightError } from "../state/openclaw-database-preflight.messages.js";
 import { VERSION } from "../version.js";
 import { enableNodeSqliteKyselyStatementCache } from "./kysely-sync-cache-state.js";
 import {
   createNewerSqliteSchemaVersionError,
-  describeRunningOpenClawBuild,
   readSqliteUserVersion,
   writeSqliteUserVersion,
 } from "./sqlite-user-version.js";
@@ -59,25 +59,31 @@ describe("readSqliteUserVersion", () => {
   );
 });
 
-describe("createNewerSqliteSchemaVersionError", () => {
-  it("names the refusing install and both schema versions", () => {
-    const error = createNewerSqliteSchemaVersionError("test database", "/tmp/test.sqlite", 12, 11);
+it.each(["9999.1.0", VERSION, undefined])("handles schema writer %s", (writer) => {
+  const newer = writer === "9999.1.0";
+  const error = createNewerSqliteSchemaVersionError("test", "/tmp/test.sqlite", 12, 11, writer);
 
-    expect(error.name).toBe("SqliteSchemaVersionError");
-    expect(error.message).toContain("https://docs.openclaw.ai/reference/database-schemas");
-    expect(error.message).toContain("uses newer schema version 12");
-    expect(error.message).toContain("this build supports 11");
-    expect(error.message).toContain(describeRunningOpenClawBuild());
-    expect(error.message).toContain("supports schema 12 or newer");
-    expect(error.message).toContain(
-      "restore your pre-update backup created with openclaw backup create.",
-    );
-    // Two builds sharing one release version can support different schemas (#115008).
-    expect(error.message).not.toContain("Do not downgrade");
-    expect(error.message).not.toContain("Upgrade OpenClaw");
-    const described = describeRunningOpenClawBuild();
-    expect(described).toContain(VERSION);
-    expect(described).toContain("installed at ");
-    expect(described).toContain("(aaaaaaa)");
-  });
+  expect(error.name).toBe("SqliteSchemaVersionError");
+  expect(error.message).toContain("https://docs.openclaw.ai/reference/database-schemas");
+  expect(error.message).toContain("uses newer schema version 12");
+  expect(error.message).toContain("this build supports 11");
+  expect(error.message).toContain(`OpenClaw ${VERSION} (aaaaaaa) installed at `);
+  expect(error.message).toContain("supports schema 12 or newer");
+  expect(error.message).toContain("restore your pre-update backup");
+  expect(error.message).toContain("openclaw backup create");
+  // Two builds sharing one release version can support different schemas (#115008).
+  expect(error.message).not.toMatch(/Do not downgrade|Upgrade OpenClaw/);
+  expect(error.message.includes("newer than this Gateway")).toBe(newer);
+  expect(error.message.includes("doctor --fix")).toBe(writer === VERSION);
+  const preflight = new OpenClawDatabaseSchemaPreflightError([
+    {
+      kind: "state",
+      path: "/tmp/test.sqlite",
+      foundVersion: 12,
+      supportedVersion: 11,
+      writerAppVersion: writer,
+    },
+  ]);
+  expect(preflight.message.includes("newer than this Gateway")).toBe(newer);
+  expect(preflight.message.includes("Use the newer install")).toBe(newer);
 });

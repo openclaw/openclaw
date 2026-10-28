@@ -15,11 +15,14 @@ import {
 } from "../../infra/update-run-timeouts.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { defaultRuntime } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import * as cliExit from "../one-shot-exit.js";
-import { withCliProcessScope } from "../runtime-cleanup-scope.js";
+import { withCliCommandCleanup, withCliProcessScope } from "../runtime-cleanup-scope.js";
+import { closeCliResources } from "../runtime-cleanup.js";
+import { exitAfterSignalExitBarriers, waitForCliSignalExit } from "../signal-exit-barrier.js";
 import { expectMessages } from "./update-boundary.test-support.js";
 import { resultFixture } from "./update-command-fixtures.test-support.js";
 import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js";
@@ -234,6 +237,80 @@ it("records the plugin failure reason without finishing an inherited run", async
   });
   ledger.finishUpdateRun(inherited.runId, { status: "failed", reason: "parent-failure" });
   expect(getUpdateRun(inherited.runId)?.reason).toBe("parent-failure");
+});
+
+it("records the accepted CLI stop cause after admitted plugin work settles", async () => {
+  const previousExitCode = process.exitCode;
+  const { lifecycle, read } = finalization(5_000);
+  const entered = createDeferredCore<AbortSignal>();
+  const settle = createDeferredCore();
+  const released = vi.fn(async () => {});
+  const running = withCliProcessScope(() =>
+    withCliCommandCleanup(false, async (cleanup) => {
+      const resources = cleanup!.pluginResources!;
+      resources.adopt({ release: released });
+      try {
+        await resources.run(() =>
+          lifecycle.run("plugins", async () => {
+            const signal = getAsyncWorkSignal()!;
+            expect(signal).toBeDefined();
+            entered.resolve(signal);
+            await settle.promise;
+            signal.throwIfAborted();
+          }),
+        );
+      } finally {
+        lifecycle.fail();
+        await closeCliResources(cleanup);
+        await resources.release();
+      }
+    }),
+  ).catch((error: unknown) => error);
+  try {
+    const signal = await Promise.race([
+      entered.promise,
+      running.then((error) => {
+        throw error;
+      }),
+    ]);
+    exitAfterSignalExitBarriers(7, "unhandled rejection");
+    exitAfterSignalExitBarriers(1, "uncaught exception");
+    expect(signal.reason).toMatchObject({
+      name: "AbortError",
+      code: 20,
+      message: "CLI stopping (unhandled rejection)",
+    });
+    expect(read().steps).toContainEqual(
+      expect.objectContaining({ step: "finalize:plugins", status: "in_progress" }),
+    );
+    expect(released).not.toHaveBeenCalled();
+    settle.resolve();
+    expect(await running).toBe(signal.reason);
+    await expect(waitForCliSignalExit()).resolves.toBe(7);
+    expect(released).toHaveBeenCalledOnce();
+    expect(read()).toMatchObject({
+      status: "failed",
+      steps: expect.arrayContaining([
+        expect.objectContaining({
+          step: "finalize:plugins",
+          status: "failed",
+          failureFacts: [
+            {
+              check: "plugins",
+              code: "20",
+              message: "CLI stopping (unhandled rejection)",
+            },
+            { check: "update", code: "update-failed" },
+          ],
+        }),
+      ]),
+    });
+  } finally {
+    settle.resolve();
+    await running;
+    await waitForCliSignalExit();
+    process.exitCode = previousExitCode;
+  }
 });
 
 it("records a returned failed outcome without requiring an exception", async () => {

@@ -504,31 +504,35 @@ export function createGatewayInstanceRuntime(
       };
       assertNoticeCurrent();
       const context = options.getContext();
-      const result = await sendMessage({
-        cfg: context.getRuntimeConfig(),
-        deps: createOutboundSendDeps(context.deps),
-        channel: payload.channel,
-        to: payload.to,
-        accountId: payload.accountId,
-        threadId: payload.threadId,
-        content: payload.text,
-        gatewayOwnedDelivery: true,
-        bestEffort: true,
-        idempotencyKey: payload.idempotencyKey,
-        // Only an explicitly live-only announcement declines durable custody.
-        // Existing guarded callers still need deduplication across owner retries.
-        ...(payload.liveOnly
-          ? { skipQueue: true }
-          : {
-              deliveryIntentId: payload.idempotencyKey,
-              reusePendingDeliveryIntent: true,
-              completionRetention: RECOVERY_NOTICE_COMPLETION_RETENTION,
-            }),
-        onPlatformSendDispatch: async () => assertNoticeCurrent(),
-        // Provider throttles may wait after the asynchronous dispatch check.
-        assertDirectAdapterHandoff: assertNoticeCurrent,
-        abortSignal: AbortSignal.timeout(10_000),
-      });
+      const result = await sendMessage(
+        {
+          cfg: context.getRuntimeConfig(),
+          deps: createOutboundSendDeps(context.deps),
+          channel: payload.channel,
+          to: payload.to,
+          accountId: payload.accountId,
+          threadId: payload.threadId,
+          content: payload.text,
+          gatewayOwnedDelivery: true,
+          bestEffort: true,
+          idempotencyKey: payload.idempotencyKey,
+          agentId: payload.generation.agentId,
+          // Recovery has no producing model turn; policyKey carries destination ownership only.
+          session: {
+            agentId: payload.generation.agentId,
+            policyKey: payload.generation.sessionKey,
+          },
+          transcriptProvenance: payload.provenance,
+          deliveryIntentId: payload.idempotencyKey,
+          reusePendingDeliveryIntent: true,
+          completionRetention: RECOVERY_NOTICE_COMPLETION_RETENTION,
+          onPlatformSendDispatch: async () => assertNoticeCurrent(),
+          // Provider throttles may wait after the asynchronous dispatch check.
+          assertDirectAdapterHandoff: assertNoticeCurrent,
+          abortSignal: AbortSignal.timeout(10_000),
+        },
+        payload.generation,
+      );
       if (result.deliveryStatus === "failed" || result.deliveryStatus === "partial_failed") {
         throw new Error(result.error ?? "recovery notice delivery failed");
       }

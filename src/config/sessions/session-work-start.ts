@@ -74,6 +74,15 @@ export function resolveSessionWorkStartBlock(
   entry: SessionWorkStartEntry | null | undefined,
   options?: SessionWorkStartOptions,
 ): SessionWorkStartError | undefined {
+  return resolveWorkStartBlock(sessionKey, entry, options);
+}
+
+function resolveWorkStartBlock(
+  sessionKey: string,
+  entry: SessionWorkStartEntry | null | undefined,
+  options?: SessionWorkStartOptions,
+  acceptedRecoveryNotice = false,
+): SessionWorkStartError | undefined {
   if (options?.expectedSessionId && !entry) {
     return new SessionWorkStartError(
       "deleted",
@@ -141,7 +150,7 @@ export function resolveSessionWorkStartBlock(
     if (options?.allowRestartTombstoneReplacement === true && !entry?.providerReview) {
       return undefined;
     }
-    if (!canResume) {
+    if (!canResume && !acceptedRecoveryNotice) {
       return new SessionWorkStartError(
         "restart_tombstone",
         entry?.modelSelectionLocked === true
@@ -175,4 +184,23 @@ export function resolveSessionWorkStartError(
   options?: SessionWorkStartOptions,
 ): string | undefined {
   return resolveSessionWorkStartBlock(sessionKey, entry, options)?.message;
+}
+
+/** Only confirmation of this exact tombstone's notice may settle through its closed lifecycle. */
+export function resolveRecoveryNoticeSettlementError(
+  sessionKey: string,
+  entry: SessionWorkStartEntry,
+  notice: { cycleId: string; revision: number },
+): string | undefined {
+  const recovery = entry.mainRestartRecovery;
+  if (
+    !recovery?.tombstone ||
+    recovery.cycleId !== notice.cycleId ||
+    recovery.revision !== notice.revision ||
+    recovery.tombstone.recoveredSessionKey
+  ) {
+    return "restart recovery notice no longer owns this tombstone";
+  }
+  return resolveWorkStartBlock(sessionKey, entry, { purpose: "accepted-result-settlement" }, true)
+    ?.message;
 }

@@ -343,6 +343,15 @@ it("seeds independent source-only Git and reconciles edits without host metadata
   expect(await git(projection, "status", "--porcelain")).toContain("source.txt");
 });
 
+it.each([false, true])(
+  "recovers accepted unindexed inventory (retained membership: %s)",
+  async (retainedMembership) => {
+    const { proveAcceptedInventoryRecovery } =
+      await import("./local-workspace-recovery.test-support.js");
+    await proveAcceptedInventoryRecovery(owner, retainedMembership);
+  },
+);
+
 it("never admits nested host secrets after guest de-ignore", async () => {
   const prefix = "nested/";
   await fs.mkdir(path.join(canonical, prefix), { recursive: true });

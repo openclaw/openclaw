@@ -1,16 +1,16 @@
-// Memory Core tests cover concept vocabulary plugin behavior.
 import { describe, expect, it } from "vitest";
 import { deriveConceptTags, summarizeConceptTagScriptCoverage } from "./concept-vocabulary.js";
 
 describe("concept vocabulary", () => {
-  it("respects astral letter boundaries around short glossary terms", () => {
+  it("respects token boundaries and grammatical stopwords", () => {
     const tags = deriveConceptTags({
       path: "memory/2026-04-04.md",
-      snippet: "kv𐐀 𐐀kv s3𐐀 𐐀s3",
+      snippet: "kv𐐀 𐐀kv s3𐐀 𐐀s3 Ich der die und mit the and",
     });
     expect(tags).toEqual(expect.arrayContaining(["kv𐐨", "𐐨kv", "s3𐐨", "𐐨s3"]));
     expect(tags).not.toContain("kv");
     expect(tags).not.toContain("s3");
+    expect(tags).not.toContain("ich");
   });
 
   it("extracts protected and segmented CJK concept tags", () => {
