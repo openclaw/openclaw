@@ -1,3 +1,4 @@
+import { hasConfiguredAccountValue } from "openclaw/plugin-sdk/account-core";
 import type {
   ChannelDoctorAdapter,
   ChannelDoctorEmptyAllowlistAccountContext,
@@ -450,6 +451,52 @@ function hasConfiguredGroups(account: DoctorAccountRecord, parent?: DoctorAccoun
   return Boolean(groups) && Object.keys(groups ?? {}).length > 0;
 }
 
+function listActiveChildAccounts(account: DoctorAccountRecord): DoctorAccountRecord[] {
+  const accounts = asObjectRecord(account.accounts);
+  if (!accounts) {
+    return [];
+  }
+  return Object.values(accounts).flatMap((value) => {
+    const child = asObjectRecord(value);
+    return child && child.enabled !== false ? [child] : [];
+  });
+}
+
+function hasExplicitDefaultChildAccount(account: DoctorAccountRecord): boolean {
+  const accounts = asObjectRecord(account.accounts);
+  if (!accounts) {
+    return false;
+  }
+  const defaultAccountId =
+    (typeof account.defaultAccount === "string"
+      ? normalizeOptionalString(account.defaultAccount)
+      : undefined) ?? "default";
+  return (
+    Object.hasOwn(accounts, defaultAccountId) &&
+    asObjectRecord(accounts[defaultAccountId])?.enabled !== false
+  );
+}
+
+function hasGroupsForEveryExplicitChildAccount(account: DoctorAccountRecord): boolean {
+  const children = listActiveChildAccounts(account);
+  const hasTopLevelCredential =
+    hasConfiguredAccountValue(account.botToken) ||
+    hasConfiguredAccountValue(account.tokenFile) ||
+    hasConfiguredAccountValue(process.env.TELEGRAM_BOT_TOKEN);
+  const accounts = asObjectRecord(account.accounts);
+  const implicitDefault = accounts ? asObjectRecord(accounts.default) : undefined;
+  const implicitDefaultHasGroups =
+    implicitDefault != null &&
+    implicitDefault.enabled !== false &&
+    hasConfiguredGroups(implicitDefault, account);
+  return (
+    hasExplicitDefaultChildAccount(account) &&
+    children.length > 0 &&
+    children.every((child) => hasConfiguredGroups(child, account)) &&
+    (!hasTopLevelCredential || implicitDefaultHasGroups)
+  );
+}
+
 function collectTelegramGroupPolicyWarnings(params: {
   account: DoctorAccountRecord;
   prefix: string;
@@ -458,6 +505,13 @@ function collectTelegramGroupPolicyWarnings(params: {
   parent?: DoctorAccountRecord;
 }): string[] {
   if (!hasConfiguredGroups(params.account, params.parent)) {
+    // The parent container is not an account. Once every explicit child account
+    // owns its groups, first-time guidance here is a false positive. Keep the
+    // warning when the default account is implicit because it has no child
+    // scope of its own to carry the guidance.
+    if (!params.parent && hasGroupsForEveryExplicitChildAccount(params.account)) {
+      return [];
+    }
     const effectiveDmPolicy = params.dmPolicy ?? "pairing";
     const dmSetupLine =
       effectiveDmPolicy === "pairing"

@@ -1,8 +1,10 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveChannelAccount } from "../../channels/account-resolution.js";
 import { findBundledChannelCatalogMetadata } from "../../channels/bundled-channel-catalog-read.js";
 import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
+import { resolveReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginPackageChannelDoctorCapabilities } from "../../plugins/manifest.js";
@@ -61,18 +63,49 @@ type DoctorChannelAccountIds = {
   runtime: string[];
 };
 
+function findReadOnlyChannelPlugin(params: {
+  cfg: OpenClawConfig;
+  channelId: string | null;
+  channelName: string;
+  env?: NodeJS.ProcessEnv;
+}) {
+  const channelId =
+    params.channelId ??
+    findBundledChannelCatalogMetadata(params.channelName)?.id ??
+    normalizeOptionalLowercaseString(params.channelName);
+  if (!channelId) {
+    return undefined;
+  }
+  try {
+    const { plugins } = resolveReadOnlyChannelPluginsForConfig(params.cfg, {
+      ...(params.env ? { env: params.env } : {}),
+      includePersistedAuthState: false,
+      includeSetupFallbackPlugins: true,
+    });
+    return plugins.find((plugin) => plugin.id === channelId);
+  } catch {
+    // Doctor stays conservative when configured plugins cannot be loaded.
+    return undefined;
+  }
+}
+
 /** Resolve configured and runtime account ids through the channel plugin's own semantics. */
 export async function resolveDoctorChannelAccountIds(
   channelName: string,
   cfg: OpenClawConfig,
   configuredAccountIds: string[],
+  options: { env?: NodeJS.ProcessEnv } = {},
 ): Promise<DoctorChannelAccountIds | undefined> {
   const channelId = normalizeAnyChannelId(channelName);
-  if (!channelId) {
-    return undefined;
-  }
   try {
-    const plugin = getChannelPlugin(channelId) ?? getBundledChannelPlugin(channelId);
+    // Doctor inspects config without starting channels, so the live plugin
+    // registry can be empty. Reuse Doctor's config-driven read-only loader for
+    // bundled and configured external channels in that case.
+    const plugin =
+      (channelId
+        ? (getChannelPlugin(channelId) ?? getBundledChannelPlugin(channelId))
+        : undefined) ??
+      findReadOnlyChannelPlugin({ cfg, channelId, channelName, env: options.env });
     if (!plugin) {
       return undefined;
     }

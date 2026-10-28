@@ -605,6 +605,7 @@ export async function collectDoctorPreviewNotes(params: {
     const emptyAllowlistWarnings = (
       await scanEmptyAllowlistPolicyWarnings(params.cfg, {
         doctorFixCommand: params.doctorFixCommand,
+        env,
         extraWarningsForAccount: emptyAllowlistHooks.extraWarningsForAccount,
         shouldSkipDefaultEmptyGroupAllowlistWarning:
           emptyAllowlistHooks.shouldSkipDefaultEmptyGroupAllowlistWarning,
