@@ -53,13 +53,9 @@ export function main(
       new Map(rows.filter((row) => row.tier === tier).map((row) => [row.file, row.calls.length]));
     const sources = loadInventorySources(root, "", args.staged);
     reportNativeTypeScriptPhase(trace, "head.sources", { files: sources.size });
-    const head = inventory(
-      root,
-      "",
-      args.staged,
-      sources,
-      trace && ((phase, facts) => trace(`head.${phase}`, facts)),
-    );
+    const head = inventory(root, "", args.staged, sources, {
+      observer: trace && ((phase, facts) => trace(`head.${phase}`, facts)),
+    });
     const baseline = baseInventory(root, base, { sources, rows: head }, trace);
     const before = counts(baseline);
     const after = counts(head);

@@ -60,7 +60,7 @@ export function baseInventory(
   const commit = git(`${ref}^{commit}`);
   if (analyzerSignature() !== loadedAnalyzerSignature) {
     reportNativeTypeScriptPhase(trace, "reuse", { outcome: "changed-analyzer" });
-    return inventory(root, commit, false, undefined, trace);
+    return inventory(root, commit, false, undefined, { observer: trace });
   }
   // The semantic project denies disk fallback and embeds its config in the analyzer.
   // A whole-tree key conservatively includes every source path, byte and membership change.
@@ -103,7 +103,9 @@ export function baseInventory(
       sources.size === current.sources.size &&
       [...sources].every(([file, text]) => current.sources.get(file) === text);
     reportNativeTypeScriptPhase(trace, "equality");
-    const rows = identical ? current.rows : inventory(root, commit, false, sources, trace);
+    const rows = identical
+      ? current.rows
+      : inventory(root, commit, false, sources, { observer: trace });
     reportNativeTypeScriptPhase(trace, "reuse", { outcome: identical ? "identical" : "analyzed" });
     if (identical) {
       console.log("SQLite worker snapshots identical: reusing fresh current-tree analysis.");

@@ -3922,13 +3922,13 @@ export function loadInventorySources(root = defaultRoot, ref = "", staged = fals
     : new Map(sourceFiles.map((file) => [file, fs.readFileSync(path.join(root, file), "utf8")]));
 }
 
-/** @param {import("./lib/native-typescript.mts").NativeTypeScriptObserver} [observer] */
+/** @param {{ observer?: import("./lib/native-typescript.mts").NativeTypeScriptObserver }} [options] */
 export function inventory(
   root = defaultRoot,
   ref = "",
   staged = false,
   texts = loadInventorySources(root, ref, staged),
-  observer,
+  { observer } = {},
 ) {
   using parser = createNativeTypeScriptParser({
     cwd: root,
