@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, expect, it, onTestFinished } from "vitest";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import * as exec from "../process/exec.js";
 import { runCommandBuffered } from "../process/exec.js";
 import {
   assertSafeGitPublicationWorkspace as assertSafeWorkspace,
@@ -57,7 +58,7 @@ it("accepts checkout-configured hooks while snapshot commands keep every hook di
   await expect(fs.access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
-it("captures a repository whose recursive tree listing exceeds the default output cap", async () => {
+it("captures a large tree without buffering unrelated paths for its attribute check", async () => {
   // 600 ~540-byte entries exceed the default 256KB `ls-tree -r` output cap.
   const directory = "a".repeat(240);
   const filename = "b".repeat(240);
@@ -72,10 +73,37 @@ it("captures a repository whose recursive tree listing exceeds the default outpu
   await git("add", "-A");
   await git("commit", "-q", "-m", "large tree");
 
+  await write(".gitattributes", "*.txt text\n");
+  await write(`${directory}/.GITATTRIBUTES`, "*.txt -text\n");
+  const transport = vi.spyOn(exec, "runCommandBuffered");
+  onTestFinished(() => transport.mockRestore());
   await expect(captureSnapshot({ cwd: root })).resolves.toMatchObject({
     workspaceTree: commit,
   });
+  let inventoryBytes = 0;
+  for (let index = 0; index < transport.mock.calls.length; index++) {
+    if (transport.mock.calls[index]![0].some((arg) => arg === "ls-tree" || arg === "ls-files")) {
+      inventoryBytes += (await transport.mock.results[index]!.value).stdout.length;
+    }
+  }
+  expect(inventoryBytes).toBeGreaterThan(0);
+  expect(inventoryBytes).toBeLessThan(1024);
 });
+
+it.each([".gitattributes", "nested/.GITATTRIBUTES"])(
+  "checks newly staged attributes from the private snapshot index: %s",
+  async (file) => {
+    vi.stubEnv("GIT_LITERAL_PATHSPECS", "1");
+    onTestFinished(() => vi.unstubAllEnvs());
+    await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
+    await write(file, "*.txt text\n");
+    await git("add", file);
+    await captureSnapshot({ cwd: root });
+    await write(file, "*.txt filter=blocked\n");
+    await expect(captureSnapshot({ cwd: root })).rejects.toThrow("unsupported Git clean filter");
+    expect(await git("show", `:${file}`)).toBe("*.txt text");
+  },
+);
 
 it.each(["replace refs", "grafts"])("rejects Git replacement metadata from %s", async (kind) => {
   const head = await git("rev-parse", "HEAD");

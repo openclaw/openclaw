@@ -341,6 +341,7 @@ describe("GitHub publication index update", () => {
   it("rejects a filter from Git's default global attributes file", async () => {
     const globalAttributes = path.join(testState.home, ".config", "git", "attributes");
     await fs.mkdir(path.dirname(globalAttributes), { recursive: true });
+    await captureGitHubPublicationWorkspaceSnapshot(f);
     await fs.writeFile(globalAttributes, "*.secret filter=redact\n");
 
     await rejects(captureGitHubPublicationWorkspaceSnapshot(f), "unsupported Git clean filter");
