@@ -163,6 +163,7 @@ describe("trusted plugin approval requests", () => {
         validateAgentRuntimeDelegatedAuthority: () => true,
       });
       const handlers = createPluginApprovalHandlers(manager);
+      const parked = vi.fn();
       const context = createContext([
         [
           "plugin.approval.request",
@@ -174,7 +175,10 @@ describe("trusted plugin approval requests", () => {
           "plugin.approval.waitDecision",
           "operator.approvals",
           "plugin-approval",
-          handlers["plugin.approval.waitDecision"]!,
+          async (options) => {
+            parked();
+            await handlers["plugin.approval.waitDecision"]!(options);
+          },
         ],
       ]);
       const caller = createOperatorClient({
@@ -194,10 +198,15 @@ describe("trusted plugin approval requests", () => {
         validateAgentRuntimeApprovalAuthority: (candidate: unknown) =>
           candidate === hookIdentity || candidate === otherRun,
       });
+      let revoked = false;
       const authority = createAdmittedRunOperatorAuthority({
         profileId: caller.authenticatedUserProfile!.profileId,
         scopes: ["operator.write"],
-        assertCurrent: () => undefined,
+        assertCurrent: () => {
+          if (revoked) {
+            throw new Error("run authority revoked");
+          }
+        },
         readCurrentRoleFacts: () => ({ assignedRole: "writer" }),
       });
       const dispatch = (
@@ -238,6 +247,13 @@ describe("trusted plugin approval requests", () => {
       const wait = dispatch("plugin.approval.waitDecision", { id });
       await vi.waitFor(async () => expect(await manager.resolve(id, "allow-once")).toBe(true));
       await expect(wait).resolves.toMatchObject({ id, decision: "allow-once" });
+      // Revocation during the wait withholds a later allowance.
+      const next = await dispatch("plugin.approval.request", { ...requestParams, twoPhase: true });
+      const revokedWait = dispatch("plugin.approval.waitDecision", { id: next.id });
+      await vi.waitFor(() => expect(parked).toHaveBeenCalledTimes(3));
+      revoked = true;
+      await manager.resolve(next.id, "allow-once");
+      await expect(revokedWait).rejects.toThrow("run authority revoked");
     }));
 
   it("does not offer the bridge to a read-only caller", () =>

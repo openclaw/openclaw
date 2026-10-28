@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
 import { createHarness } from "./gateway.mjs";
 
 const harness = await createHarness();
@@ -67,10 +68,35 @@ try {
     });
     assert.equal(written.approvals.length, 1);
     assert.equal(methods("approval/decide").at(-1).params.choiceId, "server-allow-id");
+    // Ending the run while it waits must keep a later allowance from reaching Muse.
+    const decided = methods("approval/decide").length;
+    const revoked = await harness
+      .turn("fixture:approval", {
+        via: writer,
+        key: "agent:main:writer-approval",
+        decision: "allow-once",
+        expectError: true,
+        beforeApproval: async (runId) => {
+          await writer.request("chat.abort", { sessionKey: "agent:main:writer-approval", runId });
+          await delay(500);
+        },
+      })
+      .catch((/** @type {unknown} */ error) => ({ error }));
+    console.log(
+      `revoked wait outcome: ${revoked.error ? String(revoked.error.cause ?? revoked.error) : JSON.stringify(revoked.wait)}`,
+    );
+    assert.equal(revoked.wait?.status === "ok", false);
+    assert.equal(
+      methods("approval/decide")
+        .slice(decided)
+        .some((row) => row.params.choiceId === "server-allow-id"),
+      false,
+      "a revoked wait must not forward the allowance to Muse",
+    );
   } finally {
     writer.stop();
   }
-  console.log("PASS write-only operator run receives its native approval verdict");
+  console.log("PASS write-only operator run receives its own verdict, and not after its run ends");
   await harness.stop();
   harness.config.tools.exec.security = "allowlist";
   harness.saveConfig();

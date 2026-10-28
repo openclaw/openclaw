@@ -49,6 +49,7 @@ export async function createHarness() {
   let activeDecision;
   let approvalFailure;
   let activeAfterApproval;
+  let activeBeforeApproval;
   let activeRunId;
   async function stop() {
     client?.stop();
@@ -113,14 +114,16 @@ export async function createHarness() {
             return;
           }
           activeApprovals.push(event.payload);
-          connection
-            .request("approval.resolve", {
-              id: event.payload.id,
-              kind: "plugin",
-              decision: activeDecision ?? "deny",
-            })
+          Promise.resolve(activeBeforeApproval?.(activeRunId))
+            .then(() =>
+              connection.request("approval.resolve", {
+                id: event.payload.id,
+                kind: "plugin",
+                decision: activeDecision ?? "deny",
+              }),
+            )
             .then(() => activeAfterApproval?.(activeRunId))
-            .catch((error) => {
+            .catch((/** @type {unknown} */ error) => {
               approvalFailure = error;
             });
         },
@@ -130,11 +133,19 @@ export async function createHarness() {
   }
   async function turn(
     message,
-    { decision, expectError = false, afterApproval, via = client, key = sessionKey } = {},
+    {
+      decision,
+      expectError = false,
+      afterApproval,
+      beforeApproval,
+      via = client,
+      key = sessionKey,
+    } = {},
   ) {
     activeApprovals = [];
     activeDecision = decision;
     activeAfterApproval = afterApproval;
+    activeBeforeApproval = beforeApproval;
     approvalFailure = undefined;
     const started = await via.request("chat.send", {
       sessionKey: key,
