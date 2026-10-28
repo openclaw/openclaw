@@ -11,7 +11,10 @@ import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-ca
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import * as inProcessGateway from "../../agents/tools/in-process-gateway.js";
 import { resolveAttemptWorkspaceSandbox } from "../../agents/workspace-sandbox.js";
-import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import {
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   replaceSessionEntry,
   loadSessionEntry,
@@ -22,7 +25,10 @@ import * as sessionLifecycleProjection from "../../config/sessions/session-lifec
 import { SessionEntryLifecycleUpsertConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { restartHandlers } from "../../gateway/server-methods/restart.js";
+import type { GatewayRequestHandlerOptions } from "../../gateway/server-methods/types.js";
 import { createGatewayHookDispatcher } from "../../gateway/server/hooks.js";
+import * as restartCoordinator from "../../infra/restart-coordinator.js";
 import {
   consumeSelectedSystemEventEntries,
   enqueueRequiredSystemEventEntry,
@@ -851,7 +857,7 @@ it.for([
   },
 );
 
-it.for(["owner", "guest", "revoked-owner"] as const)(
+it.for(["owner", "guest", "revoked-before-admission", "revoked-after-admission"] as const)(
   "runs an owner-only tool from a background completion only for its current owner requester: %s",
   async (requester, { signal, onTestFinished }) => {
     await runEventFixture("session-event-owner-requester", onTestFinished, async (state) => {
@@ -859,6 +865,8 @@ it.for(["owner", "guest", "revoked-owner"] as const)(
         channels: { telegram: {} },
         commands: { ownerAllowFrom: ["456"] },
       });
+      const revoke = () =>
+        setRuntimeConfigSnapshot({ ...config, commands: { ownerAllowFrom: ["789"] } });
       const scope = { agentId: "main", sessionKey: "agent:main:owner-requester" };
       await replaceSessionEntry(scope, {
         sessionId: "owner-requester",
@@ -880,23 +888,47 @@ it.for(["owner", "guest", "revoked-owner"] as const)(
             retainRequesterOwner: true,
           }),
       );
-      if (requester === "revoked-owner") {
-        // The owner is removed after the command started but before its completion runs.
-        setRuntimeConfigSnapshot({ ...config, commands: { ownerAllowFrom: ["789"] } });
+      if (requester === "revoked-before-admission") {
+        revoke();
       }
-      let senderIsOwner: boolean | undefined;
-      let restart: unknown;
-      // Only the Gateway transport is replaced; the restart request it receives is the effect.
+      // Only the Gateway transport and the final scheduler are replaced: the real restart
+      // handler still rechecks the requester against the current config at the effect.
+      const scheduled = vi
+        .spyOn(restartCoordinator, "scheduleSafeGatewayRestart")
+        .mockReturnValue({ ok: true } as ReturnType<
+          typeof restartCoordinator.scheduleSafeGatewayRestart
+        >);
       const gatewayContext = vi
         .spyOn(inProcessGateway, "getInProcessGatewayToolContext")
         .mockReturnValue({} as ReturnType<typeof inProcessGateway.getInProcessGatewayToolContext>);
       const gatewayCall = vi
         .spyOn(inProcessGateway, "callInProcessGatewayTool")
-        .mockResolvedValue({ ok: true, restart: "scheduled" });
+        .mockImplementation(async (method, params) => {
+          let response: unknown;
+          await expectDefined(
+            restartHandlers[method],
+            method,
+          )({
+            params,
+            context: {
+              getRuntimeConfig: () => expectDefined(getRuntimeConfigSnapshot(), "config"),
+            },
+            respond: (ok, value, error) => {
+              if (!ok) {
+                throw new Error(error?.message);
+              }
+              response = value;
+            },
+          } as GatewayRequestHandlerOptions);
+          return response as never;
+        });
       onTestFinished(() => {
+        scheduled.mockRestore();
         gatewayContext.mockRestore();
         gatewayCall.mockRestore();
       });
+      let senderIsOwner: boolean | undefined;
+      let restart: unknown;
       runEmbeddedAgentMock
         .mockReset()
         .mockImplementation(async (params: RunEmbeddedAgentParams) => {
@@ -922,6 +954,9 @@ it.for(["owner", "guest", "revoked-owner"] as const)(
               toolsAllow: params.toolsAllow,
               trigger: params.trigger,
               senderIsOwner: params.senderIsOwner,
+              messageChannel: params.messageChannel,
+              messageProvider: params.messageProvider,
+              agentAccountId: params.agentAccountId,
             },
             pluginId: "openclaw",
           });
@@ -936,6 +971,9 @@ it.for(["owner", "guest", "revoked-owner"] as const)(
               ).find((tool) => tool.name === "gateway"),
               "gateway tool",
             );
+            if (requester === "revoked-after-admission") {
+              revoke();
+            }
             restart = await gateway.execute("owner-only-restart", { action: "restart" }).then(
               (result) => result.details,
               (error: unknown) => (error instanceof Error ? error.message : String(error)),
@@ -951,17 +989,27 @@ it.for(["owner", "guest", "revoked-owner"] as const)(
         expectedTarget: target,
         abortSignal: signal,
         deliver: false,
+        deliveryContext: { channel: "telegram", to: "456" },
       });
       await expect(receipt.accepted).resolves.toEqual({ ok: true });
       const outcome = await receipt.settled;
       expect(outcome.status, outcome.error).toBe("completed");
-      expect(senderIsOwner).toBe(requester === "owner");
+      const owner = requester === "owner" || requester === "revoked-after-admission";
+      expect(senderIsOwner).toBe(owner);
       if (requester === "owner") {
-        expect(restart).toMatchObject({ ok: true, restart: "scheduled" });
-        expect(gatewayCall).toHaveBeenCalledOnce();
-        expect(gatewayCall.mock.calls[0]?.[0]).toBe("gateway.restart.request");
+        expect(restart).toMatchObject({ ok: true });
+        expect(gatewayCall.mock.calls[0]?.[1]).toMatchObject({
+          requester: { channel: "telegram", senderId: "456" },
+        });
+        expect(scheduled).toHaveBeenCalledOnce();
+      } else if (requester === "revoked-after-admission") {
+        // Revoking the owner publishes config, which retires the admitted turn's tool host
+        // before the call reaches the Gateway.
+        expect(restart).toBe("agent harness host capability is no longer active");
+        expect(gatewayCall).not.toHaveBeenCalled();
+        expect(scheduled).not.toHaveBeenCalled();
       } else {
-        // Guests and revoked owners are refused before any Gateway request.
+        // Guests and owners revoked before admission are gated before any Gateway request.
         expect(restart).toEqual({ gated: true });
         expect(gatewayCall).not.toHaveBeenCalled();
       }

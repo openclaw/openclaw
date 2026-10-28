@@ -45,7 +45,10 @@ const targetScopes = resolveGlobalSingleton(
         operatorAuthority?: AdmittedRunOperatorAuthority;
         ownerContinuation?: true;
         /** The captured requester keys the authority, whose source label is shared by owners. */
-        commandOwner?: { authority: PreparedCommandOwnerAuthority; requester: string };
+        commandOwner?: {
+          authority: PreparedCommandOwnerAuthority;
+          requester: CommandOwnerRequester;
+        };
         deletion?: { agentId: string; isBlocked: () => boolean };
       }
     >(),
@@ -225,16 +228,19 @@ export async function captureSessionEventTargetForHost(
       env,
       operatorAuthority,
       ...(operatorAuthority && options.ownerContinuation ? { ownerContinuation: true } : {}),
-      ...(requester && commandOwner?.source && commandOwner.isCurrent(cfg)
+      ...(requester?.messageProvider &&
+      requester.senderId &&
+      commandOwner?.source &&
+      commandOwner.isCurrent(cfg)
         ? {
             commandOwner: {
               authority: commandOwner,
-              requester: JSON.stringify([
-                requester.messageProvider,
-                requester.accountId ?? null,
-                requester.senderId,
-                requester.senderE164 ?? null,
-              ]),
+              requester: Object.freeze({
+                channel: requester.messageProvider,
+                accountId: requester.accountId ?? undefined,
+                senderId: requester.senderId,
+                senderE164: requester.senderE164 ?? undefined,
+              }),
             },
           }
         : {}),
@@ -382,10 +388,30 @@ export function readSessionEventTargetOwnerContinuation(target: SessionEventTarg
   return targetScopes.get(target)?.ownerContinuation === true;
 }
 
+export type CommandOwnerRequester = Readonly<{
+  channel: string;
+  accountId?: string;
+  senderId: string;
+  senderE164?: string;
+}>;
+
+/** The retained owner authority and the host-captured requester it belongs to. */
 export function readSessionEventTargetCommandOwner(
   target: SessionEventTarget,
-): PreparedCommandOwnerAuthority | undefined {
-  return targetScopes.get(target)?.commandOwner?.authority;
+): { authority: PreparedCommandOwnerAuthority; requester: CommandOwnerRequester } | undefined {
+  return targetScopes.get(target)?.commandOwner;
+}
+
+function commandOwnerRequesterKey(target: SessionEventTarget): string | undefined {
+  const requester = targetScopes.get(target)?.commandOwner?.requester;
+  return requester
+    ? JSON.stringify([
+        requester.channel,
+        requester.accountId ?? null,
+        requester.senderId,
+        requester.senderE164 ?? null,
+      ])
+    : undefined;
 }
 
 /** Coalesced work retains every producer's original destination and permission bound. */
@@ -410,8 +436,7 @@ export function combineSessionEventTargetsForHost(
         readSessionEventTargetOperatorAuthority(first) ||
       readSessionEventTargetOwnerContinuation(target) !==
         readSessionEventTargetOwnerContinuation(first) ||
-      targetScopes.get(target)?.commandOwner?.requester !==
-        targetScopes.get(first)?.commandOwner?.requester ||
+      commandOwnerRequesterKey(target) !== commandOwnerRequesterKey(first) ||
       channelRouteDedupeKey(target.deliveryContext) !== route
     ) {
       throw new Error(
