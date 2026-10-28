@@ -82,7 +82,7 @@ must declare their own development dependencies rather than rely on hoisting.
 
 ## Before You PR
 
-- Use **Node 24.16+ LTS** or **Node 26.1+** for source checkouts. Older Node releases can truncate SQLite TEXT reads; Node 22, 23, and 25 are unsupported. See [Node install guidance](docs/install/node.md) if your local version is too old.
+- Use **Node 24.22.1+ LTS** or **Node 26.12.1+** for source checkouts. Older Node releases can truncate SQLite TEXT reads; Node 22, 23, and 25 are unsupported. See [Node install guidance](docs/install/node.md) if your local version is too old.
 - Local tests and `pnpm dev` use the pinned OpenClaw Bun fork. See [local development tools](https://docs.openclaw.ai/reference/test/local#openclaw-bun-fork) for supported platforms, automatic staging, runtime/tool overrides, and fallbacks, and [CI runtime selection](https://docs.openclaw.ai/ci/pipeline#test-runtime-selection) for CI policy.
 - Test locally with your OpenClaw instance
 - An explicit maintainer repair-and-land request covers internal database scheduling, admission, and lifecycle decisions. The implementer owns the design and its verification. Get separate design acceptance when changing public contracts, schemas, durability, retention, or permissions; see the [database schema review checkpoint](docs/reference/database-schemas.md#review-checkpoint-for-material-changes).
@@ -92,6 +92,7 @@ must declare their own development dependencies rather than rely on hoisting.
 - Keep PRs takeover-ready: open them from a branch maintainers can push to. For fork PRs, leave GitHub's **Allow edits by maintainers** option enabled so maintainers can finish urgent fixes or merge prep when needed. If GitHub shows **Allow edits and access to secrets by maintainers**, enable it only when that workflow/secrets access is acceptable and say so in the PR.
 - Do not edit the generated `CHANGELOG.md` index or release-owned `CHANGELOG/**` entries and contribution records in normal PRs or at merge. Initial changelogs are generated at release time from merged PRs and commits; keep release-note context in PR bodies or commit messages until then. Explicit release-docs publication changes follow the [release artifact procedure](.agents/skills/openclaw-changelog-update/SKILL.md#post-release-docs-mirrors).
 - Run focused tests for touched code (`pnpm test <file> --maxWorkers=1`) and targeted typecheck, lint, and format checks. Build when the change affects build output or package boundaries. Open a ready PR once focused proof passes; PR CI runs the full suite.
+- When adding a maintained standalone command or dynamically loaded child, keep Knip's graph aligned with the real execution path. A command invoked by a package script, workflow, Docker scenario, or documentation—or a child executed as a spawned, preloaded, or worker process entrypoint through an exact path—is an exact Knip entry (`repositoryScriptEntries` in `config/knip.config.ts` for root repository scripts). When a child is instead reached as a computed module edge from a parent, use the existing source-derived consumer projection that owns that edge, such as `config/knip-dynamic-consumers.mjs` for root scripts; do not declare the child as an independent root solely to suppress a finding or mask it with an ignore or wildcard. Run `pnpm deadcode:unused-files` on the exact candidate; `pnpm check:changed` and [ordinary PR CI](docs/ci/scope-and-routing/selection.md#pr-vs-hourly-vs-release) do not run this unused-file proof. If unrelated existing findings keep the aggregate scan red, verify and report whether your owned paths appear rather than calling the aggregate a pass.
 - After PR CI fails, run `pnpm test:ci-failed <pr>` and read the failure classification. Fix new failures, use `pnpm test:ci-failed <pr> --run` until those pass locally, then push once. Do not rerun CI just to chase green or run the full local suite. Pre-existing failures follow the [failure-table landing rule](.agents/skills/openclaw-pr-maintainer/references/landing.md#red-main-and-inherited-failures).
 - For iterative local commits after running equivalent targeted validation for the touched surface, `git commit --no-verify` skips commit hooks.
 - For extension/plugin changes, run the fast local lane first:
@@ -106,7 +107,7 @@ must declare their own development dependencies rather than rely on hoisting.
   - `node --import tsx scripts/check-sdk-package-extension-import-boundary.mts --json` for `src/plugin-sdk/**` and `packages/**`
   - `node --import tsx scripts/check-test-helper-extension-import-boundary.mts --json` for `test/helpers/**`
 - Shared test helpers must use `src/test-utils/bundled-plugin-public-surface.ts` instead of repo-relative `extensions/**` imports. Keep plugin-local deep mocks inside the owning bundled plugin package.
-- If you are using an AI coding agent with OpenClaw skills available, run the `autoreview` skill before opening or updating your PR. Address accepted/actionable findings before asking for review.
+- Local review is strongly encouraged for contributors: use autoreview or optional local ClawSweeper. Follow the [local review route](https://docs.openclaw.ai/reference/pull-request-review-flow#local-review-before-a-pr) for public setup, maintainer requirements, and review evidence. Address actionable findings before asking for review.
 - Do not submit refactor-only PRs unless a maintainer explicitly requested that refactor for an active fix or deliverable.
 - Do not submit test or CI-config fixes for failures already red on `main` CI. If a failure is already visible in the [main branch CI runs](https://github.com/openclaw/openclaw/actions), it's a known issue the Maintainer team is tracking, and a PR that only addresses those failures will be closed automatically. If you spot a _new_ regression not yet shown in main CI, report it as an issue first.
 - Do not submit test-only PRs that just try to make known `main` CI failures pass. Test changes are acceptable when they are required to validate a new fix or cover new behavior in the same PR.
@@ -218,7 +219,7 @@ Please include in your PR:
 
 - [ ] Include a concise **Evidence** section with the most useful validation. Reviewers will inspect the code, tests, and CI rather than relying on the PR body alone.
 - [ ] Confirm you understand what the code does
-- [ ] Run the `autoreview` skill when available and address accepted/actionable findings
+- [ ] Follow the [local review route](https://docs.openclaw.ai/reference/pull-request-review-flow#local-review-before-a-pr), address actionable findings, and record the outcome or unavailable-tool gap
 - [ ] Follow the [pull request review flow](https://docs.openclaw.ai/reference/pull-request-review-flow) after Barnacle, ClawSweeper, or maintainer feedback
 
 AI PRs are first-class citizens here and follow the same quality and review standards as any other PR.

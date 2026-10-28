@@ -37,7 +37,7 @@ export function waitForReplyBarrierSettlement(
     if (typeof timeout === "number") {
       schedule(resolveTimerTimeoutMs(timeout, REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS), finish);
     } else {
-      const startedAt = Date.now();
+      const startedAt = performance.now();
       const maxTimeoutMs = resolveTimerTimeoutMs(
         timeout.maxTimeoutMs,
         REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
@@ -50,7 +50,7 @@ export function waitForReplyBarrierSettlement(
         }
       };
       const checkOwnerActivity = () => {
-        const remainingMs = maxTimeoutMs - (Date.now() - startedAt);
+        const remainingMs = maxTimeoutMs - (performance.now() - startedAt);
         if (remainingMs <= 0 || !shouldExtend()) {
           finish();
           return;

@@ -34,6 +34,7 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
+import { waitForFixtureFile } from "../helpers/process-wait.js";
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
@@ -1304,7 +1305,6 @@ printf 'rpc error: code = Unavailable\\n'
 trap 'printf "term\\n" >"$TMPDIR/docker.term"; exit 0' TERM
 mkfifo "$TMPDIR/docker.block"
 printf 'ready\\n' >"$TMPDIR/docker.ready"
-printf 'ready\\n' >&3
 while true; do
   read -r -t 1 _ <> "$TMPDIR/docker.block" || true
 done
@@ -1336,7 +1336,7 @@ docker_build_run e2e-build -t demo-image .
       }
       const runner = spawn(join(workDir, "runner.sh"), {
         env: { ...process.env, TMPDIR: workDir },
-        stdio: ["ignore", "ignore", "ignore", "pipe"],
+        stdio: "ignore",
       });
       const exited = waitForProcessExit(runner);
       const closed = ownChildCompletion(
@@ -1345,29 +1345,20 @@ docker_build_run e2e-build -t demo-image .
           runner.once("close", resolve);
         }),
       );
-      const ready = new Promise<void>((resolve, reject) => {
-        runner.stdio[3]!.once("data", () => resolve());
-        runner.stdio[3]!.once("error", reject);
-      });
       try {
         const pidPath = join(workDir, "docker.pid");
-        // A builtin FD write leaves no foreground reporter that tree shutdown could
-        // kill first, making errexit bypass the fixture's own TERM trap.
-        await withinTest(
-          awaitGateBeforeSettlement(ready, exited, `file was not written: ${pidPath}`),
-          signal,
-        );
-        expect(existsSync(join(workDir, "docker.ready"))).toBe(true);
+        const readyPath = join(workDir, "docker.ready");
+        await withinTest(waitForFixtureFile(readyPath, exited), signal);
+        expect(existsSync(readyPath)).toBe(true);
         const buildPid = Number.parseInt(readFileSync(pidPath, "utf8"), 10);
 
         runner.kill(childSignal);
         expect(await withinTest(closed, signal)).toBe(expectedCode);
         expect(runner.signalCode).toBeNull();
-        // The timeout wrapper can exit first; the Docker fixture holds FD 3 until
-        // its TERM trap finishes, so runner close also joins that fixture's output.
+        // The timeout wrapper can exit before the Docker fixture finishes its trap.
+        await waitForForeignProcessExit(buildPid, signal);
         expect(existsSync(join(workDir, "docker.term"))).toBe(true);
         expect(readFileSync(join(workDir, "docker-count"), "utf8").trim()).toBe("1");
-        await waitForForeignProcessExit(buildPid, signal);
         expect(isPidAlive(buildPid)).toBe(false);
       } finally {
         if (runner.exitCode === null && runner.signalCode === null) {
@@ -4158,6 +4149,7 @@ export async function sha256File(file) {
       "scripts/lib/docker-e2e-logs.sh",
       "scripts/lib/docker-e2e-container.sh",
       "scripts/lib/docker-e2e-watchdog.mjs",
+      "scripts/lib/direct-run.mjs",
       "scripts/lib/docker-e2e-resource-diagnostics.sh",
       PREPUBLISH_PLUGIN_REGISTRY_HELPER_PATH,
     ]) {

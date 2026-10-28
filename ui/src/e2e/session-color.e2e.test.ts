@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { createDarkDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import {
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
@@ -155,58 +156,50 @@ suite.define(() => {
   );
 
   it("clears an optimistic color when the authoritative roster removes it", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        colorScheme: "dark",
-        serviceWorkers: "block",
-        viewport: { width: 1440, height: 900 },
-      },
-      async ({ page }) => {
-        const key = "agent:main:color-proof";
-        const gateway = await installMockGateway(page, {
-          sessionKey: key,
-          methodResponses: {
-            "sessions.list": sessionsListResponse([sessionRow(key, "Design review", Date.now())]),
-            "sessions.patch": {},
+    await suite.withPage(createDarkDesktopControlUiContextOptions(), async ({ page }) => {
+      const key = "agent:main:color-proof";
+      const gateway = await installMockGateway(page, {
+        sessionKey: key,
+        methodResponses: {
+          "sessions.list": sessionsListResponse([sessionRow(key, "Design review", Date.now())]),
+          "sessions.patch": {},
+        },
+        featureMethods: ["chat.metadata", "chat.startup", "sessions.patch"],
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
+      const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
+      const dot = page.locator(".chat-pane__session-title .session-color-dot");
+      await row.click({ button: "right" });
+      await openAppearance(page);
+      await button(page, "Purple").click();
+      await sessionPatches(gateway, key)({ color: "purple" });
+      await expect
+        .poll(() => row.getAttribute("class"))
+        .toContain("sidebar-recent-session--colored");
+      await dot.waitFor({ state: "visible" });
+      expect(await dot.getAttribute("aria-label")).toBe("Session color: Purple");
+      const committed = await gateway.getSessionRow(key);
+      await gateway.setSessionsListResponse(
+        sessionsListResponse([
+          {
+            ...committed,
+            snapshotAt: undefined,
+            label: "Design review refreshed",
+            color: null,
+            updatedAt: committed.updatedAt! + 1,
           },
-          featureMethods: ["chat.metadata", "chat.startup", "sessions.patch"],
-        });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
-        const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
-        const dot = page.locator(".chat-pane__session-title .session-color-dot");
-        await row.click({ button: "right" });
-        await openAppearance(page);
-        await button(page, "Purple").click();
-        await sessionPatches(gateway, key)({ color: "purple" });
-        await expect
-          .poll(() => row.getAttribute("class"))
-          .toContain("sidebar-recent-session--colored");
-        await dot.waitFor({ state: "visible" });
-        expect(await dot.getAttribute("aria-label")).toBe("Session color: Purple");
-        const committed = await gateway.getSessionRow(key);
-        await gateway.setSessionsListResponse(
-          sessionsListResponse([
-            {
-              ...committed,
-              snapshotAt: undefined,
-              label: "Design review refreshed",
-              color: null,
-              updatedAt: committed.updatedAt! + 1,
-            },
-          ]),
-        );
-        await gateway.emitGatewayEvent("sessions.changed", { sessionKey: key, color: null });
-        // The roster-only label excludes an event-only clear masking stale refresh data.
-        await row.getByText("Design review refreshed", { exact: true }).waitFor();
-        expect(
-          await row.evaluate((element) => element.style.getPropertyValue("--session-color")),
-        ).toBe("");
-        await expect.poll(() => dot.count()).toBe(0);
-        await expect
-          .poll(() => row.getAttribute("class"))
-          .not.toContain("sidebar-recent-session--colored");
-      },
-    );
+        ]),
+      );
+      await gateway.emitGatewayEvent("sessions.changed", { sessionKey: key, color: null });
+      // The roster-only label excludes an event-only clear masking stale refresh data.
+      await row.getByText("Design review refreshed", { exact: true }).waitFor();
+      expect(
+        await row.evaluate((element) => element.style.getPropertyValue("--session-color")),
+      ).toBe("");
+      await expect.poll(() => dot.count()).toBe(0);
+      await expect
+        .poll(() => row.getAttribute("class"))
+        .not.toContain("sidebar-recent-session--colored");
+    });
   });
 });

@@ -68,7 +68,8 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
     shareRoute: BEAM_SESSION_SHARE_ROUTE,
     supportsProcessHomeIsolation: true,
     async list(params) {
-      const search = params.search?.trim().toLowerCase();
+      // Normalize comparison text only; uploaded titles and stored identities stay original.
+      const search = params.search?.trim().toLowerCase().normalize("NFC");
       const shareId =
         search && isControlUiCatalogShareId(BEAM_SESSION_SHARE_ROUTE, search) ? search : undefined;
       const sessions = (await store.list())
@@ -77,7 +78,10 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
             !search ||
             (shareId
               ? session.beamId.startsWith(shareId)
-              : `${session.title}\n${session.source}`.toLowerCase().includes(search)),
+              : `${session.title}\n${session.source}`
+                  .toLowerCase()
+                  .normalize("NFC")
+                  .includes(search)),
         )
         .toSorted(
           (left, right) =>

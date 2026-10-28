@@ -84,11 +84,7 @@ export function isOlderCurrentWorkChange(
 export function reconcileCurrentWork(
   result: SessionsListResult,
   changes: Iterable<CurrentWorkChange>,
-): {
-  result: SessionsListResult;
-  requiresRefresh: boolean;
-  canPublish: boolean;
-} {
+) {
   const rows = new Map(
     result.sessions.map((row) => [currentWorkIdentity(row), { row, requiresRefresh: false }]),
   );

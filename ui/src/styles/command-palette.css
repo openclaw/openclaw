@@ -284,19 +284,6 @@
   opacity: 0.55;
 }
 
-.cmd-palette__create kbd {
-  margin: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-  color: inherit;
-  font-family: var(--mono);
-  font-size: 11px;
-  line-height: inherit;
-}
-
 .cmd-palette__no-results {
   display: flex;
   flex: 1 1 auto;
@@ -374,19 +361,6 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-}
-
-.cmd-palette__footer kbd {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1px 5px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  font-family: var(--mono);
-  font-size: 12px;
-  line-height: 1.4;
 }
 
 @media (max-width: 560px) {

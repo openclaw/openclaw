@@ -42,6 +42,18 @@ Agent auth-store admission and configured model-owner changes explicitly select
 the Gateway agent-config readiness suite. Its lazy startup path is not fully
 visible to the bounded import graph; the owner watch preserves overlap coverage.
 
+PR Node plans also select the QA scenario catalog's reference check when a
+changed path is absent from the checkout, including the removed side of a rename.
+This catches stale YAML code references without selecting the full QA smoke lane.
+Removed UI test paths also select the UI runtime inventory check so its literal
+Node-driven browser list cannot silently retain deleted tests. Both checks use
+the existing bounded Node planner and leave native and real-Gateway tiers unchanged.
+
+Added tests outside the ordinary suite roots select the full-suite ownership
+inventory, including rename destinations. The policy watch uses the PR base
+to distinguish additions from existing-file edits, which add no inventory work.
+See [selection and routing](/ci/scope-and-routing/selection) for the scope.
+
 Gateway close and run-shutdown owner changes likewise select the Gateway
 detached-execution shutdown and late-admission suites. `server.close()` reaches
 those owners through the kernel's lazy shutdown runtime, beyond the bounded
@@ -143,10 +155,36 @@ serving it. Protocol recovery also uses the producer’s built Gateway and retai
 its incompatible-protocol UI build. Local, compatibility, and frozen targets
 retain their ordinary preparation path.
 
+When the selected mocked Control UI shard includes production stale-build recovery,
+its workflow step prepares the Gateway runtime before starting Vitest. This moves
+the existing cold build outside the fixture's subprocess budget without adding a
+job or building on shards that do not select that fixture. Production-artifact
+reuse still omits the delegated fixture from the mocked shards.
+
 The exact Doctor plugin-index and SQLite sessions/transcripts built-CLI proofs
 use the runtime-only compiled-worker registry. The local TUI file does the same
 when its existing built-CLI mode is enabled; source TUI and broad, mixed, or
 custom selections retain the full registry.
+
+When the artifact producer selects both channels and core support checks with
+matching compiler heap options, they share one full compiled-worker generation.
+Both test commands still run concurrently with their original configurations,
+worker limits, and separate transform caches. The generation remains owned until
+both commands finish; either failure fails the producer without canceling its
+sibling. Single selections, differing compiler heap options, and older targets
+without the shared runner retain their independent commands. Changes to the shared
+runner select both checks in the artifact producer on current targets, while the
+changed Node plan defers its boundary coverage to that producer. This opt-in does
+not enable unrelated proof-tier checks.
+
+Full and runtime-only compiled workers reserve separate live/cache slots, so
+runtime checks cannot replace a retained full generation. The protected warmer
+keeps its prebuild full seed for source-only Node shards and publishes the full
+generation already prepared by postbuild collection separately. Only selected
+source verifiers in the artifact producer restore that postbuild seed, keyed by
+the existing Node toolchain identity. A missing archive keeps their uncached path;
+an input, topology, runtime, or exact-output-path mismatch still compiles fresh.
+The producer creates no shared cache archive.
 
 Real-Gateway UI shards have a 30-minute whole-job budget on the normal Blacksmith
 path. Successful 16-class jobs reached 19:04, leaving too little margin under the
@@ -184,7 +222,9 @@ Current iOS Debug builds log CPU count, memory, machine model, booted simulators
 
 Shared OpenClawKit Periphery scans restore the same verified Watch RTC libraries published by trusted main CI, without saving caches. Both Apple consumers build their complete index in a separate timed step with streamed output retained as `build.log` in the consumer artifact. iOS uses a fresh run-owned index; Periphery analyzes that exact index without rebuilding. Scan scope and the shared dead-code intersection stay unchanged. Cache misses retain the locked Cargo build.
 
-iOS screenshot shards, release qualification, Store Release, and its screenshot-only operation use [larger hosted capacity](/ci/runners). Screenshot capture uses stock simulators and creates and cleans up one at a time; the screenshot-only operation can validate a selected branch without signing or uploading a release. The pairing, chat, and native Overview tests retain their existing assertions and deadlines.
+iOS screenshot capture, release qualification, Store Release, and its screenshot-only operation use [larger hosted capacity](/ci/runners). Screenshot capture uses stock simulators and creates and cleans up one at a time; the screenshot-only operation can validate a selected branch without signing or uploading a release. The pairing, chat, and native Overview tests retain their existing assertions and deadlines.
+
+Release qualification disables Spotlight indexing on the disposable runner's Data volume before checkout. After Simulator boot, it requires ten seconds of at least 30% idle host CPU within five minutes before issuing the pairing credential. This keeps first-launch background work out of the Gateway and XCTest deadlines. Local qualification uses the same CPU readiness check and leaves host indexing settings to the operator.
 
 Android screenshot-input PRs and ordinary full manual CI run the existing phone
 and Wear store capture script in one hosted Ubuntu job. The final CI gate requires
@@ -298,6 +338,12 @@ Additional hybrid check offloads require [fresh hosted assignment evidence](/ci/
 Windows keeps its complete explicit test inventory in five [measured project-aligned shards](/ci/runners#runner-backend-modes) for main and release validation. Windows-owner PRs retain the complete family; unrelated PRs omit it.
 
 Real-Gateway browser checks use [job budgets matched to their selected runner](/ci/runners#blacksmith-runner-capacity).
+They restore the protected full-build cache and still run private-QA preparation.
+The Control UI step can reuse public build content because backend-only private
+plugins do not change its output. Native UI declarations, assets, source plugin
+discovery, and Vite-consumed inputs remain part of its validated cache identity.
+Existing UI test bodies do not invalidate an otherwise unchanged bundle; their
+complete path inventory still invalidates new or removed glob matches.
 
 Control UI, repo E2E, and native live browser CI restore the Chromium revision pinned by the selected target's installed Playwright package, with separate OS/architecture cache keys and no fallback prefixes. The protected-main Vitest cache warmer publishes the browser cache in its short dependency job for both Linux backends; PR and release jobs remain restore-only. A cache miss still installs the managed browser, and current targets use the installer's `--require-playwright-chromium` mode rather than substituting system Chrome. Historical targets retain their Playwright installer and Linux dependency setup. Browser startup diagnostics include provider, page, WebSocket, and Chromium process events to diagnose a session-readiness timeout even when it is reported only after unrelated unit work finishes.
 
@@ -311,9 +357,11 @@ Browser extension CI launches the installed, patched Chrome MCP dependency direc
 
 When an ordinary PR, push, or scheduled run already selects the public artifact build, current-target Control UI locale checks share that job's checkout and dependency setup. Source verification and locale parity run before generators, with their result settled after the existing build diagnostics. Source failures remain blocking; generated-locale drift retains its strict or advisory policy. Standalone selections, dispatches, frozen targets, and compatibility targets keep the separate locale job.
 
-When the public artifact build is already selected, current-target browser extension E2E and the selected production deployment fixtures run directly in `build-artifacts`, before mutable built-artifact verifiers. They reuse that exact checkout's public build without an extra checkout, runtime archive, or runner. Native-policy and published-driver consumers wait for this browser proof with the rest of the producer job. Standalone browser selections and frozen targets retain their local runtime build. Real-Gateway fixtures retain their separate private-QA preparation. The sequential Doctor and SQLite built-CLI verifiers opt into the existing validated worker cache to reuse their identical compiled worker graph within the producer job; TUI retains its separate heap configuration and worker preparation.
+When the public artifact build is already selected, current-target browser extension E2E and the selected production deployment fixtures run directly in `build-artifacts`, before mutable built-artifact verifiers. They reuse that exact checkout's public build without an extra checkout, runtime archive, or runner. Native-policy and published-driver consumers wait for this browser proof with the rest of the producer job. Standalone browser selections and frozen targets retain their local runtime build. Real-Gateway fixtures retain their separate private-QA preparation. The native-host, Doctor and SQLite built-CLI verifiers opt into the existing validated worker cache to reuse their identical runtime-only compiled worker graph sequentially within the producer job; TUI retains its separate heap configuration and worker preparation.
 
-Build, QA and test orchestration restore the same [protected Node compile cache](/ci/scope-and-routing/node-test-lanes). The trusted warmer populates build tools before collecting test imports, including the same seven Control UI seed files on Node and the pinned Bun fork in both Linux cache backends; ordinary CI remains restore-only.
+Build, QA and test orchestration restore the same [protected Node compile cache](/ci/scope-and-routing/node-test-lanes). The trusted warmer populates build tools before collecting test imports. Scheduled and push warming use ordinary CI's Bun policy, retaining the runtime owner's Node-only exceptions; explicit workflow dispatches prime both runtimes for full validation. Optional full Node runs may start colder between manual dual-runtime warmings. Both Linux cache backends retain the same seven Control UI seed files on Node and the pinned Bun fork, and hosted tooling and contract seeds keep their existing runtime owners. Ordinary CI remains restore-only.
+
+Scheduled current-main artifact builds also [publish their completed build-all cache](/ci/pipeline#job-ordering-and-failure-reporting) without another declaration compile. The full warmer keeps its release profile; PRs and manual runs do not publish this archive.
 
 In-process Gateway test configs use [exclusive plan admission within existing packed jobs](/ci/capacity#measured-shard-weights).
 
@@ -343,7 +391,7 @@ prepares its required declarations. Only a successful preparation step
 enables prebuilt consumption, so the children reuse its JavaScript, assets, and
 freshness stamps instead of starting another full build.
 
-Vitest transform-cache fingerprints exclude the generated `.ci-harness` checkout so CI consumers and the protected warmer hash the same source inputs. Node bytecode caching remains enabled for ordinary Vitest runs; Vitest owns the worker-level coverage safeguard described in [local testing](/reference/test/local#core-commands).
+Vitest transform-cache generations include direct Vitest configs at every depth and the shared `test/vitest/` inputs, except the two database-worker membership inventories, unit-fast discovery inventory, and the E2E config factory. Each project fingerprints its declaring config and imported config dependencies; the E2E factory also supplies its canonical file when loaded through a wrapper. E2E-only config edits therefore invalidate E2E transforms while preserving unrelated unit transforms. Shared compiler, helper, dependency, and schema inputs retain their invalidation. Generations exclude the generated `.ci-harness` checkout so CI consumers and the protected warmer hash the same source inputs. Node bytecode caching remains enabled for ordinary Vitest runs; Vitest owns the worker-level coverage safeguard described in [local testing](/reference/test/local#core-commands).
 
 Transform keys also include each project's dependency optimizer directory. This
 prevents cached UI imports from mixing separate projects' Lit instances when a

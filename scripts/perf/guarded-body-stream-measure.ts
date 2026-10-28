@@ -1,10 +1,11 @@
 /**
- * Guarded response-body owner benchmark: 1,000 preallocated 512-byte chunks per stream.
+ * Guarded response-body owner benchmark: 10 MiB in 640 preallocated 16 KiB chunks per stream.
  * Run from each revision with Node and the repo loader:
  *   node --import ./scripts/tsx.mjs scripts/perf/guarded-body-stream-measure.ts cpu
  *   node --import ./scripts/tsx.mjs scripts/perf/guarded-body-stream-measure.ts allocation
  *   node --import ./scripts/tsx.mjs scripts/perf/guarded-body-stream-measure.ts promises
  * Optional second argument: owner module URL (for isolated compiled source comparisons).
+ * Optional third argument: measured stream count (default 2,000; promise mode 10).
  * CPU runs are untraced; allocation sampling and promise counts are separate passes.
  * Compare at least five counterbalanced base/candidate runs, with identical Node versions.
  */
@@ -21,9 +22,10 @@ assert(["cpu", "allocation", "promises"].includes(mode));
 const { wrapGuardedBodyStream }: { wrapGuardedBodyStream: typeof Wrap } = await import(
   process.argv[3] ?? "../../src/infra/net/guarded-body-stream.js"
 );
-const chunksPerStream = 1_000;
-const streams = mode === "promises" ? 10 : 2_000;
-const chunk = new Uint8Array(512).fill(42);
+const chunksPerStream = 640;
+const streams = Number(process.argv[4] ?? (mode === "promises" ? 10 : 2_000));
+assert(Number.isSafeInteger(streams) && streams > 0);
+const chunk = new Uint8Array(16 * 1024).fill(42);
 
 async function run(count: number) {
   let received = 0;

@@ -4,10 +4,7 @@ import { BROWSER_ACTION_NAVIGATION_GRACE_MS } from "./act-policy.js";
 import type { BrowserBatchAbort, BrowserBatchActionResult } from "./client-actions-types.js";
 import type { BrowserActRequest } from "./client-actions.types.js";
 import type { BrowserDownloadResult } from "./download-types.js";
-import {
-  assertBrowserNavigationResultAllowed,
-  type BrowserNavigationPolicyOptions,
-} from "./navigation-guard.js";
+import { assertBrowserNavigationResultAllowed } from "./navigation-guard.js";
 import { pageTargetInfo } from "./pw-session-connection.js";
 import {
   beginActionDownloadCaptureOnPage,
@@ -145,17 +142,6 @@ function actionUsesNavigationRequestGuard(action: BrowserActRequest): boolean {
     : action.kind !== "close" && action.kind !== "resize";
 }
 
-function actionNeedsStandaloneDownloadGrace(
-  action: BrowserActRequest,
-  navigationPolicy: BrowserNavigationPolicyOptions,
-): boolean {
-  // Guarded interactions already hold a 250 ms event window while policy is
-  // active. Policy-free internal callers need that window from download capture.
-  return (
-    actionUsesNavigationRequestGuard(action) && !hasInteractionNavigationPolicy(navigationPolicy)
-  );
-}
-
 export async function executeActViaPlaywright(
   opts: GuardedInteractionOptions & {
     action: BrowserActRequest;
@@ -193,9 +179,13 @@ export async function executeActViaPlaywright(
       });
     },
   });
-  const downloadGraceMs = actionNeedsStandaloneDownloadGrace(opts.action, navigationPolicy)
-    ? BROWSER_ACTION_NAVIGATION_GRACE_MS
-    : 0;
+  // Guarded interactions already hold a 250 ms event window while policy is
+  // active. Policy-free internal callers need that window from download capture.
+  const downloadGraceMs =
+    actionUsesNavigationRequestGuard(opts.action) &&
+    !hasInteractionNavigationPolicy(navigationPolicy)
+      ? BROWSER_ACTION_NAVIGATION_GRACE_MS
+      : 0;
   const drainDownloads = async (firstEventGraceMs = downloadGraceMs) =>
     await downloadCapture.drain({
       firstEventGraceMs,

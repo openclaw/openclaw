@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import { readConfigMachineStateWithMetadata } from "../test-utils/config-machine-state.js";
 import {
@@ -7,7 +8,6 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { writeConfigMachineState } from "./config-machine-state-write.js";
-import { OnboardingRecommendationMatchesSchema } from "./onboarding-recommendations.contract.js";
 import {
   createOnboardingRecommendationsStore,
   type OnboardingRecommendationMatch,
@@ -175,19 +175,35 @@ test("updates pending matches without changing the inventory identity", async (s
 });
 
 test("validates writes once and reads independent canonical records", async (store, state) => {
-  const parse = vi.spyOn(OnboardingRecommendationMatchesSchema, "parse");
+  const memoizer = z.config().memoizer;
+  if (!memoizer) {
+    throw new Error("Zod memoizer is not installed");
+  }
+  const offeredMatches = [{ ...matches[0]!, ignored: "not persisted" }];
+  let recommendationSchema: Parameters<typeof memoizer.alloc>[0] | undefined;
+  const originalAlloc = memoizer.alloc.bind(memoizer);
+  const allocations = vi
+    .spyOn(memoizer, "alloc")
+    .mockImplementation((schema, payload, empty, context) => {
+      if (payload.value === offeredMatches) {
+        recommendationSchema = schema;
+      }
+      return originalAlloc(schema, payload, empty, context);
+    });
   try {
-    const offeredMatches = [{ ...matches[0]!, ignored: "not persisted" }];
     const original = await writeOffer(store, { matches: offeredMatches });
     expect(original.matches).toEqual(matches);
-    expect(parse).toHaveBeenCalledTimes(1);
+    expect(recommendationSchema).toBeDefined();
+    const validationCount = () =>
+      allocations.mock.calls.filter(([schema]) => schema === recommendationSchema).length;
+    expect(validationCount()).toBe(1);
     const written = await store.updatePending({
       expected: original,
       matches: [{ ...matches[0]!, reason: "Updated recommendation" }],
     });
-    expect(parse).toHaveBeenCalledTimes(2);
+    expect(validationCount()).toBe(2);
     await closeOpenClawStateDatabaseAsync();
-    parse.mockClear();
+    allocations.mockClear();
     const { workspaceKey } = resolveWorkspaceStateIdentity(state.workspaceDir);
     const read = () =>
       withExistingOpenClawStateDatabaseReadOnly(
@@ -199,7 +215,7 @@ test("validates writes once and reads independent canonical records", async (sto
     expect(first).toEqual(written);
     first!.matches[0]!.candidate.displayName = "Caller mutation";
     expect(read()).toEqual(written);
-    expect(parse).not.toHaveBeenCalled();
+    expect(validationCount()).toBe(0);
 
     const invalid = {
       ...matches[0]!,
@@ -209,7 +225,7 @@ test("validates writes once and reads independent canonical records", async (sto
     expect(() => store.updatePending({ expected: original, matches: [invalid] })).toThrow();
     expect(await store.read()).toEqual(written);
   } finally {
-    parse.mockRestore();
+    allocations.mockRestore();
   }
 });
 

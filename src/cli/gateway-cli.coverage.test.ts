@@ -8,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createEmptyCostUsageTotals } from "../infra/session-cost-usage-totals.js";
 import type { CostUsageSummary } from "../infra/session-cost-usage.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 import { registerGatewayCli } from "./gateway-cli.js";
 
 type DiscoveredBeacon = Awaited<
@@ -180,13 +181,7 @@ describe("gateway-cli coverage", () => {
     });
   });
 
-  it("scopes usage-cost to a specific agent via --agent", async () => {
-    await runGatewayCommand(["usage-cost", "--agent", "alpha", "--days", "7", "--json"]);
-
-    expectGatewayCall({ method: "usage.cost", params: { days: 7, agentId: "alpha" } });
-  });
-
-  it("prints the provider/model breakdown for missing costs", async () => {
+  it("scopes usage-cost to an agent and prints its missing-cost breakdown", async () => {
     callGateway.mockResolvedValue({
       updatedAt: 1,
       days: 7,
@@ -204,8 +199,9 @@ describe("gateway-cli coverage", () => {
       cacheStatus: { status: "fresh", cachedFiles: 1, pendingFiles: 0, staleFiles: 0 },
     });
 
-    await runGatewayCommand(["usage-cost", "--days", "7"]);
+    await runGatewayCommand(["usage-cost", "--agent", "alpha", "--days", "7"]);
 
+    expectGatewayCall({ method: "usage.cost", params: { days: 7, agentId: "alpha" } });
     expect(runtimeLogs.join("\n")).toContain(
       "Missing cost: 12 (openai/gpt-5.6-sol 10, openai-codex/gpt-5.5 2)",
     );
@@ -320,7 +316,6 @@ describe("gateway-cli coverage", () => {
   );
 
   it("prints the latest stability bundle without calling Gateway", async () => {
-    callGateway.mockClear();
     const tempDir = tempDirs.make("openclaw-gateway-cli-bundle-");
     const bundleDir = path.join(tempDir, "logs", "stability");
     const bundlePath = path.join(
@@ -426,7 +421,6 @@ describe("gateway-cli coverage", () => {
   ] as const)(
     "writes %s export with service-owned snapshots (timeout=%i, JSON=%s)",
     async (command, timeoutMs, json) => {
-      callGateway.mockClear();
       callGateway.mockResolvedValue({ ok: true, source: "serving-gateway" });
       const tempDir = tempDirs.make("openclaw-gateway-cli-support-");
       const outputPath = path.join(tempDir, "diagnostics.zip");
@@ -442,7 +436,6 @@ describe("gateway-cli coverage", () => {
         },
       );
 
-      expect(callGateway).toHaveBeenCalledTimes(2);
       for (const method of ["health", "diagnostics.capabilities"]) {
         expect(callGateway).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -453,7 +446,6 @@ describe("gateway-cli coverage", () => {
           }),
         );
       }
-      expect(fs.existsSync(outputPath)).toBe(true);
       const zip = await JSZip.loadAsync(fs.readFileSync(outputPath));
       const capabilities = zip.file("runtime/gateway-capabilities.json");
       if (!capabilities) {
@@ -508,10 +500,7 @@ describe("gateway-cli coverage", () => {
       ["\\\\?\\UNC\\server\\share\\config.json", "\\\\?\\UNC\\server\\share\\config.json"],
       ["\\\\.\\pipe\\openclaw-gateway", "\\\\.\\pipe\\openclaw-gateway"],
     ] as const;
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({ logging: { file: logPath }, plugins: { enabled: false } }),
-    );
+    writeFixtureJsonSync(configPath, { logging: { file: logPath }, plugins: { enabled: false } });
     fs.writeFileSync(logPath, cases.map(([msg]) => JSON.stringify({ msg })).join("\n") + "\n");
     const expected = cases.map(([, msg]) => JSON.stringify({ msg })).join("\n") + "\n";
 

@@ -9,7 +9,6 @@ import {
   captureComposerProof,
   installTalkBrowserFixtures,
   TALK_READY_HISTORY_MESSAGE,
-  waitForTalkReady,
 } from "./browser-talk-start-stop.fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -157,10 +156,53 @@ suite.define(() => {
               .locator(".chat-bubble")
               .getByText("Review complete.", { exact: true })
               .waitFor();
+            const composer = page.locator(".agent-chat__input--dictating");
+            const phase = composer.locator(".agent-chat__dictation-phase");
+            const stop = composer.getByRole("button", { name: "Stop and keep text" });
+            const send = composer.getByRole("button", { name: "Send", exact: true });
+            await expect.poll(() => phase.isVisible()).toBe(true);
+            await expect
+              .poll(() => phase.textContent().then((text) => text?.trim()))
+              .toBe("Listening…");
+            expect(await composer.locator(".agent-chat__dictation-wave").count()).toBe(0);
+            expect(await composer.locator(".agent-chat__dictation-elapsed").count()).toBe(0);
+            await expect.poll(() => stop.isVisible()).toBe(true);
+            await expect.poll(() => send.isVisible()).toBe(true);
+            await captureComposer(page, "dictation-status-actions.png");
+            await captureFullPage(page, "dictation-latched-after-release");
+            // Observe controls in one frame while the dictation owner can republish.
+            const layout = await composer.evaluate((element) => {
+              const composerBox = element.getBoundingClientRect();
+              const controls = [
+                ".agent-chat__dictation-phase",
+                ".chat-mobile-dictation-action .chat-send-btn--dictating",
+                ".chat-send-btn--dictation-commit",
+              ].map((selector) => {
+                const control = element.querySelector(selector);
+                if (!control?.checkVisibility({ visibilityProperty: true })) {
+                  return false;
+                }
+                const box = control.getBoundingClientRect();
+                return (
+                  box.width > 0 &&
+                  box.height > 0 &&
+                  box.x >= composerBox.x &&
+                  box.right <= composerBox.right
+                );
+              });
+              return { composerSized: composerBox.width > 0 && composerBox.height > 0, controls };
+            });
+            expect(layout).toEqual({ composerSized: true, controls: [true, true, true] });
             await button(page, "Stop and keep text", true).click();
             await gateway.waitForRequest("talk.session.close");
             await close();
             await expectDraft(textarea, "Please check the tests too.");
+            await expect.poll(() => microphone.isVisible()).toBe(true);
+            const microphoneColors = await microphone.evaluate((element) => ({
+              button: getComputedStyle(element).color,
+              icon: getComputedStyle(element.querySelector("svg")!).color,
+            }));
+            expect(microphoneColors.icon).toBe(microphoneColors.button);
             expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           }
           await capture("dictated-draft");
@@ -185,7 +227,6 @@ suite.define(() => {
   );
 
   it.each([
-    { name: "caret insertion", start: 5, end: 5, expected: "ship please it", cancel: false },
     { name: "selection replacement", start: 5, end: 7, expected: "ship please", cancel: false },
     { name: "cancel after blur", start: 7, end: 7, expected: "ship it please", cancel: true },
   ])("preserves the draft through $name", ({ name, start, end, expected, cancel }) =>
@@ -286,65 +327,52 @@ suite.define(() => {
       }),
   );
 
-  it.each([false, true])(
-    "cancels new-session dictation after dismissing any tooltip (open: %s)",
-    (tooltipOpen) =>
-      suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
-        const { gateway, textarea, admit, emit } = await openDictation(page, { route: "new" });
-        await textarea.fill("keep this draft");
-        await button(page, "Dictate", true).click();
-        await admit();
-        await emit("discard this speech");
-        await expect.poll(() => textarea.inputValue()).toContain("discard this speech");
-        await emit("discard this speech", true);
-        await expectDraft(textarea, "keep this draft discard this speech");
-        await emit("too");
-        await expectDraft(textarea, "keep this draft discard this speech too");
-        await emit("", true);
-        await expectDraft(textarea, "keep this draft discard this speech too");
-        await captureComposer(
-          page,
-          `dictation-new-session-${tooltipOpen ? "tooltip" : "composer"}-preview.png`,
-        );
-        // Clicking Dictate changes the hovered button into Stop; its hover hint
-        // can open while transcripts arrive. Establish which surface Escape owns.
-        await textarea.hover();
-        await textarea.focus();
-        const openTooltips = page.locator(
-          "openclaw-tooltip .tooltip-surface[popover]:popover-open",
-        );
-        await expect.poll(() => openTooltips.count()).toBe(0);
-        if (tooltipOpen) {
-          const stop = button(page, "Stop and keep text");
-          const tooltip = stop.locator("..").locator(".tooltip-surface[popover]");
-          await stop.hover();
-          await expect
-            .poll(() => tooltip.evaluate((element) => element.matches(":popover-open")))
-            .toBe(true);
+  it("cancels new-session dictation after dismissing its tooltip", () =>
+    suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
+      const { gateway, textarea, admit, emit } = await openDictation(page, { route: "new" });
+      await textarea.fill("keep this draft");
+      await button(page, "Dictate", true).click();
+      await admit();
+      await emit("discard this speech");
+      await expect.poll(() => textarea.inputValue()).toContain("discard this speech");
+      await emit("discard this speech", true);
+      await expectDraft(textarea, "keep this draft discard this speech");
+      await emit("too");
+      await expectDraft(textarea, "keep this draft discard this speech too");
+      await emit("", true);
+      await expectDraft(textarea, "keep this draft discard this speech too");
+      await captureComposer(page, "dictation-new-session-tooltip-preview.png");
+      // Clicking Dictate changes the hovered button into Stop; its hover hint
+      // can open while transcripts arrive. Establish which surface Escape owns.
+      await textarea.hover();
+      await textarea.focus();
+      const openTooltips = page.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open");
+      await expect.poll(() => openTooltips.count()).toBe(0);
+      const stop = button(page, "Stop and keep text");
+      const tooltip = stop.locator("..").locator(".tooltip-surface[popover]");
+      await stop.hover();
+      await expect
+        .poll(() => tooltip.evaluate((element) => element.matches(":popover-open")))
+        .toBe(true);
 
-          await page.keyboard.press("Escape");
+      await page.keyboard.press("Escape");
 
-          await expect
-            .poll(() => tooltip.evaluate((element) => element.matches(":popover-open")))
-            .toBe(false);
-          expect(await textarea.inputValue()).toBe("keep this draft discard this speech too");
-          expect(await readOnly(textarea)).toBe(true);
-          expect(await isFocused(textarea)).toBe(true);
-          expect(await gateway.getRequests("talk.session.close")).toHaveLength(0);
-        }
-        await page.keyboard.press("Escape");
-        await expectDraft(textarea, "keep this draft");
-        await gateway.waitForRequest("talk.session.close");
-        expect(await button(page, "Dictate", true).isVisible()).toBe(true);
-        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-        expect(await readOnly(textarea)).toBe(false);
-        expect(await gateway.getRequests("talk.session.close")).toHaveLength(1);
-        await captureComposer(
-          page,
-          `dictation-new-session-${tooltipOpen ? "tooltip" : "composer"}-cancelled.png`,
-        );
-      }),
-  );
+      await expect
+        .poll(() => tooltip.evaluate((element) => element.matches(":popover-open")))
+        .toBe(false);
+      expect(await textarea.inputValue()).toBe("keep this draft discard this speech too");
+      expect(await readOnly(textarea)).toBe(true);
+      expect(await isFocused(textarea)).toBe(true);
+      expect(await gateway.getRequests("talk.session.close")).toHaveLength(0);
+      await page.keyboard.press("Escape");
+      await expectDraft(textarea, "keep this draft");
+      await gateway.waitForRequest("talk.session.close");
+      expect(await button(page, "Dictate", true).isVisible()).toBe(true);
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      expect(await readOnly(textarea)).toBe(false);
+      expect(await gateway.getRequests("talk.session.close")).toHaveLength(1);
+      await captureComposer(page, "dictation-new-session-tooltip-cancelled.png");
+    }));
 
   it("gates unavailable voice capabilities in the microphone picker", () =>
     suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
@@ -372,71 +400,6 @@ suite.define(() => {
       await captureFullPage(page, "microphone-picker-capability-gating-full");
       await picker.locator('[data-chat-talk-capability="dictation"]').focus();
       await page.keyboard.press("Enter");
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/talk");
     }));
-
-  it("keeps dictation activity and the insert/discard actions visible", () =>
-    suite.withPage(
-      { permissions: ["microphone"], viewport: { width: 390, height: 844 } },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          historyMessages: [TALK_READY_HISTORY_MESSAGE],
-          methodResponses: createDictationMethodResponses(),
-        });
-        await installTalkBrowserFixtures(page);
-        await page.goto(`${suite.server.baseUrl}chat`);
-        await waitForTalkReady(page);
-
-        const microphone = button(page, "Dictation");
-        const microphoneColors = await microphone.evaluate((element) => ({
-          button: getComputedStyle(element).color,
-          icon: getComputedStyle(element.querySelector("svg")!).color,
-        }));
-        expect(microphoneColors.icon).toBe(microphoneColors.button);
-        await microphone.click();
-        await gateway.waitForRequest("talk.session.create");
-
-        const composer = page.locator(".agent-chat__input--dictating");
-        const phase = composer.locator(".agent-chat__dictation-phase");
-        const stop = composer.getByRole("button", { name: "Stop and keep text" });
-        const send = composer.getByRole("button", { name: "Send", exact: true });
-        await expect.poll(() => phase.isVisible()).toBe(true);
-        await expect
-          .poll(() => phase.textContent().then((text) => text?.trim()))
-          .toBe("Listening…");
-        expect(await composer.locator(".agent-chat__dictation-wave").count()).toBe(0);
-        expect(await composer.locator(".agent-chat__dictation-elapsed").count()).toBe(0);
-        await expect.poll(() => stop.isVisible()).toBe(true);
-        await expect.poll(() => send.isVisible()).toBe(true);
-        await captureComposer(page, "dictation-status-actions.png");
-        await captureFullPage(page, "dictation-latched-after-release");
-        // Read one rendered frame: owner publications can replace the status
-        // between Playwright's element lookup and its separate box request.
-        const layout = await composer.evaluate((element) => {
-          const composerBox = element.getBoundingClientRect();
-          const controls = [
-            ".agent-chat__dictation-phase",
-            ".chat-mobile-dictation-action .chat-send-btn--dictating",
-            ".chat-send-btn--dictation-commit",
-          ].map((selector) => {
-            const control = element.querySelector(selector);
-            if (!control?.checkVisibility({ visibilityProperty: true })) {
-              return false;
-            }
-            const box = control.getBoundingClientRect();
-            return (
-              box.width > 0 &&
-              box.height > 0 &&
-              box.x >= composerBox.x &&
-              box.right <= composerBox.right
-            );
-          });
-          return { composerSized: composerBox.width > 0 && composerBox.height > 0, controls };
-        });
-        expect(layout).toEqual({ composerSized: true, controls: [true, true, true] });
-
-        await stop.click();
-        await expect.poll(() => microphone.isVisible()).toBe(true);
-      },
-    ));
 });

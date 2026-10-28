@@ -50,7 +50,7 @@ async function prepareClaudeCliAuth({
   }
   const result = await capture.pending;
   signal?.throwIfAborted();
-  return result.status !== "missing"
+  return result.status !== "missing" && result.status !== "not-installed"
     ? {
         apiKey: CLAUDE_CLI_NATIVE_AUTH_MARKER,
         source: "Claude CLI native auth",

@@ -308,6 +308,29 @@ describe("buildWorkspaceSkillStatus", () => {
     ]);
   });
 
+  it("marks bundled and custodian skills blocked by an empty allowlist", () => {
+    const report = buildWorkspaceSkillStatus(workspaceDir, {
+      config: { skills: { allowBundled: [] } },
+      entries: [
+        createEntry("bundled", { source: "openclaw-bundled" }),
+        createEntry("custodian", { source: "openclaw-custodian" }),
+        createEntry("workspace", { source: "openclaw-workspace" }),
+      ],
+    });
+
+    expect(
+      report.skills.map(({ name, eligible, blockedByAllowlist }) => [
+        name,
+        eligible,
+        blockedByAllowlist,
+      ]),
+    ).toEqual([
+      ["bundled", false, true],
+      ["custodian", false, true],
+      ["workspace", true, false],
+    ]);
+  });
+
   it("preserves source, keys, order and distinct visibility reasons in a mixed skill pack", () => {
     const missingBin = "openclaw-test-definitely-missing-skill-bin";
     const env = "OPENCLAW_TEST_MISSING_SKILL_KEY";

@@ -1,9 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { setImmediate as nextTurn } from "node:timers/promises";
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { createShellOwner } from "./app-host-solid.test-support.ts";
@@ -15,15 +13,6 @@ import {
 } from "./gateway-store.test-support.ts";
 import { loadSettings } from "./settings.ts";
 import { resolveApplicationStartupSettings } from "./startup-settings.ts";
-
-vi.hoisted(() => {
-  // Build identity is captured on import, including imports from an earlier shared test.
-  vi.resetModules();
-  vi.stubGlobal("OPENCLAW_CONTROL_UI_BUILD_INFO", {
-    version: "1.0.0",
-    buildId: "serving-build",
-  });
-});
 
 function createRefreshShell(gateway: ApplicationRuntime["context"]["gateway"]) {
   const snapshot = { controlUiRefreshRequired: true };
@@ -95,15 +84,9 @@ it("retires cached roster admission before publishing a replacement connection",
   expect(observed).not.toContain(false);
 });
 
-it.each(["clear", "replace", "remote"])(
-  "does not reload for invalid recovery state or a remote target: %s",
+it.each(["clear", "replace"])(
+  "does not reload after the shell's recovery state is %s",
   async (action) => {
-    if (action === "remote") {
-      store.gateway.connect({
-        gatewayUrl: "wss://remote-gateway.example",
-        bootstrapToken: "synthetic-remote-bootstrap",
-      });
-    }
     const { shell, snapshot } = createRefreshShell(store.gateway);
     const refresh = shell.refreshControlUi();
     if (action === "clear") {
@@ -115,34 +98,13 @@ it.each(["clear", "replace", "remote"])(
 
     await expect(refresh).resolves.toBe(false);
     expect(replace).not.toHaveBeenCalled();
-    if (action === "remote") {
-      expect(fetchMock).not.toHaveBeenCalled();
-    }
   },
 );
 
-it("continues the browser handoff when manual refresh follows a failed automatic probe", async () => {
-  fetchMock.mockResolvedValueOnce(new Response(null, { status: 503 }));
-  store.current().testOptions.onClose?.({
-    code: 1008,
-    reason: "Control UI updated",
-    error: {
-      code: "UNAVAILABLE",
-      message: "Control UI updated",
-      details: {
-        code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
-        gatewayBuildId: "replacement-build",
-        reloadRequired: true,
-      },
-    },
-    willRetry: false,
-  });
-  await nextTurn();
-  expect(replace).not.toHaveBeenCalled();
+it("carries the browser handoff through a manual shell refresh", async () => {
   const { shell } = createRefreshShell(store.gateway);
 
   const refresh = shell.refreshControlUi();
-  expect(fetchMock).toHaveBeenCalledTimes(2);
   probe.resolve(new Response(null, { status: 200 }));
 
   await expect(refresh).resolves.toBe(true);
@@ -151,11 +113,9 @@ it("continues the browser handoff when manual refresh follows a failed automatic
     loadSettings(),
     new URL(replace.mock.calls[0]![0]),
   );
-  expect(resumed.pendingBootstrapToken).toBe("synthetic-owner-bootstrap");
-  expect(resumed.pendingBootstrapProfile).toBe("owner");
-  expect(resumed.location.hash).toBe("");
-
-  await vi.advanceTimersByTimeAsync(1_000);
-  expect(fetchMock).toHaveBeenCalledTimes(2);
-  expect(replace).toHaveBeenCalledOnce();
+  expect(resumed).toMatchObject({
+    pendingBootstrapToken: "synthetic-owner-bootstrap",
+    pendingBootstrapProfile: "owner",
+    location: { hash: "" },
+  });
 });

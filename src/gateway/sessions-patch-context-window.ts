@@ -6,11 +6,11 @@ import {
   type ModelCatalogEntry,
   type ModelCatalogSnapshot,
 } from "../agents/model-catalog.js";
+import type { ModelRef } from "../agents/model-ref-shared.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 
 export function* applySessionContextWindowPatch(params: {
-  defaultModel: string;
-  defaultProvider: string;
+  resolveDefaultModel: () => ModelRef;
   loadModelCatalog: () => Generator<
     void,
     ModelCatalogEntry[] | undefined,
@@ -48,8 +48,8 @@ export function* applySessionContextWindowPatch(params: {
     delete params.next.contextWindow;
     return { ok: true };
   }
-  const provider = params.next.providerOverride ?? params.defaultProvider;
-  const model = params.next.modelOverride ?? params.defaultModel;
+  const provider = params.next.providerOverride ?? params.resolveDefaultModel().provider;
+  const model = params.next.modelOverride ?? params.resolveDefaultModel().model;
   const catalog = yield* params.loadModelCatalog();
   const logical = catalog
     ? findModelCatalogEntry(catalog, { provider, modelId: model })

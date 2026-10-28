@@ -48,19 +48,20 @@ export function describeToolGroup(
   return { total: summary.total, label, outcomes };
 }
 
+/**
+ * Failed and skipped steps stay on their own rows: agents recover from routine
+ * failures, and a run that ends in one reports it through its own error message.
+ */
 export function summarizeToolGroup(
   items: readonly AgentActivityItem[],
-  options: ToolGroupOptions & { includeInlineOutcomes?: boolean } = {},
+  options: ToolGroupOptions = {},
 ): string {
   const summary = describeToolGroup(items, options);
   return (
     [
       summary.label,
       ...summary.outcomes
-        .filter(
-          ({ kind }) =>
-            options.includeInlineOutcomes !== false || (kind !== "failed" && kind !== "skipped"),
-        )
+        .filter(({ kind }) => kind !== "failed" && kind !== "skipped")
         .map(({ label }) => label),
     ]
       .filter(Boolean)

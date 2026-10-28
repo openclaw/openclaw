@@ -1,9 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
-import { resolveQueueSettings } from "../../auto-reply/reply/queue/settings-runtime.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import {
@@ -11,7 +9,7 @@ import {
   isRetryableUnadoptedChatClaim,
 } from "../../config/sessions/restart-recovery-state.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
@@ -47,7 +45,11 @@ import {
   prepareAdmittedChatSendDispatch,
   releaseChatSendCallerAuthority,
 } from "./chat-send-admission-cleanup.js";
-import { prepareChatSendAdmissionContext } from "./chat-send-admission-context.js";
+import {
+  prepareChatSendAdmissionContext,
+  prepareChatSendAcpMetadata,
+  prepareChatSendAcpRefresh,
+} from "./chat-send-admission-context.js";
 import { respondChatSessionRoutingChanged } from "./chat-send-admission-errors.js";
 import { isWorkerGoalChatAdmission } from "./chat-send-goal-admission.js";
 import { prepareGoalChatSendRetry } from "./chat-send-goal-retry.js";
@@ -64,7 +66,7 @@ import {
 } from "./chat-send-reservation.js";
 import { bindChatSendPreparedSession } from "./chat-send-session-binding.js";
 import { captureAdmittedChatSendSessionSettings } from "./chat-send-session-settings.js";
-import { withCurrentChatSendSession, prepareChatSendSessionEntry } from "./chat-send-session.js";
+import { prepareChatSendSessionEntry } from "./chat-send-session.js";
 import {
   admitChatSendUploads,
   assertChatSendExclusiveAdmission,
@@ -86,7 +88,6 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   const {
     rawSessionKey,
     clientRunId,
-    cfg,
     storePath,
     entry,
     sessionKey,
@@ -107,7 +108,8 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     }
   };
   const cachedMeta = { cached: true, runId: clientRunId };
-  const { chatSendTraceAttributes, originatingRoute } = prepareChatSendAdmissionContext(params);
+  const { chatSendTraceAttributes, originatingRoute, queuePolicy } =
+    prepareChatSendAdmissionContext(params);
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const pendingAttemptId = randomUUID();
   const reservation = createPendingChatSendReservationAccess({
@@ -168,8 +170,8 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   let gatewayWorkAdmission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
   let restartSafeAdmission: ReturnType<typeof resolveRestartSafeChatAdmission>;
   let workerGoalAdmission = false;
-  let initialSessionEntry: SessionEntry | undefined;
-  let admittedSessionEntry: SessionEntry | undefined;
+  let initialSessionEntry: InternalSessionEntry | undefined;
+  let admittedSessionEntry: InternalSessionEntry | undefined;
   let admittedSessionSettings: ReturnType<typeof captureAdmittedChatSendSessionSettings>;
   let assertInitialSkillSelection: (() => void) | undefined;
   let messageInjectionTarget: ReplyMessageInjectionTarget | undefined;
@@ -184,13 +186,9 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     incarnation: admittedSessionId,
   });
   const admittedRunAbort = registerChatAbortController({
+    sourceInput: params.controllerInput,
     target: sessionTarget,
-    policy: resolveQueueSettings({
-      cfg,
-      channel: originatingRoute.originatingChannel,
-      sessionEntry: entry,
-      inlineMode: p.queueMode,
-    }),
+    policy: queuePolicy,
     authority: { assertCurrent: () => assertSourceAuthority?.() },
     runId: clientRunId,
     sessionId: admittedSessionId,
@@ -251,9 +249,10 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     return true;
   };
   const commitChatWorkAdmission = async (
-    acpMeta: SessionEntry["acp"] | null,
+    initialAcp: Awaited<ReturnType<typeof prepareChatSendAcpMetadata>> | null,
     preparedPlacement?: PreparedRestartSafeChatPlacement,
   ): Promise<void> => {
+    let acp = initialAcp;
     if (context.workerSessionPlacementService !== placementService) {
       throw new Error("Worker placement owner changed during chat admission; retry.");
     }
@@ -263,13 +262,17 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
       placementService &&
       preparedPlacement?.sessionId !== admittedSessionId
     ) {
-      return withRestartSafeChatPlacement(placementService, admittedSessionId, (prepared) =>
-        commitChatWorkAdmission(acpMeta, prepared),
-      );
+      using placementPhase = diagnostics?.scope("detail.admission.placement_prepare");
+      return await withRestartSafeChatPlacement(placementService, admittedSessionId, (prepared) => {
+        placementPhase?.finish();
+        return commitChatWorkAdmission(acp, prepared);
+      });
     }
     let refreshPlacement = false;
     for (;;) {
       let pendingPlacementRead: (() => Promise<void>) | undefined;
+      let pendingAcpRead: (() => ReturnType<typeof prepareChatSendAcpMetadata>) | undefined;
+      using currentPhase = diagnostics?.scope("detail.admission.current_session");
       await withCurrentChatSendRetry(params, pendingAttemptId, (latestSession, comparison) => {
         const currentConfig = context.getRuntimeConfig();
         const localRecovery = restartSafeRequest && !currentConfig.cloudWorkers?.requiredProfile;
@@ -316,6 +319,10 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         const expectedSessionId = requestedSessionId ?? backingSessionId;
         if (expectedSessionId && latestSessionId !== expectedSessionId) {
           throw new Error(`Session "${sessionKey}" changed while starting work. Retry.`);
+        }
+        pendingAcpRead = prepareChatSendAcpRefresh(params, acp, latestSession);
+        if (pendingAcpRead) {
+          return;
         }
         const retryableClaim = isRetryableUnadoptedChatClaim(latestEntry, clientRunId);
         if (
@@ -376,6 +383,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
           return;
         }
         const placement = localRecovery ? preparedPlacement?.facts.current() : undefined;
+        const acpMeta = acp?.meta ?? null;
         restartSafeAdmission = resolveRestartSafeChatAdmission({
           resolveGatewayContext: context.resolveGatewayContext,
           agentId,
@@ -410,13 +418,19 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         }
         throw error;
       });
+      if (pendingAcpRead) {
+        currentPhase?.finish();
+        acp = await pendingAcpRead();
+        continue;
+      }
       if (!pendingPlacementRead) {
         break;
       }
       // End row consumption before joining the native writer; retain FIFO and recheck authority.
+      currentPhase?.mark("detail.admission.placement_refresh");
       await pendingPlacementRead();
     }
-    return refreshPlacement ? commitChatWorkAdmission(acpMeta) : undefined;
+    return refreshPlacement ? commitChatWorkAdmission(acp) : undefined;
   };
 
   let capturedOperator: Awaited<ReturnType<typeof prepareChatSendInterruptAdmission>>["operator"];
@@ -425,6 +439,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   let retainedRequestConflict: ReturnType<typeof resolveChatSendRequestConflict>;
   try {
     using workPhase = diagnostics?.scope("detail.admission.work");
+    using admissionPhase = diagnostics?.scope("detail.admission.operator");
     const preparedInterrupt = await prepareChatSendInterruptAdmission({
       operator: { ...params, runId: clientRunId, spawnedBy: session.entry?.spawnedBy },
       interruptCapture: runInterruptCapture,
@@ -435,6 +450,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     });
     capturedOperator = preparedInterrupt.operator;
     releaseCapturedOperator = capturedOperator.release;
+    admissionPhase?.mark("detail.admission.lifecycle_prepare");
     gatewayWorkAdmission = await beginSessionEffect({
       agentId,
       sourceInput: admittedRunAbort.entry?.input,
@@ -447,21 +463,12 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         assertChatSendExclusiveAdmission(request, session);
       },
       revalidateAllowed: async () => {
+        admissionPhase?.finish();
         using _ = diagnostics?.scope("detail.admission.revalidate");
         if (!restartSafeRequest) {
           return await commitChatWorkAdmission(null);
         }
-        const latest = await withCurrentChatSendSession({
-          session,
-          getRuntimeConfig: context.getRuntimeConfig,
-          includeMembership: false,
-          consume: (current) => current,
-        });
-        const [acpMeta] = await readAcpSessionMetaForEntries({
-          cfg: latest.cfg,
-          entries: [{ agentId, sessionKey: latest.canonicalKey, entry: latest.entry }],
-        });
-        return await commitChatWorkAdmission(acpMeta ?? null);
+        return await commitChatWorkAdmission(await prepareChatSendAcpMetadata(params));
       },
       onInterrupt: (reason) => {
         admittedRunAbort.controller.abort(reason);
@@ -566,10 +573,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   }
   if (!admittedRunAbort.registered) {
     releaseAdmissionOwners();
-    respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
-      cached: true,
-      runId: clientRunId,
-    });
+    respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, cachedMeta);
     return { ok: false as const };
   }
   assertSourceAuthority = () => {

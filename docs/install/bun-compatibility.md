@@ -12,9 +12,11 @@ Plugin resolution stays with Bun's native/Jiti loader and `Bun.plugin` on Bun, e
 
 ## Requirements
 
-Node fallback and build processes require Node **24.22.1+ or 26.12.1+** for the eMudhra compromised-key rejection fix. Updating Node does not change Bun's independent TLS verifier or its release qualification.
+Node fallback and build processes accept Node **24.16.0+ on 24.x, or 26.1.0+**. Node **24.22.1+/26.12.1+** is strongly recommended for the eMudhra compromised-key rejection fix; compatible older Node warns during updates and security audit instead of being refused solely for the missing security patch. Updating Node does not change Bun's independent TLS verifier or its release qualification.
 
-OpenClaw supports only the **latest stable Bun release (currently 1.4.3)** and the **pinned OpenClaw Bun fork**. Older stock releases are rejected before CLI or Gateway work, even if their SQLite checks pass. Both supported runtimes require an available **`node:sqlite`** API and the same [WAL-safe SQLite floor as Node](/install/node-compatibility#why-the-floors-exist).
+OpenClaw supports only the **latest stable Bun release (currently 1.4.4)** and the **pinned OpenClaw Bun fork**. Older stock releases are rejected before CLI or Gateway work, even if their SQLite checks pass. Both supported runtimes require an available **`node:sqlite`** API and the same [WAL-safe SQLite floor as Node](/install/node-compatibility#why-the-floors-exist).
+
+Stock Bun 1.4.4 adds the eMudhra compromised-key blocklist for full handshakes, but this is partial remediation: saved TLS sessions can retain earlier authorization, and QUIC early data can bypass changed trust policy. The pinned OpenClaw fork includes the current-trust session and early-data repair in [Bun #213](https://github.com/openclaw/bun/pull/213), published as `openclaw-v1.4.4-20261026-191755ec11-webkit-b82bc917e9`. Its detailed incident/session/product proof is native macOS ARM64; other release targets have build and smoke checks, with shared Windows compatibility checks on x64 and ARM64. See [the exact shared pin and qualification limits](/ci/pipeline#test-runtime-selection). Use a supported patched Node runtime or the qualified pinned fork for current compromised-key rejection. Publication and a source pin do not update an existing installation or establish fleet delivery.
 
 | Platform | SQLite library Bun uses                       | Extension loading              | What OpenClaw does                                 |
 | -------- | --------------------------------------------- | ------------------------------ | -------------------------------------------------- |
@@ -155,7 +157,7 @@ the selected Bun even when PATH has no Bun or contains a different build.
 When an owned managed Bun Gateway serves a different package root from the CLI,
 `openclaw update` advances the Gateway installation in place and leaves the
 invoking CLI installation unchanged. The updater validates that service's actual
-Bun for Bun 1.4.3+ and WAL-safe `node:sqlite`, without comparing its emulated Node
+Bun for Bun 1.4.4+ and WAL-safe `node:sqlite`, without comparing its emulated Node
 version to `engines.node`. If the updater runs on Node, that Node must also meet
 the target package's Node and SQLite requirements because finalization uses it.
 The existing service install/restart path retains the recorded Bun pin. Node split-root routing is unchanged, and a path under
@@ -168,7 +170,7 @@ refuses maintenance before stopping the service. Use
 `<bun> <service-root>/openclaw.mjs doctor --fix` for repair from the service's
 installation.
 
-First installs and updater staging without a persistent Node require `OPENCLAW_PACKAGE_BUN_LAUNCHER` set to the absolute Bun executable that launches the CLI. The updater sets it automatically when running under Bun; an app must set it for its first `bun add -g --trust openclaw@<version>`. Preinstall validates that launcher as Bun 1.4.3+ without spawning absent or nonexecutable Node candidates. Without the marker, preinstall still requires a persistent Node; a Node found on PATH must satisfy the package's Node requirements even when the marker is set.
+First installs and updater staging without a persistent Node require `OPENCLAW_PACKAGE_BUN_LAUNCHER` set to the absolute Bun executable that launches the CLI. The updater sets it automatically when running under Bun; an app must set it for its first `bun add -g --trust openclaw@<version>`. Preinstall validates that launcher as Bun 1.4.4+ without spawning absent or nonexecutable Node candidates. Without the marker, preinstall still requires a persistent Node; a Node found on PATH must satisfy the package's Node requirements even when the marker is set.
 
 The trusted package lifecycle creates the launcher only when Bun's existing global
 bin points to that package and no persistent Node is present. Updates create it in
@@ -301,7 +303,9 @@ See [Bun](/install/bun) for the workflow and lifecycle trust commands.
 
 | Release                            | Change                                                                                                                                                                                                |
 | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Unreleased (main)                  | Requires Bun 1.4.3+ at startup and package preinstall, retaining the pinned OpenClaw fork; removes the fixed JSC segment lookup workaround.                                                           |
+| Unreleased (main)                  | Restores Node fallback/build compatibility to 24.16.0+/26.1.0+ and reports missing Node security patches as update/audit warnings. Bun requirements and fork provisioning are unchanged.              |
+| Unreleased (main)                  | Adopts the signed OpenClaw fork release with current-trust checks for saved TLS sessions and QUIC early data. Stock Bun 1.4.4 retains the separately documented session/early-data gaps.              |
+| Unreleased (main)                  | Requires stock Bun 1.4.4+ at startup and package preinstall, and refreshes stock acquisition pins.                                                                                                    |
 | Unreleased (main)                  | Refuses Apple's system SQLite on macOS when discovery finds no supported library, naming unloadable candidates such as an arm64 Homebrew library under x64 Rosetta Bun.                               |
 | Unreleased (main)                  | Reuses SQLite workers after a native-close check passes on macOS or Linux. Stock Bun 1.4.2, Windows, and inconclusive checks retain conservative cleanup.                                             |
 | Unreleased (main)                  | Runs the macOS app's private worker and Chrome setup on the OpenClaw Bun fork, bundling the full package and signed extension-capable SQLite in one shared runtime. Gateway hosting remains external. |

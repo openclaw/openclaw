@@ -1,3 +1,4 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
@@ -102,11 +103,13 @@ describe("applyPatch", () => {
   it.each([true, false])("rejects invalid UTF-8 (workspaceOnly=%s)", async (workspaceOnly) => {
     const original = Buffer.concat([Buffer.from("heading\nprice: 5\n"), Buffer.from([0xff, 0xfe])]);
     const { dir, file: filePath } = await makeFile(original);
+    using read = vi.spyOn(syncFs, "readFileSync");
 
     await expect(applyPatch(priceUpdatePatch, { cwd: dir, workspaceOnly })).rejects.toThrow(
-      /not valid UTF-8/,
+      /valid UTF-8/,
     );
     await expect(fs.readFile(filePath)).resolves.toEqual(original);
+    expect(read.mock.calls.filter(([file]) => typeof file === "number")).toHaveLength(0);
   });
 
   it("preserves a valid UTF-8 BOM in sandbox updates", async () => {
@@ -190,7 +193,7 @@ describe("applyPatch", () => {
     const result = await applyPatch(patch, memory.options);
 
     expect(memory.files.get("/sandbox/notes.txt")).toBe("new\n");
-    expect(result.summary.added).toEqual(["notes.txt"]);
+    expect(result.details.summary.added).toEqual(["notes.txt"]);
   });
 
   it("fails closed on sandbox adds when atomic create is unavailable", async () => {
@@ -204,14 +207,14 @@ describe("applyPatch", () => {
   });
 
   it("updates and moves a file", async () => {
-    const memory = createMemoryPatchSandbox({ "source.txt": "foo\nbar\n" });
-    const patch = buildUpdatePatch("source.txt", " foo\n-bar\n+baz", "dest.txt");
+    const memory = createMemoryPatchSandbox({ "source.txt": "It\u2019s here\nold\n" });
+    const patch = buildUpdatePatch("source.txt", " It's here\n-old\n+new", "dest.txt");
 
     const result = await applyPatch(patch, memory.options);
 
-    expect(memory.files.get("/sandbox/dest.txt")).toBe("foo\nbaz\n");
+    expect(memory.files.get("/sandbox/dest.txt")).toBe("It\u2019s here\nnew\n");
     expect(memory.files.has("/sandbox/source.txt")).toBe(false);
-    expect(result.summary.modified).toEqual(["dest.txt"]);
+    expect(result.details.summary.modified).toEqual(["dest.txt"]);
   });
 
   it.each(["./source.txt", "/sandbox/./source.txt", "/sandbox//source.txt"])(
@@ -232,7 +235,7 @@ describe("applyPatch", () => {
       expect(memory.files.size).toBe(1);
       expect(memory.createFileExclusive).not.toHaveBeenCalled();
       expect(memory.remove).not.toHaveBeenCalled();
-      expect(result.summary.modified).toEqual(["source.txt"]);
+      expect(result.details.summary.modified).toEqual(["source.txt"]);
     },
   );
 
@@ -253,10 +256,11 @@ describe("applyPatch", () => {
       const move = (before: string, after: string) =>
         buildUpdatePatch("source.txt", `-${before}\n+${after}`, movePath);
       await expect(applyPatch(move("before", "after"), memory.options)).resolves.toMatchObject({
-        summary: { modified: ["source.txt"] },
+        details: { summary: { modified: ["source.txt"] } },
       });
       await expect(applyPatch(move("after", "after"), memory.options)).resolves.toMatchObject({
-        noOp: true,
+        content: [{ type: "text", text: "No changes made to source.txt." }],
+        details: { summary: { added: [], modified: [], deleted: [] } },
       });
       expect([...memory.files.values()]).toEqual(["after\n"]);
       expect(memory.writeFile).toHaveBeenCalledTimes(1);
@@ -303,16 +307,22 @@ describe("applyPatch", () => {
     }
   });
 
-  it("rejects path traversal outside cwd by default", async () => {
-    const dir = makeDir();
-    const escapedPath = path.join(makeDir(), "escaped.txt");
-    const relativeEscape = path.relative(dir, escapedPath);
-
-    await expect(applyPatch(buildAddFilePatch(relativeEscape), { cwd: dir })).rejects.toThrow(
-      /Path escapes sandbox root/,
-    );
-    await expectMissingPath(fs.readFile(escapedPath, "utf8"));
-  });
+  it.each([true, false])(
+    "contains traversal outside cwd (workspaceOnly=%s)",
+    async (workspaceOnly) => {
+      const dir = makeDir();
+      const escapedPath = path.join(makeDir(), "escaped.txt");
+      const relativeEscape = path.relative(dir, escapedPath);
+      const pending = applyPatch(buildAddFilePatch(relativeEscape), { cwd: dir, workspaceOnly });
+      if (workspaceOnly) {
+        await expect(pending).rejects.toThrow(/Path escapes sandbox root/);
+        await expectMissingPath(fs.readFile(escapedPath, "utf8"));
+      } else {
+        expect((await pending).details.summary.added.length).toBe(1);
+        await expect(fs.readFile(escapedPath, "utf8")).resolves.toBe("escaped\n");
+      }
+    },
+  );
 
   it("rejects broken final symlink targets outside cwd by default", async () => {
     if (process.platform === "win32") {
@@ -368,18 +378,6 @@ describe("applyPatch", () => {
     await expect(fs.readFile(outsideFile, "utf8")).resolves.toBe("victim\n");
   });
 
-  it("allows path traversal when workspaceOnly is explicitly disabled", async () => {
-    const dir = makeDir();
-    const escapedPath = path.join(makeDir(), "escaped.txt");
-    const relativeEscape = path.relative(dir, escapedPath);
-
-    const patch = buildAddFilePatch(relativeEscape);
-
-    const result = await applyPatch(patch, { cwd: dir, workspaceOnly: false });
-    expect(result.summary.added.length).toBe(1);
-    await expect(fs.readFile(escapedPath, "utf8")).resolves.toBe("escaped\n");
-  });
-
   it("allows deleting a symlink itself even if it points outside cwd", async () => {
     const dir = makeDir();
     const outsideDir = tempDirs.make("openclaw-patch-outside-", path.dirname(dir));
@@ -394,7 +392,7 @@ describe("applyPatch", () => {
     const patch = buildDeletePatch("link");
 
     const result = await applyPatch(patch, { cwd: dir });
-    expect(result.summary.deleted).toEqual(["link"]);
+    expect(result.details.summary.deleted).toEqual(["link"]);
     await expectMissingPath(fs.lstat(linkDir));
     await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("keep\n");
   });
@@ -634,7 +632,7 @@ describe("apply_patch unrestricted host writes", () => {
 
     const result = await hostUpdate(filePath);
 
-    expect(result.summary.modified).toEqual(["important.txt"]);
+    expect(result.details.summary.modified).toEqual(["important.txt"]);
     await expect(fs.readFile(filePath, "utf8")).resolves.toBe("replacement\n");
     const after = await fs.stat(filePath);
     expect(after.ino).toBe(before.ino);

@@ -615,6 +615,11 @@ type AgentsWaitResult = {
 };
 ```
 
+`not_found` means no collector run with that ID is visible to the caller. Waiting on your own
+announcing child (started without `collect=true`) is rejected as an input error
+instead: its result arrives as a completion message to your session, so continue
+other work or end the turn.
+
 A completed item can contain partial `structured` data and still have
 `status: "failed"` when the provider or runtime fails afterward. In that case,
 `error` is the authoritative terminal failure. Recovery code should prefer a

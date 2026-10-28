@@ -50,7 +50,7 @@ const retainedWindow = (content: unknown[], role = "user") => [
 const retainedUser = retainedWindow([{ type: "input_text", text: "Remember NORTH-COPPER-17." }])[0];
 function mockCompactResponse(
   output: unknown[],
-  usage = { input_tokens: 1, output_tokens: 1 },
+  usage: Record<string, unknown> = { input_tokens: 1, output_tokens: 1 },
 ): void {
   sdkState.post.mockResolvedValue({ object: "response.compaction", output, usage });
 }
@@ -97,6 +97,29 @@ it("keeps instructions outside the retained user/assistant window, even with few
     },
   });
   expect(result.output).toEqual(output);
+});
+
+it("prices the compact call with the normal Responses usage buckets", async () => {
+  mockCompactResponse([compactionItem], {
+    input_tokens: 120_000,
+    output_tokens: 4_000,
+    input_tokens_details: { cached_tokens: 20_000 },
+    output_tokens_details: { reasoning_tokens: 1_500 },
+  });
+  const pricedModel = { ...model, cost: { input: 2, output: 8, cacheRead: 0.5, cacheWrite: 0 } };
+
+  const result = await compact(pricedModel);
+
+  // Run accounting treats a call without cost as making the whole run's cost unavailable.
+  expect(result.modelUsage).toMatchObject({
+    input: 100_000,
+    cacheRead: 20_000,
+    output: 4_000,
+    reasoningTokens: 1_500,
+    usageReport: { state: "available" },
+    cost: { input: 0.2, output: 0.032, cacheRead: 0.01 },
+  });
+  expect(result.modelUsage?.cost.total).toBeCloseTo(0.242, 10);
 });
 
 it.each<{ output: unknown[]; reason: string }>([

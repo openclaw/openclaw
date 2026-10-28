@@ -3,8 +3,11 @@ import { HEARTBEAT_PROMPT, INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../auto-repl
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "../plugin-sdk/message-tool-delivery-hints.js";
 import { annotateInterSessionPromptText } from "../sessions/input-provenance.js";
 import { STATE_CONTENTION_DIAGNOSTIC } from "../sessions/session-run-error-presentation.js";
+import { buildPersistedUserTurnMessage } from "../sessions/user-turn-transcript.message.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
+import { projectPendingInputMessage } from "./server-methods/chat-pending-inputs.js";
 import { assistantTextMessage } from "./session-history-fixtures.test-support.js";
+import { projectSessionMessagePayload } from "./session-transcript-message.js";
 
 const internalContext = (text: string) =>
   ["<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>", text, "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>"].join("\n");
@@ -13,8 +16,8 @@ const userTextMessage = (text: string, seq = 1) => ({
   content: [{ type: "text", text }],
   __openclaw: { seq },
 });
-const internalMessage = (text: string, sourceTool: string) => ({
-  ...userTextMessage(text),
+const internalMessage = (text: string, sourceTool: string, seq = 1) => ({
+  ...userTextMessage(text, seq),
   provenance: { kind: "internal_system", sourceTool },
 });
 const mediaMessage = (text: string, seq: number, url: string) => ({
@@ -66,6 +69,38 @@ it.each(["reviewer", "legacy-plugin"])("projects %s steering only on request", (
     maxChars: 8,
   });
   expect(capped).not.toHaveProperty(["__openclaw", "pluginSteering", "displayText"]);
+});
+
+it("hides tool handoff resumes from history, live, and pending chat but keeps plugin events", () => {
+  const event = (sourceTool: string, text: string) =>
+    buildPersistedUserTurnMessage({
+      text,
+      timestamp: 2,
+      provenance: { kind: "internal_system", sourceTool },
+    });
+  const resume = event(
+    "tool_handoff",
+    'Plugin reload result: {"ok":false,"error":"denied","code":"INVALID_REQUEST"}\n' +
+      "Continue the original task in this conversation. Do not repeat a completed operation.",
+  );
+  const pluginEvent = event("plugin", "Discord presence changed to idle.");
+  const answer = assistantTextMessage("The reload was refused; nothing changed.", 3);
+  expect(projectChatDisplayMessages([resume, pluginEvent, answer])).toMatchObject([
+    { role: "user", content: pluginEvent.content },
+    { role: "assistant", content: answer.content },
+  ]);
+  const live = (message: unknown) =>
+    projectSessionMessagePayload({ message, sessionKey: "agent:main:main" }).payload;
+  expect(live(resume)).toBeUndefined();
+  expect(live(pluginEvent)?.message).toMatchObject({ content: pluginEvent.content });
+  const pending = (message: typeof resume) =>
+    projectPendingInputMessage(
+      { id: "event-1", runId: "event-run", message, acceptedAt: 2, state: "queued" },
+      20_000,
+      (projected) => projected,
+    );
+  expect(pending(resume)).toBeUndefined();
+  expect(pending(pluginEvent)).toMatchObject({ content: pluginEvent.content });
 });
 
 it("hides attributed child coordination without hiding peer messages or parent answers", () => {
@@ -124,6 +159,38 @@ it.each([
   const answer = mediaMessage("Created.", 2, "/api/chat/media/outgoing/generated.png");
   expectProjection([completion, ...controls, answer], [...controls, answer]);
   expect(completion).toEqual(original);
+});
+
+it.each([
+  ["heartbeat", { role: "user", content: [{ type: "text", text: HEARTBEAT_PROMPT }] }],
+  ["exec completion", internalMessage("Exec completed (amber-ri, code 0) :: output", "exec", 2)],
+])("keeps a %s boundary on a tool-shaped user row", (_name, hidden) => {
+  const toolResult = {
+    role: "user",
+    content: [{ type: "tool_result", tool_use_id: "tool-1", content: "done" }],
+    __openclaw: { seq: 3 },
+  };
+  const toolEnvelope = { ...userTextMessage("done", 5), toolCallId: "tool-1" };
+  const answer = assistantTextMessage("Disk usage crossed 95 percent.", 4);
+  for (const toolRow of [toolResult, toolEnvelope]) {
+    expectProjection(
+      [hidden, toolRow, answer],
+      [{ ...toolRow, __openclaw: { ...toolRow["__openclaw"], turnBoundary: true } }, answer],
+    );
+  }
+});
+
+it("starts a new turn after a hidden exec completion so the earlier answer stays its own reply", () => {
+  const earlier = assistantTextMessage("long final answer", 2);
+  const completion = {
+    ...internalMessage("Exec completed (amber-ri, code 0) :: output", "exec", 3),
+    timestamp: 100,
+  };
+  const followUp = assistantTextMessage("should I fix points 1-4?", 4);
+  expectProjection(
+    [earlier, completion, followUp],
+    [earlier, { ...followUp, __openclaw: { seq: 4, turnBoundary: true } }],
+  );
 });
 
 it.each(["no_r", "NO_R", "No_Repl"])("keeps ordinary %s replies visible", (text) => {

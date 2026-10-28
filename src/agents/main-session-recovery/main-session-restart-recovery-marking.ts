@@ -393,6 +393,7 @@ export async function markRestartAbortedMainSessions(params: {
 }
 
 type OrphanMarkParams = {
+  shouldRecoverAgent?: (agentId: string) => boolean;
   cfg?: OpenClawConfig;
   updatedBeforeMs?: number;
   lifecycleGeneration: string;
@@ -439,6 +440,13 @@ async function markOrphanedMainSessionStore(
         storePath: params.target.storePath,
       }),
     );
+  }
+  sessionKeys = sessionKeys.filter((sessionKey) => {
+    const requester = requesters.get(sessionKey);
+    return !requester || params.shouldRecoverAgent?.(requester.agentId) !== false;
+  });
+  if (sessionKeys.length === 0) {
+    return { marked: 0, skipped: 0 };
   }
   const orphanChecks: Array<() => boolean> = [];
   return await markRecoveryStore({
@@ -575,6 +583,7 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
   agentIds?: ReadonlySet<string>;
   stateDir?: string;
   startupCheckedStorePaths?: Set<string>;
+  shouldRecoverAgent?: (agentId: string) => boolean;
   updatedBeforeMs?: number;
   onOwnerPending?: OrphanMarkParams["onOwnerPending"];
   assertCommitAllowed?: () => void;
@@ -590,15 +599,23 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
       continue;
     }
     try {
+      let inputPending = false;
       const storeResult = await markOrphanedMainSessionStore({
         ...params,
         target,
         lifecycleGeneration,
+        shouldRecoverAgent: (agentId) => {
+          const ready = params.shouldRecoverAgent?.(agentId) !== false;
+          inputPending ||= !ready;
+          return ready;
+        },
       });
       assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
       result.marked += storeResult.marked;
       result.skipped += storeResult.skipped;
-      params.startupCheckedStorePaths?.add(key);
+      if (!inputPending) {
+        params.startupCheckedStorePaths?.add(key);
+      }
       recordStartupRecoveryStoreResult({ target, outcome: { ok: true } });
     } catch (error) {
       assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);

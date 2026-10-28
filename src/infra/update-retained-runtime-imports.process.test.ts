@@ -14,12 +14,6 @@ for (const runtime of ["node", "bun"] as const) {
     async () => {
       const base = directories.make("openclaw-retained-imports-");
       const root = path.join(base, "install");
-      await fs.mkdir(path.join(root, "dist"), { recursive: true });
-      await fs.mkdir(path.join(root, "node_modules", "fixture"), { recursive: true });
-      await fs.mkdir(path.join(root, "node_modules", "fixture-cjs"), { recursive: true });
-      await fs.mkdir(path.join(root, "node_modules", "fixture-commonjs-js"), { recursive: true });
-      await fs.mkdir(path.join(root, "node_modules", "fixture-preloaded"), { recursive: true });
-      await fs.mkdir(path.join(root, "node_modules", "fixture-conditional"), { recursive: true });
       const files = {
         "package.json": '{"name":"openclaw","type":"module"}',
         "node_modules/fixture/package.json": '{"type":"module","exports":"./index.js"}',
@@ -52,6 +46,7 @@ for (const runtime of ["node", "bun"] as const) {
         "tooling.mjs": 'export { value } from "./dist/tool-dependency.mjs";',
       };
       for (const [file, content] of Object.entries(files)) {
+        await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
         await fs.writeFile(path.join(root, file), content);
       }
       const source = `import assert from "node:assert/strict";
@@ -70,18 +65,17 @@ for (const runtime of ["node", "bun"] as const) {
        await fs.writeFile(path.join(root, "dist/late-new-hash.mjs"), 'export const value = "new build";');
        await fs.writeFile(path.join(root, "dist/shared.mjs"), 'throw new Error("new singleton loaded by old updater");');
        await fs.writeFile(path.join(root, "dist/tool-dependency.mjs"), 'export const value = "new tooling";');
-       await fs.rm(path.join(root, "node_modules/fixture/index.js"));
-       await fs.writeFile(path.join(root, "node_modules/fixture/index.js"), 'export default "new dependency";');
-       await fs.rm(path.join(root, "node_modules/fixture-cjs/index.cjs"));
-       await fs.writeFile(path.join(root, "node_modules/fixture-cjs/index.cjs"), 'module.exports = "new CJS dependency";');
-       await fs.rm(path.join(root, "node_modules/fixture-commonjs-js/index.js"));
-       await fs.writeFile(path.join(root, "node_modules/fixture-commonjs-js/index.js"), 'exports.named = "new CommonJS JS";');
-       await fs.rm(path.join(root, "node_modules/fixture-preloaded/index.cjs"));
-       await fs.writeFile(path.join(root, "node_modules/fixture-preloaded/index.cjs"), 'module.exports = { state: "new singleton" };');
-       await fs.rm(path.join(root, "node_modules/fixture-conditional/import.mjs"));
-       await fs.rm(path.join(root, "node_modules/fixture-conditional/require.cjs"));
-       await fs.writeFile(path.join(root, "node_modules/fixture-conditional/import.mjs"), 'export default "new import branch";');
-       await fs.writeFile(path.join(root, "node_modules/fixture-conditional/require.cjs"), 'module.exports = "new require branch";');
+       for (const [file, content] of Object.entries({
+         "fixture/index.js": 'export default "new dependency";',
+         "fixture-cjs/index.cjs": 'module.exports = "new CJS dependency";',
+         "fixture-commonjs-js/index.js": 'exports.named = "new CommonJS JS";',
+         "fixture-preloaded/index.cjs": 'module.exports = { state: "new singleton" };',
+         "fixture-conditional/import.mjs": 'export default "new import branch";',
+         "fixture-conditional/require.cjs": 'module.exports = "new require branch";',
+       })) {
+         await fs.rm(path.join(root, "node_modules", file));
+         await fs.writeFile(path.join(root, "node_modules", file), content);
+       }
        const late = await updater.late();
        assert.equal(late.value, "old dependency");
        assert.equal(late.conditional, "old import branch");

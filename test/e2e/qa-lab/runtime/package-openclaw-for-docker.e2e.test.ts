@@ -1733,7 +1733,7 @@ describe("package-openclaw-for-docker", () => {
     expect(calls).toEqual([
       `prepare-docs:${sourceDir}`,
       `prepare:${sourceDir}`,
-      `npm:pack --silent --ignore-scripts --pack-destination ${outputDir} --json=false:${sourceDir}`,
+      `npm:pack --loglevel=error --ignore-scripts --pack-destination ${outputDir} --json=false:${sourceDir}`,
       `restore-changelog:${sourceDir}`,
       `restore-docs:${sourceDir}`,
     ]);

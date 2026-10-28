@@ -7,6 +7,9 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
 import { completeUpdateFailureSummary } from "./update-failure-result.js";
+import { claimUpdateResultInTransaction } from "./update-result-claim.js";
+import type { UpdateResultPayload } from "./update-result-payload.js";
+import { isNeverActivatedFailedUpdate } from "./update-run-activation.js";
 import { encodeRun, isRetainedStep, type UpdateRunLedgerOptions } from "./update-run-codec.js";
 import type { UpdateRunPhasePatch } from "./update-run-mutation.types.js";
 import { decodeRun, readUpdateRunRecord } from "./update-run-read.kernel.js";
@@ -96,11 +99,12 @@ export function applyUpdateRunStep(
   record: UpdateRunRecord,
   { reason, ...step }: UpdateRunStep & { reason?: string },
 ): void {
-  // Post-success retirement is advisory; it may add diagnostics, never change the terminal outcome.
+  // Post-completion retirement is advisory; it may add diagnostics, never change the terminal outcome.
   if (
     record.finishedAtMs !== null &&
     (record.status === "succeeded" ||
-      (record.status === "skipped" && record.reason === "already-current")) &&
+      (record.status === "skipped" && record.reason === "already-current") ||
+      isNeverActivatedFailedUpdate(record)) &&
     step.status === "completed" &&
     [
       "recovery-artifact-cleanup",
@@ -305,12 +309,38 @@ export function recordUpdateRunDiagnostics(
   }
 }
 
+/** A host reporter claims the settled outcome in this transaction and receives it after commit. */
 export function finishUpdateRun(
   runId: string,
   result: FinishUpdateRunInput,
   options: UpdateRunLedgerOptions = {},
+  reportUpdateResult?: (payload: UpdateResultPayload) => void,
 ): UpdateRunRecord {
-  return mutateRun(runId, (record) => applyFinishUpdateRun(record, result), options);
+  let updateResult: UpdateResultPayload | undefined;
+  const finished = runExistingOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const record = mutateRunInTransaction(
+        db,
+        runId,
+        (current) => applyFinishUpdateRun(current, result),
+        options,
+      );
+      if (reportUpdateResult) {
+        updateResult = claimUpdateResultInTransaction(db, record);
+      }
+      return record;
+    },
+    options,
+    {
+      schemaSql: updateRunLedgerSchema,
+      operationLabel: "update.run",
+      busyTimeoutMs: options.busyTimeoutMs,
+    },
+  );
+  if (updateResult) {
+    reportUpdateResult?.(updateResult);
+  }
+  return finished;
 }
 
 export function applyFinishUpdateRun(record: UpdateRunRecord, result: FinishUpdateRunInput): void {

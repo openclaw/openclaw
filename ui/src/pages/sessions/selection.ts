@@ -2,7 +2,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 
 export type SessionDeleteRow = Pick<
   GatewaySessionRow,
-  "key" | "archived" | "sessionId" | "label" | "displayName"
+  "key" | "archived" | "sessionId" | "label" | "displayName" | "hasAutomation"
 >;
 
 export function settleSelectedSession(

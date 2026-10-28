@@ -1,6 +1,11 @@
 import { expect } from "vitest";
 import { describePeriod } from "./periods.js";
-import { reportMember } from "./reports-data.test-support.js";
+import {
+  discordMessage,
+  githubItem,
+  reportDocument,
+  reportMember,
+} from "./reports-data.test-support.js";
 import { githubCounts } from "./reports.fixtures.js";
 import { buildRoster } from "./roster.js";
 import type { TeamReportsOperations } from "./store-contract.js";
@@ -8,31 +13,25 @@ import type { createSqliteWorkerBackend } from "./store.worker.js";
 import type { ReportDocument } from "./types.js";
 
 export function report(): ReportDocument {
-  return {
-    version: 1,
-    period: describePeriod("day", "2026-08-20"),
-    generatedAtMs: Date.parse("2026-08-21T00:00:00Z"),
-    status: "closed",
-    orgs: ["example"],
-    memberCount: 2,
-    activeMembers: 1,
-    totals: {
-      github: {
-        ...githubCounts(41),
-        commits: 11,
-        prsOpened: 7,
-        prsMerged: 5,
-        securityAdvisories: 3,
-      },
-      discord: { messages: 13, channels: { general: 13 } },
-    },
-    members: ["alice", "bob"].map((login) =>
+  return reportDocument(
+    ["alice", "bob"].map((login) =>
       reportMember(login, { discord: { total: 2, channels: { general: 2 }, excerpts: [] } }),
     ),
-    otherActors: [],
-    unmatchedDiscord: [],
-    sources: { github: { ok: true, warnings: ["fixture warning"], stats: { apiCalls: 1 } } },
-  };
+    {
+      activeMembers: 1,
+      totals: {
+        github: {
+          ...githubCounts(41),
+          commits: 11,
+          prsOpened: 7,
+          prsMerged: 5,
+          securityAdvisories: 3,
+        },
+        discord: { messages: 13, channels: { general: 13 } },
+      },
+      sources: { github: { ok: true, warnings: ["fixture warning"], stats: { apiCalls: 1 } } },
+    },
+  );
 }
 
 export function exercise(backend: Pick<ReturnType<typeof createSqliteWorkerBackend>, "execute">) {
@@ -47,14 +46,14 @@ export function exercise(backend: Pick<ReturnType<typeof createSqliteWorkerBacke
     return result;
   }
   call("resetActivity", undefined);
-  const activity = {
-    kind: "commit" as const,
+  const document = report();
+  const activity = githubItem({
     actor: "alice",
     repo: "example/app",
     title: "Initial",
     url: "https://example.test/commit/1",
-    atMs: report().period.sinceMs + 1,
-  };
+    atMs: document.period.sinceMs + 1,
+  });
   call("appendActivity", { source: "github", entries: [{ key: "a", value: activity }] });
   call("appendActivity", {
     source: "github",
@@ -65,22 +64,21 @@ export function exercise(backend: Pick<ReturnType<typeof createSqliteWorkerBacke
     entries: [
       {
         key: "d",
-        value: {
+        value: discordMessage({
           channelId: "general",
           channelName: "general",
           parentChannelId: "general",
           authorId: "1",
-          authorIsBot: false,
           atMs: activity.atMs,
           content: "Example message",
-        },
+        }),
       },
     ],
   });
   const options = {
-    period: report().period,
-    nowMs: report().generatedAtMs,
-    orgs: ["example"],
+    period: document.period,
+    nowMs: document.generatedAtMs,
+    orgs: document.orgs,
     roster: buildRoster([{ github: ["alice"], discordUserId: "1" }, { github: ["bob"] }]),
     githubStatus: { ok: true, warnings: [], stats: {} },
     discordConfig: { channels: [{ id: "general", excerpts: true }], excerptMaxChars: 260 },
@@ -88,7 +86,7 @@ export function exercise(backend: Pick<ReturnType<typeof createSqliteWorkerBacke
   const aggregate = call("aggregateActivity", options);
   expect(aggregate).toMatchObject({ totals: { github: { total: 1 }, discord: { messages: 1 } } });
   call("upsertPeriod", {
-    report: report(),
+    report: document,
     markdown: "original",
     summary: {
       source: "fallback",
@@ -104,10 +102,10 @@ export function exercise(backend: Pick<ReturnType<typeof createSqliteWorkerBacke
     {
       period: "day",
       key: "2026-08-20",
-      sinceMs: report().period.sinceMs,
-      untilMs: report().period.untilMs,
+      sinceMs: document.period.sinceMs,
+      untilMs: document.period.untilMs,
       status: "closed",
-      generatedAtMs: report().generatedAtMs,
+      generatedAtMs: document.generatedAtMs,
       activeMembers: 1,
       memberCount: 2,
       githubTotal: 41,
@@ -143,8 +141,8 @@ export function exercise(backend: Pick<ReturnType<typeof createSqliteWorkerBacke
     result: { finishedAtMs: 2, status: "ok", stats: { apiCalls: 2 } },
   });
   call("listRuns", { limit: 1, filter: { kind: "manual", status: "ok" } });
-  call("prune", { retentionDays: 0, nowMs: report().generatedAtMs });
-  call("prune", { retentionDays: 1, nowMs: report().generatedAtMs + 2 * 86_400_000 });
+  call("prune", { retentionDays: 0, nowMs: document.generatedAtMs });
+  call("prune", { retentionDays: 1, nowMs: document.generatedAtMs + 2 * 86_400_000 });
   expect(call("listPeriods", {})).toEqual([]);
   return results;
 }

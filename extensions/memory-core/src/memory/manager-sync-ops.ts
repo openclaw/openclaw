@@ -22,6 +22,7 @@ import {
 import type { MemoryManagerProviderFactory } from "./manager-registry.js";
 import { MemoryManagerReindexOps } from "./manager-reindex-ops.js";
 import {
+  canUpgradeMemoryIndexProviderKey,
   resolveConfiguredSourcesForMeta,
   resolveMemoryIndexIdentityState,
 } from "./manager-reindex-state.js";
@@ -249,14 +250,11 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
         ftsTokenizer: this.settings.store.fts.tokenizer,
       });
       if (
-        indexIdentity.status === "valid" &&
-        syncProvider &&
-        meta?.model === syncProvider.model &&
-        meta.providerKey &&
+        meta &&
         syncProviderKey &&
-        meta.providerKey !== syncProviderKey
+        canUpgradeMemoryIndexProviderKey(indexIdentity, meta, syncProviderIdentities)
       ) {
-        // Validate the full legacy identity before retiring its credential-dependent key.
+        // Retire the legacy cache namespace atomically before any chunking rebuild.
         const database = this.database;
         const upgraded = await database.updateIndexStructure(
           { type: "index.upgradeProviderKey", input: { meta, providerKey: syncProviderKey } },

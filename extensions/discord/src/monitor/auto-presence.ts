@@ -52,13 +52,6 @@ function resolveAutoPresenceConfig(config?: DiscordAutoPresenceConfig) {
   };
 }
 
-type DiscordAutoPresenceController = {
-  start: () => Promise<void>;
-  stop: () => Promise<void>;
-  refresh: () => Promise<void>;
-  enabled: boolean;
-};
-
 export function createDiscordAutoPresenceController(params: {
   scheduler: PluginServiceSchedulerV1;
   accountId: string;
@@ -66,7 +59,7 @@ export function createDiscordAutoPresenceController(params: {
   gateway: PresenceGateway;
   loadAuthStore?: () => AuthProfileStore | Promise<AuthProfileStore>;
   log?: (message: string) => void;
-}): DiscordAutoPresenceController {
+}) {
   const autoCfg = resolveAutoPresenceConfig(params.discordConfig.autoPresence);
   const loadAuthStore = params.loadAuthStore ?? (() => ensureAuthProfileStoreAsync());
   const now = params.scheduler.now;

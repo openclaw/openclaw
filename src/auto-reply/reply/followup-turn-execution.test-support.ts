@@ -1,4 +1,5 @@
-import { expect, vi } from "vitest";
+import assert from "node:assert/strict";
+import { vi } from "vitest";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import type { FollowupRun } from "./queue/types.js";
@@ -112,10 +113,7 @@ export async function executeQueuedFollowupTurnForTest(
         .spyOn(replyAdmission, "admitReplyTurn")
         .mockImplementationOnce(async ({ captureRunSelection, mailboxClaim }) => {
           captureRunSelection?.();
-          expect(mailboxClaim, "queued admission must own its selected source").toBeDefined();
-          if (!mailboxClaim) {
-            throw new Error("Expected the queued source's mailbox claim");
-          }
+          assert(mailboxClaim, "Expected the queued source's mailbox claim");
           admittedOperation = createReplyOperation({
             sessionKey: queued.run.sessionKey ?? queued.run.sessionId,
             sessionId: queued.run.sessionId,
@@ -131,10 +129,7 @@ export async function executeQueuedFollowupTurnForTest(
         .mockResolvedValue(undefined);
       try {
         const admission = await prepareReplyAgentTurn({ queued, defaults });
-        expect(admission.kind).toBe("admitted");
-        if (admission.kind !== "admitted") {
-          throw new Error("Expected queued owner admission");
-        }
+        assert(admission.kind === "admitted", "Expected queued owner admission");
         turn = admission.turn;
       } finally {
         lease.mockRestore();

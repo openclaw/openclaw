@@ -250,5 +250,24 @@ describe("speed policy context preparation", () => {
     });
     expect(extra).toHaveBeenCalledTimes(1);
     expect(capabilities).toHaveBeenCalledTimes(1);
+    // Interleaved runtime/auth/route variants retain their own prepared policy facts.
+    const read = (authMode: string, runtimeId: string, baseUrl = selectedRoute.baseUrl) =>
+      resolve(
+        entry,
+        { ...available, selectedAuthMode: authMode, selectedRoute: { ...selectedRoute, baseUrl } },
+        runtimeId,
+      );
+    read("oauth", "openclaw");
+    read("api_key", "fixture-native");
+    read("api_key", "openclaw", "https://proxy.example/v1");
+    for (let index = 0; index < 3; index++) {
+      read("api_key", "openclaw");
+      read("oauth", "openclaw");
+      read("api_key", "fixture-native");
+      read("api_key", "openclaw", "https://proxy.example/v1");
+    }
+    expect(extra).toHaveBeenCalledTimes(4);
+    expect(capabilities).toHaveBeenCalledTimes(4);
+    expect(kind === "fast" ? fast : tiers).toHaveBeenCalledTimes(4);
   });
 });

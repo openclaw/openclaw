@@ -5,7 +5,9 @@
       "id": "local_workspace_projections",
       "tables": [
         "local_workspace_projections",
-        "local_workspace_manifest_nodes"
+        "local_workspace_manifest_nodes",
+        "local_workspace_tree_packs",
+        "local_workspace_source_path_sets"
       ],
       "indexes": [],
       "dependencies": [],

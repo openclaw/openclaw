@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { validateClawDraftDocument } from "../../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clawDraftRevision, createClawDraft, MAX_CLAW_DRAFT_BYTES } from "../../claws/draft.js";
+import { createResearchBriefProposal } from "../../claws/draft.test-support.js";
 import { extractBuiltClawArtifact } from "../../claws/project-build.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -126,19 +127,7 @@ async function reviewDraft(
   return { reviewToken: payload.reviewToken, name: payload.name, files, items: payload.items };
 }
 
-const proposal = {
-  name: "research-brief",
-  version: "0.1.0",
-  scope: {
-    input: "A research question and public sources.",
-    job: "Compare sources and produce a cited brief.",
-    output: "A short Markdown brief with links and uncertainties.",
-    authority: "Read public sources. Ask before sending messages or spending money.",
-  },
-  manifest:
-    "---\nschemaVersion: 1\nagent:\n  id: research-brief\n---\nCompare primary sources and cite every factual claim.\n",
-  files: [],
-};
+const proposal = createResearchBriefProposal();
 
 async function publicationFixture(name = "@maker/research-brief") {
   const workspaceDir = tempDirs.make("claw-draft-publish-");

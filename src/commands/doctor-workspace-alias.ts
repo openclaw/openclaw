@@ -6,7 +6,6 @@ import {
   inspectWorkspaceAliasMove,
   rebindRepointedWorkspaceAlias,
   type RepointedWorkspaceAliasFacts,
-  type WorkspaceAliasRebindOutcome,
 } from "../agents/workspace-alias-rebind.js";
 import { listWorkspaceStateDirs } from "../agents/workspace-state-dirs.js";
 import { readConfigFileSnapshot } from "../config/io.js";
@@ -42,7 +41,10 @@ export type WorkspaceAliasFinding = {
 const WORKSPACE_ALIAS_CHECK_ID = "core/doctor/workspace-alias";
 const REPAIR_HINT =
   "If the same workspace moved, run `openclaw doctor --fix` and confirm the move, or use `openclaw doctor --fix --force`. Otherwise restore the original link or configure the intended workspace directly.";
-const REBIND_MESSAGES: Record<Exclude<WorkspaceAliasRebindOutcome, "rebound">, string> = {
+const REBIND_MESSAGES: Record<
+  Exclude<Awaited<ReturnType<typeof rebindRepointedWorkspaceAlias>>, "rebound">,
+  string
+> = {
   "no-repoint": "The alias no longer needs repair.",
   "repoint-changed":
     "The workspace changed after inspection. Nothing was transferred; rerun doctor to inspect it again.",

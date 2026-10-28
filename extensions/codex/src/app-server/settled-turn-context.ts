@@ -1,4 +1,5 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   CodexHistoryRejection,
   codexHistoryRejectionReason,
@@ -8,6 +9,10 @@ import type { JsonValue } from "./protocol.js";
 import type { CodexBindingWithCurrent } from "./session-binding.js";
 import type { CodexMirroredSessionHistoryTarget } from "./session-history.js";
 import type { SettledTurnMessages } from "./settled-turn-evidence.js";
+
+const loadSessionHistoryWorker = createLazyRuntimeModule(
+  () => import("../../session-history-worker-runtime.js"),
+);
 
 type CodexSettledTurnSelection = {
   model: string;
@@ -43,8 +48,7 @@ export async function captureCodexSettledTurnFinalizationContext(
     if (!model) {
       throw new CodexHistoryRejection("model_unavailable");
     }
-    const { projectCodexSettledHistoryInWorker } =
-      await import("../../session-history-worker-runtime.js");
+    const { projectCodexSettledHistoryInWorker } = await loadSessionHistoryWorker();
     const result = await projectCodexSettledHistoryInWorker(params, params.signal);
     params.signal?.throwIfAborted();
     params.assertActive?.();

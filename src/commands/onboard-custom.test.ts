@@ -1,7 +1,8 @@
 // Onboard custom tests cover custom provider prompts and API-key credential handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ensureApiKeyFromEnvOrPrompt } from "../plugins/provider-auth-input.js";
+import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { promptCustomApiConfig } from "./onboard-custom.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const loadManifestMetadataSnapshot = vi.hoisted(() => vi.fn(() => ({ plugins: [] })));
 const discoveryFetch = vi.hoisted(() => vi.fn());
@@ -23,19 +24,10 @@ vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal)
   };
 });
 
-vi.mock("../plugins/provider-auth-input.js", () => ({
-  ensureApiKeyFromEnvOrPrompt: vi.fn(
-    async (params: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]) => {
-      await params.prompter.select({ message: "Secret input mode", options: [] });
-      const input = await params.prompter.text({
-        message: params.promptMessage,
-        validate: params.validate,
-      });
-      const apiKey = params.normalize(input ?? "");
-      await params.setCredential(apiKey);
-      return apiKey;
-    },
-  ),
+// Keep host credentials outside the prompt flow while using the real credential helper.
+vi.mock("../agents/model-auth-env.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/model-auth-env.js")>()),
+  resolveEnvApiKey: () => null,
 }));
 
 function queuedAnswers<T>(answers: T[] = [], fallback?: T) {
@@ -48,6 +40,7 @@ function queuedAnswers<T>(answers: T[] = [], fallback?: T) {
 
 function createTestPrompter(params: { text: string[]; select?: string[]; confirm?: boolean[] }) {
   return {
+    ...createWizardPrompter(),
     text: queuedAnswers(params.text),
     progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
     select: queuedAnswers(params.select ?? ["plaintext", "openai"]),
@@ -88,8 +81,8 @@ async function runPromptCustomApi(
   > = {},
 ) {
   return promptCustomApiConfig({
-    prompter: prompter as unknown as Parameters<typeof promptCustomApiConfig>[0]["prompter"],
-    runtime: { log: vi.fn() } as unknown as Parameters<typeof promptCustomApiConfig>[0]["runtime"],
+    prompter,
+    runtime: createTestRuntime(),
     config: {},
     ...setup,
   });

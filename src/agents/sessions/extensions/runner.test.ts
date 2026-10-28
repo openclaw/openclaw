@@ -118,6 +118,34 @@ it("isolates caller messages while chaining replacements through a shared handle
   expect(contexts[0]).toBe(contexts[1]);
 });
 
+it("detaches frozen context containers without serializing their transcript text", async () => {
+  const block = Object.freeze({ type: "text" as const, text: "history".repeat(8192) });
+  const message = { role: "user" as const, content: [block], timestamp: 1 };
+  const messages: AgentMessage[] = [message];
+  Object.freeze(message.content);
+  Object.freeze(message);
+  Object.freeze(messages);
+  const runner = buildHandlerRunner("context", [async () => undefined]);
+  using nativeClone = vi.spyOn(globalThis, "structuredClone");
+  const projected = await runner.emitContext(messages);
+  expect(projected).toEqual(messages);
+  expect(nativeClone).not.toHaveBeenCalled();
+  const projectedMessage = projected[0];
+  if (projectedMessage?.role !== "user" || !Array.isArray(projectedMessage.content)) {
+    throw new Error("Expected the projected user message");
+  }
+  const content = projectedMessage.content;
+  if (content[0]?.type !== "text") {
+    throw new Error("Expected the projected text block");
+  }
+  content[0].text = "hook edit";
+  content.push({ type: "text", text: "hook addition" });
+  projected.push({ role: "user", content: "next", timestamp: 2 });
+  expect(messages).toHaveLength(1);
+  expect(message.content).toEqual([block]);
+  expect(block.text).toBe("history".repeat(8192));
+});
+
 // Other adapters share dispatchHandlers; retain each distinct stop/continue path here.
 const emitters = {
   tool_call: (runner) => runner.emitToolCall({ type: "tool_call", ...toolCall }),
@@ -229,6 +257,33 @@ const messageUpdate = {
   message: buildMessages()[1],
   assistantMessageEvent: { type: "text_delta", delta: "hi", contentIndex: 0 },
 } satisfies Parameters<ExtensionRunner["emit"]>[0];
+
+it("observes live handler changes without allocating a predicate for each lookup", () => {
+  const first = buildExtension({ message_update: [] });
+  const second = buildExtension({});
+  const extensions = [first, second];
+  const runner = new ExtensionRunner(
+    extensions,
+    createExtensionRuntime(),
+    "/tmp",
+    {} as SessionManager,
+    {} as ModelRegistry,
+  );
+  using predicates = vi.spyOn(extensions, "some");
+  using laterLookups = vi.spyOn(second.handlers, "get");
+  expect(runner.hasHandlers("message_update")).toBe(false);
+  first.handlers.set("message_update", [async () => undefined]);
+  laterLookups.mockClear();
+  expect(runner.hasHandlers("message_update")).toBe(true);
+  expect(laterLookups).not.toHaveBeenCalled();
+  first.handlers.get("message_update")!.length = 0;
+  expect(runner.hasHandlers("message_update")).toBe(false);
+  second.handlers.set("message_update", [async () => undefined]);
+  expect(runner.hasHandlers("message_update")).toBe(true);
+  second.handlers.delete("message_update");
+  expect(runner.hasHandlers("message_update")).toBe(false);
+  expect(predicates).not.toHaveBeenCalled();
+});
 
 it.each([false, true])("constructs context only for matching handlers=%s", async (matching) => {
   const failure = new Error("context construction failed");

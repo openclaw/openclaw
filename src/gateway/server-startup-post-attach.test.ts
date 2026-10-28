@@ -14,6 +14,7 @@ import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
+  nextEventLoopTurn,
 } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { currentUpdateCheckLifecycle } from "../infra/update-check-lifecycle.js";
@@ -387,8 +388,10 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(fs.existsSync(testState.root)).toBe(false);
   });
 
-  it("finishes sidecar startup before marking while keeping agent admission gated", async () => {
-    const methods = ["chat.history", "models.list", "agent", "sessions.send", "chat.send"];
+  it("starts channel transports before orphan marking while keeping agent admission gated", async ({
+    signal,
+  }) => {
+    const methods = ["models.list", "agent", "sessions.send", "chat.send"];
     const unavailableGatewayMethods = new Set(methods);
     const startupOrder: string[] = [];
     const postReadyWork = createDeferred();
@@ -420,7 +423,7 @@ describe("startGatewayPostAttachRuntime", () => {
     const log = { info: vi.fn(), warn: vi.fn() };
 
     try {
-      await startGatewayPostAttachRuntime({
+      const runtime = await startGatewayPostAttachRuntime({
         ...createPostAttachParams(),
         getConfig: () => currentConfig,
         startChannels,
@@ -454,25 +457,26 @@ describe("startGatewayPostAttachRuntime", () => {
           activationSourceConfig: { hooks: { internal: { enabled: false } } },
         }),
       );
-      expect(hoisted.scheduleRestartAbortedMainSessionRecovery).toHaveBeenCalledWith({
-        getConfig: expect.any(Function),
-        shouldContinue: expect.any(Function),
-        startupCheckedStorePaths: expect.any(Set),
-        waitForStart: expect.any(Function),
-        gatewayRuntime: expect.any(Object),
-      });
+      expect(hoisted.scheduleRestartAbortedMainSessionRecovery).toHaveBeenCalledOnce();
       expect(hoisted.activateSubagentRegistry).not.toHaveBeenCalled();
       expect(startupOrder).toEqual([]);
-      expect(startChannels).not.toHaveBeenCalled();
+      expect(startChannels).toHaveBeenCalledOnce();
       expect(hoisted.markStartupOrphanedMainSessionsForRecovery).not.toHaveBeenCalled();
       postReadyWork.resolve();
       await markingEntered.promise;
       expect(onSidecarsReady).not.toHaveBeenCalled();
-      expect(startChannels).not.toHaveBeenCalled();
+      expect(startChannels).toHaveBeenCalledOnce();
       expect(hoisted.activateSubagentRegistry).not.toHaveBeenCalled();
       expect([...unavailableGatewayMethods]).toStrictEqual(methods);
       releaseMarking.resolve();
-      await recoveryActivated.promise;
+      await withinTest(
+        awaitGateBeforeSettlement(
+          recoveryActivated.promise,
+          runtime.subagentRecoverySettled,
+          "startup recovery settled before registry activation",
+        ),
+        signal,
+      );
       expect(startChannels).toHaveBeenCalledOnce();
       await chatReady.promise;
       expect([...unavailableGatewayMethods]).toStrictEqual([]);
@@ -489,6 +493,7 @@ describe("startGatewayPostAttachRuntime", () => {
   });
 
   registerGatewayStartupReadinessTests({
+    recoveryMocks: hoisted,
     start: startGatewayPostAttachRuntime,
     createParams: createPostAttachParams,
     createRuntimeDeps: createPostAttachRuntimeDeps,
@@ -528,56 +533,6 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(recoverySidecar.stop).toHaveBeenCalledOnce();
     expect(publishedGatewayLifetimeSidecars.has(recoverySidecar)).toBe(false);
   });
-
-  it.each([false, true])(
-    "gates main-session recovery behind subagent restoration (failure: %s)",
-    async (failRestoration) => {
-      const { promise: postReadyWork, resolve: releasePostReadyWork } = createDeferred();
-      const restorationStarted = createDeferred();
-      const restorationReady = createDeferred();
-      hoisted.activateSubagentRegistry.mockImplementationOnce(() => {
-        restorationStarted.resolve();
-        const settled = restorationReady.promise.then(() => {
-          if (failRestoration) {
-            throw new Error("restoration failed");
-          }
-        });
-        return hoisted.createRecoveryProgress(settled, Promise.resolve());
-      });
-      let waitForStart: (() => Promise<void>) | undefined;
-      hoisted.scheduleRestartAbortedMainSessionRecovery.mockImplementationOnce(
-        (params: { waitForStart?: () => Promise<void> }) => {
-          waitForStart = params.waitForStart;
-          return { stop: vi.fn(async () => {}) };
-        },
-      );
-
-      await startGatewayPostAttachRuntime({
-        ...createPostAttachParams(),
-        waitForPostReadyWork: () => postReadyWork,
-      });
-
-      await waitForGatewayTestState(() => {
-        expect(waitForStart).toEqual(expect.any(Function));
-      });
-      let released = false;
-      const waiting = waitForStart?.().then(() => {
-        released = true;
-      });
-      await Promise.resolve();
-      expect(released).toBe(false);
-
-      try {
-        releasePostReadyWork();
-        await restorationStarted.promise;
-        expect(released).toBe(false);
-      } finally {
-        restorationReady.resolve();
-      }
-      await waiting;
-      expect(released).toBe(true);
-    },
-  );
 
   it("reports internal hook load failures without copying the error into the summary", async () => {
     const log = { info: vi.fn<(message: string) => void>(), warn: vi.fn() };
@@ -704,9 +659,7 @@ describe("startGatewayPostAttachRuntime", () => {
         } else {
           sidecars.resolve();
         }
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextEventLoopTurn();
         expect(returned).not.toHaveBeenCalled();
         logging.resolve();
         sidecars.resolve();
@@ -777,9 +730,7 @@ describe("startGatewayPostAttachRuntime", () => {
         expect(completed).toEqual([]);
         const closed = vi.fn();
         const closing = lifetime.drain().then(closed);
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextEventLoopTurn();
         expect(closed).not.toHaveBeenCalled();
         release();
         await closing;
@@ -868,9 +819,7 @@ describe("startGatewayPostAttachRuntime", () => {
     events.push("returned");
 
     try {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
       expect(updateCheck.initialize).not.toHaveBeenCalled();
       expect(updateCheck.start).not.toHaveBeenCalled();
       expect(events).toEqual(["sidecars", "returned"]);
@@ -908,12 +857,8 @@ describe("startGatewayPostAttachRuntime", () => {
       if (outcome === "close-prelude") {
         closing = true;
         postReadyWork.resolve();
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextEventLoopTurn();
+        await nextEventLoopTurn();
       }
       let stopped = false;
       const stopping = result.stopGatewayUpdateCheck().then(() => {
@@ -926,9 +871,7 @@ describe("startGatewayPostAttachRuntime", () => {
         postReadyWork.resolve();
         await stopping;
       }
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
       expect(createGatewayUpdateCheck).not.toHaveBeenCalled();
       expect(updateCheck.initialize).not.toHaveBeenCalled();
       expect(updateCheck.start).not.toHaveBeenCalled();
@@ -1241,9 +1184,7 @@ describe("startGatewayPostAttachRuntime", () => {
 
       const closed = vi.fn();
       const closing = lifetime.drain().then(closed);
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
       expect(closed).not.toHaveBeenCalled();
       channels.resolve();
       await closing;
@@ -2161,9 +2102,7 @@ describe("startGatewayPostAttachRuntime", () => {
     for (const sidecar of postReadySidecars) {
       await stopTrackedSidecar(sidecar);
     }
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextEventLoopTurn();
 
     expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
   });
@@ -2209,9 +2148,7 @@ describe("startGatewayPostAttachRuntime", () => {
           closing = true;
         }
         releaseImport?.();
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextEventLoopTurn();
 
         expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
       } finally {
@@ -2707,9 +2644,7 @@ describe("startGatewayPostAttachRuntime", () => {
       const closing = connectionWork.drain().then(() => {
         events.push("metadata-retired");
       });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
       if (closeAfterRefreshStarts) {
         expect.soft(events).toEqual(["refresh-started"]);
       } else {
@@ -2718,9 +2653,7 @@ describe("startGatewayPostAttachRuntime", () => {
       releaseRefresh.resolve();
       await runtime.startupSettled;
       await closing;
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
       expect(events).toEqual(
         closeAfterRefreshStarts
           ? ["refresh-started", "refresh-completed", "metadata-retired"]
@@ -2729,9 +2662,7 @@ describe("startGatewayPostAttachRuntime", () => {
     } finally {
       releaseRefresh.resolve();
       await connectionWork.drain();
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
     }
   });
 
@@ -2777,24 +2708,18 @@ describe("startGatewayPostAttachRuntime", () => {
       await hookLoadStarted.promise;
       connectionWork.beginClose();
       const closing = connectionWork.drain().then(retirePluginMetadata);
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
       expect.soft(retirePluginMetadata).not.toHaveBeenCalled();
       releaseHookLoad.resolve();
       await runtime.startupSettled;
       await closing;
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
       expect(gatewayStart).not.toHaveBeenCalled();
       expect(retirePluginMetadata).toHaveBeenCalledOnce();
     } finally {
       releaseHookLoad.resolve();
       await connectionWork.drain();
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
     }
   });
 

@@ -8,6 +8,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
+import { createSessionGoalFixture } from "../../gateway/session-goal.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { finishAgentCommandCleanup } from "../command/cleanup.js";
@@ -47,6 +48,7 @@ it("does not replay a terminally failed legacy pending final on the next boot", 
     };
     const gatewayRuntime: GatewayRecoveryRuntime = {
       prepareRestartRecovery: () => undefined,
+      prepareFailedWorkerPlacement: async () => undefined,
       dispatchAgent: async <T>(request: Record<string, unknown>) => (await dispatch(request)) as T,
       dispatchSessionMethod: unexpectedCall,
       waitForAgent: unexpectedCall,
@@ -82,6 +84,91 @@ it("does not replay a terminally failed legacy pending final on the next boot", 
     expect(transcript).toContain(pending.text);
   });
 });
+
+it.each(["none", "local", "channel"] as const)(
+  "records a failed worker placement once across two restarts (saved final=%s)",
+  async (savedFinal) => {
+    await withOpenClawTestState({ label: "failed-placement-recovery" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
+      const target = {
+        agentId: "main",
+        sessionKey: "agent:main:dashboard:failed-worker",
+        storePath: path.join(state.sessionsDir(), "sessions.json"),
+      };
+      const reason = "Worker setup failed. Use Stop cloud worker to finish cleanup, then retry.";
+      await replaceSessionEntry(target, {
+        sessionId: "failed-worker-session",
+        updatedAt: 100,
+        status: savedFinal !== "none" ? "failed" : "interrupted",
+        abortedLastRun: true,
+        mainRestartRecovery: { cycleId: "failed-placement-cycle", revision: 1, chargedAttempts: 0 },
+        goal: createSessionGoalFixture("placement-goal", "Finish the worker task"),
+        ...(savedFinal !== "none"
+          ? {
+              pendingFinalDelivery: {
+                kind: "replayable" as const,
+                text: "Retained answer",
+                createdAt: 100,
+                ...(savedFinal === "channel"
+                  ? { context: { channel: "telegram", to: "synthetic-recipient" } }
+                  : {}),
+              },
+            }
+          : {}),
+      });
+      const dispatch = vi.fn(async () => ({
+        status: "error",
+        error: "Worker turn rejected in placement failed",
+      }));
+      const unexpectedCall = async (): Promise<never> => {
+        throw new Error("failed placement recovery must not wait or deliver");
+      };
+      const release = vi.fn();
+      const sendRecoveryNotice = vi.fn(async () => ({ suppressed: false }));
+      const gatewayRuntime: GatewayRecoveryRuntime = {
+        prepareRestartRecovery: () => undefined,
+        prepareFailedWorkerPlacement: async () => ({ reason, isCurrent: () => true, release }),
+        dispatchAgent: async <T>() => (await dispatch()) as T,
+        dispatchSessionMethod: unexpectedCall,
+        waitForAgent: unexpectedCall,
+        sendRecoveryNotice,
+        resumeChatInput: unexpectedCall,
+      };
+      for (let boot = 0; boot < 2; boot++) {
+        await markOrphans({ stateDir: state.stateDir });
+        await recoverStore({
+          ...target,
+          stateDir: state.stateDir,
+          gatewayRuntime,
+          handledSessionKeys: new Set(),
+        });
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(loadSessionEntry(target)).toMatchObject({
+          sessionId: "failed-worker-session",
+          status: "failed",
+          abortedLastRun: false,
+          mainRestartRecovery: { tombstone: { reason } },
+          goal: {
+            id: "placement-goal",
+            status: "paused",
+            lastStatusNote: expect.stringContaining(reason),
+          },
+        });
+      }
+      expect(release).toHaveBeenCalledOnce();
+      expect(sendRecoveryNotice).toHaveBeenCalledTimes(savedFinal === "channel" ? 1 : 0);
+      const transcript = JSON.stringify(
+        await loadTranscriptEvents({ ...target, sessionId: "failed-worker-session" }),
+      );
+      expect(transcript.split(reason)).toHaveLength(2);
+      expect(loadSessionEntry(target)?.pendingFinalDelivery).toBeUndefined();
+      if (savedFinal !== "none") {
+        expect(transcript).toContain("Saved reply (delivery unconfirmed)");
+        expect(transcript).toContain("Retained answer");
+      }
+    });
+  },
+);
 
 it("retires only the failed command's legacy final and retains terminal delivery evidence", async () => {
   await withOpenClawTestState({ label: "legacy-final-cleanup" }, async (state) => {

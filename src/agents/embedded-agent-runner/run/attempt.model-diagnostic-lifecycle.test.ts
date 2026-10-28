@@ -1,5 +1,8 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { notifyProviderStreamOpened } from "@openclaw/ai/transports";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
@@ -20,6 +23,7 @@ import {
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { registerDiagnosticTracePropagationBridge } from "../../../infra/diagnostic-trace-propagation.js";
 import { flushDiagnosticsTimeline } from "../../../infra/diagnostics-timeline.js";
+import { getModelTransportContext } from "../../../llm/model-transport-context.js";
 import {
   resetDiagnosticRunActivityForTest,
   startDiagnosticRunActivityTracking,
@@ -30,6 +34,7 @@ import {
   resetGlobalHookRunner,
 } from "../../../plugins/hook-runner-global.js";
 import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-fixtures.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
@@ -158,6 +163,51 @@ async function completeSuppressedReasoning(params: {
 }
 
 describe("model diagnostic lifecycle", () => {
+  it.each(["completed", "failed"] as const)(
+    "releases request callbacks from retained transport frames after %s requests",
+    async (outcome) => {
+      async function settleRequest() {
+        const owner = { callId: "retention:1" };
+        let retainedFrame: ReturnType<typeof AsyncLocalStorage.snapshot> | undefined;
+        const failure = new Error("provider failed");
+        const response = await wrap(
+          () => {
+            retainedFrame = AsyncLocalStorage.snapshot();
+            return {
+              async *[Symbol.asyncIterator]() {},
+              async result() {
+                if (outcome === "failed") {
+                  throw failure;
+                }
+                return makeAssistantMessageFixture();
+              },
+            };
+          },
+          { nextCallId: () => owner.callId },
+        )({} as never, { messages: [] });
+        const context = retainedFrame!(getModelTransportContext)!;
+        expect(context.onRateLimitWait).toBeTypeOf("function");
+        context.onRateLimitWait!(Date.now() + 1_000)();
+        if (outcome === "failed") {
+          await expect(response.result()).rejects.toBe(failure);
+        } else {
+          await response.result();
+        }
+        return { frame: retainedFrame!, owner: new WeakRef(owner) };
+      }
+      const completed = await Promise.all(Array.from({ length: 20 }, settleRequest));
+      const control = new WeakRef({});
+      await nextTurn();
+      queryObjects(WeakRef);
+      expect(control.deref()).toBeUndefined();
+      expect(completed.filter(({ owner }) => owner.deref())).toHaveLength(0);
+      expect(completed[0]!.frame(getModelTransportContext)).toMatchObject({
+        requestId: "retention:1",
+        onRateLimitWait: undefined,
+      });
+    },
+  );
+
   beforeEach(() => {
     resetDiagnosticEventsForTest();
     resetDiagnosticSessionStateForTest();
@@ -422,6 +472,106 @@ describe("model diagnostic lifecycle", () => {
       expect(ended.mock.calls[0]?.[0]).not.toHaveProperty("providerProcessingMs");
       expect(ended.mock.calls[0]?.[0]).not.toHaveProperty("providerWaitEstimateMs");
       expect(JSON.stringify(events)).not.toMatch(/private-(?:answer|payload|prompt)/);
+    },
+  );
+
+  it("does not assimilate concrete event values as promises", async () => {
+    let assimilations = 0;
+    const chunk = new Proxy<AssistantMessageEvent>(
+      { type: "text_delta", contentIndex: 0, delta: "x" },
+      {
+        get(target, property, receiver) {
+          if (property === "then") {
+            assimilations++;
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      },
+    );
+    const ready = Promise.resolve({ done: false as const, value: chunk });
+    const response = await wrap(() => ({
+      [Symbol.asyncIterator]: () => ({ next: () => ready }),
+      result: async () => makeAssistantMessageFixture(),
+    }))(
+      makeProviderModelFixture({
+        id: "synthetic",
+        provider: "synthetic",
+        api: "openai-responses",
+        baseUrl: "https://example.invalid",
+      }),
+      { messages: [] },
+    );
+    const iterator = response[Symbol.asyncIterator]();
+    try {
+      for (let index = 0; index < 3; index++) {
+        const next = await iterator.next();
+        expect(assimilations).toBe(0);
+        expect(next.value).toBe(chunk);
+        expect(next.done).toBe(false);
+      }
+    } finally {
+      await iterator.return?.();
+    }
+  });
+
+  it.each(["return", "throw", "rejected return"] as const)(
+    "serializes overlapping reads before consumer %s and closes subsequent reads",
+    async (operation) => {
+      const first = createDeferredCore<IteratorResult<AssistantMessageEvent>>();
+      const chunks: AssistantMessageEvent[] = ["first", "second"].map((delta) => ({
+        type: "text_delta",
+        contentIndex: 0,
+        delta,
+      }));
+      const next = vi
+        .fn()
+        .mockImplementationOnce(() => first.promise)
+        .mockResolvedValue({ done: false, value: chunks[1] });
+      const close = vi.fn().mockResolvedValue({ done: true, value: undefined });
+      const failure = new Error("consumer stopped");
+      const events = await collect(async () => {
+        const response = await wrap(() => ({
+          [Symbol.asyncIterator]: () => ({ next, return: close }),
+          result: async () => makeAssistantMessageFixture(),
+        }))(
+          makeProviderModelFixture({
+            id: "synthetic",
+            provider: "synthetic",
+            api: "openai-responses",
+            baseUrl: "https://example.invalid",
+          }),
+          { messages: [] },
+        );
+        const iterator = response[Symbol.asyncIterator]();
+        const reads = [iterator.next(), iterator.next()];
+        const closing =
+          operation === "throw"
+            ? iterator.throw!(failure)
+            : iterator.return!(
+                operation === "rejected return" ? Promise.reject(failure) : "closed",
+              );
+        // Observe the rejected close before releasing the queued reads.
+        const closed =
+          operation === "return"
+            ? expect(closing).resolves.toEqual({ done: true, value: "closed" })
+            : expect(closing).rejects.toBe(failure);
+        expect(next).toHaveBeenCalledTimes(1);
+        expect(close).not.toHaveBeenCalled();
+        first.resolve({ done: false, value: chunks[0]! });
+        expect(await Promise.all(reads)).toEqual(chunks.map((value) => ({ done: false, value })));
+        await closed;
+        if (operation !== "rejected return") {
+          expect(await iterator.next()).toEqual({ done: true, value: undefined });
+        } else {
+          await expect(iterator.next()).rejects.toBe(failure);
+        }
+        expect(next).toHaveBeenCalledTimes(2);
+        expect(close).toHaveBeenCalledTimes(operation === "return" ? 1 : 0);
+      });
+      expect(events.map((event) => event.type)).toEqual([
+        "model.call.started",
+        operation === "return" ? "model.call.completed" : "model.call.error",
+      ]);
     },
   );
 

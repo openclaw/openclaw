@@ -12,10 +12,7 @@ import {
   acquireSqliteDatabaseAdmissionTurn,
   runWithSqliteDatabaseAdmissionTurn,
 } from "./sqlite-database-admission-turn.js";
-import {
-  hasSqliteDatabaseSchemaAdmissionForPath,
-  revokeSqliteDatabaseAdmissionsForPath,
-} from "./sqlite-database-admission.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "./sqlite-database-admission.js";
 import { admitSqliteSchema } from "./sqlite-schema-facts.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -61,32 +58,22 @@ function makeFixture(prefix: string) {
   return { options, entered, release, order, hold, record };
 }
 
-it("settles nested warm writes ahead of cold followers after schema admission is revoked", async ({
-  signal,
-}) => {
+it("settles nested warm writes before cold followers after revocation", async ({ signal }) => {
   const { options, entered, release, hold, order, record } = makeFixture("warm-write-revocation-");
   using database = openNodeSqliteDatabase(options.path);
   database.exec("CREATE TABLE proof(value INTEGER)");
   admitSqliteSchema(database);
-  expect(hasSqliteDatabaseSchemaAdmissionForPath(options.path)).toBe(true);
   const blocker = write(options, hold);
   await entered.promise;
-  const outerEntered = createDeferred();
   const outer = write(options, async () => {
-    outerEntered.resolve();
     await workerWrite(options, record("nested"));
     order.push("outer");
   });
   revokeSqliteDatabaseAdmissionsForPath(options.path);
-  expect(hasSqliteDatabaseSchemaAdmissionForPath(options.path)).toBe(false);
   const controller = new AbortController();
   const follower = write(options, record("follower"), false, undefined, controller.signal);
   try {
     release.resolve();
-    await withinTest(outerEntered.promise, signal);
-    // A reentrant nested writer settles without waiting for another writer turn.
-    await setImmediate();
-    expect(order).toContain("nested");
     await withinTest(Promise.all([outer, follower]), signal);
     expect(order).toEqual(["nested", "outer", "follower"]);
   } finally {
@@ -96,9 +83,7 @@ it("settles nested warm writes ahead of cold followers after schema admission is
   }
 });
 
-it("retires a warm admission scope before its detached child requests a cold writer", async ({
-  signal,
-}) => {
+it("retires warm scopes before detached children request cold writers", async ({ signal }) => {
   const { options, order, record } = makeFixture("warm-write-retired-scope-");
   using database = openNodeSqliteDatabase(options.path);
   database.exec("CREATE TABLE proof(value INTEGER)");

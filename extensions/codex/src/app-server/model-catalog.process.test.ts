@@ -175,7 +175,7 @@ process.stdin.on("end", () => process.exit(0));
           {
             provider: "openai",
             status: mode === "absent-key" ? "unavailable" : "ready",
-            ...(accountType === "chatgpt" ? { modelAccessPrograms: [] } : {}),
+            ...(accountType ? { modelAccessPrograms: [] } : {}),
           },
         ]);
         check(result.entries).toContainEqual(expect.objectContaining({ id: "synthetic-model" }));

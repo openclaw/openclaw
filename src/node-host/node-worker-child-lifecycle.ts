@@ -65,22 +65,7 @@ export class NodeWorkerChildLifecycle {
   private readonly processObservations = new NodeWorkerProcessObservations();
 
   observeProcesses(input: NodeWorkerProcessInput, signal?: AbortSignal) {
-    const owner = [...this.owners.values()].find(
-      (entry) =>
-        entry.binding.environmentId === input.environmentId &&
-        entry.binding.gatewayNamespace === input.gatewayNamespace,
-    );
-    if (!owner || owner.state !== "running" || this.options.isClosed()) {
-      throw new Error(
-        "Retained worker process observation unavailable; start a new turn and retry.",
-      );
-    }
-    return this.processObservations.request(
-      owner,
-      input,
-      () => !this.options.isClosed() && this.owners.get(owner.launchId) === owner,
-      signal,
-    );
+    return this.processObservations.observe(input, signal, this.owners, this.options);
   }
 
   constructor(private readonly options: NodeWorkerChildLifecycleOptions) {

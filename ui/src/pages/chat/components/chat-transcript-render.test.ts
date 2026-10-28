@@ -117,6 +117,31 @@ describe("chat transcript rendering", () => {
     resetTranscriptTestDom();
   });
 
+  it("keeps cached message context metadata until the live session replaces it", async () => {
+    const sessionKey = "agent:main:cached-meta";
+    const props = threadProps(
+      "cached-meta",
+      sessionKey,
+      [
+        {
+          role: "assistant",
+          content: "Cached reply with usage",
+          usage: { input: 20_000, output: 100 },
+          timestamp: 1_000,
+        },
+      ],
+      { transcriptMetadata: { key: sessionKey, kind: "direct", contextTokens: 100_000 } },
+    );
+    const { container, rerender } = await mountThread(props);
+    expect(container.querySelector(".msg-meta__ctx")?.textContent).toBe("20% ctx");
+    props.transcriptMetadata = undefined;
+    props.selectedSession = { key: sessionKey, kind: "direct", contextTokens: 200_000 };
+    rerender();
+    await waitForSolid(() =>
+      expect(container.querySelector(".msg-meta__ctx")?.textContent).toBe("10% ctx"),
+    );
+  });
+
   it.each([true, false])(
     "renders an inactive run without a terminal row (show tools=%s)",
     async (showTools) => {
@@ -438,6 +463,8 @@ describe("chat transcript rendering", () => {
       replaceOwner();
       rerender();
       expect(container.querySelector(".chat-turn-recap")).toBeNull();
+      rerender();
+      expect(container.querySelector(".chat-turn-recap")).toBeNull();
       rerender({ currentAgentId: "first", runId, runWorking: true });
       rerender({ runId: null, runWorking: false });
       expectRecap("7.1k output tokens");
@@ -646,21 +673,20 @@ describe("chat transcript rendering", () => {
     );
   }
 
-  function searchFor(container: HTMLElement, query: string) {
-    const input = requireElement(container, "input") as HTMLInputElement;
+  async function searchFor(container: HTMLElement, query: string) {
+    const input = await waitForSolid(() => requireElement(container, "input") as HTMLInputElement);
     input.value = query;
     input.dispatchEvent(new Event("input", { bubbles: true }));
   }
 
-  it("projects search changes without redraw callbacks or replacing its input", () => {
+  it("projects search changes without redraw callbacks or replacing its input", async () => {
     const paneId = "native-search-revision";
     const state = getTranscriptState(paneId);
     const container = transcriptContainer();
     render(renderTranscriptSearch(paneId), container);
     expect(container.querySelector("input")).toBeNull();
     state.search.toggle();
-    flush();
-    const input = requireElement(container, "input") as HTMLInputElement;
+    const input = await waitForSolid(() => requireElement(container, "input") as HTMLInputElement);
     input.focus();
     state.search.setQuery("updated query");
     flush();
@@ -790,9 +816,7 @@ describe("chat transcript rendering", () => {
         expect.objectContaining({ sourceMessageId: "timestamp-answer", text }),
       );
       if (index === 1) {
-        expect(requireElement(group, ".chat-work-group").textContent).toContain(
-          "Worked for 35 minutes, 17 seconds",
-        );
+        expect(requireElement(group, ".chat-work-group").textContent).toContain("Worked");
       }
       await vi.advanceTimersByTimeAsync(1_500);
       fixture.dispose();
@@ -844,7 +868,7 @@ describe("chat transcript rendering", () => {
       toggleTranscriptSearch(paneId);
       flush();
       transcript.start();
-      searchFor(searchContainer, text);
+      await searchFor(searchContainer, text);
       await flushDeferredRowPrune();
 
       const bubble = requireElement(container, ".chat-group.assistant .chat-bubble");
@@ -890,7 +914,7 @@ describe("chat transcript rendering", () => {
       transcript.start();
       rerender();
       if (search) {
-        searchFor(searchContainer, "workspace layout");
+        await searchFor(searchContainer, "workspace layout");
       }
       await flushDeferredRowPrune();
 

@@ -26,6 +26,8 @@ With a repository selected, the branch picker shows **From main** (or the select
 
 When preparing a Gateway folder on a node, OpenClaw preserves its credential-free HTTP, HTTPS, or Git transport `origin` if the node checkout has none. Existing node origins remain unchanged. Origins with embedded credentials, query strings, fragments, or other schemes are not forwarded. Full workspace replacement retains the existing [Git metadata recovery limits](/gateway/cloud-workers/session-lifecycle#accept-a-completed-turn).
 
+If the origin cannot supply the selected local commit, OpenClaw discards the incomplete clone and transfers the Gateway's exact workspace snapshot, including its Git base. Unpublished local commits do not need to exist on the origin.
+
 If the Gateway restarts during provisioning, the pending first message waits for recovery and continues automatically when its worker is ready. Temporary startup or suspension errors do not cancel setup. The first message stays before later recovery notices in the chat, including after reconnecting.
 
 If startup recovery times out, the notice distinguishes setup still in progress from a Gateway that could not confirm completion, and confirms that the first message has not been sent. **Retry** checks the existing worker first. It waits for setup already in progress and sends the preserved first message once that worker is ready. A replacement is requested only when the placement permits a new dispatch; a failed worker that still needs cleanup must be stopped first. Reconnecting alone never requests a replacement.

@@ -34,12 +34,12 @@ import type {
   TalkRequesterFinalBinding,
 } from "./client-agent-consult.types.js";
 import { createTalkClientAgentRuntime } from "./client-agent-runtime.js";
+import type { TalkClientRunAuthority } from "./client-run-authority.js";
 import {
+  prepareTalkClientToolContext,
   resolveTalkAgentConsultAuthority,
   type TalkAgentConsultAuthority,
-} from "./client-gateway-control.js";
-import type { TalkClientRunAuthority } from "./client-run-authority.js";
-import { prepareTalkClientToolContext } from "./client-tool-authority.js";
+} from "./client-tool-authority.js";
 import { isTalkConsultSourceCurrent } from "./run-ownership.js";
 import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 
@@ -159,7 +159,6 @@ export function createTalkClientAgentConsultRunner(params: {
     _source: TalkAgentConsultSource = "tool-call",
     sourceInput?: SessionControllerInput,
   ) => {
-    const config = getConfig();
     const parsedArgs = parseRealtimeVoiceAgentConsultArgs(args);
     const voiceSessionId = params.getVoiceSessionId();
     if (!voiceSessionId) {
@@ -170,12 +169,14 @@ export function createTalkClientAgentConsultRunner(params: {
     }
     await ready?.();
     signal?.throwIfAborted();
+    const config = getConfig();
     const physicalSource = params.getVoiceSessionSource?.();
     if (params.getVoiceSessionSource && !physicalSource) {
       throw new Error("Realtime browser voice session is not ready for agent consult");
     }
     let assertRunRegistrationCurrent: (() => void) | undefined;
     const assertConsultCurrent = () => {
+      params.sessionTarget.assertCurrent(getConfig());
       assertCurrent?.();
       physicalSource?.assertCurrent();
       assertRunRegistrationCurrent?.();
@@ -190,15 +191,13 @@ export function createTalkClientAgentConsultRunner(params: {
     }
     const runtime = owner
       ? createOwnedAgentRuntime(owner, assertConsultCurrent)
-      : assertCurrent || physicalSource || params.ownerConnId || params.registerRun
-        ? createTalkClientAgentRuntime({
-            config: getConfig(),
-            resolveGatewayContext: params.context.resolveGatewayContext,
-            runAuthority: params.runAuthority,
-            ...(params.ownerConnId ? { rawSourceRef: params.ownerConnId } : {}),
-            assertCurrent: assertConsultCurrent,
-          })
-        : getAgentRuntime();
+      : createTalkClientAgentRuntime({
+          config,
+          resolveGatewayContext: params.context.resolveGatewayContext,
+          runAuthority: params.runAuthority,
+          ...(params.ownerConnId ? { rawSourceRef: params.ownerConnId } : {}),
+          assertCurrent: assertConsultCurrent,
+        });
     const talkConfig = config.talk;
     // A voice turn outlives offer setup and must drain under its own root,
     // while new turns still respect suspension and restart admission.

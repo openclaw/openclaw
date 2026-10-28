@@ -366,3 +366,61 @@ describe("skill review notices", () => {
     ]);
   });
 });
+
+it("records only submitted model transitions and coalesces repeated queued selections", () => {
+  const submitted = (id: string, model: string, previous = "a") => ({
+    role: "user",
+    content: id,
+    timestamp: Number(id),
+    __openclaw: {
+      id,
+      modelSelection: {
+        provider: "fixture",
+        model,
+        previous: { provider: "fixture", model: previous },
+      },
+    },
+  });
+  const labels = (messages: unknown[]) =>
+    render(messages, []).flatMap((item) =>
+      item.kind === "notice" && item.icon === "brain" ? [item.label] : [],
+    );
+
+  // Changing the picker and returning to A leaves the submitted selection unchanged.
+  expect(labels([submitted("1", "a")])).toEqual([]);
+  // Draft B is absent: only the final selection C belongs to the sent message.
+  const before = {
+    role: "assistant",
+    provider: "fixture",
+    model: "a",
+    content: "Previous answer",
+    timestamp: 0,
+  };
+  const first = submitted("2", "c");
+  expect(labels([before, first])).toEqual(["Model changed from fixture/a to fixture/c."]);
+  expect(labels([{ ...before, model: "fallback-b" }, submitted("2", "a")])).toEqual([]);
+  // The last-run fallback can still be A while several user messages are queued.
+  const lateMedia = submitted("3", "a");
+  const history = [
+    before,
+    first,
+    { ...lateMedia, __openclaw: { ...lateMedia["__openclaw"], lateMedia: true } },
+    submitted("5", "c"),
+    submitted("6", "b"),
+  ];
+  expect(labels(history)).toEqual([
+    "Model changed from fixture/a to fixture/c.",
+    "Model changed from fixture/c to fixture/b.",
+  ]);
+  expect(labels([submitted("3", "c"), submitted("4", "c")])).toEqual([]);
+});
+
+it("does not invent a model change without a previous selection", () => {
+  const first = {
+    role: "user",
+    content: "First input",
+    timestamp: 1,
+    __openclaw: { id: "first", modelSelection: { provider: "fixture", model: "a" } },
+  };
+  expect(render([first], []).some((item) => item.kind === "notice")).toBe(false);
+});

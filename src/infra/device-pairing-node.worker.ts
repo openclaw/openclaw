@@ -305,11 +305,18 @@ export const nodePairingOperations = {
     { pairedDeviceId: (input) => input.nodeId },
   ),
   "node.recordDisconnection": devicePairingMutation(
-    (input: GenerationInput & { connectedAtMs: number; disconnectedAtMs: number }) =>
+    (
+      input: GenerationInput & {
+        connectedAtMs: number;
+        disconnectedAtMs: number;
+        hostStats?: NodeHostStats;
+      },
+    ) =>
       updateNodeSurface(
         input,
         (surface) => ({
           ...surface,
+          ...(input.hostStats ? { lastHostStats: input.hostStats } : {}),
           lastDisconnectedAtMs: Math.max(
             surface.lastDisconnectedAtMs ?? input.disconnectedAtMs,
             input.disconnectedAtMs,

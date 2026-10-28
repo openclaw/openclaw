@@ -6,7 +6,6 @@ import {
   listConfiguredSessionStoreAgentIds,
   resolveConfiguredAgentDatabaseCandidatePaths,
 } from "../config/sessions/targets.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
@@ -49,11 +48,10 @@ import {
   OpenClawDatabaseSchemaPreflightError,
 } from "./openclaw-database-preflight.messages.js";
 import type {
-  AgentDatabasePreflightStats,
-  DeferredStateSchemaPublication,
   IndeterminateOpenClawDatabase,
   OpenClawDatabaseSchemaPreflight,
   OpenClawDatabasePreflightOptions,
+  OpenClawDatabaseReadinessOptions,
 } from "./openclaw-database-preflight.types.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -89,21 +87,7 @@ class AgentDatabaseRecoveryHeldError extends Error {}
 
 /** Verify persisted runtime schemas before certifying repair or accepting restart. */
 export async function assertOpenClawDatabasesReady(
-  options: {
-    env: NodeJS.ProcessEnv;
-    onAgentInspection?: (stats: AgentDatabasePreflightStats) => void;
-    onRegisteredAgentDatabases?: OpenClawDatabasePreflightOptions["onRegisteredAgentDatabases"];
-  } & (
-    | {
-        operation: "doctor";
-        configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[];
-        config?: OpenClawConfig;
-        onDeferredSchemaPublication?: (publication: DeferredStateSchemaPublication) => void;
-        onVerified?: (schemas: OpenClawDatabaseSchemaPreflight) => void;
-      }
-    | { operation: "gateway-restart"; config?: OpenClawConfig }
-    | { operation: "gateway-startup"; config: OpenClawConfig }
-  ),
+  options: OpenClawDatabaseReadinessOptions,
 ): Promise<void> {
   const schemas = await preflightOpenClawDatabaseSchemas(
     {
@@ -656,6 +640,9 @@ export async function preflightOpenClawDatabaseSchemas(
           }
         }
         recordPreparedSchemaHeader?.(schemaInspection);
+        if (schemaInspection.readReady) {
+          (inspection.readReadyAgentPaths ??= []).push(realAgentPath);
+        }
         return schemaInspection.preparationPending ? "defer" : undefined;
       } catch (error) {
         if (options.signal?.aborted) {

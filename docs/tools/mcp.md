@@ -60,6 +60,14 @@ replacement. The remote server may retain the abandoned session until it expires
 
 When OpenClaw's built-in MCP client cannot start a server, it retries with exponential backoff: 30 seconds, doubling up to 10 minutes. The runtime that encountered the first failure can retry once on its normal five-second catalog schedule, using a fresh connection after retiring the failed one. The first connection for a server configuration and requester still waits for bounded initialization and catalog listing. After a startup failure, turns never wait for retries: recovery runs in the background, and recovered tools become available at the next turn boundary. If that recovery attempt also fails, the same exponential backoff applies to it. Failure state survives ordinary session cleanup and is scoped to the server configuration and requester. The effective tool inventory keeps one unavailable notice per server while the failure persists, with that runtime's next retry time and a reachability check as the next step; recovery removes the notice without adding chat or transcript messages. Each failed retry logs once; skipped runs do not repeat the warning. A successful connection, config publication, or explicit MCP reload clears the backoff. Reload the process that owns the connection; a CLI reload does not reset a separate Gateway.
 
+Native OAuth authorization failures wait for a credential change instead of a
+timer. The Gateway remembers the failure across sessions, logs it once, and hides
+that server's tools while retaining the sign-in guidance in its catalog diagnostic.
+Signing in, updating that credential, changing the server configuration, or
+explicitly reloading MCP allows discovery again. Other users' credential changes
+do not clear the failure. Inspect `openclaw mcp status --verbose` or
+`openclaw mcp doctor <name>` for authorization status and sign-in instructions.
+
 ## Add a server from the composer
 
 In a Control UI chat, select **+** → **Plugins** → **Add MCP server…**. The dialog uses the same server fields as Settings and requires administrator access.
@@ -206,7 +214,7 @@ openclaw mcp login <name>
 
 Follow the printed authorization URL. OpenClaw normally captures the loopback redirect and saves the credentials automatically; use the printed `--code` command when the browser cannot reach the callback listener.
 
-The CLI signs in only to servers defined under `mcp.servers`. A server that a plugin declares signs in from the plugin's page (**Accounts** → **Connect**); a failed browser sign-in for it points back to the plugin settings instead of a CLI command.
+The CLI signs in only to servers defined under `mcp.servers`. A server that a plugin declares signs in from the plugin's page (**Sign in**, or **Accounts** → **Sign in**); a failed browser sign-in for it points back to the plugin settings instead of a CLI command.
 
 ### Changes do not reach an active agent
 

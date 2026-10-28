@@ -1,16 +1,9 @@
 import { Value } from "typebox/value";
 import { expect, it } from "vitest";
 import { AskUserToolSchema, normalizeAskUserParams } from "./ask-user-tool-normalization.js";
+import { createDeploymentQuestion } from "./ask-user-tool.test-support.js";
 
-const question = {
-  id: "deploy_target",
-  header: "Deployment target",
-  question: "Where should this deploy?",
-  options: [
-    { label: "Staging (Recommended)", description: "Safer default" },
-    { label: "Production" },
-  ],
-};
+const question = createDeploymentQuestion("Deployment target");
 const validArgs = { questions: [question] };
 const withQuestion = (overrides: Partial<typeof question>) => ({
   questions: [{ ...question, ...overrides }],

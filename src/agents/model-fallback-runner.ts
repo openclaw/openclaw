@@ -72,6 +72,7 @@ import {
   logModelFallbackDecision,
   type ModelFallbackDecisionParams,
 } from "./model-fallback-observation.js";
+import { prepareModelFallbackRateLimit } from "./model-fallback-rate-limit.js";
 import { takeStickyRateLimitFallback } from "./model-fallback-sticky.js";
 import {
   MODEL_FALLBACK_SKIPPED_CODE,
@@ -198,7 +199,9 @@ async function runWithModelFallbackInternal<T>(
         }),
       })
     : null;
-  const attempts: FallbackAttempt[] = stickyFallback?.attempts ?? [];
+  const rateLimit = prepareModelFallbackRateLimit(candidates, { ...params, authStore });
+  candidates = rateLimit.candidates;
+  const attempts: FallbackAttempt[] = [...(stickyFallback?.attempts ?? []), ...rateLimit.attempts];
   const profileIdsByCandidate = new Map<ModelFallbackCandidate, string[]>();
   let lastError: unknown;
   let selectionChanged = false;
@@ -512,7 +515,7 @@ async function runWithModelFallbackInternal<T>(
       captureHarnessPreflight: true,
       options: {
         ...runOptions,
-        isFinalFallbackAttempt: !hasRemainingCandidate,
+        isFinalFallbackAttempt: rateLimit.isFinalAttempt(candidates, i, tlsFailedProviders),
         modelRoutingProvenance: {
           requestedProvider: params.provider,
           requestedModel: params.model,

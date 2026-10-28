@@ -13,7 +13,10 @@ import {
 import { logVerbose } from "../../globals.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
-import { emitDiagnosticsTimelineEvent } from "../../infra/diagnostics-timeline.js";
+import {
+  emitDiagnosticsTimelineEvent,
+  withDiagnosticsTimelineObserver,
+} from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { recordSessionCreated } from "../../sessions/session-created.js";
@@ -118,6 +121,7 @@ export async function handleChatSendWithStorage(
     messageInjectionTarget,
     restartSafeAdmission,
   } = admission;
+  options?.onSourceAdmitted?.(admission.sourceRef);
   const phase = diagnostics.scope("attachments");
   const preparedAttachments = await prepareChatSendAttachments({
     ...setup,
@@ -257,7 +261,10 @@ export async function handleChatSendWithStorage(
       );
     const persistGatewayUserTurnTranscript = (
       ...args: Parameters<typeof persistUserTurnTranscript>
-    ) => withUserTurnInputPublication(() => persistUserTurnTranscript(...args));
+    ) =>
+      withDiagnosticsTimelineObserver(diagnostics.observeSpan, () =>
+        withUserTurnInputPublication(() => persistUserTurnTranscript(...args)),
+      );
     const persistGatewayUserTurnTranscriptBestEffort = (
       ...args: Parameters<typeof userTurn.persistBestEffort>
     ) => withUserTurnInputPublication(() => userTurn.persistBestEffort(...args));
@@ -339,11 +346,13 @@ export async function handleChatSendWithStorage(
         assertCustodyLifetimeCurrent,
         assertClientUploadAllowed: admission.assertClientUploadAllowed,
       });
-      const staged = await userTurnRecorder.stageApproved?.({
-        ...pendingAdmission,
-        retryInterrupted: true,
-        ...(request.restartResume ? { lifecycleAdmission: request.restartResume } : {}),
-      });
+      const staged = await withDiagnosticsTimelineObserver(diagnostics.observeSpan, () =>
+        userTurnRecorder.stageApproved?.({
+          ...pendingAdmission,
+          retryInterrupted: true,
+          ...(request.restartResume ? { lifecycleAdmission: request.restartResume } : {}),
+        }),
+      );
       stagePhase?.finish();
       if (userTurnRecorder.isPendingInputConsumed?.()) {
         admission.cleanupAdmittedRun();
@@ -361,6 +370,7 @@ export async function handleChatSendWithStorage(
         // Only committed input custody can outlive the originating tool, while
         // the retained operator, destination and Gateway authority stay live.
         assertAcceptedInputCurrent = pendingAdmission.assertAdmittedCurrent;
+        options.onInputCommitted?.();
       }
       approvedInput = userTurnRecorder.getPendingInputMessage?.();
       emitSessionsChanged(
@@ -512,6 +522,7 @@ export async function handleChatSendWithStorage(
       return;
     }
     const beginCapturedMessageInjection = createChatSendMessageInjectionStarter({
+      diagnostics,
       operatorAuthority: admission.operatorAuthority,
       target: messageInjectionTarget,
       sourceRef: admission.sourceRef,
@@ -592,6 +603,8 @@ export async function handleChatSendWithStorage(
       client,
       context,
       toolsAllow: options?.toolsAllow,
+      continuationPolicy: options?.continuationPolicy,
+      onExecutionStarted: options?.onExecutionStarted,
       prepareAssistantTranscriptMessage: options?.prepareAssistantTranscriptMessage,
       skillLibrary: {
         sessionKey,

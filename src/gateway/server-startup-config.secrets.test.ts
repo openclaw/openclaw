@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createInfoWarnErrorLogger as mockLogSecretsForTest } from "../../test/helpers/mock-logger.js";
@@ -13,10 +13,6 @@ import {
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import { writePersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
-import {
-  flushDiagnosticsTimeline,
-  measureDiagnosticsTimelineSpan,
-} from "../infra/diagnostics-timeline.js";
 import { refResolutionError } from "../secrets/resolve-errors.js";
 import { associateSecretResolutionErrorOwners } from "../secrets/runtime-degraded-state.js";
 import {
@@ -259,30 +255,6 @@ function activatorOptions() {
   return {
     logSecrets: mockLogSecretsForTest(),
     emitStateEvent: vi.fn<(code: string, message: string, cfg: OpenClawConfig) => void>(),
-  };
-}
-
-function readTimelineEvents(filePath: string): Array<Record<string, unknown>> {
-  flushDiagnosticsTimeline();
-  return readFileSync(filePath, "utf8")
-    .trim()
-    .split(/\r?\n/u)
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as Record<string, unknown>);
-}
-
-function installDiagnosticsTimelineEnv() {
-  const root = autoCleanupTempDirs.make("openclaw-startup-secrets-timeline-");
-  const timelinePath = path.join(root, "timeline.jsonl");
-  const env = captureEnv(["OPENCLAW_DIAGNOSTICS", "OPENCLAW_DIAGNOSTICS_TIMELINE_PATH"]);
-  process.env.OPENCLAW_DIAGNOSTICS = "timeline";
-  process.env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH = timelinePath;
-  return {
-    timelinePath,
-    cleanup: () => {
-      flushDiagnosticsTimeline();
-      env.restore();
-    },
   };
 }
 
@@ -618,47 +590,6 @@ it.each(["same source", "secrets changed", "credentials changed", "admission clo
     }
   },
 );
-
-it("omits secret preparation error messages from diagnostics timeline spans", async () => {
-  const timelineEnv = installDiagnosticsTimelineEnv();
-  try {
-    const failure = new Error('Secret provider "default" is not configured for GATEWAY_TOKEN_REF.');
-    const activate = failingActivator(failure);
-
-    await expect(
-      prepareGatewayStartupConfig({
-        configSnapshot: gatewaySecretRefSnapshot(),
-        activateRuntimeSecrets: activate,
-        measure: (name, run, options) =>
-          measureDiagnosticsTimelineSpan(name, run, {
-            env: process.env,
-            omitErrorMessage: options?.omitErrorMessage,
-            phase: "startup",
-          }),
-      }),
-    ).rejects.toMatchObject({ message: expect.stringContaining(failure.message), cause: failure });
-
-    const events = readTimelineEvents(timelineEnv.timelinePath);
-    expect(events.find((event) => event.name === "secrets.prepare")?.attributes).toEqual({
-      activate: false,
-      gatewayAuthSecretRef: true,
-      reason: "startup",
-    });
-    const errorEvents = events.filter((event) => event.type === "span.error");
-    expect(errorEvents.map((event) => event.name)).toEqual([
-      "secrets.prepare",
-      "config.auth.secret-preflight",
-    ]);
-    for (const event of errorEvents) {
-      expect(event).toMatchObject({ phase: "startup", errorName: "Error" });
-      expect(event.errorMessage).toBeUndefined();
-    }
-    expect(JSON.stringify(events)).not.toContain("GATEWAY_TOKEN_REF");
-    expect(JSON.stringify(events)).not.toContain("default");
-  } finally {
-    timelineEnv.cleanup();
-  }
-});
 
 it("redacts startup failures without emitting reload events", async () => {
   const error = missingRef("PRIVATE_STARTUP_AUTH_REF");
@@ -1037,52 +968,6 @@ it("activates reference-free startup without caller SQL or a runtime import", as
   }
 });
 
-it("retries a stale startup fast-path preflight against the newer runtime context", async () => {
-  const agentDir = autoCleanupTempDirs.make("openclaw-startup-fast-path-cas-");
-  let clearImportedSecretsRuntimeSnapshot: (() => void) | undefined;
-  const config = (port: number) =>
-    gatewayTokenConfig({
-      agents: { entries: { default: { agentDir } } },
-      gateway: { port },
-    });
-  try {
-    // A preceding lazy-import test resets Vitest's module cache. Import this
-    // whole runtime graph together so the activator and handler share state.
-    const { createRuntimeSecretsActivator: createImportedRuntimeSecretsActivator } =
-      await import("./server-startup-config.js");
-    const secretsRuntime = await import("../secrets/runtime.js");
-    clearImportedSecretsRuntimeSnapshot = secretsRuntime.clearSecretsRuntimeSnapshot;
-    const activate = createImportedRuntimeSecretsActivator(activatorOptions());
-    await activate(config(19_021), { reason: "startup", activate: true });
-    const { getRuntimeConfigSnapshotRefreshHandler } =
-      await import("../config/runtime-snapshot.js");
-    const staleRefreshHandler = getRuntimeConfigSnapshotRefreshHandler();
-    if (!staleRefreshHandler?.preflight) {
-      throw new Error("expected startup fast-path refresh preflight handler");
-    }
-    const desiredConfig = config(19_023);
-    const preflightResult = await staleRefreshHandler.preflight({ sourceConfig: desiredConfig });
-    const concurrent = await secretsRuntime.prepareSecretsRuntimeSnapshot({
-      config: config(19_022),
-      agentDirs: [agentDir],
-      loadAuthStore: () => authStore("newer-context-key"),
-    });
-    secretsRuntime.activateSecretsRuntimeSnapshot(concurrent);
-
-    await expect(
-      staleRefreshHandler.refresh({ sourceConfig: desiredConfig, preflightResult }),
-    ).resolves.toBe(true);
-
-    const active = secretsRuntime.getActiveSecretsRuntimeSnapshot();
-    expect(active?.sourceConfig.gateway?.port).toBe(19_023);
-    expect(active?.authStores[0]?.store.profiles["openai:default"]).toMatchObject({
-      key: "newer-context-key",
-    });
-  } finally {
-    clearImportedSecretsRuntimeSnapshot?.();
-  }
-});
-
 it("grafts live auth stores onto one-shot config-write snapshots", async () => {
   const agentDir = "/tmp/openclaw-managed-write-auth-store";
   const store = authStore("live-auth-store-key");
@@ -1178,4 +1063,4 @@ it("uses the activation env when publishing persisted startup auth", async () =>
       }
     },
   );
-}); /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+});

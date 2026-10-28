@@ -73,7 +73,7 @@ async function loadAgentReplacementOperations() {
           captureFullFacts: true,
           postimages,
         });
-        const candidate = { ...result, publication };
+        const candidate = { maintenancePlans: result.maintenancePlans, publication };
         if (publication.source && publication.fullEntries?.size) {
           sealSessionEntryPublicationSource(publication.source);
         }
@@ -172,8 +172,6 @@ async function loadAgentCompoundOperations() {
   const turn = await import("../config/sessions/session-turn.worker.js");
   const reset = await import("../config/sessions/session-reset.worker.js");
   const lifecycle = await import("../config/sessions/session-lifecycle-projection.worker.js");
-  const predicates = await import("../config/sessions/session-turn-predicate.js");
-  await predicates.prepareSessionTurnPredicates();
   return {
     "session.turn.prepare": turn.prepareSessionTurn,
     "session.turn.commit": turn.commitSessionTurn,
@@ -370,7 +368,7 @@ async function loadAgentPendingInputOperations() {
     "session.pendingInputs.mutate": (
       input: Parameters<typeof pending.mutatePendingInput>[0],
       context,
-    ) => pending.mutatePendingInput(input, context, deferSqliteWorkerCommitReceipt),
+    ) => void pending.mutatePendingInput(input, context, deferSqliteWorkerCommitReceipt),
     "session.pendingInputs.interruptHistory": (
       input: Parameters<typeof history.interruptPendingInputHistoryInDatabase>[2],
       { open, options, admit },
@@ -571,6 +569,7 @@ export function createAgentWorkerOperationLoaders(
     "session.maintenance.prepare": loadMaintenanceOperations,
     "session.maintenance.metadata": loadMaintenanceOperations,
     "usageCache.writeRollup": loadUsageCacheOperations,
+    "usageCache.writeQuarters": loadUsageCacheOperations,
     "usageCache.prune": loadUsageCacheOperations,
     "usageCache.retireLegacy": loadUsageCacheOperations,
     "session.rowTranscript.backfill": loadSessionRowBackfillOperations,

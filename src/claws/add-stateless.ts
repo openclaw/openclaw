@@ -32,7 +32,6 @@ import {
 } from "./cron.js";
 import { digestClawValue } from "./digest.js";
 import {
-  ClawMcpInstallError,
   installClawMcpServersStateless,
   rollbackStatelessClawMcpServers,
   type PersistedClawMcpServerRef,
@@ -46,6 +45,7 @@ import {
 } from "./packages.js";
 import type { ClawPluginRuntimeOptions } from "./plugin-runtime.js";
 import type { PersistedClawPackageRef } from "./provenance.js";
+import type { ClawMutationStateOptions } from "./state-mutation-options.js";
 import { CLAW_OUTPUT_STABILITY, type ClawAddPlan } from "./types.js";
 import { createClawWorkspaceFiles, type PersistedClawWorkspaceFile } from "./workspace.js";
 
@@ -53,8 +53,7 @@ type ConfigCommit = (
   transform: (config: OpenClawConfig, runtimeConfig?: OpenClawConfig) => OpenClawConfig,
 ) => Promise<void>;
 
-export type StatelessClawAddOptions = {
-  assertCurrent?: () => void;
+export type StatelessClawAddOptions = ClawMutationStateOptions & {
   assertForwardCurrent?: () => void;
   assertReviewedConfig?: (config: OpenClawConfig, phase?: "after-agent-commit") => void;
   getCurrentConfig?: () => OpenClawConfig;
@@ -152,6 +151,8 @@ async function commitConfig(
   options: StatelessClawAddOptions,
 ): Promise<void> {
   if (options.commitConfig) {
+    await options.prepareEffect?.();
+    options.assertCurrent?.();
     await options.commitConfig(transform);
     return;
   }
@@ -159,6 +160,10 @@ async function commitConfig(
     afterWrite: { mode: "auto" },
     writeOptions: copyRuntimeConfigWriteApplication(options.configWriteOptions, {
       assertCurrent: options.assertCurrent,
+      beforeCommit: async () => {
+        await options.configWriteOptions?.beforeCommit?.();
+        await options.prepareEffect?.();
+      },
     }),
     transform: (config, context) => ({
       nextConfig: transform(config, context.snapshot.runtimeConfig),
@@ -197,7 +202,7 @@ export async function stageClawAddHostRequirementsStateless(
   let configCommitAttempted = false;
   let workspaceFiles: PersistedClawWorkspaceFile[] = [];
   let packages: PersistedClawPackageRef[] = [];
-  let mcpServers: PersistedClawMcpServerRef[] = [];
+  const mcpServers: PersistedClawMcpServerRef[] = [];
   let cronJobs: PersistedClawCronRef[] = [];
   let continued = false;
   const result = (
@@ -250,6 +255,8 @@ export async function stageClawAddHostRequirementsStateless(
     if (configCommitted) {
       try {
         if (options.rollbackNewAgent) {
+          await options.prepareEffect?.();
+          options.assertCurrent?.();
           await options.rollbackNewAgent(plan, cronJobs);
         } else {
           for (const ref of cronJobs.toReversed()) {
@@ -266,6 +273,8 @@ export async function stageClawAddHostRequirementsStateless(
             if (!revision) {
               throw new Error(`Automation ${ref.schedulerJobId} has no rollback revision`);
             }
+            await options.prepareEffect?.();
+            options.assertCurrent?.();
             await options.cronGateway.remove(ref.schedulerJobId, {
               commitGuard: options.assertCurrent,
               expectedConfigRevision: revision,
@@ -297,6 +306,8 @@ export async function stageClawAddHostRequirementsStateless(
         ) {
           throw new Error("Workspace changed after the agent became available; left it in place.");
         }
+        await options.prepareEffect?.();
+        options.assertCurrent?.();
         await rm(workspace, { recursive: true, force: false });
         workspaceCreated = false;
       } catch (error) {
@@ -362,7 +373,10 @@ export async function stageClawAddHostRequirementsStateless(
           `Workspace ${JSON.stringify(workspace)} was created after planning.`,
         );
       }
+      await options.prepareEffect?.();
+      assertForwardCurrent();
       await mkdir(dirname(workspace), { recursive: true });
+      await options.prepareEffect?.();
       assertForwardCurrent();
       assertWorkspacePathUnchanged(workspace);
       await mkdir(workspace);
@@ -376,7 +390,7 @@ export async function stageClawAddHostRequirementsStateless(
       if (workspacePlan.actions.some((action) => action.kind === "package")) {
         packages = [...packages, ...(await installClawPackages(workspacePlan, stageOptions()))];
       }
-      mcpServers = await installClawMcpServersStateless(plan, stageOptions());
+      await installClawMcpServersStateless(plan, { ...stageOptions(), refs: mcpServers });
       workspaceBeforeExposure = await workspaceIdentity(workspace);
       const deletion = await readAgentDeletionJournalAsync(plan.agent.finalId);
       if (deletion && !deletion.cleanupCompleted) {
@@ -404,14 +418,15 @@ export async function stageClawAddHostRequirementsStateless(
       }, options);
       configCommitted = true;
       workspaceExposed = true;
-      if (
-        deletion?.cleanupCompleted &&
-        !(await claimCompletedAgentDeletion(plan.agent.finalId, deletion.operationId))
-      ) {
-        throw new ClawAddMutationError(
-          "agent_deletion_changed",
-          `Agent ${JSON.stringify(plan.agent.finalId)} deletion changed during Add.`,
-        );
+      if (deletion?.cleanupCompleted) {
+        await options.prepareEffect?.();
+        assertForwardCurrent("after-agent-commit");
+        if (!(await claimCompletedAgentDeletion(plan.agent.finalId, deletion.operationId))) {
+          throw new ClawAddMutationError(
+            "agent_deletion_changed",
+            `Agent ${JSON.stringify(plan.agent.finalId)} deletion changed during Add.`,
+          );
+        }
       }
       let finished = false;
       const finishOnce = (nextOptions: StatelessClawAddOptions) => {
@@ -485,9 +500,6 @@ export async function stageClawAddHostRequirementsStateless(
       }
       if (error instanceof ClawPackageInstallError) {
         packages = [...packages, ...error.installedPackages];
-      }
-      if (error instanceof ClawMcpInstallError) {
-        mcpServers = error.mcpServers;
       }
       return {
         kind: "partial",

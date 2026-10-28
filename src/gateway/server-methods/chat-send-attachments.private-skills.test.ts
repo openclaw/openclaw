@@ -8,7 +8,7 @@ import {
 } from "./chat-send-attachments.test-support.js";
 
 const { sandbox, media, skills } = vi.hoisted(() => ({
-  sandbox: { ensureSandboxWorkspaceForSession: vi.fn() },
+  sandbox: { prepareSandboxWorkspaceForSession: vi.fn() },
   media: { SANDBOX_MEDIA_MAX_BYTES: 20 * 1024 * 1024, stageSandboxMedia: vi.fn() },
   skills: { resolveReusableWorkspaceSkillSnapshot: vi.fn() },
 }));
@@ -32,8 +32,10 @@ it.each(["existing", "admitted new"] as const)(
       };
       const snapshot = { prompt: "", skills: [], librarySelections: [selection] };
       skills.resolveReusableWorkspaceSkillSnapshot.mockReset().mockResolvedValue({ snapshot });
-      sandbox.ensureSandboxWorkspaceForSession.mockReset().mockResolvedValue({
-        workspaceDir: state.path("isolated-runtime"),
+      sandbox.prepareSandboxWorkspaceForSession.mockReset().mockResolvedValue({
+        workspace: { workspaceDir: state.path("isolated-runtime") },
+        assertCurrent() {},
+        [Symbol.dispose]() {},
       });
       media.stageSandboxMedia.mockReset().mockImplementation(async ({ ctx }) => {
         ctx.media[0].path = "media/inbound/private.txt";
@@ -73,7 +75,7 @@ it.each(["existing", "admitted new"] as const)(
           workspaceDir: state.workspaceDir,
         }),
       );
-      for (const stage of [sandbox.ensureSandboxWorkspaceForSession, media.stageSandboxMedia]) {
+      for (const stage of [sandbox.prepareSandboxWorkspaceForSession, media.stageSandboxMedia]) {
         expect(stage).toHaveBeenCalledWith(
           expect.objectContaining({ skillsSnapshot: snapshot, workspaceDir }),
         );

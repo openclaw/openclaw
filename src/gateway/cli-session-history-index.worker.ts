@@ -9,7 +9,7 @@ import {
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
-  compareCliHistoryRows,
+  orderCliHistoryRows,
   createCliHistoryRow,
   DEDUPE_TIMESTAMP_WINDOW_MS,
   mergeCliHistoryRow,
@@ -50,7 +50,7 @@ export class CliSessionHistoryIndex {
     this.db = getNodeSqliteKysely<HistoryDatabase>(this.database);
     // Only imported bodies live here; local rows retain their canonical sequence.
     const columns = `id INTEGER PRIMARY KEY, local_seq INTEGER, import_ref INTEGER, message_id TEXT, payload TEXT, bytes INTEGER NOT NULL, role TEXT,
-      text TEXT, undecorated_text TEXT, routed_key TEXT, timestamp REAL, external_key TEXT, image_key TEXT,
+      text TEXT, drift_text TEXT, timestamp REAL, external_key TEXT, image_key TEXT,
       image_mentions INTEGER NOT NULL, metadata TEXT, consumed INTEGER NOT NULL,
       ordinal INTEGER`;
     // sqlite-allow-raw -- Reconstructible temporary schema; no canonical writes or durability.
@@ -62,7 +62,6 @@ export class CliSessionHistoryIndex {
       CREATE INDEX match_text ON messages(role, text, consumed, id);
       CREATE INDEX match_timed_text ON messages(role, text, consumed, id) WHERE timestamp IS NOT NULL;
       CREATE INDEX match_undated_text ON messages(role, text, consumed, id) WHERE timestamp IS NULL;
-      CREATE INDEX match_routed ON messages(role, routed_key, consumed, id);
       CREATE INDEX match_image ON messages(image_key, consumed, id);
       CREATE INDEX message_identity ON messages(message_id);
       CREATE INDEX local_sequence ON messages(local_seq);
@@ -102,10 +101,11 @@ export class CliSessionHistoryIndex {
         })
         .onConflict((conflict) =>
           conflict.columns(["role", "text"]).doUpdateSet((eb) => ({
-            minimum_order: eb.fn<number>("max", [
-              eb.ref("floors.minimum_order"),
-              eb.ref("excluded.minimum_order"),
-            ]),
+            minimum_order:
+              /* pg-sqlite-only: This display index owns a private native SQLite database. */ eb.fn<number>(
+                "max",
+                [eb.ref("floors.minimum_order"), eb.ref("excluded.minimum_order")],
+              ),
           })),
         ),
     );
@@ -134,8 +134,7 @@ export class CliSessionHistoryIndex {
         bytes: parameter((row) => row.bytes),
         role: parameter((row) => row.role),
         text: parameter((row) => row.text),
-        undecorated_text: parameter((row) => row.undecorated_text),
-        routed_key: parameter((row) => row.routed_key),
+        drift_text: parameter((row) => row.drift_text),
         timestamp: parameter((row) => row.timestamp),
         external_key: parameter((row) => row.external_key),
         image_key: parameter((row) => row.image_key),
@@ -222,8 +221,7 @@ export class CliSessionHistoryIndex {
             .groupBy("external_key"),
         ),
     );
-    const candidates = () =>
-      this.db.selectFrom("messages").select(["id", "text", "routed_key", "metadata"]);
+    const candidates = () => this.db.selectFrom("messages").select(["id", "text", "metadata"]);
     const matchExternal = prepareSqliteQueryTakeFirstSync<string, HistoryMatch>(
       this.database,
       (parameter) =>
@@ -250,7 +248,7 @@ export class CliSessionHistoryIndex {
           .orderBy("id")
           .limit(1),
     );
-    const textMatchers = (external: boolean, column: "text" | "routed_key") => {
+    const textMatchers = (external: boolean) => {
       const create = (time: "any" | "window" | "missing") =>
         prepareSqliteQueryTakeFirstSync<HistoryTextMatch, HistoryMatch>(
           this.database,
@@ -262,7 +260,7 @@ export class CliSessionHistoryIndex {
                 parameter((row) => row.role),
               )
               .where(
-                column,
+                "text",
                 "=",
                 parameter((row) => row.text),
               )
@@ -297,16 +295,7 @@ export class CliSessionHistoryIndex {
         );
       return { any: create("any"), window: create("window"), missing: create("missing") };
     };
-    const matchers = {
-      text: {
-        withIdentity: textMatchers(true, "text"),
-        withoutIdentity: textMatchers(false, "text"),
-      },
-      routed_key: {
-        withIdentity: textMatchers(true, "routed_key"),
-        withoutIdentity: textMatchers(false, "routed_key"),
-      },
-    };
+    const matchers = { withIdentity: textMatchers(true), withoutIdentity: textMatchers(false) };
     const consume = prepareSqliteQuerySync<Pick<HistoryRow, "id" | "metadata" | "external_key">>(
       this.database,
       (parameter) =>
@@ -347,8 +336,7 @@ export class CliSessionHistoryIndex {
             "bytes",
             "role",
             "text",
-            "undecorated_text",
-            "routed_key",
+            "drift_text",
             "timestamp",
             "external_key",
             "image_key",
@@ -376,14 +364,12 @@ export class CliSessionHistoryIndex {
         }
       });
     }
-    // Preserve the existing stable comparator even for mixed/missing timestamps.
-    const order = executeSqliteQuerySync(
+    // Local rows keep transcript order. Unmatched imports splice in by timestamp.
+    const selected = executeSqliteQuerySync(
       this.database,
-      this.db.selectFrom("messages").select(["id", "timestamp"]).orderBy("id"),
+      this.db.selectFrom("messages").select(["id", "local_seq", "timestamp"]).orderBy("id"),
     ).rows;
-    if (this.expanded) {
-      order.sort(compareCliHistoryRows);
-    }
+    const order = this.expanded ? orderCliHistoryRows(selected) : selected;
     for (let offset = 0; offset < order.length; offset += INDEX_ORDINAL_BATCH_ROWS) {
       const end = Math.min(order.length, offset + INDEX_ORDINAL_BATCH_ROWS);
       runSqliteImmediateTransactionSync(this.database, () => {

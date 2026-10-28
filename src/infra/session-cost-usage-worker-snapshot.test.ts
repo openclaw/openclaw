@@ -12,10 +12,14 @@ import {
   createUsageRollupEntry,
   createUsageTranscriptEntry,
 } from "./session-cost-usage-fixtures.test-support.js";
-import { partitionUsageCostRollup } from "./session-cost-usage-partitions.js";
+import {
+  partitionUsageCostRollup,
+  USAGE_COST_PARTITION_SCOPE,
+  usageCostPartitionKey,
+} from "./session-cost-usage-partitions.js";
+import { USAGE_COST_QUARTER_SCOPE } from "./session-cost-usage-quarters.js";
 import {
   decodeUsageCostRollupEnvelope,
-  encodeUsageCostRollup,
   USAGE_COST_ROLLUP_SCOPE,
   type UsageCostRollupEntry,
 } from "./session-cost-usage-rollup-codec.js";
@@ -102,6 +106,27 @@ function reportEntry(file: UsageCostTranscriptFile, tokens: number): UsageCostRo
     parsedRecords: 1,
     countedRecords: 1,
   });
+}
+
+/** Write a rollup with its month partitions and quarter rows, as the refresh owner does. */
+function writeReport(db: DatabaseSync, file: UsageCostTranscriptFile, entry: UsageCostRollupEntry) {
+  const upsert = db.prepare(`INSERT INTO cache_entries (scope, key, value_json, blob, updated_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT (scope, key) DO UPDATE SET
+      value_json = excluded.value_json, blob = excluded.blob, updated_at = excluded.updated_at`);
+  const { valueJson, blob, partitions } = partitionUsageCostRollup(entry);
+  upsert.run(USAGE_COST_ROLLUP_SCOPE, file.filePath, valueJson, blob, timestamp);
+  for (const partition of partitions) {
+    const key = usageCostPartitionKey(file.filePath, partition.date);
+    upsert.run(USAGE_COST_PARTITION_SCOPE, key, partition.valueJson, partition.blob, timestamp);
+    upsert.run(
+      USAGE_COST_QUARTER_SCOPE,
+      key,
+      partition.quarters!.valueJson,
+      partition.quarters!.blob,
+      timestamp,
+    );
+  }
 }
 
 function borrowDatabase(db: DatabaseSync) {
@@ -273,27 +298,19 @@ it("spends the shared decoded budget on complete reports after preparing the sna
   expect(await read(second)).toBeNull();
 });
 
-it("ends the cache snapshot before projection awaits and preserves a concurrent write", async ({
+it("reads the report snapshot after discovery and keeps it closed across awaits", async ({
   signal,
 }) => {
   const db = cacheDatabase();
   const file = reportFile("/synthetic/report.jsonl", 2);
-  const write = (connection: DatabaseSync, tokens: number) => {
-    const encoded = encodeUsageCostRollup(reportEntry(file, tokens));
-    connection
-      .prepare(`INSERT INTO cache_entries (scope, key, value_json, blob, updated_at)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT (scope, key) DO UPDATE SET
-          value_json = excluded.value_json, blob = excluded.blob, updated_at = excluded.updated_at`)
-      .run(USAGE_COST_ROLLUP_SCOPE, file.filePath, encoded.valueJson, encoded.blob, timestamp);
-  };
-  write(db, 3);
-  // Borrow one native connection so an independent job can use it while projection waits.
+  const write = (tokens: number) => writeReport(db, file, reportEntry(file, tokens));
+  write(3);
+  // Borrow one native connection so an independent job can use it while discovery waits.
   borrowDatabase(db);
-  const projecting = createDeferredCore();
+  const discovering = createDeferredCore();
   const resume = createDeferredCore();
   fixture.inventory.mockImplementationOnce(async () => {
-    projecting.resolve();
+    discovering.resolve();
     await resume.promise;
     return [file];
   });
@@ -303,30 +320,74 @@ it("ends the cache snapshot before projection awaits and preserves a concurrent 
       kind: "summary",
       pricingFingerprint,
       startMs: timestamp,
-      endMs: timestamp,
+      endMs: timestamp + 15 * 60 * 1000 - 1,
       dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
     });
   const pending = report();
   try {
     await withinTest(
-      awaitGateBeforeSettlement(projecting.promise, pending, "Report did not reach projection"),
+      awaitGateBeforeSettlement(discovering.promise, pending, "Report did not reach discovery"),
       signal,
     );
     const insideReportSnapshot = db.isTransaction;
-    write(db, 7);
+    write(7);
     resume.resolve();
     expect(insideReportSnapshot).toBe(false);
     expect(await pending).toMatchObject({
-      kind: "summary",
-      summary: { totals: { totalTokens: 3, totalCost: 0.3 } },
-    });
-    expect(await report()).toMatchObject({
       kind: "summary",
       summary: { totals: { totalTokens: 7, totalCost: 0.7 } },
     });
   } finally {
     resume.resolve();
     await pending.catch(() => {});
+    db.close();
+  }
+});
+
+it("refreshes a usage.cost cache written before a shorter SQLite transcript rewrite", async () => {
+  const db = cacheDatabase();
+  const filePath = "sqlite:main:usage-rewritten:/synthetic/openclaw-agent.sqlite";
+  // The rewrite rotated the generation and left fewer events than the cached checkpoint.
+  const file: UsageCostTranscriptFile = {
+    kind: "sqlite",
+    filePath,
+    sourcePath: filePath,
+    sessionId: "usage-rewritten",
+    size: 100,
+    mtimeMs: timestamp,
+    eventCount: 10,
+    maxSeq: 10,
+    generation: "generation-b",
+  };
+  writeReport(db, file, {
+    ...reportEntry(file, 7),
+    checkpoint: {
+      kind: "sqlite",
+      generation: "generation-a",
+      maxSeq: 100,
+      eventCount: 100,
+      size: 1_000,
+      mtimeMs: timestamp,
+      anchorHash: "synthetic-anchor",
+    },
+  });
+  borrowDatabase(db);
+  fixture.inventory.mockResolvedValue([file]);
+  try {
+    expect(
+      await execute({
+        kind: "summary",
+        pricingFingerprint,
+        startMs: timestamp,
+        endMs: timestamp + 15 * 60 * 1000 - 1,
+        dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+      }),
+    ).toMatchObject({
+      kind: "summary",
+      summary: { totals: { totalTokens: 0 }, cacheStatus: { staleFiles: 1 } },
+      staleSessionFiles: [filePath],
+    });
+  } finally {
     db.close();
   }
 });

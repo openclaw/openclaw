@@ -41,6 +41,10 @@ main.content:where(.content--logs-page) .content-header {
   container-type: inline-size;
 }
 
+.log-stream--windowed {
+  overflow-anchor: none;
+}
+
 .log-row {
   display: grid;
   grid-template-columns: 90px 70px minmax(140px, 200px) minmax(0, 1fr);
@@ -56,7 +60,7 @@ main.content:where(.content--logs-page) .content-header {
   background: var(--bg-hover);
 }
 
-.log-row:last-child {
+.log-row--last {
   border-bottom: none;
 }
 

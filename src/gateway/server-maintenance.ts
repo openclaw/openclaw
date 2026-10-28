@@ -32,6 +32,12 @@ import {
 import { listRpcSourceEntries } from "../sessions/session-controller.rpc-sources.js";
 import { registerSkillUsageTracking } from "../skills/workshop/skill-usage.js";
 import { pruneExpiredArtifactDownloads } from "./artifact-download-grants.js";
+import {
+  captureThawRestartTargets,
+  restartRunningChannelAccounts,
+  type ThawRestartManager,
+  type ThawRestartTarget,
+} from "./channel-thaw-restart.js";
 import type { RestartRecoveryCandidate } from "./chat-abort.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
 import type { HealthSummary } from "./health/types.js";
@@ -81,6 +87,13 @@ type HostThawChannelRestartOutcome =
       reason: "active-work" | "admission-closed" | "channel-restart-incomplete";
     };
 
+type PendingHostThawRestart = {
+  deadlineAtMs: number;
+  loggedDeferral: boolean;
+  reason?: string;
+  targets: ThawRestartTarget[];
+};
+
 export function startGatewayMaintenanceTimers(params: {
   scheduler: GatewayScheduler;
   resolveGatewayContext?: GatewayContextResolver;
@@ -101,10 +114,7 @@ export function startGatewayMaintenanceTimers(params: {
     includeSensitive?: boolean;
   }) => Promise<HealthSummary>;
   logHealth: { info: (msg: string) => void; error: (msg: string) => void };
-  restartRunningChannels: (
-    mode: "new-thaw" | "deferred-retry",
-    shouldContinue?: () => boolean,
-  ) => Promise<boolean>;
+  channelManager: ThawRestartManager;
   activeWorkInspectors: Partial<GatewayActiveWorkInspectors>;
   refreshPresence: () => void;
   resetEventLoopHealth: () => void;
@@ -156,6 +166,7 @@ export function startGatewayMaintenanceTimers(params: {
   });
 
   const restartChannelsIfIdle = async (
+    pending: PendingHostThawRestart,
     mode: "new-thaw" | "deferred-retry",
   ): Promise<HostThawChannelRestartOutcome> => {
     const snapshot = createGatewayActiveWorkSnapshot(params.activeWorkInspectors, {
@@ -182,11 +193,11 @@ export function startGatewayMaintenanceTimers(params: {
       return { status: "retry", reason: "admission-closed" };
     }
     try {
-      const restarted = await params.restartRunningChannels(
-        mode,
-        () => !invalidated && !scheduler.signal.aborted,
-      );
-      return restarted
+      pending.targets = await restartRunningChannelAccounts(pending.targets, {
+        shouldContinue: () => !invalidated && !scheduler.signal.aborted,
+        onError: (message) => params.logHealth.error(message),
+      });
+      return pending.targets.length === 0
         ? { status: "completed" }
         : { status: "retry", reason: "channel-restart-incomplete" };
     } finally {
@@ -197,9 +208,7 @@ export function startGatewayMaintenanceTimers(params: {
   let lastTickAtMs = scheduler.now();
   let lastCpuUsage = process.cpuUsage();
   let pendingFrozenMs: number | undefined;
-  let pendingChannelRestart:
-    | { deadlineAtMs: number; loggedDeferral: boolean; reason?: string }
-    | undefined;
+  let pendingChannelRestart: PendingHostThawRestart | undefined;
   const isThawAdmissionClosed = () => scheduler.signal.aborted || isGatewayWorkAdmissionClosed();
   const runThawStep = async (label: string, step: () => void | Promise<unknown>) => {
     try {
@@ -223,7 +232,7 @@ export function startGatewayMaintenanceTimers(params: {
       return;
     }
     try {
-      const outcome = await restartChannelsIfIdle(mode);
+      const outcome = await restartChannelsIfIdle(pending, mode);
       if (outcome.status === "retry") {
         const detail =
           outcome.reason === "active-work"
@@ -290,9 +299,16 @@ export function startGatewayMaintenanceTimers(params: {
         );
       } else {
         pendingFrozenMs = Math.max(pendingFrozenMs ?? 0, gapMs - TICK_INTERVAL_MS);
+        // Capture before admission checks or any awaited recovery step: another
+        // owner may replace these accounts while this thaw waits for idle work.
+        const targets = captureThawRestartTargets(
+          params.channelManager,
+          pendingChannelRestart?.targets,
+        );
         pendingChannelRestart = {
           deadlineAtMs: nowMs + HOST_THAW_RESTART_WINDOW_MS,
           loggedDeferral: false,
+          targets,
         };
       }
     }

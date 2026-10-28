@@ -3,13 +3,22 @@ import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
 import { requireDirectorySync, syncDirectorySync } from "../../infra/directory-durability.js";
-import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+  iterateSqliteQuerySync,
+} from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { publishEncodedSessionTranscriptArchive } from "./session-accessor.sqlite-archive-artifact.js";
 import type {
   SessionColdArchive,
+  SessionColdBatchInput,
+  SessionColdBatchPrepared,
+  SessionColdExternalization,
   SessionColdChunkMetadata,
   SessionColdPlan,
   SessionColdPrepared,
@@ -18,19 +27,241 @@ import {
   readSessionStateDeleteSnapshot,
   sqliteSessionStateDeleteSnapshotsEqual,
 } from "./session-accessor.sqlite-delete-snapshot.js";
-import { hashSessionColdChunks } from "./session-cold-storage-chunks.js";
+import { hashSessionColdChunks, readSessionColdChunks } from "./session-cold-storage-chunks.js";
 import {
   decodeSessionColdRecords,
   MAX_COLD_ARCHIVE_BYTES,
   resolveSessionColdArchivePath,
+  readVerifiedSessionColdArchive,
   verifyPublishedSessionColdArchive,
   sessionColdRecordSchema,
   type SessionColdRecord,
 } from "./session-cold-storage-codec.js";
+import {
+  readSessionAdmissionProtectionKeys,
+  selectSessionColdBatch,
+} from "./session-cold-storage-selection.js";
 import { selectSessionTranscriptFtsRows } from "./session-transcript-fts.js";
 import { transcriptEventJsonSql } from "./transcript-payload.js";
 
-export function prepareSessionColdArchiveInWorker(
+async function prepareExternalization(
+  input: SessionColdBatchInput,
+  expected: Omit<SessionColdArchive, "archive_blob">,
+  maxEnvelopeBytes: number,
+): Promise<SessionColdExternalization | undefined> {
+  const opened = withOpenClawAgentDatabaseReadOnly(
+    (database) =>
+      executeSqliteQuerySync(
+        database.db,
+        getNodeSqliteKysely<DB>(database.db)
+          .selectFrom("session_transcript_cold_archives")
+          .selectAll()
+          .where("session_id", "=", expected.session_id),
+      ).rows[0],
+    input.databaseOptions,
+  );
+  const archive = opened.found ? opened.value : undefined;
+  if (
+    !archive ||
+    archive.storage !== "sqlite" ||
+    archive.generation !== expected.generation ||
+    archive.archive_sha256 !== expected.archive_sha256
+  ) {
+    return undefined;
+  }
+  const selected = withOpenClawAgentDatabaseReadOnly(
+    (database) => readSessionColdChunks(database.db, archive),
+    input.databaseOptions,
+  );
+  if (!selected.found) {
+    throw new Error("Cold transcript disappeared before externalization");
+  }
+  const chunks = selected.value;
+  let envelopeBytes = 0;
+  for (const file of chunks.length ? chunks : [archive]) {
+    const embedded = chunks.length
+      ? withOpenClawAgentDatabaseReadOnly(
+          (database) =>
+            executeSqliteQueryTakeFirstSync(
+              database.db,
+              getNodeSqliteKysely<DB>(database.db)
+                .selectFrom("session_transcript_cold_archive_chunks")
+                .select("archive_blob")
+                .where("session_id", "=", archive.session_id)
+                .where("archive_name", "=", file.archive_name),
+            )?.archive_blob,
+          input.databaseOptions,
+        )
+      : undefined;
+    const bytes = await readVerifiedSessionColdArchive({
+      storePath: input.databaseOptions.path,
+      archive: {
+        ...file,
+        storage: "sqlite",
+        archive_blob: embedded?.found ? (embedded.value ?? null) : archive.archive_blob,
+      },
+    });
+    // A window is indivisible; its files are bounded independently of the remaining pass budget.
+    envelopeBytes += zlib.zstdDecompressSync(bytes, {
+      maxOutputLength: MAX_COLD_ARCHIVE_BYTES,
+    }).byteLength;
+    if (envelopeBytes > maxEnvelopeBytes) {
+      throw new ColdArchiveBudgetError();
+    }
+    for (const record of decodeSessionColdRecords(bytes, {
+      ...file,
+      generation: archive.generation,
+    })) {
+      void record;
+    }
+    const directory = path.dirname(
+      resolveSessionColdArchivePath(input.databaseOptions.path, file.archive_name),
+    );
+    publishEncodedSessionTranscriptArchive({
+      archiveDirectory: directory,
+      archiveName: file.archive_name,
+      bytes,
+      sha256: file.archive_sha256,
+    });
+    requireDirectorySync(syncDirectorySync(directory), "Cold archive directory");
+    requireDirectorySync(syncDirectorySync(path.dirname(directory)), "Session artifact directory");
+  }
+  return { archive: expected, chunks, envelopeBytes };
+}
+
+export async function prepareSessionColdBatchInWorker(
+  input: SessionColdBatchInput,
+): Promise<SessionColdBatchPrepared> {
+  const result: SessionColdBatchPrepared = {
+    freePages: 0,
+    protectionKeys: [],
+    prepared: [],
+    externalizations: [],
+    oversizedTranscripts: [],
+    envelopeBytes: 0,
+  };
+  const selection = selectSessionColdBatch(input);
+  if (!selection.found) {
+    return result;
+  }
+  result.freePages = selection.value.freePages;
+  const maxBytes = Math.min(input.maxBytes, MAX_COLD_ARCHIVE_BYTES);
+  const candidates = [
+    ...selection.value.externalizations.map((archive) => ({
+      kind: "externalize" as const,
+      archive,
+    })),
+    ...selection.value.plans.map((plan) => ({ kind: "archive" as const, plan })),
+  ];
+  for (const candidate of candidates.slice(0, 128)) {
+    const remaining = maxBytes - result.envelopeBytes;
+    if (remaining <= 0) {
+      break;
+    }
+    // Only a first window with the full pass budget may exceed it atomically.
+    const budget =
+      result.envelopeBytes === 0 && maxBytes === MAX_COLD_ARCHIVE_BYTES ? Infinity : remaining;
+    try {
+      if (candidate.kind === "archive") {
+        const lowerBoundBytes = readLargestSessionColdEvent(candidate.plan);
+        if (lowerBoundBytes > MAX_COLD_ARCHIVE_BYTES) {
+          result.oversizedTranscripts.push({
+            sessionId: candidate.plan.sessionId,
+            lowerBoundBytes,
+          });
+          continue;
+        }
+        const prepared = prepareSessionColdArchiveInWorker(candidate.plan, budget);
+        result.prepared.push(prepared);
+        result.envelopeBytes += prepared.envelopeBytes;
+      } else {
+        const prepared = await prepareExternalization(input, candidate.archive, budget);
+        if (prepared) {
+          result.externalizations.push(prepared);
+          result.envelopeBytes += prepared.envelopeBytes;
+        }
+      }
+    } catch (error) {
+      if (error instanceof ColdArchiveBudgetError) {
+        break;
+      }
+      if (!(error instanceof ColdArchiveLimitError)) {
+        throw error;
+      }
+      result.oversizedTranscripts.push({
+        sessionId:
+          candidate.kind === "archive" ? candidate.plan.sessionId : candidate.archive.session_id,
+        lowerBoundBytes: MAX_COLD_ARCHIVE_BYTES + 1,
+      });
+      // One event group cannot fit a file. Later windows can still archive.
+      continue;
+    }
+  }
+  const included = [
+    ...result.prepared.map((item) => item.plan.sessionId),
+    ...result.externalizations.map((item) => item.archive.session_id),
+  ];
+  if (included.length > 0) {
+    const protection = withOpenClawAgentDatabaseReadOnly(
+      (database) =>
+        runSqliteReadSnapshotSync(
+          database.db,
+          () => [...readSessionAdmissionProtectionKeys(database, included)],
+          { databaseLabel: database.path, operationLabel: "cold admission protection" },
+        ),
+      input.databaseOptions,
+    );
+    if (!protection.found) {
+      throw new Error("Cold transcript database disappeared during preparation");
+    }
+    result.protectionKeys = protection.value;
+  }
+
+  return result;
+}
+
+/** Only inspect payload sizes for windows reached within this pass's byte budget. */
+function readLargestSessionColdEvent(plan: SessionColdPlan): number {
+  const opened = withOpenClawAgentDatabaseReadOnly((database) => {
+    const db = getNodeSqliteKysely<DB>(database.db);
+    const sizes = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("transcript_events")
+        .select((eb) => [
+          eb.fn.max<number>("event_utf8_bytes").as("known"),
+          eb.fn
+            .max<number>(
+              eb
+                .case()
+                .when("event_utf8_bytes", "is", null)
+                .then(eb.fn<number>("octet_length", ["event_json"]))
+                .end(),
+            )
+            .as("stored"),
+        ])
+        .where("session_id", "=", plan.sessionId),
+    );
+    const stored = sizes?.stored ?? 0;
+    // UTF-16 stores leave event_utf8_bytes null; half the stored bytes bounds UTF-8 below.
+    const utf16Storage =
+      stored > 0 &&
+      !isPostgresSqlConnection(database.db) &&
+      executeSqliteQueryTakeFirstSync(
+        database.db,
+        getNodeSqliteKysely<{ pragma_encoding: { encoding: string } }>(database.db)
+          .selectFrom("pragma_encoding")
+          .select("encoding"),
+      )?.encoding !== "UTF-8";
+    return Math.max(sizes?.known ?? 0, utf16Storage ? Math.ceil(stored / 2) : stored);
+  }, plan.databaseOptions);
+  if (!opened.found) {
+    throw new Error("Cold transcript database disappeared during preparation");
+  }
+  return opened.value;
+}
+
+function prepareSessionColdArchiveInWorker(
   plan: SessionColdPlan,
   maxEnvelopeBytes: number,
 ): SessionColdPrepared {
@@ -200,7 +431,12 @@ export function prepareSessionColdArchiveInWorker(
               raw_bytes: rawBytes + eventCount - 1,
               archive_bytes: bytes.length,
             };
-            decodeSessionColdRecords(bytes, { ...chunk, generation: plan.snapshot.generation! });
+            for (const record of decodeSessionColdRecords(bytes, {
+              ...chunk,
+              generation: plan.snapshot.generation!,
+            })) {
+              void record;
+            }
             publishEncodedSessionTranscriptArchive({
               archiveDirectory: directory,
               archiveName: chunk.archive_name,
@@ -265,5 +501,5 @@ export function prepareSessionColdArchiveInWorker(
   return { plan, archive, chunks: chunks.length > 1 ? chunks : [], envelopeBytes };
 }
 
-export class ColdArchiveLimitError extends Error {}
-export class ColdArchiveBudgetError extends Error {}
+class ColdArchiveLimitError extends Error {}
+class ColdArchiveBudgetError extends Error {}

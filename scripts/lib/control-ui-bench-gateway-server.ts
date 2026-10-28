@@ -15,6 +15,7 @@ export async function startControlUiBenchGatewayServer(
             body: string | Buffer;
             contentType: string;
             delayMs?: number;
+            headers?: Record<string, string>;
           }
         | undefined)
     | undefined;
@@ -53,7 +54,9 @@ export async function startControlUiBenchGatewayServer(
   }
 
   let currentRoot = await prepareRoot(outDir);
+  let responseLatencyMs = assetLatencyMs;
   let preloadHeadersEnabled = true;
+  let terminalEnabled = false;
   let closing: Promise<void> | undefined;
   const requests: Array<{ method: string; url: string; navigationPreload: boolean }> = [];
   const serve = (request: IncomingMessage, response: ServerResponse) => {
@@ -76,6 +79,7 @@ export async function startControlUiBenchGatewayServer(
           "Cache-Control": "no-store",
           "Access-Control-Allow-Origin": "*",
           "Cross-Origin-Resource-Policy": "cross-origin",
+          ...fixture.headers,
         });
         response.end(request.method === "HEAD" ? undefined : fixture.body);
       };
@@ -90,7 +94,7 @@ export async function startControlUiBenchGatewayServer(
     // Match the synthetic Gateway fixture; a document/bootstrap mismatch triggers a reload.
     void handleControlUiHttpRequest(request, response, {
       root: currentRoot,
-      terminalEnabled: false,
+      terminalEnabled,
     }).then(
       (handled) => {
         if (!handled) {
@@ -109,9 +113,9 @@ export async function startControlUiBenchGatewayServer(
     );
   };
   const server = createServer((request, response) => {
-    if (assetLatencyMs > 0) {
+    if (responseLatencyMs > 0) {
       // Server-side delay also covers dedicated-worker module imports.
-      setTimeout(() => serve(request, response), assetLatencyMs);
+      setTimeout(() => serve(request, response), responseLatencyMs);
     } else {
       serve(request, response);
     }
@@ -133,6 +137,12 @@ export async function startControlUiBenchGatewayServer(
     requests,
     setPreloadHeadersEnabled(enabled: boolean) {
       preloadHeadersEnabled = enabled;
+    },
+    setTerminalEnabled(enabled: boolean) {
+      terminalEnabled = enabled;
+    },
+    setAssetLatencyMs(latencyMs: number) {
+      responseLatencyMs = latencyMs;
     },
     setFixtureReader(reader: typeof readFixture) {
       readFixture = reader;

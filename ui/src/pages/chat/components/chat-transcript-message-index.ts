@@ -1,12 +1,14 @@
-import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { nativeHistoryMessageIdentity } from "../../../lib/chat/history-message-identity.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
+import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import {
   agentRunFrameActiveStatusParts,
   chatItemGroups,
   coalesceAgentRunFrames,
 } from "../chat-agent-run-grouping.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
+import { isHandoffBoundaryItem } from "../chat-sessions-yield.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import { coalesceSystemEvents } from "../chat-system-event-grouping.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
@@ -62,7 +64,10 @@ type TranscriptIndex = Readonly<{
   liveItem?: StreamOwner;
 }>;
 
-type TranscriptIndexSource = Pick<TranscriptChain, "searchActive" | "transcriptItems" | "live">;
+type TranscriptIndexSource = Pick<
+  TranscriptChain,
+  "searchActive" | "transcriptItems" | "continuations" | "live"
+>;
 
 type LiveStream = Extract<ReturnType<typeof buildCachedChatItems>[number], { kind: "stream" }>;
 type StreamOwner = Extract<ChatRenderItem, { kind: "stream-run" | "agent-run-frame" }>;
@@ -152,10 +157,8 @@ export function projectTranscriptChain(
     bubbleMode?: boolean;
     messages?: readonly unknown[];
     activeRunId?: string | null;
-    session?: Pick<GatewaySessionRow, "key" | "lastRunId" | "status" | "runtimeMs">;
   },
 ): TranscriptChain {
-  const { session } = options;
   const liveIndex = findLiveStreamIndex(chatItems);
   const liveStream = chatItems[liveIndex];
   const key = [
@@ -167,10 +170,6 @@ export function projectTranscriptChain(
     options.bubbleMode,
     options.messages,
     options.activeRunId,
-    session?.key,
-    session?.lastRunId,
-    session?.status,
-    session?.runtimeMs,
     readLiveTerminalRevision(),
   ];
   const cached = chains.get(chatItems);
@@ -190,7 +189,7 @@ export function projectTranscriptChain(
   const continuations = new Map<string, StreamGroupPart[]>();
   const transcriptItems = collapsedItems.filter((item, index) => {
     // A handoff boundary only shapes the grouping above; it has no row of its own.
-    if (item.kind === "notice" && item.handoffBoundary) {
+    if (isHandoffBoundaryItem(item)) {
       return false;
     }
     const previous = collapsedItems[index - 1];
@@ -247,27 +246,57 @@ export function projectTranscriptChain(
 export function projectTranscriptIndex(
   chain: TranscriptIndexSource,
   expandedToolCards: Map<string, boolean>,
-  props: Pick<ChatThreadProps, "assistantName" | "userId" | "userName">,
+  props: Pick<ChatThreadProps, "assistantName" | "userId" | "userName" | "messageReactions">,
 ): TranscriptIndex {
-  const key = [
+  const cacheKey = [
     expandedToolCards,
     getExpansionStateVersion(expandedToolCards),
     props.assistantName,
     props.userId,
     props.userName,
+    props.messageReactions,
   ];
-  return indexes(chain, key, (): TranscriptIndex => {
+  return indexes(chain, cacheKey, (): TranscriptIndex => {
     const loadedReplySources = new Map<string, LoadedReplySource>();
     const messageRowKeysById = new Map<string, string>();
     const transcriptMessageKeys = new Map<string, string>();
-    // New row keys measure expanded work immediately; existing keys keep their
-    // cached height until ResizeObserver reports the changed layout.
     const rows: TranscriptRow<ChatRenderItem>[] = [];
+    const row = (item: ChatRenderItem, key = item.key): TranscriptRow<ChatRenderItem> => {
+      const groups = chatItemGroups(item);
+      const parts = item.kind === "agent-run-frame" ? item.parts : [item];
+      if (
+        chain.continuations.has(item.key) ||
+        (item.kind === "agent-run-frame" && item.outcome.kind === "active") ||
+        groups.some((group) => group.isStreaming) ||
+        parts.some(
+          (part) =>
+            part.kind === "stream-run" ||
+            part.kind === "stream" ||
+            part.kind === "reading-indicator",
+        )
+      ) {
+        return { kind: "item", key, item };
+      }
+      const messages = groups.flatMap((group) =>
+        group.messages.map(({ message }) => [
+          nativeHistoryMessageIdentity(message) ?? message,
+          props.messageReactions?.get(persistedMessageEntryId(message) ?? "") ?? [],
+        ]),
+      );
+      const content = JSON.stringify(
+        item.kind === "agent-run-frame"
+          ? [item.outcome.kind, messages]
+          : messages.length
+            ? messages
+            : item,
+      );
+      return { kind: "item", key, item, revision: `${content.length}:${fnv1aUtf16(content)}` };
+    };
     for (const item of chain.transcriptItems) {
-      rows.push({ kind: "item", key: item.key, item });
+      rows.push(row(item));
       if (item.kind === "work-group" && expandedToolCards.get(item.key)) {
         for (const group of item.groups) {
-          rows.push({ kind: "item", key: `${item.key}:${group.key}`, item: group });
+          rows.push(row(group, `${item.key}:${group.key}`));
         }
       }
       const parts = item.kind === "agent-run-frame" ? item.parts : [item];
@@ -295,12 +324,17 @@ export function projectTranscriptIndex(
             transcriptMessageKeys.set(source.key, rowKey);
             const sourceMessageId = persistedMessageEntryId(source.message);
             if (sourceMessageId) {
-              messageRowKeysById.set(sourceMessageId, rowKey);
-              loadedReplySources.set(sourceMessageId, {
-                message: source.message,
-                messageId: source.key,
-                senderLabel,
-              });
+              // Split fragments share a persisted ID. Prefer a visible anchor and
+              // resolve actions against the original recorded envelope.
+              const previous = loadedReplySources.get(sourceMessageId);
+              if (!previous || source.hasVisibleContent) {
+                messageRowKeysById.set(sourceMessageId, rowKey);
+                loadedReplySources.set(sourceMessageId, {
+                  message: source.actionMessage ?? source.message,
+                  messageId: source.actionKey ?? source.key,
+                  senderLabel,
+                });
+              }
             }
           }
         }
@@ -350,16 +384,31 @@ export function expandReplyTargetWork(
   }
 }
 
+export type PlacedContentRow = Extract<TranscriptRow, { kind: "content" }> & {
+  /** Row key this content follows; null leads the transcript and undefined trails it. */
+  after?: string | null;
+};
+
 export function projectTranscriptRows(
   rows: readonly TranscriptRow<ChatRenderItem>[],
   workPreviews: ReturnType<typeof projectTranscriptWorkPreviews>,
-  contentRows: readonly Extract<TranscriptRow, { kind: "content" }>[],
+  contentRows: readonly PlacedContentRow[],
 ): readonly TranscriptRow<ChatRenderItem>[] {
-  return presentationRows(rows, [workPreviews, ...contentRows.map((row) => row.key)], () => {
+  const key = [workPreviews, ...contentRows.flatMap((row) => [row.key, row.after])];
+  return presentationRows(rows, key, () => {
     if (!workPreviews.size && !contentRows.length) {
       return rows;
     }
-    const result: TranscriptRow<ChatRenderItem>[] = [];
+    const placed = Map.groupBy(
+      contentRows.filter((row) => row.after !== undefined),
+      (row) => row.after,
+    );
+    const take = (after: string | null) => {
+      const found = placed.get(after) ?? [];
+      placed.delete(after);
+      return found;
+    };
+    const result: TranscriptRow<ChatRenderItem>[] = take(null);
     for (const row of rows) {
       result.push(row);
       const previews = workPreviews.get(row.key);
@@ -371,7 +420,12 @@ export function projectTranscriptRows(
           content: new GuardedTranscriptItem([content], content),
         });
       }
+      result.push(...take(row.key));
     }
-    return result.concat(contentRows);
+    // An anchor outside these rows keeps its content visible at the end.
+    return result.concat(
+      [...placed.values()].flat(),
+      contentRows.filter((row) => row.after === undefined),
+    );
   });
 }

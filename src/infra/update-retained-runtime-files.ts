@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { UpdateCandidatePluginTreePlanSchema } from "./update-candidate-plugin-tree-schema.js";
@@ -8,7 +9,7 @@ import { linkUpdateCandidatePluginTrees } from "./update-retained-runtime-tree.j
 export const RetainedRuntimeFilesSchema = z
   .object({
     relocations: UpdateCandidatePluginTreePlanSchema.shape.relocations,
-    files: z.array(z.string()),
+    fileCount: z.number().int().nonnegative(),
     entries: z.number().int().nonnegative(),
     estimatedBytes: UpdateCandidatePluginTreePlanSchema.shape.bytes,
     inventoryMs: z.number().nonnegative(),
@@ -17,6 +18,24 @@ export const RetainedRuntimeFilesSchema = z
     copied: z.number().int().nonnegative(),
   })
   .or(z.object({ unusableReason: z.string() }));
+
+// Beside, never inside, the projected tree; the parent owns its private root.
+const retainedRuntimeFileList = (privateRoot: string) =>
+  path.join(privateRoot, "retained-files.json");
+
+/** Large installations retain more file paths than worker stdout can carry. */
+export async function readRetainedRuntimeFileList(
+  privateRoot: string,
+  reply: { fileCount: number },
+): Promise<string[]> {
+  const files = z
+    .array(z.string())
+    .parse(JSON.parse(await fs.readFile(retainedRuntimeFileList(privateRoot), "utf8")));
+  if (files.length !== reply.fileCount) {
+    throw new Error("Retained runtime file list does not match its worker reply");
+  }
+  return files;
+}
 
 export function projectRetainedRuntimePath(privateRoot: string, source: string): string {
   const base = path.parse(source).root;
@@ -63,11 +82,16 @@ export async function prepareRetainedRuntimeFiles(params: {
   if ("unusableReason" in counts) {
     return counts;
   }
-  // Tree discovery stays in the worker. Returning the full plan can
-  // exceed stdout's capture limit after materialization has already succeeded.
+  // Tree discovery stays in the worker. Returning the plan, or even its file
+  // paths, can exceed stdout's capture limit after materialization succeeded.
+  const files = plan.entries.filter((entry) => entry.kind === "file").map((entry) => entry.path);
+  await fs.writeFile(retainedRuntimeFileList(params.privateRoot), JSON.stringify(files), {
+    mode: 0o600,
+    flag: "wx",
+  });
   return {
     relocations: plan.relocations,
-    files: plan.entries.filter((entry) => entry.kind === "file").map((entry) => entry.path),
+    fileCount: files.length,
     entries: plan.entries.length,
     estimatedBytes: plan.bytes,
     inventoryMs,

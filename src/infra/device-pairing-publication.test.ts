@@ -181,6 +181,24 @@ test("keeps committed node bindings across bootstrap writes and caller-owned row
   expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(binding);
 });
 
+test("preserves device keys and equal-timestamp ordering in the committed publication", async () => {
+  const node = expectDefined(await getPairedDevice("node", baseDir), "paired node");
+  persistNodes(
+    Object.fromEntries(
+      ["__proto__", "constructor", "10", "2"].map((deviceId) => [deviceId, { ...node, deviceId }]),
+    ),
+  );
+  const snapshot = await readDevicePairingNodeSnapshot(baseDir);
+  expect(snapshot.paired.map((device) => device.deviceId)).toEqual([
+    "2",
+    "10",
+    "__proto__",
+    "constructor",
+  ]);
+  expect(await getPairedDevice("__proto__", baseDir)).toMatchObject({ deviceId: "__proto__" });
+  expect(await getPairedDevice("toString", baseDir)).toBeNull();
+});
+
 test("keeps node authority available while retained setup cleanup is pending", async () => {
   await inState(async () => {
     const snapshot = await readDevicePairingNodeSnapshot(baseDir);
@@ -220,6 +238,7 @@ test.for([
   "retains only usable node authority during %s",
   async ([change, expected], { signal }) => {
     const snapshot = await readDevicePairingNodeSnapshot(baseDir);
+    const original = JSON.stringify(snapshot.paired);
     const generation = await generationFor();
     const binding = getPublishedPairedDeviceBinding("node", baseDir);
     if (change === "metadata after a failed read") {
@@ -257,11 +276,16 @@ test.for([
       );
       const committedBinding = change === "token revocation" ? null : binding;
       expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(committedBinding);
+      using read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+      using index = vi.spyOn(Object, "fromEntries");
       const updated = await readDevicePairingNodeSnapshot(baseDir);
       expect(updated).not.toBe(snapshot);
       expect(await readDevicePairingNodeSnapshot(baseDir)).toBe(updated);
       expect(updated.bindings.get("node") ?? null).toEqual(committedBinding);
       expect(updated.paired[0]).toMatchObject(expected);
+      expect(JSON.stringify(snapshot.paired)).toBe(original);
+      expect(read).not.toHaveBeenCalled();
+      expect(index).not.toHaveBeenCalled();
     } finally {
       releaseMutation.resolve();
       await Promise.allSettled([mutation]);
@@ -393,10 +417,12 @@ test("keeps inspection snapshot bytes without republishing revoked node authorit
       await removePairedDevice("node", baseDir);
       expect(getPublishedPairedDeviceBinding("node", baseDir)).toBeNull();
       expect(JSON.stringify(await listDevicePairingReadOnly(baseDir))).toBe(historical);
+      using read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
       const currentNodes = await readDevicePairingNodeSnapshot(baseDir);
       expect(currentNodes).not.toBe(nodes);
       expect(currentNodes.paired).toEqual([]);
       expect(currentNodes.bindings.size).toBe(0);
+      expect(read).not.toHaveBeenCalled();
       expect(getPublishedPairedDeviceBinding("node", baseDir)).toBeNull();
       expect(await getPairedDevice("node", baseDir)).toBeNull();
       expect((await listDevicePairing(baseDir)).paired).toEqual([]);

@@ -1,5 +1,5 @@
 import { channel } from "node:diagnostics_channel";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -15,119 +15,99 @@ import type { SessionTranscriptAuthority } from "./session-transcript-authority.
 import { createSessionTranscriptTurnKernel } from "./session-turn.kernel.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 
-describe("transcript turn work budget", () => {
-  const fixture = useTempSessionsFixture("openclaw-turn-count-");
-  beforeEach(() => setRuntimeConfigSnapshot({}));
-  afterEach(() => {
-    vi.restoreAllMocks();
-    clearRuntimeConfigSnapshot();
-  });
+const fixture = useTempSessionsFixture("openclaw-turn-count-");
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(() => {
+  vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
+});
 
-  it.each([1, 2, 3, 4, 513])(
-    "batches %i fresh messages while preserving strict window advances",
-    (count) => {
-      const scope = {
-        agentId: "main",
-        sessionId: `turn-${count}`,
-        sessionKey: `agent:main:turn-${count}`,
-        storePath: fixture.storePath(),
-      };
-      replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const resolved = resolveSqliteTranscriptScope(scope);
-      const databaseOptions = toDatabaseOptions(resolved);
-      const database = openOpenClawAgentDatabase(databaseOptions);
-      const kernel = createSessionTranscriptTurnKernel(resolved, {
-        expectedSessionId: scope.sessionId,
-        sessionFile: scope.sessionKey,
-        keyFormat: "agent-qualified",
-        messages: [],
-      });
-      let authority: SessionTranscriptAuthority | undefined;
-      const commit = (
-        messages: { eventId: string; message: { role: string; content: string } }[],
-      ) =>
-        runOpenClawAgentWriteTransaction((db) => {
-          const result = kernel.commit(db, messages).result;
-          const fact = readStagedSessionTranscriptAuthority(db)?.[0]?.facts.get(scope.sessionKey);
-          authority = fact?.kind === "postimage" ? fact.value : undefined;
-          return result;
-        }, databaseOptions);
-      commit([{ eventId: "seed", message: { role: "assistant", content: "Existing history" } }]);
+it.each([1, 4, 513])(
+  "batches %i fresh messages while preserving strict window advances",
+  (count) => {
+    const sessionId = `turn-${count}`;
+    const sessionKey = `agent:main:${sessionId}`;
+    const scope = { agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() };
+    replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const resolved = resolveSqliteTranscriptScope(scope);
+    const databaseOptions = toDatabaseOptions(resolved);
+    const database = openOpenClawAgentDatabase(databaseOptions);
+    const select = (columns: string) =>
+      database.db
+        .prepare(`SELECT ${columns} FROM session_windows WHERE session_id = ?`)
+        .get(scope.sessionId);
+    const fresh = Array.from({ length: count }, (_, index) => ({
+      eventId: `fresh-${index}`,
+      parentId: index ? `fresh-${index - 1}` : "seed",
+      message: { role: index % 2 ? "assistant" : "user", content: `Message ${index}` },
+    }));
+    const kernel = createSessionTranscriptTurnKernel(resolved, {
+      expectedSessionId: scope.sessionId,
+      sessionFile: scope.sessionKey,
+      keyFormat: "agent-qualified",
+      messages: [],
+    });
+    let authority: SessionTranscriptAuthority | undefined;
+    const commit = (messages: { eventId: string; message: { role: string; content: string } }[]) =>
+      runOpenClawAgentWriteTransaction((db) => {
+        const result = kernel.commit(db, messages).result;
+        const fact = readStagedSessionTranscriptAuthority(db)?.[0]?.facts.get(scope.sessionKey);
+        authority = fact?.kind === "postimage" ? fact.value : undefined;
+        return result;
+      }, databaseOptions);
+    commit([{ eventId: "seed", message: { role: "assistant", content: "Existing history" } }]);
+    database.db
+      .prepare(
+        "UPDATE session_windows SET transcript_updated_at = ?, transcript_observed_at = ? WHERE session_id = ?",
+      )
+      .run(10000, 20000, scope.sessionId);
+    vi.spyOn(Date, "now").mockReturnValue(5000);
+    let statements = 0;
+    const events = channel("openclaw.database.statement");
+    const observe = (value: unknown) => {
+      const event = value as { engine: string; sql?: string; outcome: string };
+      if (event.engine === "sqlite" && event.outcome === "ok") {
+        statements += event.sql?.split(";").filter((part) => part.trim()).length ?? 0;
+      }
+    };
+    events.subscribe(observe);
+    let result;
+    try {
+      result = commit(fresh.map(({ eventId, message }) => ({ eventId, message })));
+    } finally {
+      events.unsubscribe(observe);
+    }
+    expect(result.appendedMessages).toMatchObject(
+      fresh.map(({ eventId, parentId }) => ({
+        messageId: eventId,
+        appended: true,
+        effectiveParentId: parentId,
+      })),
+    );
+    expect(select("transcript_updated_at, transcript_observed_at")).toEqual({
+      transcript_updated_at: 20000 + count,
+      transcript_observed_at: 20000,
+    });
+    const window = select("row_transcript_json") as { row_transcript_json: string };
+    const lastAssistant = { text: `Message ${count - (count % 2 ? 2 : 1)}`, timestamp: 5000 };
+    expect(JSON.parse(window.row_transcript_json).lastAssistantMessage).toEqual(
+      count % 2 ? "unchanged" : lastAssistant,
+    );
+    expect(authority?.lastAssistantMessage).toEqual(count === 1 ? "unchanged" : lastAssistant);
+    expect(
       database.db
         .prepare(
-          "UPDATE session_windows SET transcript_updated_at = ?, transcript_observed_at = ? WHERE session_id = ?",
+          "SELECT event_id, parent_id FROM transcript_event_identities WHERE session_id = ? AND event_type = 'message' ORDER BY seq",
         )
-        .run(10000, 20000, scope.sessionId);
-      vi.spyOn(Date, "now").mockReturnValue(5000);
-      let statements = 0;
-      const events = channel("openclaw.database.statement");
-      const observe = (value: unknown) => {
-        const event = value as { engine: string; sql?: string; outcome: string };
-        if (event.engine === "sqlite" && event.outcome === "ok") {
-          statements += event.sql?.split(";").filter((part) => part.trim()).length ?? 0;
-        }
-      };
-      events.subscribe(observe);
-      let result;
-      try {
-        result = commit(
-          Array.from({ length: count }, (_, index) => ({
-            eventId: `fresh-${index}`,
-            message: { role: index % 2 ? "assistant" : "user", content: `Message ${index}` },
-          })),
-        );
-      } finally {
-        events.unsubscribe(observe);
-      }
-      expect(
-        result.appendedMessages.map((message) => ({
-          id: message.messageId,
-          appended: message.appended,
-          parent: message.effectiveParentId,
-        })),
-      ).toEqual(
-        Array.from({ length: count }, (_, index) => ({
-          id: `fresh-${index}`,
-          appended: true,
-          parent: index ? `fresh-${index - 1}` : "seed",
-        })),
-      );
-      expect(
-        database.db
-          .prepare(
-            "SELECT transcript_updated_at, transcript_observed_at FROM session_windows WHERE session_id = ?",
-          )
-          .get(scope.sessionId),
-      ).toEqual({ transcript_updated_at: 20000 + count, transcript_observed_at: 20000 });
-      const window = database.db
-        .prepare("SELECT row_transcript_json FROM session_windows WHERE session_id = ?")
-        .get(scope.sessionId) as { row_transcript_json: string };
-      expect(JSON.parse(window.row_transcript_json).lastAssistantMessage).toEqual(
-        count % 2 ? "unchanged" : { text: `Message ${count - 1}`, timestamp: 5000 },
-      );
-      expect(authority?.lastAssistantMessage).toEqual(
-        count === 1
-          ? "unchanged"
-          : { text: `Message ${count - (count % 2 ? 2 : 1)}`, timestamp: 5000 },
-      );
-      expect(
-        database.db
-          .prepare(
-            "SELECT event_id, parent_id FROM transcript_event_identities WHERE session_id = ? AND event_type = 'message' ORDER BY seq",
-          )
-          .all(scope.sessionId),
-      ).toEqual([
-        { event_id: "seed", parent_id: null },
-        ...Array.from({ length: count }, (_, index) => ({
-          event_id: `fresh-${index}`,
-          parent_id: index ? `fresh-${index - 1}` : "seed",
-        })),
-      ]);
-      // Budget is the real writer's SQL, including its required transaction envelope.
-      expect(statements).toBeGreaterThan(0);
-      expect(statements, `observed ${statements} statements for ${count} messages`).toBeLessThan(
-        count === 1 ? 15 : count * 11 + 6,
-      );
-    },
-  );
-});
+        .all(scope.sessionId),
+    ).toEqual([
+      { event_id: "seed", parent_id: null },
+      ...fresh.map(({ eventId, parentId }) => ({ event_id: eventId, parent_id: parentId })),
+    ]);
+    // Budget is the real writer's SQL, including its required transaction envelope.
+    expect(statements).toBeGreaterThan(0);
+    expect(statements, `observed ${statements} statements for ${count} messages`).toBeLessThan(
+      count === 1 ? 15 : count * 11 + 6,
+    );
+  },
+);

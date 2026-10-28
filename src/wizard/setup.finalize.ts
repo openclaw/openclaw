@@ -1,11 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
-import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { PreparedModelCatalogConfigReplacedError } from "../agents/prepared-model-catalog.errors.js";
-import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
@@ -57,6 +56,7 @@ import {
   gatewayAuthUsesLocalPassword,
   resolveGatewayLocalPassword,
 } from "./setup.finalize-gateway-auth.js";
+import { resolveWebSearchCredentialSummary } from "./setup.finalize-search.js";
 import { getLocalizedGatewayDaemonRuntimeOptions } from "./setup.service-runtime.js";
 import type { GatewayWizardSettings, WizardFlow } from "./setup.types.js";
 
@@ -707,8 +707,10 @@ export async function finalizeSetupWizard(
 
     await prompter.note(
       [
-        dashboardReady ? t("wizard.finalize.webUiUrl", { url: displayLinks.httpUrl }) : undefined,
-        t("wizard.finalize.gatewayWsUrl", { url: displayLinks.wsUrl }),
+        dashboardReady
+          ? t("wizard.finalize.webUiUrl", { url: terminalText`${displayLinks.httpUrl}` })
+          : undefined,
+        t("wizard.finalize.gatewayWsUrl", { url: terminalText`${displayLinks.wsUrl}` }),
         gatewayStatusLine,
         ...windowsFirewallLines,
         t("wizard.finalize.controlUiDocs"),
@@ -735,7 +737,9 @@ export async function finalizeSetupWizard(
       if (modelAuthStatus?.status === "missing") {
         await prompter.note(
           [
-            t("wizard.finalize.noModelAuth", { provider: modelAuthStatus.provider }),
+            t("wizard.finalize.noModelAuth", {
+              provider: terminalText`${modelAuthStatus.provider}`,
+            }),
             t("wizard.finalize.noModelAuthNext", {
               command: formatCliCommand("openclaw configure --section model"),
             }),
@@ -789,45 +793,14 @@ export async function finalizeSetupWizard(
     const configuredSearchProviders = listConfiguredWebSearchProviders({ config: nextConfig });
     let webSearchLines: string[];
     if (webSearchProvider) {
-      const { resolveExistingKey, hasExistingKey, hasKeyInEnv } =
-        await import("../flows/search-setup.js");
       const entry = configuredSearchProviders.find((e) => e.id === webSearchProvider);
-      const label = entry?.label ?? webSearchProvider;
-      const storedKey = entry ? resolveExistingKey(nextConfig, webSearchProvider) : undefined;
-      const keyConfigured = entry ? hasExistingKey(nextConfig, webSearchProvider) : false;
-      const envAvailable = entry ? hasKeyInEnv(entry) : false;
-      const hasKey = keyConfigured || envAvailable;
-      const authProviderId = entry?.authProviderId?.trim();
-      const authProviderLabel = authProviderId === "xai" ? "xAI" : authProviderId;
-      const authStore = authProviderId
-        ? await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir)
-        : undefined;
-      const providerAuthProfileAvailable = authProviderId
-        ? hasAuthProfileForProvider({
-            provider: authProviderId,
-            authStore,
-          })
-        : false;
-      const oauthAuthProfileAvailable =
-        authProviderId && providerAuthProfileAvailable
-          ? hasAuthProfileForProvider({
-              provider: authProviderId,
-              authStore,
-              type: "oauth",
-            })
-          : false;
-      const hasCredential = hasKey || providerAuthProfileAvailable;
-      const keySource = storedKey
-        ? t("wizard.finalize.webSearchKeyStored")
-        : keyConfigured
-          ? t("wizard.finalize.webSearchKeyRef")
-          : envAvailable
-            ? t("wizard.finalize.webSearchKeyEnv", { env: entry?.envVars.join(" / ") ?? "" })
-            : oauthAuthProfileAvailable && authProviderLabel
-              ? t("wizard.finalize.webSearchOAuthProfile", { provider: authProviderLabel })
-              : providerAuthProfileAvailable && authProviderLabel
-                ? t("wizard.finalize.webSearchAuthProfile", { provider: authProviderLabel })
-                : undefined;
+      const label = terminalText`${entry?.label ?? webSearchProvider}`;
+      const { hasCredential, keySource } = await resolveWebSearchCredentialSummary({
+        config: nextConfig,
+        provider: webSearchProvider,
+        entry,
+        agentDir,
+      });
       if (!entry) {
         webSearchLines = [
           t("wizard.finalize.webSearchProviderUnavailable", { provider: label }),
@@ -857,7 +830,7 @@ export async function finalizeSetupWizard(
           `  ${formatCliCommand("openclaw configure --section web")}`,
           "",
           t("wizard.finalize.webSearchGetKey", {
-            url: entry?.signupUrl ?? "https://docs.openclaw.ai/tools/web",
+            url: terminalText`${entry?.signupUrl ?? "https://docs.openclaw.ai/tools/web"}`,
           }),
         ];
       } else {
@@ -878,7 +851,9 @@ export async function finalizeSetupWizard(
       );
       if (legacyDetected) {
         webSearchLines = [
-          t("wizard.finalize.webSearchAutoDetected", { provider: legacyDetected.label }),
+          t("wizard.finalize.webSearchAutoDetected", {
+            provider: terminalText`${legacyDetected.label}`,
+          }),
         ];
       } else if (codexNativeSummary) {
         webSearchLines = [t("wizard.finalize.managedWebSearchSkipped"), codexNativeSummary];

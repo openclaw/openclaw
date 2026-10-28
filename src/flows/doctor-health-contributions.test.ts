@@ -636,6 +636,22 @@ async function requireDoctorHealthCheck(id: string) {
   return check;
 }
 
+async function expectOptInLintFindings(
+  ctx: Parameters<typeof runDoctorLintChecks>[0],
+  id: string,
+  findings?: readonly unknown[],
+) {
+  const check = await requireDoctorHealthCheck(id);
+  expect(check).toMatchObject({ defaultEnabled: false });
+  await expect(runDoctorLintChecks(ctx, { checks: [check], onlyIds: [id] })).resolves.toMatchObject(
+    {
+      checksRun: 1,
+      checksSkipped: 0,
+      ...(findings === undefined ? {} : { findings }),
+    },
+  );
+}
+
 type DoctorContributionRunContext = Parameters<
   ReturnType<typeof requireDoctorContribution>["run"]
 >[0];
@@ -1587,25 +1603,21 @@ describe("doctor health contributions", () => {
     expect(mocks.maybeMigrateHeartbeatCadenceToCron.mock.calls).toEqual([[migration], [migration]]);
   });
 
-  it("forwards the health-check environment to heartbeat cadence detection", async () => {
-    const check = await requireDoctorHealthCheck("core/doctor/heartbeat-cadence-migration");
-    const cfg = { agents: { defaults: { heartbeat: { every: "15m" } } } };
-    const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-detector-state" };
+  it.each([
+    ["cadence", "heartbeat-cadence-migration", mocks.collectHeartbeatCadenceMigrationFindings],
+    ["task", "heartbeat-task-cron-migration", mocks.collectHeartbeatTaskMigrationFindings],
+  ] as const)(
+    "forwards the health-check environment to heartbeat %s detection",
+    async (kind, id, collect) => {
+      const check = await requireDoctorHealthCheck(`core/doctor/${id}`);
+      const cfg = { agents: { defaults: { heartbeat: { every: "15m" } } } };
+      const env = { OPENCLAW_STATE_DIR: `/tmp/openclaw-${kind}-detector-state` };
 
-    await check!.detect(createDoctorLintFixture(cfg, { env }));
+      await check.detect(createDoctorLintFixture(cfg, { env }));
 
-    expect(mocks.collectHeartbeatCadenceMigrationFindings).toHaveBeenCalledWith(cfg, env);
-  });
-
-  it("forwards the health-check environment to heartbeat task detection", async () => {
-    const check = await requireDoctorHealthCheck("core/doctor/heartbeat-task-cron-migration");
-    const cfg = { agents: { defaults: { heartbeat: { every: "15m" } } } };
-    const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-task-detector-state" };
-
-    await check!.detect(createDoctorLintFixture(cfg, { env }));
-
-    expect(mocks.collectHeartbeatTaskMigrationFindings).toHaveBeenCalledWith(cfg, env);
-  });
+      expect(collect).toHaveBeenCalledWith(cfg, env);
+    },
+  );
 
   it("includes opt-in default-account diagnostics when all checks are requested", async () => {
     const contribution = requireDoctorContribution("doctor:default-account-routing");
@@ -2153,8 +2165,6 @@ describe("doctor health contributions", () => {
   });
 
   it("keeps stale plugin-runtime symlinks opt-in for structured lint selection", async () => {
-    const check = await requireDoctorHealthCheck("core/doctor/stale-plugin-runtime-symlinks");
-    expect(check).toMatchObject({ defaultEnabled: false });
     mocks.collectStalePluginRuntimeSymlinkHealthFindings.mockResolvedValueOnce([
       {
         checkId: "core/doctor/stale-plugin-runtime-symlinks",
@@ -2169,21 +2179,12 @@ describe("doctor health contributions", () => {
 
     expect(mocks.collectStalePluginRuntimeSymlinkHealthFindings).not.toHaveBeenCalled();
 
-    await expect(
-      runDoctorLintChecks(ctx, {
-        checks: [check!],
-        onlyIds: ["core/doctor/stale-plugin-runtime-symlinks"],
+    await expectOptInLintFindings(ctx, "core/doctor/stale-plugin-runtime-symlinks", [
+      expect.objectContaining({
+        checkId: "core/doctor/stale-plugin-runtime-symlinks",
+        path: "/tmp/node_modules/left-pad",
       }),
-    ).resolves.toMatchObject({
-      checksRun: 1,
-      checksSkipped: 0,
-      findings: [
-        expect.objectContaining({
-          checkId: "core/doctor/stale-plugin-runtime-symlinks",
-          path: "/tmp/node_modules/left-pad",
-        }),
-      ],
-    });
+    ]);
     expect(mocks.collectStalePluginRuntimeSymlinkHealthFindings).toHaveBeenCalledTimes(1);
   });
 
@@ -2259,32 +2260,21 @@ describe("doctor health contributions", () => {
   });
 
   it("keeps workspace suggestions opt-in for default lint selection", async () => {
-    const workspaceSuggestionsCheck = await requireDoctorHealthCheck(
-      "core/doctor/workspace-suggestions",
-    );
-    expect(workspaceSuggestionsCheck).toMatchObject({ defaultEnabled: false });
     mocks.collectWorkspaceBackupTip.mockReturnValueOnce(
       "Back up your workspace before major repair work.",
     );
 
     const ctx = createDoctorLintFixture();
-    const checks = [workspaceSuggestionsCheck!];
 
     expect(mocks.collectWorkspaceBackupTip).not.toHaveBeenCalled();
 
-    await expect(
-      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/workspace-suggestions"] }),
-    ).resolves.toMatchObject({
-      checksRun: 1,
-      checksSkipped: 0,
-      findings: [
-        expect.objectContaining({
-          checkId: "core/doctor/workspace-suggestions",
-          severity: "info",
-          message: "Back up your workspace before major repair work.",
-        }),
-      ],
-    });
+    await expectOptInLintFindings(ctx, "core/doctor/workspace-suggestions", [
+      expect.objectContaining({
+        checkId: "core/doctor/workspace-suggestions",
+        severity: "info",
+        message: "Back up your workspace before major repair work.",
+      }),
+    ]);
     expect(mocks.collectWorkspaceBackupTip).toHaveBeenCalledWith("/tmp/openclaw-workspace");
   });
 
@@ -2332,11 +2322,7 @@ describe("doctor health contributions", () => {
   });
 
   it("keeps disk space opt-in for default lint selection", async () => {
-    const diskSpaceCheck = await requireDoctorHealthCheck("core/doctor/disk-space");
-    expect(diskSpaceCheck).toMatchObject({ defaultEnabled: false });
-
     const ctx = createDoctorLintFixture();
-    const checks = [diskSpaceCheck!];
 
     expect(mocks.collectDiskSpaceHealthFindings).not.toHaveBeenCalled();
 
@@ -2350,13 +2336,9 @@ describe("doctor health contributions", () => {
       },
     ]);
 
-    await expect(
-      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/disk-space"] }),
-    ).resolves.toMatchObject({
-      checksRun: 1,
-      checksSkipped: 0,
-      findings: [expect.objectContaining({ checkId: "core/doctor/disk-space" })],
-    });
+    await expectOptInLintFindings(ctx, "core/doctor/disk-space", [
+      expect.objectContaining({ checkId: "core/doctor/disk-space" }),
+    ]);
     expect(mocks.collectDiskSpaceHealthFindings).toHaveBeenCalledWith(undefined);
   });
 
@@ -2463,19 +2445,10 @@ describe("doctor health contributions", () => {
   });
 
   it("keeps device pairing opt-in for default lint selection", async () => {
-    const devicePairingCheck = await requireDoctorHealthCheck("core/doctor/device-pairing");
-    expect(devicePairingCheck).toMatchObject({ defaultEnabled: false });
-
     const ctx = createDoctorLintFixture({ gateway: { mode: "local" } });
-    const checks = [devicePairingCheck!];
     expect(mocks.collectDevicePairingHealthFindings).not.toHaveBeenCalled();
 
-    await expect(
-      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/device-pairing"] }),
-    ).resolves.toMatchObject({
-      checksRun: 1,
-      checksSkipped: 0,
-    });
+    await expectOptInLintFindings(ctx, "core/doctor/device-pairing");
     expect(mocks.collectDevicePairingHealthFindings).toHaveBeenCalledWith({
       cfg: ctx.cfg,
       healthOk: false,
@@ -2490,11 +2463,7 @@ describe("doctor health contributions", () => {
       "core/doctor/legacy-cron-store",
     ]);
 
-    const cronStoreCheck = await requireDoctorHealthCheck("core/doctor/legacy-cron-store");
-    expect(cronStoreCheck).toMatchObject({ defaultEnabled: false });
-
     const ctx = createDoctorLintFixture({ cron: { store: "/tmp/openclaw-cron/jobs.json" } });
-    const checks = [cronStoreCheck!];
 
     expect(mocks.collectLegacyCronStoreHealthFindings).not.toHaveBeenCalled();
 
@@ -2507,22 +2476,14 @@ describe("doctor health contributions", () => {
         requirement: "legacy-cron-store",
       },
     ]);
-    await expect(
-      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/legacy-cron-store"] }),
-    ).resolves.toMatchObject({
-      checksRun: 1,
-      checksSkipped: 0,
-      findings: [expect.objectContaining({ checkId: "core/doctor/legacy-cron-store" })],
-    });
+    await expectOptInLintFindings(ctx, "core/doctor/legacy-cron-store", [
+      expect.objectContaining({ checkId: "core/doctor/legacy-cron-store" }),
+    ]);
     expect(mocks.collectLegacyCronStoreHealthFindings).toHaveBeenCalledWith({ cfg: ctx.cfg });
   });
 
   it("keeps legacy WhatsApp crontab opt-in for default lint selection", async () => {
-    const crontabCheck = await requireDoctorHealthCheck("core/doctor/legacy-whatsapp-crontab");
-    expect(crontabCheck).toMatchObject({ defaultEnabled: false });
-
     const ctx = createDoctorLintFixture();
-    const checks = [crontabCheck!];
 
     expect(mocks.collectLegacyWhatsAppCrontabHealthWarning).not.toHaveBeenCalled();
 
@@ -2530,46 +2491,31 @@ describe("doctor health contributions", () => {
       "Legacy WhatsApp crontab health check detected.\nRemove the stale crontab entry.",
     );
 
-    await expect(
-      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/legacy-whatsapp-crontab"] }),
-    ).resolves.toMatchObject({
-      checksRun: 1,
-      checksSkipped: 0,
-      findings: [
-        expect.objectContaining({
-          checkId: "core/doctor/legacy-whatsapp-crontab",
-          severity: "warning",
-        }),
-      ],
-    });
+    await expectOptInLintFindings(ctx, "core/doctor/legacy-whatsapp-crontab", [
+      expect.objectContaining({
+        checkId: "core/doctor/legacy-whatsapp-crontab",
+        severity: "warning",
+      }),
+    ]);
     expect(mocks.collectLegacyWhatsAppCrontabHealthWarning).toHaveBeenCalledTimes(1);
   });
 
   it("keeps channel plugin blockers opt-in for default lint selection", async () => {
-    const blockerCheck = await requireDoctorHealthCheck("core/doctor/channel-plugin-blockers");
-    expect(blockerCheck).toMatchObject({ defaultEnabled: false });
     mocks.scanConfiguredChannelPluginBlockers.mockReturnValue([
       { channelId: "discord", pluginId: "discord", reason: "missing explicit enablement" },
     ]);
 
     const ctx = createDoctorLintFixture({ channels: { discord: { enabled: true } } });
-    const checks = [blockerCheck!];
 
     expect(mocks.scanConfiguredChannelPluginBlockers).not.toHaveBeenCalled();
 
-    await expect(
-      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/channel-plugin-blockers"] }),
-    ).resolves.toMatchObject({
-      checksRun: 1,
-      checksSkipped: 0,
-      findings: [
-        expect.objectContaining({
-          checkId: "core/doctor/channel-plugin-blockers",
-          path: "channels.discord",
-          target: "discord",
-        }),
-      ],
-    });
+    await expectOptInLintFindings(ctx, "core/doctor/channel-plugin-blockers", [
+      expect.objectContaining({
+        checkId: "core/doctor/channel-plugin-blockers",
+        path: "channels.discord",
+        target: "discord",
+      }),
+    ]);
     expect(mocks.scanConfiguredChannelPluginBlockers).toHaveBeenCalledWith(ctx.cfg, process.env);
   });
 
@@ -2620,10 +2566,6 @@ describe("doctor health contributions", () => {
       "core/doctor/channel-plugin-blockers",
       "core/doctor/channel-preview-warnings",
     ]);
-    const previewWarningsCheck = contribution.healthChecks.find(
-      (check) => check.id === "core/doctor/channel-preview-warnings",
-    ) as HealthCheck | undefined;
-    expect(previewWarningsCheck).toMatchObject({ defaultEnabled: false });
     mocks.collectChannelPreviewWarningHealthFindings.mockResolvedValue([
       {
         checkId: "core/doctor/channel-preview-warnings",
@@ -2634,22 +2576,15 @@ describe("doctor health contributions", () => {
     ]);
 
     const ctx = createDoctorLintFixture({ channels: { matrix: { enabled: true } } });
-    const checks = [previewWarningsCheck!];
 
     expect(mocks.collectChannelPreviewWarningHealthFindings).not.toHaveBeenCalled();
 
-    await expect(
-      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/channel-preview-warnings"] }),
-    ).resolves.toMatchObject({
-      checksRun: 1,
-      checksSkipped: 0,
-      findings: [
-        expect.objectContaining({
-          checkId: "core/doctor/channel-preview-warnings",
-          path: "channels.matrix",
-        }),
-      ],
-    });
+    await expectOptInLintFindings(ctx, "core/doctor/channel-preview-warnings", [
+      expect.objectContaining({
+        checkId: "core/doctor/channel-preview-warnings",
+        path: "channels.matrix",
+      }),
+    ]);
     expect(mocks.collectChannelPreviewWarningHealthFindings).toHaveBeenCalledWith({
       cfg: ctx.cfg,
       allowExec: false,
@@ -2912,8 +2847,11 @@ describe("doctor health contributions", () => {
       });
     }
 
-    it("reports Nix immutable config mode when selected", async () => {
-      vi.stubEnv("OPENCLAW_NIX_MODE", "1");
+    it.each([
+      ["Nix", "OPENCLAW_NIX_MODE", "OpenClaw is running in Nix mode"],
+      ["externally managed", "OPENCLAW_CONFIG_READONLY", "config is externally managed"],
+    ])("reports %s immutable config mode when selected", async (_label, envName, reason) => {
+      vi.stubEnv(envName, "1");
 
       await expect(lintWriteConfig("/tmp/fake-openclaw.json")).resolves.toMatchObject({
         checksRun: 1,
@@ -2921,24 +2859,7 @@ describe("doctor health contributions", () => {
         findings: [
           expect.objectContaining({
             checkId: "core/doctor/write-config",
-            message: "Doctor config writes are disabled because OpenClaw is running in Nix mode.",
-            path: "/tmp/fake-openclaw.json",
-            requirement: "mutable-config-write-path",
-          }),
-        ],
-      });
-    });
-
-    it("reports externally managed immutable config mode when selected", async () => {
-      vi.stubEnv("OPENCLAW_CONFIG_READONLY", "1");
-
-      await expect(lintWriteConfig("/tmp/fake-openclaw.json")).resolves.toMatchObject({
-        checksRun: 1,
-        checksSkipped: 0,
-        findings: [
-          expect.objectContaining({
-            checkId: "core/doctor/write-config",
-            message: "Doctor config writes are disabled because config is externally managed.",
+            message: `Doctor config writes are disabled because ${reason}.`,
             path: "/tmp/fake-openclaw.json",
             requirement: "mutable-config-write-path",
           }),

@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { registerPreparedModelRuntimePublicationListener } from "../agents/prepared-model-runtime.publication-events.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { readPreparedGatewaySessionRowPolicy } from "./server-model-catalog-view.js";
 import type { Inputs } from "./session-row-projection-record.js";
 
@@ -47,16 +48,20 @@ export function createSessionRowProjectionCatalog(params: {
   let catalogDirty = Boolean(params.getModelCatalog);
   let pending: Promise<void> | undefined;
   let replacement: Promise<void> | undefined;
-  let disposed = false;
+  let runtimeInvalidated = false;
+  const lifecycle = new AbortController();
   const unsubscribe = registerPreparedModelRuntimePublicationListener((event) => {
     if (event.phase === "catalog-status") {
       return;
+    }
+    if (event.phase === "invalidated" && (event.replacement || event.modelFactsChanged !== false)) {
+      runtimeInvalidated = true;
     }
     if (event.phase === "invalidated" && event.replacement) {
       replacement = event.replacement;
       const settled = () => {
         // A superseded reload must not release its successor's catalog gate.
-        if (!disposed && replacement === event.replacement) {
+        if (!lifecycle.signal.aborted && replacement === event.replacement) {
           replacement = undefined;
           params.onInvalidated();
         }
@@ -75,15 +80,33 @@ export function createSessionRowProjectionCatalog(params: {
     }
     params.onInvalidated();
   });
-  return {
+  const catalog = {
     get current() {
       return modelCatalog;
     },
     get isRefreshing() {
-      return !disposed && pending !== undefined;
+      return !lifecycle.signal.aborted && pending !== undefined;
     },
     get needsInitialRead() {
       return catalogDirty && modelCatalog === undefined;
+    },
+    get needsCurrentRead() {
+      return Boolean(params.getModelCatalog) && runtimeInvalidated;
+    },
+    async prepareCurrent(abortSignal?: AbortSignal): Promise<void> {
+      const signal = abortSignal
+        ? AbortSignal.any([abortSignal, lifecycle.signal])
+        : lifecycle.signal;
+      signal.throwIfAborted();
+      do {
+        signal.throwIfAborted();
+        if (replacement) {
+          await racePromiseWithAbortSignal(replacement, signal);
+          continue;
+        }
+        await racePromiseWithAbortSignal(() => catalog.refresh(), signal);
+      } while (catalog.needsCurrentRead);
+      signal.throwIfAborted();
     },
     invalidate() {
       if (params.getModelCatalog) {
@@ -91,7 +114,11 @@ export function createSessionRowProjectionCatalog(params: {
       }
     },
     refresh() {
-      if (disposed || !catalogDirty || (replacement && modelCatalog !== undefined)) {
+      if (
+        lifecycle.signal.aborted ||
+        !catalogDirty ||
+        (replacement && modelCatalog !== undefined)
+      ) {
         return Promise.resolve();
       }
       if (pending) {
@@ -100,13 +127,14 @@ export function createSessionRowProjectionCatalog(params: {
       const work = (async () => {
         const next = await params.getModelCatalog?.();
         // Replacement can begin while the catalog read yields.
-        if (disposed || (replacement && modelCatalog !== undefined)) {
+        if (lifecycle.signal.aborted || (replacement && modelCatalog !== undefined)) {
           return;
         }
         // A concurrent catalog change is adopted by the next publication.
         const changed = changedModelAgents(modelCatalog, next);
         modelCatalog = next;
         catalogDirty = false;
+        runtimeInvalidated = false;
         params.onRefreshed(changed);
       })().finally(() => {
         pending = undefined;
@@ -116,8 +144,9 @@ export function createSessionRowProjectionCatalog(params: {
       return work;
     },
     dispose() {
-      disposed = true;
+      lifecycle.abort(new Error("Session row projection is no longer active"));
       unsubscribe();
     },
   };
+  return catalog;
 }

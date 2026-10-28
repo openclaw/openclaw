@@ -1,3 +1,4 @@
+import { createHook } from "node:async_hooks";
 import { describe, expect, it } from "vitest";
 import {
   blockEvent,
@@ -308,6 +309,38 @@ const fixtures: ParityFixture[] = [
 ];
 
 describe("Responses stream processor parity fixtures", () => {
+  // Bun does not emit async_hooks PROMISE events; this budget measures Node/V8.
+  it.skipIf(Boolean(process.versions.bun))(
+    "keeps bookkeeping events within the stream promise budget",
+    async () => {
+      const count = 1_000;
+      const events = Array.from({ length: count }, () => ({
+        type: "response.in_progress",
+        response: { id: "resp" },
+      }));
+      let promises = 0;
+      const hook = createHook({
+        init(_id, type) {
+          if (type === "PROMISE") {
+            promises++;
+          }
+        },
+      });
+      hook.enable();
+      try {
+        const result = await runFixture([...events, completed("resp")]);
+        expect(result.error).toBeNull();
+        expect(result.responseId).toBe("resp");
+        // Includes the fixture source and cooperative scheduling. A redundant
+        // adaptation iterator adds four promises per event (about 13,000 total).
+        expect(promises).toBeGreaterThan(count);
+        expect(promises).toBeLessThan(count * 11);
+      } finally {
+        hook.disable();
+      }
+    },
+  );
+
   it.each(fixtures)("$name", async (fixture) => {
     expect(await runFixture(fixture.events)).toEqual(fixture.canonical);
   });

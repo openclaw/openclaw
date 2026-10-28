@@ -110,61 +110,54 @@ it("registers session participant inspection and native facepile links through t
   expect(controls.read()).toEqual([]);
 });
 
-it("retires a payload-replaced Copy button without keeping its old control registered", () => {
-  const [text, setText] = createSignal("first");
-  const view = mount(() => (
-    <CopyButton ref={createHovercardControlRef()} text={text()} idleLabel="Copy value" />
-  ));
-  const original = view.getByRole("button", { name: "Copy value" });
-  expect(controls.read()).toEqual([original]);
-
-  setText("second");
-  flush();
-  const replacement = view.getByRole("button", { name: "Copy value" });
-  expect(replacement).not.toBe(original);
-  // A detached old control must be released, rather than merely filtered out.
-  container.append(original);
-  expect(controls.read()).toEqual([replacement]);
-
-  view.unmount();
-  container.append(replacement);
-  expect(controls.read()).toEqual([]);
-});
-
-it("reads current session Markdown and retires removed islands independently per card", () => {
+it.each(["copy", "markdown"] as const)("retires replaced %s controls and their owner", (kind) => {
   const other = controlsForHovercard(document.createElement("div"));
-  const [markdown, setMarkdown] = createSignal("[Old](#old)");
+  const [value, setValue] = createSignal("Old");
   const view = mount(() => (
     <>
       <button>Outside island</button>
-      <SessionHovercard
-        progressCard={{
-          sessionKey: "agent:main:hovercard-test",
-          revision: 1,
-          updatedAt: 1,
-          markdown: markdown(),
-        }}
-      />
+      {kind === "copy" ? (
+        <CopyButton ref={createHovercardControlRef()} text={value()} idleLabel="Copy value" />
+      ) : (
+        <SessionHovercard
+          progressCard={{
+            sessionKey: "agent:main:hovercard-test",
+            revision: 1,
+            updatedAt: 1,
+            markdown: value() ? `[${value()}](#link)` : "",
+          }}
+        />
+      )}
     </>
   ));
+  const findControl = (label: string) =>
+    view.getByRole(kind === "copy" ? "button" : "link", {
+      name: kind === "copy" ? "Copy value" : label,
+    });
+  const original = findControl("Old");
   expect(controlsForHovercard(container)).toBe(controls);
-  expect(labels()).toEqual(["Old"]);
-
-  setMarkdown("[New](#new)");
+  expect(controls.read()).toEqual([original]);
+  setValue("New");
   flush();
-  expect(labels()).toEqual(["New"]);
+  const replacement = findControl("New");
+  if (kind === "copy") {
+    expect(replacement).not.toBe(original);
+    // Reattach retired nodes so disconnected-node filtering cannot hide leaked registrations.
+    container.append(original);
+  }
+  expect(controls.read()).toEqual([replacement]);
   expect(other.read()).toEqual([]);
-  const retired = controls.read()[0]!;
-  setMarkdown("");
-  flush();
-  container.append(retired);
-  expect(controls.read()).toEqual([]);
-
-  setMarkdown("[Current](#current)");
-  flush();
-  const current = view.getByRole("link", { name: "Current" });
-  expect(controls.read()).toEqual([current]);
+  if (kind === "markdown") {
+    setValue("");
+    flush();
+    container.append(replacement);
+    expect(controls.read()).toEqual([]);
+    setValue("Current");
+    flush();
+    expect(controls.read()).toEqual([findControl("Current")]);
+  }
+  const last = kind === "copy" ? replacement : findControl("Current");
   view.unmount();
-  container.append(current);
+  container.append(last);
   expect(controls.read()).toEqual([]);
 });

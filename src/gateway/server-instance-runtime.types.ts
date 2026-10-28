@@ -43,6 +43,8 @@ export type GatewayInstanceAgentDispatchOptions = {
   /** Keep runtime error payloads (timeouts, provider failures) out of the delivered reply. */
   internalDeliverySuppressErrors?: boolean;
   onAccepted?: (payload: unknown) => void;
+  /** The reserved recovery input committed into the ordinary reply owner atomically. */
+  onRecoveryInputTransferred?: () => void;
   onStartOwner?: (owner: AgentTurnStartOwner) => void;
   onExecutionStarted?: () => void;
   onSignalAbort?: () => Promise<void> | void;
@@ -75,6 +77,11 @@ export type GatewayRecoveryTypingParams = {
 };
 
 export type GatewayRecoveryRuntime = {
+  prepareFailedWorkerPlacement: (target: {
+    sessionId: string;
+    sessionKey: string;
+    agentId: string;
+  }) => Promise<{ reason: string; isCurrent: () => boolean; release: () => void } | undefined>;
   resumeChatInput: (
     target: import("./chat-input-recovery-source.js").ChatInputRecoveryTarget,
     options: {

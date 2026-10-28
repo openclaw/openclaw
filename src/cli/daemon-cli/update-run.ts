@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "../../infra/errors.js";
 import { refreshUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
+import { sendUpdateResultTelemetry } from "../../infra/update-result-telemetry.js";
 import type { UpdateRunLedgerOptions } from "../../infra/update-run-codec.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { finishUpdateRun as finishLedgerRun } from "../../infra/update-run-write.js";
@@ -10,7 +11,12 @@ export async function finishDaemonUpdateRun(
   result: Parameters<typeof finishLedgerRun>[1],
   options: UpdateRunLedgerOptions = {},
 ): Promise<UpdateRunRecord> {
-  const run = finishLedgerRun(runId, result, options);
+  const run = finishLedgerRun(
+    runId,
+    result,
+    options,
+    (payload) => void sendUpdateResultTelemetry(payload, { env: options.env }),
+  );
   try {
     await refreshUpdateRunReportArtifact(run, options);
   } catch (error) {

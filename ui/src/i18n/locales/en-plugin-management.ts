@@ -18,7 +18,6 @@ const enPluginManagement = {
     dashboardEmpty: "This session has no dashboard widgets yet.",
     customPluginsDisabled: en.pluginUi.customPluginsDisabled,
     customPluginsEnableHint: en.pluginUi.customPluginsEnableHint,
-    openLabs: en.pluginUi.openLabs,
     surface: {
       "session-list": "Session list",
       composer: "Composer",
@@ -31,6 +30,7 @@ const enPluginManagement = {
     clawhub: {
       retryStatus: "Status unavailable · Retry",
       viewDetails: "View details",
+      signIn: "Sign in",
     },
   },
   custodian: {
@@ -136,6 +136,21 @@ const enPluginManagement = {
     },
   },
   pluginsPage: {
+    installTrust: {
+      title: "Plugin code",
+      description:
+        "Plugins can run code inside the Gateway. If a plugin includes native web UI, that code also runs in the OpenClaw web app with the signed-in user’s Gateway permissions. Only install plugins you trust.",
+    },
+    bundleTrust: {
+      title: "Bundle contents",
+      description:
+        "Bundles can add content and configure tools, hooks, or external services. Only install bundles you trust.",
+    },
+    nativeUi: {
+      title: "Includes native web UI",
+      description:
+        "This plugin runs code in the OpenClaw web app. It can read and modify the app’s interface and use the Gateway permissions of the signed-in user. Only enable plugins you trust.",
+    },
     compatibilityDeprecatedDated:
       "Uses OpenClaw APIs that retire on {date}. It keeps working until then; check for a plugin update.",
     compatibilityDeprecatedUndated:
@@ -338,12 +353,12 @@ const enPluginManagement = {
       configured: "Configured",
       editAccount: "Edit {name} connection",
       editCredential: "Edit {name}",
-      connectAccount: "Connect {name}",
+      connectAccount: "Sign in to {name}",
       configure: "Configure",
       configureCredential: "Configure {name}",
-      connect: "Connect",
-      requestFailed: "Sign-in did not finish. Try connecting again.",
-      sessionExpired: "This sign-in session expired. Try connecting again.",
+      connect: "Sign in",
+      requestFailed: "Sign-in did not finish. Try signing in again.",
+      sessionExpired: "This sign-in session expired. Try signing in again.",
     },
     toggleNamed: "Enable or disable {name}",
     schemaUnavailable: "Plugin settings schema is unavailable.",

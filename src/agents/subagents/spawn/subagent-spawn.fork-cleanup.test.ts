@@ -218,7 +218,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     const runtime = await import("./subagent-spawn.runtime.js");
     const resolveTarget = runtime.resolveGatewaySessionStoreTargetInWorker;
     let provisional: { sessionKey: string; entry: SessionEntry } | undefined;
-    const selected = vi
+    using _ = vi
       .spyOn(runtime, "resolveGatewaySessionStoreTargetInWorker")
       .mockImplementation(async (params) => {
         const child = children().find(({ sessionKey }) => sessionKey !== parentKey);
@@ -228,17 +228,14 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
         }
         return await resolveTarget(params);
       });
-    try {
-      await spawn({ task: "inspect parent history", context: "fork" }).catch(() => undefined);
 
-      const created = expectDefined(provisional, "committed provisional child");
-      expect(read(created.sessionKey)).toBeUndefined();
-      expect(fork).not.toHaveBeenCalled();
-      expectNotLaunched();
-      expect(read()).toMatchObject({ sessionId: parentId, lifecycleRevision: "parent-revision" });
-    } finally {
-      selected.mockRestore();
-    }
+    await spawn({ task: "inspect parent history", context: "fork" }).catch(() => undefined);
+
+    const created = expectDefined(provisional, "committed provisional child");
+    expect(read(created.sessionKey)).toBeUndefined();
+    expect(fork).not.toHaveBeenCalled();
+    expectNotLaunched();
+    expect(read()).toMatchObject({ sessionId: parentId, lifecycleRevision: "parent-revision" });
   });
 
   it("refuses an oversized fork when its created child disappears before preparation", async () => {

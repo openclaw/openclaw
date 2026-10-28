@@ -1,44 +1,29 @@
 import { expect, it, vi } from "vitest";
 import { observeCronJobCommits } from "../../test/helpers/cron/runtime-mutation.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { CronServiceState } from "../cron/service/state.js";
 import { onTimer as onCronTimer } from "../cron/service/timer.test-support.js";
 import { loadCronStore } from "../cron/store.js";
 import { cronStoreKey } from "../cron/store/key.js";
-import type { CronJobCreate } from "../cron/types.js";
-import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
-import type { buildGatewayCronService } from "./server-cron.js";
+import type { registerGatewayCronContextTests } from "./server-cron.context.test-support.js";
 
 const idleState = { queuedAtMs: undefined, runningAtMs: undefined, runningReceiptId: undefined };
 
-type CronFixture = ReturnType<typeof buildGatewayCronService>;
-type GatewayCronQueueTestHarness = {
-  createCronConfig: (name: string) => OpenClawConfig;
-  loadCronService: (
-    cfg: OpenClawConfig,
-    overrides?: { scheduler?: GatewayScheduler },
-  ) => CronFixture;
-  withCronService: (
-    cfg: OpenClawConfig,
-    run: (service: CronFixture) => Promise<void>,
-  ) => Promise<void>;
-  getCronState: (service: CronFixture) => CronServiceState;
-  addAgentTurnJob: (
-    service: CronFixture,
-    name: string,
-    message: string,
-    overrides?: Partial<Omit<CronJobCreate, "name" | "payload">>,
-  ) => ReturnType<CronFixture["cron"]["add"]>;
-  loadConfigMock: { mockReturnValue: (cfg: OpenClawConfig) => unknown };
-  runCronIsolatedAgentTurnMock: (params: {
-    abortSignal?: AbortSignal;
-  }) => Promise<{ status: "ok"; summary: string }>;
+type ContextHarness = Parameters<typeof registerGatewayCronContextTests>[0];
+type GatewayCronQueueTestHarness = Pick<
+  ContextHarness,
+  | "createCronConfig"
+  | "withCronService"
+  | "getCronState"
+  | "addAgentTurnJob"
+  | "loadConfigMock"
+  | "runCronIsolatedAgentTurnMock"
+> & {
+  loadCronService: ContextHarness["createCronService"];
   expectIsolatedRunFields: (fields: Record<string, unknown>) => unknown;
 };
 
@@ -49,7 +34,7 @@ export function registerGatewayCronQueueTests(h: GatewayCronQueueTestHarness) {
     const reloadedCfg = {
       ...startupCfg,
       agents: { ...startupCfg.agents, entries: { main: {} } },
-    } as OpenClawConfig;
+    };
     await h.withCronService(startupCfg, async (state) => {
       const job = await h.addAgentTurnJob(state, "isolated-subagent-workspace", "read SOW.md", {
         agentId: "yinze",
@@ -79,6 +64,7 @@ export function registerGatewayCronQueueTests(h: GatewayCronQueueTestHarness) {
   it("retries due work after scheduled claim and activation roll back together", async ({
     signal,
   }) => {
+    using cleanup = new DisposableStack();
     vi.useFakeTimers();
     const now = Date.parse("2026-08-13T18:15:00.000Z");
     vi.setSystemTime(now);
@@ -86,26 +72,32 @@ export function registerGatewayCronQueueTests(h: GatewayCronQueueTestHarness) {
     const cfg = h.createCronConfig("server-cron-activation-write-failure");
     const state = h.loadCronService(cfg, { scheduler: createTestGatewayScheduler(clock.clock) });
     const cronState = h.getCronState(state);
-    try {
-      const database = openOpenClawStateDatabase().db;
-      try {
-        await state.cron.start();
-        const job = await h.addAgentTurnJob(state, "activation-failure", "run it", {
-          agentId: "main",
-          deleteAfterRun: false,
-          delivery: { mode: "none" },
-          schedule: { kind: "cron", expr: "* * * * *", staggerMs: 0 },
-        });
-        const storeKey = cronStoreKey(cronState.deps.storePath);
-        const receipts = () =>
-          database
-            .prepare(
-              "SELECT receipt_id, status FROM cron_run_receipts WHERE store_key = ? AND job_id = ? ORDER BY receipt_id",
-            )
-            .all(storeKey, job.id);
-        expect(receipts()).toEqual([]);
-        // The scheduler commits the receipt and running state together.
-        database.exec(`
+    const database = openOpenClawStateDatabase().db;
+    cleanup.defer(() => {
+      state.cron.stop();
+      vi.useRealTimers();
+    });
+    cleanup.defer(() => database.exec("DROP TRIGGER IF EXISTS fail_gateway_cron_activation"));
+    await state.cron.start();
+    const job = await h.addAgentTurnJob(state, "activation-failure", "run it", {
+      agentId: "main",
+      deleteAfterRun: false,
+      delivery: { mode: "none" },
+      schedule: { kind: "cron", expr: "* * * * *", staggerMs: 0 },
+    });
+    const storeKey = cronStoreKey(cronState.deps.storePath);
+    const readState = async () =>
+      (await loadCronStore(cronState.deps.storePath)).jobs.find((entry) => entry.id === job.id)
+        ?.state;
+    const receipts = () =>
+      database
+        .prepare(
+          "SELECT receipt_id, status FROM cron_run_receipts WHERE store_key = ? AND job_id = ? ORDER BY receipt_id",
+        )
+        .all(storeKey, job.id);
+    expect(receipts()).toEqual([]);
+    // The scheduler commits the receipt and running state together.
+    database.exec(`
           CREATE TRIGGER fail_gateway_cron_activation
           AFTER UPDATE OF state_json ON cron_jobs
           WHEN NEW.store_key = '${storeKey.replaceAll("'", "''")}'
@@ -116,57 +108,38 @@ export function registerGatewayCronQueueTests(h: GatewayCronQueueTestHarness) {
             SELECT RAISE(ABORT, 'injected scheduled activation failure');
           END;
         `);
-        vi.setSystemTime(now + 60_000);
-        clock.setTime(Date.now());
-        await expect(onCronTimer(cronState)).rejects.toThrow(
-          "injected scheduled activation failure",
-        );
-        expect(receipts()).toEqual([]);
-        const afterFailure = (await loadCronStore(cronState.deps.storePath)).jobs.find(
-          (entry) => entry.id === job.id,
-        );
-        expect({ ...idleState, ...afterFailure?.state }).toMatchObject({
-          ...idleState,
-          nextRunAtMs: now + 60_000,
-        });
-        expect(h.runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
-        database.exec("DROP TRIGGER fail_gateway_cron_activation");
+    vi.setSystemTime(now + 60_000);
+    clock.setTime(Date.now());
+    await expect(onCronTimer(cronState)).rejects.toThrow("injected scheduled activation failure");
+    expect(receipts()).toEqual([]);
+    expect({ ...idleState, ...(await readState()) }).toMatchObject({
+      ...idleState,
+      nextRunAtMs: now + 60_000,
+    });
+    expect(h.runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
+    database.exec("DROP TRIGGER fail_gateway_cron_activation");
 
-        const completed = createDeferred();
-        const stopObserving = observeCronJobCommits(job.id, (runtime) => {
-          if (runtime.queuedAtMs === undefined && runtime.runningAtMs === undefined) {
-            completed.resolve();
-          }
-        });
-        try {
-          vi.setSystemTime(now + 120_000);
-          clock.setTime(Date.now());
-          await onCronTimer(cronState);
-          await withinTest(completed.promise, signal);
-        } finally {
-          stopObserving();
-        }
-        expect(h.runCronIsolatedAgentTurnMock).toHaveBeenCalledOnce();
-        h.expectIsolatedRunFields({ job: expect.objectContaining({ id: job.id }) });
-        const afterTick = (await loadCronStore(cronState.deps.storePath)).jobs.find(
-          (entry) => entry.id === job.id,
-        );
-        expect({
-          queuedAtMs: undefined,
-          runningAtMs: undefined,
-          ...afterTick?.state,
-        }).toMatchObject({
-          lastRunStatus: "ok",
-          queuedAtMs: undefined,
-          runningAtMs: undefined,
-        });
-        expect(receipts()).toEqual([expect.objectContaining({ status: "ok" })]);
-      } finally {
-        database.exec("DROP TRIGGER IF EXISTS fail_gateway_cron_activation");
+    const completed = createDeferred();
+    const stopObserving = observeCronJobCommits(job.id, (runtime) => {
+      if (runtime.queuedAtMs === undefined && runtime.runningAtMs === undefined) {
+        completed.resolve();
       }
+    });
+    try {
+      vi.setSystemTime(now + 120_000);
+      clock.setTime(Date.now());
+      await onCronTimer(cronState);
+      await withinTest(completed.promise, signal);
     } finally {
-      state.cron.stop();
-      vi.useRealTimers();
+      stopObserving();
     }
+    expect(h.runCronIsolatedAgentTurnMock).toHaveBeenCalledOnce();
+    h.expectIsolatedRunFields({ job: expect.objectContaining({ id: job.id }) });
+    expect({ ...idleState, ...(await readState()) }).toMatchObject({
+      lastRunStatus: "ok",
+      queuedAtMs: undefined,
+      runningAtMs: undefined,
+    });
+    expect(receipts()).toEqual([expect.objectContaining({ status: "ok" })]);
   });
 }

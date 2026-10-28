@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { resolveBootstrapContextForRun } from "../agents/bootstrap-files.js";
 import * as worktreeGit from "../agents/worktrees/git.js";
 import { requireGit } from "../agents/worktrees/git.js";
@@ -10,6 +11,9 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import bootstrapExtraFilesHook from "../hooks/bundled/bootstrap-extra-files/handler.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
+import * as backoff from "../infra/backoff.js";
+import { withProjectCheckoutLifecycle } from "../projects/project-checkout.js";
+import { registerProjectRegistry } from "../projects/project-registry.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createRequestGate } from "./server-methods.request-gate.test-support.js";
 import { prepareSessionWorktree } from "./session-worktree-preparation.js";
@@ -97,14 +101,15 @@ it.each([
     if (hookEvent) {
       registerInternalHook(hookEvent, bootstrapExtraFilesHook);
     }
+    const target = {
+      agentId: "main",
+      key: "agent:main:sandbox-worktree",
+      storePath: path.join(state.sessionsDir(), "sessions.sqlite"),
+      sandboxRequired,
+    };
     const preparing = prepareSessionWorktree({
       cfg,
-      target: {
-        agentId: "main",
-        key: "agent:main:sandbox-worktree",
-        storePath: path.join(state.sessionsDir(), "sessions.sqlite"),
-        sandboxRequired,
-      },
+      target,
       workspace,
       baseRef: "HEAD",
       runSetupScript: false,
@@ -147,10 +152,7 @@ it.each([
         const reused = await prepareSessionWorktree({
           cfg,
           target: {
-            agentId: "main",
-            key: "agent:main:sandbox-worktree",
-            storePath: path.join(state.sessionsDir(), "sessions.sqlite"),
-            sandboxRequired,
+            ...target,
             entry: {
               sessionId: "workspace-reuse",
               updatedAt: 1,
@@ -186,3 +188,132 @@ it.each([
     }
   }),
 );
+
+it("shares source waiting through preparation and final binding without charging protected work", async ({
+  signal,
+}) => {
+  await withOpenClawTestState({ label: "worktree-source-wait-budget" }, async (state) => {
+    const workspace = state.workspaceDir;
+    await requireGit(workspace, ["init", "-b", "main"]);
+    await requireGit(workspace, ["config", "user.name", "Workspace Fixture"]);
+    await requireGit(workspace, ["config", "user.email", "fixture@example.invalid"]);
+    await fs.writeFile(path.join(workspace, "README.md"), "Preserved workspace.\n");
+    await requireGit(workspace, ["add", "README.md"]);
+    await requireGit(workspace, ["commit", "-qm", "source wait fixture"]);
+    const project = await registerProjectRegistry({ path: workspace });
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { workspace } },
+      worktreeAcceleration: false,
+    };
+    setRuntimeConfigSnapshot(cfg);
+
+    const holders: Array<{ release: () => void; settled: Promise<void> }> = [];
+    let waiting: { elapsedMs: number; advanced: boolean; release: () => Promise<void> } | undefined;
+    const holdSource = async (elapsedMs: number) => {
+      const gate = createRequestGate();
+      const settled = withProjectCheckoutLifecycle(project.repoRoot, {}, gate.pause);
+      holders.push({ release: gate.release, settled });
+      await withinTest(
+        awaitGateBeforeSettlement(gate.entered, settled, "Source holder did not acquire custody"),
+        signal,
+      );
+      const release = async () => {
+        gate.release();
+        await settled;
+      };
+      waiting = { elapsedMs, advanced: false, release };
+      return release;
+    };
+    let clock = 0;
+    const clockSpy = vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const sleep = backoff.sleepWithAbort;
+    const sleepSpy = vi.spyOn(backoff, "sleepWithAbort").mockImplementation(async (...args) => {
+      const held = waiting;
+      if (!held) {
+        return sleep(...args);
+      }
+      if (!held.advanced) {
+        held.advanced = true;
+        clock += held.elapsedMs;
+        return;
+      }
+      // The actual acquisition loop must remain pending after observing the elapsed wait.
+      waiting = undefined;
+      await held.release();
+    });
+    const waitBudget = { remainingMs: 90_000 };
+    let prepared: Awaited<ReturnType<typeof prepareSessionWorktree>> | undefined;
+    try {
+      await holdSource(31_000);
+      prepared = await withinTest(
+        prepareSessionWorktree({
+          cfg,
+          target: {
+            agentId: "main",
+            key: "agent:main:source-wait-budget",
+            storePath: path.join(state.sessionsDir(), "sessions.sqlite"),
+            projectId: project.id,
+            sandboxRequired: true,
+          },
+          workspace,
+          name: "source-wait-budget",
+          baseRef: "HEAD",
+          runSetupScript: false,
+          signal,
+          waitBudget,
+        }),
+        signal,
+      );
+      assert(prepared.ok, JSON.stringify(prepared));
+      const { worktree, spawnedCwd, withCommit } = prepared.value;
+      assert(worktree && spawnedCwd && withCommit, "Expected a source-bound completed checkout");
+      expect(waitBudget.remainingMs).toBe(59_000);
+
+      await holdSource(31_000);
+      expect(
+        await withinTest(
+          withCommit(async (assertCurrent) => {
+            assertCurrent();
+            clock += 120_000;
+            return fs.readFile(path.join(spawnedCwd, "README.md"), "utf8");
+          }),
+          signal,
+        ),
+      ).toBe("Preserved workspace.\n");
+      expect(waitBudget.remainingMs).toBe(28_000);
+
+      const release = await holdSource(28_001);
+      const commit = vi.fn(async () => "must not run while source is held");
+      await expect(withinTest(withCommit(commit), signal)).rejects.toThrow(
+        /timed out waiting for capacity or checkout custody/,
+      );
+      expect(commit).not.toHaveBeenCalled();
+      expect(waitBudget.remainingMs).toBe(0);
+      await release();
+      waiting = undefined;
+      expect(
+        await withCommit(async (assertCurrent) => {
+          assertCurrent();
+          return fs.readFile(path.join(spawnedCwd, "README.md"), "utf8");
+        }),
+      ).toBe("Preserved workspace.\n");
+      expect(getRegistryWorktree(process.env, worktree.id)).toMatchObject({
+        id: worktree.id,
+        path: spawnedCwd,
+        ownerId: "agent:main:source-wait-budget",
+      });
+      expect(waitBudget.remainingMs).toBe(0);
+    } finally {
+      waiting = undefined;
+      for (const holder of holders) {
+        holder.release();
+      }
+      await Promise.allSettled(holders.map((holder) => holder.settled));
+      sleepSpy.mockRestore();
+      clockSpy.mockRestore();
+      if (prepared?.ok) {
+        await prepared.value.rollback?.();
+      }
+    }
+  });
+});

@@ -15,6 +15,7 @@ import {
   isProviderVoiceTranscript,
   resolveAssistantReplyPhase,
 } from "../chat-assistant-reply.ts";
+import { isChatSendReconnecting } from "../chat-send-presentation.ts";
 import { readPendingSendStatus } from "../chat-thread-items.ts";
 import { hasForwardedSource } from "../chat-turn-boundary.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
@@ -47,15 +48,30 @@ export function prepareGroupMessage(
   const source = prepareChatMessageRender(item.message);
   // Run frames give actions to their answer only; unframed groups apply the same rule per message.
   const ownsActions =
-    normalizeRoleForGrouping(group.role) !== "assistant" ||
-    assistantMessageCanOwnTurnActions(item.message);
-  const details = resolveMessageActionDetails(source, {
+    item.presentationOwnsFooter !== false &&
+    (normalizeRoleForGrouping(group.role) !== "assistant" ||
+      assistantMessageCanOwnTurnActions(item.actionMessage ?? item.message));
+  const actionSource = item.actionMessage ? prepareChatMessageRender(item.actionMessage) : source;
+  // The original mixed envelope normalizes as a tool message, but a visible
+  // assistant part still targets the original assistant's action identity/text.
+  const actionPreparation =
+    item.actionMessage && group.role === "assistant"
+      ? {
+          ...actionSource,
+          normalizedMessage: { ...actionSource.normalizedMessage, role: "assistant" },
+        }
+      : actionSource;
+  const actionDetails = resolveMessageActionDetails(actionPreparation, {
     ...opts,
     onReply: ownsActions ? opts.onReply : undefined,
-    messageId: item.key,
+    messageId: item.actionKey ?? item.key,
     canFetchFullMessage: Boolean(opts.loadFullAssistantMessage && opts.sessionKey),
     senderLabel: resolveMessageGroupSenderLabel(group, opts),
   });
+  const details =
+    actionDetails && !ownsActions
+      ? { ...actionDetails, reactionMessageId: undefined }
+      : actionDetails;
   const fullMessage = details?.fullMessage;
   if (fullMessage) {
     const { messageId, state: expansion } = fullMessage;
@@ -179,12 +195,15 @@ export function prepareMessageGroupFrame(
   // no identity, footer or actions of their own, only the run-block gap.
   const isTurnBlock =
     normalizedRole === "tool" ||
-    group.messages.every(({ message }) => isProviderVoiceTranscript(message)) ||
+    (group.messages.length > 0 &&
+      (group.messages.every((message) => message.presentationOwnsFooter === false) ||
+        group.messages.every(({ message }) => isProviderVoiceTranscript(message)))) ||
     (normalizedRole === "assistant" &&
       !opts.searchResult &&
       !ownsRunFrame &&
       !isForwarded &&
-      resolveAssistantReplyPhase(group.messages[0]?.message) === "commentary");
+      resolveAssistantReplyPhase(group.messages[0]?.actionMessage ?? group.messages[0]?.message) ===
+        "commentary");
   const actionOwners = ownsRunFrame
     ? opts.frameActionOwner
       ? [opts.frameActionOwner]
@@ -198,15 +217,23 @@ export function prepareMessageGroupFrame(
   const hasUserFooterActions =
     normalizedRole === "user" &&
     ((opts.onRewind && !opts.rewindDisabled) || hasMessageActionButtons(footerActionDetails, opts));
-  // Source sessions share the stable sender hue machinery; CSS owns contrast
-  // in each theme. Unattributed local messages keep the accent skin.
+  // Source sessions share stable sender hues; the shared participant palette owns contrast
+  // in each theme. Own and unattributed messages keep the theme-derived accent skin.
   const senderHue =
     isForwarded && sourceSessionKey
       ? resolveIdentityHue({ id: sourceSessionKey })
-      : normalizedRole === "user" && group.sender
+      : normalizedRole === "user" && group.sender && !isOwnGroup
         ? resolveIdentityHue(group.sender)
         : null;
-  const sendStatus = readPendingSendStatus(group.messages.at(-1)?.message);
+  const pendingSend = readPendingSendStatus(group.messages.at(-1)?.message);
+  // Normal delivery uses the settled footer; only recovery needs an interruption.
+  const sendStatus =
+    pendingSend &&
+    (pendingSend.state === "failed" ||
+      pendingSend.state === "held" ||
+      isChatSendReconnecting(pendingSend.state, opts.connected))
+      ? pendingSend
+      : null;
 
   const inlineUserAvatar =
     normalizedRole === "user" &&
@@ -257,7 +284,7 @@ export function prepareMessageGroupFrame(
         "chat-group--reply": holdsReplyRow,
       },
     ],
-    style: senderHue === null ? undefined : `--chat-sender-hue: ${senderHue}`,
+    senderHue,
     sessionKey: sourceSessionKey ?? undefined,
   };
 }

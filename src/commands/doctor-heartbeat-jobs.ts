@@ -1,9 +1,11 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
-import { cronStoreKey } from "../cron/store/key.js";
+import { readDefaultProactiveJobReceiptInDatabase } from "../cron/proactive-job-receipt.kernel.js";
+import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
 import { loadCronRows, rowToCronJob } from "../cron/store/row-codec.js";
 import type { CronJobReadRow } from "../cron/store/schema.js";
+import { CronStoreSelectionRequiredError } from "../cron/store/selection-error.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 
@@ -72,8 +74,35 @@ export function readDoctorHeartbeatJobs(
 ): DoctorCronJob[] {
   return (
     withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) => decodeDoctorHeartbeatJobRows(loadCronRows(db, cronStoreKey(storePath))),
+      ({ db }) =>
+        decodeDoctorHeartbeatJobRows(
+          loadCronRows(db, resolveCronStoreKeyInDatabase(db, storePath, env)),
+        ),
       { env },
     ) ?? []
   );
+}
+
+export function readDoctorHeartbeatCutoverReceipt(
+  storePath: string,
+  agentId: string,
+  env: NodeJS.ProcessEnv,
+) {
+  try {
+    return withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) =>
+        readDefaultProactiveJobReceiptInDatabase(
+          db,
+          resolveCronStoreKeyInDatabase(db, storePath, env),
+          agentId,
+        ),
+      { env },
+    );
+  } catch (error) {
+    // Unresolved cron selection cannot prove completed cutover; source guards still apply.
+    if (error instanceof CronStoreSelectionRequiredError) {
+      return undefined;
+    }
+    throw error;
+  }
 }

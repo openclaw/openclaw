@@ -1,6 +1,6 @@
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it, vi } from "vitest";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS, DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./constants.js";
+import { heldAction } from "./pw-tools-core.guard-test-support.js";
 import * as harness from "./pw-tools-core.test-harness.js";
 
 harness.installPwToolsCoreTestHooks();
@@ -13,15 +13,15 @@ const target = { cdpUrl: "http://127.0.0.1:18792" };
 const session = harness.getPwToolsCoreSessionMocks();
 
 function installTextPage(
-  contents: Record<string, string[]>,
+  contents: Record<string, string>,
   overrides: { count?: () => Promise<number>; innerText?: () => Promise<string> } = {},
 ) {
   harness.setPwToolsCoreCurrentPage({
     locator: (selector: string) => ({
       first: () => ({
-        count: async () => (contents[selector]?.length ? 1 : 0),
+        count: async () => (selector in contents ? 1 : 0),
         innerText: async () =>
-          contents[selector]?.[0] ?? Promise.reject(new Error("Selector did not match an element")),
+          contents[selector] ?? Promise.reject(new Error("Selector did not match an element")),
         ...overrides,
       }),
     }),
@@ -30,21 +30,16 @@ function installTextPage(
 
 it.each(["cancel", "timeout"])("settles a stalled selector probe on %s", async (reason) => {
   vi.useFakeTimers();
-  const probe = createDeferred<number>();
-  const entered = createDeferred<void>();
+  const probe = heldAction<number>();
   const innerText = vi.fn(async () => "late text");
-  const count = () => {
-    entered.resolve();
-    return probe.promise;
-  };
-  installTextPage({}, { count, innerText });
+  installTextPage({}, { count: probe.run, innerText });
   const controller = new AbortController();
   const pending = readText({ ...target, signal: controller.signal });
   const rejected = expect(pending).rejects.toThrow(
     reason === "cancel" ? "cancel text" : /timed out/i,
   );
   try {
-    await entered.promise;
+    await probe.started;
     if (reason === "cancel") {
       controller.abort(new Error("cancel text"));
     } else {
@@ -61,10 +56,9 @@ it.each(["cancel", "timeout"])("settles a stalled selector probe on %s", async (
 });
 
 it.each([".excerpt", undefined])("extracts the first matching element (%s)", async (selector) => {
-  const contents: Record<string, string[]> = selector
-    ? { ".excerpt": ["Selected", "Not selected"], article: ["Article"], body: ["Body"] }
-    : { body: ["Body"] };
-  installTextPage(contents);
+  installTextPage(
+    selector ? { ".excerpt": "Selected", article: "Article", body: "Body" } : { body: "Body" },
+  );
   expect(await readText({ ...target, selector })).toEqual({
     text: selector ? "Selected" : "Body",
     truncated: false,
@@ -73,7 +67,7 @@ it.each([".excerpt", undefined])("extracts the first matching element (%s)", asy
 
 it("caps article text at the hard limit", async () => {
   const text = "x".repeat(DEFAULT_AI_SNAPSHOT_MAX_CHARS + 1);
-  installTextPage({ article: [text, "Second article"], main: ["Main"], body: ["Body"] });
+  installTextPage({ article: text, main: "Main", body: "Body" });
   expect(await readText({ ...target, maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS * 2 })).toEqual({
     text: text.slice(0, DEFAULT_AI_SNAPSHOT_MAX_CHARS),
     truncated: true,

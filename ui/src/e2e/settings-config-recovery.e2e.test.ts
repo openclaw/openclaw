@@ -149,9 +149,7 @@ suite.define(() => {
         const { raw } = saved.params as { raw: string };
         expect(JSON.parse(raw)).toEqual({ ...config, messages: { responsePrefix: finalDraft } });
         await gateway.resolveDeferred("config.set");
-        await expect
-          .poll(() => indicator.textContent())
-          .toContain(restored ? "Apply changes" : "Saved");
+        await expect.poll(() => indicator.textContent()).toContain("Apply changes");
         if (restored) {
           await page.reload();
           await expect.poll(() => prefix.inputValue()).toBe(finalDraft);

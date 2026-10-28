@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
+import kotlinx.coroutines.test.TestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -43,6 +44,7 @@ import org.robolectric.RuntimeEnvironment
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.ContinuationInterceptor
 
 @RunWith(RobolectricTestRunner::class)
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -58,6 +60,13 @@ class ChatControllerBranchCoordinationTest {
   @After
   fun tearDown() {
     controllerScopes.forEach { it.cancel() }
+    // Cancellation can leave Room work finishing on IO or queued on a test dispatcher.
+    controllerScopes.forEach { scope ->
+      val dispatcher = scope.coroutineContext[ContinuationInterceptor] as? TestDispatcher
+      runTest(dispatcher ?: StandardTestDispatcher()) {
+        requireNotNull(scope.coroutineContext[Job]).join()
+      }
+    }
     database.close()
   }
 

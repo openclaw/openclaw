@@ -3,7 +3,6 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
 import { readSessionEntryInstanceId } from "./session-accessor.sqlite-entry-identity.js";
 import {
   SessionReactionLimitError,
@@ -14,6 +13,7 @@ import type {
   SessionReactionWrite,
   SetSessionReactionParams,
 } from "./session-reaction-store.types.js";
+import { SessionWorkStartInvalidatedError } from "./work-start-error.js";
 
 export function setSessionReactionInDatabase(
   database: OpenClawAgentDatabase,

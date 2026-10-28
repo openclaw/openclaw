@@ -1,3 +1,4 @@
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { computeSandboxConfigHash } from "./config-hash.js";
 import { SANDBOX_DOCKER_CREATE_ARGS_EPOCH } from "./constants.js";
@@ -11,11 +12,7 @@ import {
   type SandboxContainerEngine,
   type SandboxContainerEngineTarget,
 } from "./container-engine.js";
-import {
-  containerState,
-  readContainerLabel,
-  recordedPodmanContainerState,
-} from "./container-inspect.js";
+import { containerState, recordedPodmanContainerState } from "./container-inspect.js";
 import {
   admitSandboxContainerSource,
   bindSandboxContainerSource,
@@ -66,11 +63,7 @@ export type {
   SandboxContainerEngine,
   SandboxContainerEngineTarget,
 } from "./container-engine.js";
-export {
-  bindPodmanSandboxEngine,
-  resolvePodmanSandboxRuntimeInfo,
-  validateSandboxContainerEngineTarget,
-} from "./podman-runtime.js";
+export { bindPodmanSandboxEngine, validateSandboxContainerEngineTarget } from "./podman-runtime.js";
 export {
   containerState,
   dockerContainerState,
@@ -110,6 +103,7 @@ type EnsureSandboxContainerParams = {
 };
 
 export async function ensureSandboxContainer(params: EnsureSandboxContainerParams) {
+  using phases = observeDiagnosticsTimelinePhases("attempt.setup.sandbox.backend.lifecycle_wait");
   const engine = params.engine;
   const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(params.scopeKey);
   const prefix =
@@ -127,8 +121,10 @@ export async function ensureSandboxContainer(params: EnsureSandboxContainerParam
   return await withSandboxContainerLifecycle(
     containerName,
     params.cfg.scope === "shared" ? undefined : params.operatorAuthority,
-    (source) =>
-      ensureSandboxContainerLifecycle({ ...params, assertCurrent }, containerName, source),
+    (source) => {
+      phases[Symbol.dispose]();
+      return ensureSandboxContainerLifecycle({ ...params, assertCurrent }, containerName, source);
+    },
   );
 }
 
@@ -137,6 +133,7 @@ async function ensureSandboxContainerLifecycle(
   containerName: string,
   source: ContainerSourceLease | undefined,
 ) {
+  using phases = observeDiagnosticsTimelinePhases("attempt.setup.sandbox.backend.runtime_info");
   const configuredEngine = params.engine;
   const podmanRuntimeInfo =
     configuredEngine.id === "podman" ? await resolvePodmanSandboxRuntimeInfo() : undefined;
@@ -147,6 +144,7 @@ async function ensureSandboxContainerLifecycle(
     ? bindPodmanSandboxEngine(podmanRuntimeInfo.target)
     : configuredEngine;
   params.assertCurrent?.();
+  phases.mark("attempt.setup.sandbox.backend.registry_read");
   let existingRegistryEntry = await readRegistryEntry(containerName);
   if (engine.id === "docker" && existingRegistryEntry?.backendTarget) {
     const recorded = dockerPersistentTargetFromEngineTarget(existingRegistryEntry.backendTarget);
@@ -184,16 +182,19 @@ async function ensureSandboxContainerLifecycle(
         throw error;
       }
       const recordedEngine = bindPodmanSandboxEngine(existingRegistryEntry.backendTarget);
+      phases.mark("attempt.setup.sandbox.backend.recorded_target_inspect");
       const recordedState = await recordedPodmanContainerState(recordedEngine, containerName);
       if (recordedState.exists) {
         throw error;
       }
       // A removed or replaced Podman target can leave registry metadata behind.
       // Drop it only after the recorded target no longer exposes the runtime.
+      phases.mark("attempt.setup.sandbox.backend.stale_registry_remove");
       await removeRegistryEntry(containerName);
       existingRegistryEntry = null;
     }
   }
+  phases.mark("attempt.setup.sandbox.backend.mount_prepare");
   const mountPlan = await prepareSandboxMountPlan({
     engine,
     workspaceDir: params.workspaceDir,
@@ -207,6 +208,7 @@ async function ensureSandboxContainerLifecycle(
     tmpfs: params.cfg.docker.tmpfs,
     readOnlyResourceMounts: params.readOnlyResourceMounts,
   });
+  phases.mark("attempt.setup.sandbox.backend.config_hash");
   const genericConfigHash = computeSandboxConfigHash({
     docker: params.cfg.docker,
     dockerEnvPolicyEpoch: resolveDockerEnvPolicyEpoch(params.cfg.docker.env),
@@ -229,43 +231,29 @@ async function ensureSandboxContainerLifecycle(
   const needsSetupReservation =
     Boolean(params.cfg.docker.setupCommand?.trim()) ||
     existingRegistryEntry?.runtimeState === "pending";
+  phases.mark("attempt.setup.sandbox.backend.container_inspect");
   const state = await containerState(engine, containerName, { strict: needsSetupReservation });
-  let containerId = "";
-  let readOnlyRoot = false;
-  if (state.exists) {
-    const identity = await execContainer(
-      engine,
-      ["inspect", "--format", "{{.Id}} {{.HostConfig.ReadonlyRootfs}}", containerName],
-      {
-        signal: AbortSignal.timeout(5_000),
-      },
-    );
-    const [id, rootReadOnly] = identity.stdout.trim().split(/\s+/u);
-    containerId = id ?? "";
-    readOnlyRoot = rootReadOnly === "true";
-    if (!/^[a-f0-9]{64}$/u.test(containerId)) {
-      throw new Error("Container inspect did not return an immutable container ID.");
-    }
-  }
+  phases.mark("attempt.setup.sandbox.backend.config_match");
+  let containerId = state.exists ? state.id : "";
+  const readOnlyRoot = state.exists && state.readOnlyRoot;
   let hasContainer = state.exists;
   let running = state.running;
   let currentHash: string | null = null;
   let hashMismatch = false;
   const registryEntry = existingRegistryEntry;
-  if (hasContainer) {
+  if (state.exists) {
     if (registryEntry?.runtimeState === "pending") {
       throw new Error(
         `Sandbox ${containerName} setup did not complete. Inspect the retained container and preserve needed data before explicitly recreating it.`,
       );
     }
-    currentHash = await readContainerLabel(engine, containerName, "openclaw.configHash");
-    if (!currentHash) {
-      currentHash = registryEntry?.configHash ?? null;
-    }
+    currentHash = state.configHash ?? registryEntry?.configHash ?? null;
     hashMismatch = !currentHash || currentHash !== expectedHash;
     if (hashMismatch) {
       const lastUsedAtMs = registryEntry?.lastUsedAtMs;
+      phases.mark("attempt.setup.sandbox.backend.persistent_import");
       const { hasSandboxPersistentExecCustody } = await import("./persistent-exec.js");
+      phases.mark("attempt.setup.sandbox.backend.persistent_custody");
       const persistent = await hasSandboxPersistentExecCustody({ containerName, containerId });
       params.assertCurrent?.();
       let isHot =
@@ -273,6 +261,7 @@ async function ensureSandboxContainerLifecycle(
         (running &&
           (typeof lastUsedAtMs !== "number" || now - lastUsedAtMs < HOT_CONTAINER_WINDOW_MS));
       if (isHot) {
+        phases.mark("attempt.setup.sandbox.backend.mount_compare");
         const mounts = params.requireCurrentConfig
           ? "match"
           : await compareSandboxMountPlan({ engine, containerName: containerId, plan: mountPlan });
@@ -300,6 +289,7 @@ async function ensureSandboxContainerLifecycle(
       }
       if (!isHot) {
         params.assertCurrent?.();
+        phases.mark("attempt.setup.sandbox.backend.container_replace");
         const removed = await execContainer(engine, ["rm", "-f", containerId], {
           allowFailure: true,
         });
@@ -315,6 +305,7 @@ async function ensureSandboxContainerLifecycle(
       }
     }
   }
+  phases.mark("attempt.setup.sandbox.backend.registry_prepare");
   const readyEntry = {
     containerName,
     backendId: engine.id,
@@ -337,12 +328,14 @@ async function ensureSandboxContainerLifecycle(
     // provider allocation, including a crash or revocation before publication.
     if (params.workspaceSource === "managed-worktree" || needsSetupReservation) {
       params.assertCurrent?.();
+      phases.mark("attempt.setup.sandbox.backend.registry_reserve");
       await updateRegistry(
         needsSetupReservation ? { ...readyEntry, runtimeState: "pending" } : readyEntry,
       );
     }
     let allocated = false;
     try {
+      phases.mark("attempt.setup.sandbox.backend.container_allocate");
       containerId = await allocateSandboxContainer({
         engine,
         name: containerName,
@@ -362,24 +355,29 @@ async function ensureSandboxContainerLifecycle(
         bindSandboxContainerSource({ engine, name: containerName, id: containerId, owner: source });
       }
       params.assertCurrent?.();
-      await execContainer(engine, ["start", containerId]);
+      phases.mark("attempt.setup.sandbox.backend.container_start");
+      await execContainer(engine, ["start", containerId], { assertCurrent: params.assertCurrent });
       const setupCommand = params.cfg.docker.setupCommand;
       if (setupCommand?.trim()) {
         params.assertCurrent?.();
+        phases.mark("attempt.setup.sandbox.backend.setup_command");
         await execContainer(engine, ["exec", "-i", containerId, "/bin/sh", "-lc", setupCommand], {
           signal: params.operatorAuthority?.signal,
         });
       }
       params.assertCurrent?.();
+      readyEntry.lastUsedAtMs = Date.now();
+      phases.mark("attempt.setup.sandbox.backend.registry_publish");
       if (needsSetupReservation) {
         await completeSandboxRegistryReservation(readyEntry);
-      } else if (params.workspaceSource !== "managed-worktree") {
+      } else {
         await updateRegistry(readyEntry);
       }
       params.assertCurrent?.();
       return {
         containerName,
         containerId,
+        ...(podmanRuntimeInfo ? { podmanTarget: podmanRuntimeInfo.target } : {}),
         configHash: expectedHash,
         mountPlan,
         currentConfig: true,
@@ -392,10 +390,12 @@ async function ensureSandboxContainerLifecycle(
         // Revocation stops a proven-private generation without deleting its
         // writable layer. Shared/unknown environments remain running.
         if (params.workspaceSource !== "managed-worktree" && !needsSetupReservation) {
+          phases.mark("attempt.setup.sandbox.backend.cancelled_registry_publish");
           await updateRegistry(readyEntry);
         }
         throw creationError;
       }
+      phases.mark("attempt.setup.sandbox.backend.partial_cleanup");
       await throwAfterPartialSandboxCleanup({
         engine,
         containerName,
@@ -406,6 +406,7 @@ async function ensureSandboxContainerLifecycle(
     }
   } else {
     params.assertCurrent?.();
+    phases.mark("attempt.setup.sandbox.backend.source_admission");
     if (
       await admitSandboxContainerSource({
         engine,
@@ -419,17 +420,21 @@ async function ensureSandboxContainerLifecycle(
     }
     params.assertCurrent?.();
     if (!running) {
-      await execContainer(engine, ["start", containerId]);
+      phases.mark("attempt.setup.sandbox.backend.container_start");
+      await execContainer(engine, ["start", containerId], { assertCurrent: params.assertCurrent });
     }
   }
+  phases.mark("attempt.setup.sandbox.backend.registry_publish");
   await updateRegistry({
     ...readyEntry,
+    lastUsedAtMs: Date.now(),
     configHash: hashMismatch ? (currentHash ?? undefined) : expectedHash,
   });
   params.assertCurrent?.();
   return {
     containerName,
     containerId,
+    ...(podmanRuntimeInfo ? { podmanTarget: podmanRuntimeInfo.target } : {}),
     configHash: hashMismatch ? currentHash : expectedHash,
     mountPlan,
     currentConfig: !hashMismatch,

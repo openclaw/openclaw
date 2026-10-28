@@ -1,19 +1,74 @@
 import fs from "node:fs";
 import { expect, it } from "vitest";
-import type { SessionEntry } from "../../../config/sessions.js";
+import type { InternalSessionEntry, SessionEntry } from "../../../config/sessions.js";
 import {
   listSessionEntriesReadOnly,
   replaceSessionEntrySync,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { setGatewayDedupeEntry } from "../../../gateway/agent-turn/agent-job.js";
+import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   loadSubagentSessionEntry as loadEntry,
   resolveSubagentSessionCompletion as readCompletion,
   resolveSubagentSessionStartedAt as readStartedAt,
+  resolveCompletionForSubagentRun,
 } from "./subagent-session-reconciliation.js";
+
+it("keeps a yielded collector's exact terminal result after its session advances", async () => {
+  const runId = "yielded-collector-session-reconciliation";
+  const sessionKey = "agent:main:subagent:yielded-collector";
+  const session: InternalSessionEntry = {
+    sessionId: "collector-session",
+    lifecycleRevision: "collector-revision",
+    lifecycleRunId: "later-collector-followup",
+    status: "done",
+    startedAt: 300,
+    endedAt: 500,
+    updatedAt: 500,
+  };
+  const entry = createSubagentRunRecord({
+    runId,
+    childSessionKey: sessionKey,
+    childSessionIdentity: session,
+    collect: true,
+    createdAt: 100,
+    startedAt: 100,
+  });
+  setGatewayDedupeEntry({
+    dedupe: new Map(),
+    key: `agent:${runId}`,
+    entry: {
+      ts: 200,
+      ok: true,
+      payload: {
+        status: "completed",
+        startedAt: 100,
+        endedAt: 200,
+        stopReason: "aborted",
+        yielded: true,
+        terminalReply: { disposition: "visible", text: "Collector result." },
+      },
+    },
+    session: {
+      sessionKey,
+      sessionId: session.sessionId,
+      agentId: "main",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    },
+  });
+  expect(await resolveCompletionForSubagentRun(entry, session, () => {})).toEqual({
+    startedAt: 100,
+    endedAt: 200,
+    terminalReply: { disposition: "visible", text: "Collector result." },
+    outcome: { status: "ok" },
+    reason: "subagent-complete",
+  });
+});
 
 const terminalSession: SessionEntry = {
   sessionId: "sibling-session",

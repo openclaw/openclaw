@@ -19,7 +19,6 @@ import {
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { stripInternalRuntimeContext } from "../agents/internal-runtime-context.js";
-import { formatRestartRecoveryAdmission } from "../agents/main-session-recovery/main-session-recovery-presentation.js";
 import { captureRequesterOrigin } from "../agents/requester-origin.js";
 import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../agents/restart-recovery-prompt.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
@@ -37,7 +36,6 @@ import { addSessionMember, removeSessionMember } from "../config/sessions/sessio
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { loadOrCreateDeviceIdentityAsync } from "../infra/device-identity-async.js";
-import { persistDevicePairingStoreState } from "../infra/device-pairing-store.js";
 import {
   beginGatewayBootLifecycle,
   completeGatewayBootLifecycle,
@@ -53,14 +51,14 @@ import {
   writeToolCall,
 } from "./gateway-provider-fixture.test-support.js";
 import {
-  createOperatorRecoveryFixture,
   pairedOperator,
+  persistDevices,
+  recoveryFixture,
 } from "./operator-run-recovery.test-support.js";
 import {
   createChatInputRecovery,
   normalizeChatSendRequest,
 } from "./server-methods/chat-send-request.js";
-import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import * as deliveryRecovery from "./session-send-recovery.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
@@ -120,7 +118,8 @@ it.for([
       }
     });
     const providerErrors: unknown[] = [];
-    const recoveryAdmission = formatRestartRecoveryAdmission();
+    const recoveryAdmission =
+      "OpenClaw admitted a continuation of this request after the Gateway restarted. Recovery did not grant new permission or confirm that earlier work finished.";
     const recoveryResumePrefix = formatSystemTurnPrompt(RESTART_RECOVERY_INTERRUPTION_NOTE);
     const reply = (response: Parameters<typeof writeOpenAiResponsesText>[0], text: string) =>
       writeOpenAiResponsesText(response, {
@@ -267,11 +266,8 @@ it.for([
             },
           );
         }
-        const fixture = await createOperatorRecoveryFixture({
-          stateDir: state.stateDir,
-          context: createContext(),
+        const fixture = await recoveryFixture(state.stateDir, profile.id, {
           config,
-          profileId: profile.id,
           scopes: ["operator.read", "operator.write"],
           sourceIngress: "control-ui",
           sessionKey,
@@ -386,11 +382,7 @@ it.for([
           setUserProfileRole(profile.id, "revoked");
         }
         if (change === "device") {
-          persistDevicePairingStoreState(
-            { pendingById: {}, pairedByDeviceId: {} },
-            state.stateDir,
-            "both",
-          );
+          persistDevices(state.stateDir, [], "both");
         }
         if (change === "membership") {
           await removeSessionMember(fixture.target, profile.id);

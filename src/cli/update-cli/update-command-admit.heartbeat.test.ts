@@ -6,7 +6,6 @@ import * as terminalNote from "../../../packages/terminal-core/src/note.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { retireHeartbeatWithDoctor } from "../../commands/doctor-heartbeat-retirement.js";
 import { getDatabaseEngineInput } from "../../infra/database-engine/context.js";
-import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import {
   isUpdateAdmissionAuthorityEnvKey,
   type UpdateAdmissionContext,
@@ -16,8 +15,10 @@ import { defaultRuntime } from "../../runtime.js";
 import * as stateReadOnly from "../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withStateMigrationBackupForTest } from "../../state/openclaw-state-schema.test-support.js";
+import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import * as schemaPreflight from "./schema-preflight.js";
 import { updateAdmitCommand } from "./update-command-admit.js";
+import { snapshotUpdateFixtureFiles } from "./update-command-filesystem-snapshot.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const initialExitCode = process.exitCode;
@@ -37,6 +38,7 @@ type Scenario = {
   source?: string;
   invalidSource?: boolean;
   message?: string;
+  retainedSource?: "symlink" | "link";
 };
 
 function fixture(scenario: Scenario, withDatabase = true) {
@@ -51,7 +53,7 @@ function fixture(scenario: Scenario, withDatabase = true) {
   const config = {
     agents: { entries: { main: { workspace, heartbeat: { every: "30m", target: "none" } } } },
   };
-  fs.writeFileSync(configPath, JSON.stringify(config));
+  writeFixtureJsonSync(configPath, config);
   fs.writeFileSync(path.join(root, "package.json"), '{"name":"openclaw","version":"2026.9.8"}');
   const sourcePath = path.join(workspace, "HEARTBEAT.md");
   if (scenario.invalidSource) {
@@ -95,65 +97,98 @@ function fixture(scenario: Scenario, withDatabase = true) {
     supervisor: { version: "2026.9.9", host: "fixture", pid: process.pid },
   };
   const contextPath = path.join(home, "context.json");
-  fs.writeFileSync(contextPath, JSON.stringify(context));
+  writeFixtureJsonSync(contextPath, context);
   if (withDatabase) {
-    const database = new DatabaseSync(path.join(state, "state", "openclaw.sqlite"));
-    try {
-      database.exec(
-        fs.readFileSync(new URL("../../state/openclaw-state-schema.sql", import.meta.url), "utf8"),
-      );
-      database.exec("PRAGMA user_version=20");
-      database.exec("INSERT INTO schema_meta VALUES ('primary','global',20,NULL,'2026.9.8',1,1)");
-      const storeKey = path.join(state, "cron", "jobs.json");
-      const jobId = "july-monitor";
-      const job = {
-        id: jobId,
-        name: "Existing monitor",
-        agentId: "main",
-        declarationKey: "heartbeat:main",
-        enabled: true,
-        createdAtMs: 1,
-        updatedAtMs: 1,
-        schedule: { kind: "every", everyMs: 1_800_000, anchorMs: 37 },
-        sessionTarget: "main",
-        wakeMode: "now",
-        payload: { kind: "heartbeat" },
-        delivery: { mode: "none" },
-        state: {},
-      };
-      database
-        .prepare(
-          "INSERT INTO cron_jobs (store_key,job_id,declaration_key,name,enabled,agent_id,payload_kind,job_json,updated_at) VALUES (?,?,'heartbeat:main','Existing monitor',1,'main','heartbeat',?,1)",
-        )
-        .run(storeKey, jobId, JSON.stringify(job));
-      database
-        .prepare("INSERT INTO cron_job_scratch VALUES (?,?,?,?,NULL,1)")
-        .run(storeKey, jobId, scenario.scratch, 4);
-    } finally {
-      database.close();
-    }
+    using database = new DatabaseSync(path.join(state, "state", "openclaw.sqlite"));
+    database.exec("BEGIN");
+    database.exec(
+      fs.readFileSync(new URL("../../state/openclaw-state-schema.sql", import.meta.url), "utf8"),
+    );
+    database.exec("PRAGMA user_version=20");
+    database.exec("INSERT INTO schema_meta VALUES ('primary','global',20,NULL,'2026.9.8',1,1)");
+    const storeKey = path.join(state, "cron", "jobs.json");
+    const jobId = "july-monitor";
+    const job = {
+      id: jobId,
+      name: "Existing monitor",
+      agentId: "main",
+      declarationKey: "heartbeat:main",
+      enabled: true,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      schedule: { kind: "every", everyMs: 1_800_000, anchorMs: 37 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "heartbeat" },
+      delivery: { mode: "none" },
+      state: {},
+    };
+    database
+      .prepare(
+        "INSERT INTO cron_jobs (store_key,job_id,declaration_key,name,enabled,agent_id,payload_kind,job_json,updated_at) VALUES (?,?,'heartbeat:main','Existing monitor',1,'main','heartbeat',?,1)",
+      )
+      .run(storeKey, jobId, JSON.stringify(job));
+    database
+      .prepare("INSERT INTO cron_job_scratch VALUES (?,?,?,?,NULL,1)")
+      .run(storeKey, jobId, scenario.scratch, 4);
+    database.exec("COMMIT");
   }
-  const snapshot = () =>
-    listDirectoryTreeStrictSync(home)
-      .map((walkEntry) => walkEntry.dirent)
-      .filter((entry) => entry.isFile())
-      .map((entry) => {
-        const filename = path.join(entry.parentPath, entry.name);
-        return [
-          path.relative(home, filename),
-          fs.readFileSync(filename).toString("hex"),
-          fs.statSync(filename).mode,
-        ];
-      });
+  const snapshot = () => snapshotUpdateFixtureFiles(home);
   return { config, configPath, contextPath, sourcePath, snapshot };
 }
 
-it.each<Scenario>([
-  {
-    name: "conflicting operator scratch",
-    scratch: operatorScratch,
+it.each(["absent", "file", "unreadable"] as const)(
+  "checks unresolved cron update admission (heartbeat source: %s)",
+  async (sourceKind) => {
+    const f = fixture({
+      name: sourceKind,
+      scratch: source,
+      invalidSource: sourceKind === "unreadable",
+    });
+    writeFixtureJsonSync(f.configPath, {
+      agents: { entries: { main: { workspace: path.dirname(f.sourcePath) } } },
+    });
+    if (sourceKind === "absent") {
+      fs.unlinkSync(f.sourcePath);
+    }
+    {
+      using db = new DatabaseSync(resolveOpenClawStateSqlitePath());
+      const oldKey = path.join(
+        path.dirname(process.env.OPENCLAW_STATE_DIR!),
+        "old",
+        "cron",
+        "jobs.json",
+      );
+      db.prepare("UPDATE cron_jobs SET store_key = ?").run(oldKey);
+      db.prepare("UPDATE cron_job_scratch SET store_key = ?").run(oldKey);
+    }
+    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    const before = f.snapshot();
+
+    await updateAdmitCommand(f.contextPath);
+
+    const blocked = sourceKind === "unreadable";
+    expect(process.exitCode).toBe(blocked ? 3 : 0);
+    expect(parseUpdateAdmissionVerdict(output.mock.calls[0]?.[0])).toMatchObject({
+      verdict: blocked ? "refuse" : "admit",
+      reasons: blocked
+        ? [
+            expect.objectContaining({
+              code: "heartbeat-migration",
+              message: expect.stringContaining("regular file"),
+            }),
+          ]
+        : [],
+    });
+    expect(f.snapshot()).toEqual(before);
   },
+);
+
+it.each<Scenario>([
+  { name: "conflicting operator scratch", scratch: operatorScratch },
   { name: "matching operator scratch", scratch: source },
+  { name: "completed external symlink", scratch: source, retainedSource: "symlink" },
+  { name: "completed hard link", scratch: source, retainedSource: "link" },
   {
     name: "incomplete tasks in a retained source beside operator scratch",
     scratch: operatorScratch,
@@ -167,6 +202,18 @@ it.each<Scenario>([
   },
 ])("checks $name before update activation without changing input", async (scenario) => {
   const f = fixture(scenario);
+  if (scenario.retainedSource) {
+    writeFixtureJsonSync(
+      f.configPath,
+      await withStateMigrationBackupForTest({}, () => retireHeartbeatWithDoctor(f.config)),
+    );
+    const target = path.join(path.dirname(f.configPath), "outside.md");
+    fs.writeFileSync(target, "Outside notes: do not import.\n");
+    if (fs.existsSync(f.sourcePath)) {
+      fs.unlinkSync(f.sourcePath);
+    }
+    fs[scenario.retainedSource === "link" ? "linkSync" : "symlinkSync"](target, f.sourcePath);
+  }
   const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
   const errors = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
   const before = f.snapshot();
@@ -175,7 +222,6 @@ it.each<Scenario>([
 
   expect(output).toHaveBeenCalledOnce();
   const verdict = parseUpdateAdmissionVerdict(output.mock.calls[0]?.[0]);
-  expect(verdict).not.toBeNull();
   expect(process.exitCode).toBe(scenario.message ? 3 : 0);
   expect(verdict).toMatchObject({
     protocol: 1,
@@ -199,24 +245,20 @@ it.each<Scenario>([
     );
     expect(next.agents?.entries?.main?.heartbeat).toBeUndefined();
     expect(fs.readFileSync(f.sourcePath)).toEqual(Buffer.from(scenario.source ?? source));
-    const database = new DatabaseSync(resolveOpenClawStateSqlitePath(), { readOnly: true });
-    try {
-      expect(database.prepare("SELECT * FROM cron_job_scratch").all()).toEqual([
-        {
-          store_key: path.join(path.dirname(f.configPath), "cron", "jobs.json"),
-          job_id: "july-monitor",
-          content: operatorScratch,
-          revision: 4,
-          source_sha256: null,
-          updated_at_ms: 1,
-        },
-      ]);
-      expect(database.prepare("SELECT job_id, payload_kind FROM cron_jobs").all()).toEqual([
-        { job_id: "july-monitor", payload_kind: "agentTurn" },
-      ]);
-    } finally {
-      database.close();
-    }
+    using database = new DatabaseSync(resolveOpenClawStateSqlitePath(), { readOnly: true });
+    expect(database.prepare("SELECT * FROM cron_job_scratch").all()).toEqual([
+      {
+        store_key: path.join(path.dirname(f.configPath), "cron", "jobs.json"),
+        job_id: "july-monitor",
+        content: operatorScratch,
+        revision: 4,
+        source_sha256: null,
+        updated_at_ms: 1,
+      },
+    ]);
+    expect(database.prepare("SELECT job_id, payload_kind FROM cron_jobs").all()).toEqual([
+      { job_id: "july-monitor", payload_kind: "agentTurn" },
+    ]);
     expect(notes).toHaveBeenCalledWith(
       expect.stringContaining("different cron scratch"),
       "Doctor notices",
@@ -251,19 +293,16 @@ it.each([
     },
   };
   if (kind === "included") {
-    fs.writeFileSync(path.join(path.dirname(f.configPath), "agents.json"), JSON.stringify(agents));
+    writeFixtureJsonSync(path.join(path.dirname(f.configPath), "agents.json"), agents);
   }
-  fs.writeFileSync(
-    f.configPath,
-    JSON.stringify({
-      agents: kind === "included" ? { $include: "agents.json" } : agents,
-      ...(kind === "retired July reasoning"
-        ? { meta: { lastTouchedVersion: "2026.7.1-beta.1" } }
-        : {}),
-      ...(kind === "unrelated invalid field" ? { gateway: { port: "private-invalid-value" } } : {}),
-      ...(kind === "future-written" ? { meta: { lastTouchedVersion: "9999.1.1" } } : {}),
-    }),
-  );
+  writeFixtureJsonSync(f.configPath, {
+    agents: kind === "included" ? { $include: "agents.json" } : agents,
+    ...(kind === "retired July reasoning"
+      ? { meta: { lastTouchedVersion: "2026.7.1-beta.1" } }
+      : {}),
+    ...(kind === "unrelated invalid field" ? { gateway: { port: "private-invalid-value" } } : {}),
+    ...(kind === "future-written" ? { meta: { lastTouchedVersion: "9999.1.1" } } : {}),
+  });
   vi.stubEnv("OPENCLAW_CONFIG_READONLY", kind === "read-only" ? "1" : undefined);
   vi.stubEnv("OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS", undefined);
   fs.writeFileSync(`${f.configPath}.bak`, "retained pre-upgrade backup\n");
@@ -272,10 +311,7 @@ it.each([
     const capture = schemaPreflight.captureTargetDatabaseSchemaContext;
     vi.spyOn(schemaPreflight, "captureTargetDatabaseSchemaContext").mockImplementationOnce(
       async (...args) => {
-        fs.writeFileSync(
-          f.configPath,
-          JSON.stringify({ agents, gateway: { port: "private-invalid-value" } }),
-        );
+        writeFixtureJsonSync(f.configPath, { agents, gateway: { port: "private-invalid-value" } });
         before = f.snapshot();
         return capture(...args);
       },
@@ -367,18 +403,15 @@ it.each([false, true])(
     anchor.exec("CREATE TABLE openclaw_engine_anchor (engine TEXT)");
     anchor.close();
     vi.stubEnv("TEST_DATABASE_DSN", "postgresql://127.0.0.1:1/heartbeat_admission");
-    fs.writeFileSync(
-      f.configPath,
-      JSON.stringify({
-        ...f.config,
-        database: {
-          engine: "postgres",
-          postgres: {
-            connection: { source: "env", provider: "default", id: "TEST_DATABASE_DSN" },
-          },
+    writeFixtureJsonSync(f.configPath, {
+      ...f.config,
+      database: {
+        engine: "postgres",
+        postgres: {
+          connection: { source: "env", provider: "default", id: "TEST_DATABASE_DSN" },
         },
-      }),
-    );
+      },
+    });
     vi.spyOn(schemaPreflight, "checkTargetDatabaseSchemasForContexts").mockResolvedValue({
       incompatible: [],
       indeterminate: [],

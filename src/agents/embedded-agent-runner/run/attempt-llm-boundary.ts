@@ -117,17 +117,11 @@ const runtimeContextProjections = [false, true].map((escape) =>
         return message;
       }
       const content = message.content;
-      const projected =
-        typeof content === "string"
-          ? escapeInternalRuntimeContextDelimiters(content)
-          : content.map((block) =>
-              block.type === "text"
-                ? Object.assign({}, block, {
-                    text: escapeInternalRuntimeContextDelimiters(block.text),
-                  })
-                : block,
-            );
-      return Object.assign({}, message, { content: projected });
+      const projected = transformUserTextContent(content, (text) => {
+        const escaped = escapeInternalRuntimeContextDelimiters(text);
+        return escaped === text ? undefined : escaped;
+      });
+      return projected === content ? message : Object.assign({}, message, { content: projected });
     }),
   ),
 );
@@ -210,7 +204,10 @@ export function normalizeMessagesForCurrentPromptBoundary(
   params: CurrentPromptBoundaryInput & { messages: AgentMessage[] },
 ): AgentMessage[] {
   const { message, options } = buildCurrentPromptBoundaryInput(params);
-  return normalizeMessagesForLlmBoundary([...params.messages, message], options).slice(0, -1);
+  const normalized = normalizeMessagesForLlmBoundary([...params.messages, message], options);
+  // Boundary projection owns this array; discard the synthetic tail without copying history.
+  normalized.pop();
+  return normalized;
 }
 
 export function normalizeCurrentPromptTextForLlmBoundary(

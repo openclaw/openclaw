@@ -212,6 +212,7 @@ export function openAgentDatabaseSqliteWorkerStore<Operations extends SqliteWork
       custody.stateContext,
       () => custody.assertCurrent(),
       {
+        carrierClass: "agent",
         createAdmission: custody.createAdmission,
         stateDatabasePath: custody.stateDatabasePath,
         onNativeLost: custody.onNativeLost,
@@ -239,7 +240,7 @@ export function openSharedStateSqliteWorkerStore<Operations extends SqliteWorker
       { ...options, input: undefined },
       stateContext,
       assertCurrent,
-      { ...lifecycle, sharedState: true },
+      { ...lifecycle, carrierClass: "shared-state" },
     ),
   ).then((store) => {
     if (store) {

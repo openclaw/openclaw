@@ -171,14 +171,6 @@ function hasEscapedLineContinuation(text: string): boolean {
   return /\\(?:\r\n|[\r\n])/.test(text);
 }
 
-function hasLineBreakEscapedWordBoundary(text: string): boolean {
-  return /(?:\r\n|[\r\n])\\/.test(text);
-}
-
-function hasExecutableLineContinuation(text: string): boolean {
-  return /^[^\s]*\\(?:\r\n|[\r\n])/.test(text);
-}
-
 function hasUnescapedDynamicPattern(text: string): boolean {
   for (let index = 0; index < text.length; index += 1) {
     const ch = text[index];
@@ -389,7 +381,7 @@ function argvFromCommand(
     if (
       !nameNode ||
       hasEscapedLineContinuation(nameNode.text) ||
-      hasExecutableLineContinuation(node.text)
+      /^[^\s]*\\(?:\r\n|[\r\n])/.test(node.text)
     ) {
       return null;
     }
@@ -679,7 +671,7 @@ function visitNode(
   let childContext = context;
   if (node.type === "program" && hasEscapedLineContinuation(node.text)) {
     output.risks.push({ kind: "line-continuation", span });
-  } else if (node.type === "word" && hasLineBreakEscapedWordBoundary(node.text)) {
+  } else if (node.type === "word" && /(?:\r\n|[\r\n])\\/.test(node.text)) {
     output.risks.push({ kind: "line-continuation", span });
   }
 

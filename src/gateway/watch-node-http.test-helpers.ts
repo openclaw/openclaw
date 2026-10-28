@@ -182,7 +182,7 @@ export async function startWatchNodeHttpRuntime(
     }
   };
   runtimeCleanups.push(async () => {
-    runtime.close();
+    await runtime.close();
     await new Promise<void>((resolve) => {
       server.close(() => resolve());
     });

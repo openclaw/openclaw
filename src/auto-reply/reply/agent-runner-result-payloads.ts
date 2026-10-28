@@ -41,6 +41,7 @@ import {
   isReplyPayloadTerminalContent,
   markReplyPayloadForSourceSuppressionDelivery,
   selectAutomationReplyPayloads,
+  setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -482,10 +483,16 @@ export async function prepareReplyAgentPayloads(state: {
   }
   const fallbackNoticePayloads: ReplyPayload[] = fallbackNoticeText
     ? [
-        markReplyPayloadForSourceSuppressionDelivery({
-          text: fallbackNoticeText,
-          isFallbackNotice: true,
-        }),
+        setReplyPayloadMetadata(
+          markReplyPayloadForSourceSuppressionDelivery({
+            text: fallbackNoticeText,
+            isFallbackNotice: true,
+          }),
+          !providerPolicyRetrySucceeded &&
+            runResult.meta.modelFallbackTranscriptToModel === fallbackTransition.activeModelRef
+            ? { modelFallbackNotice: true }
+            : {},
+        ),
       ]
     : [];
 

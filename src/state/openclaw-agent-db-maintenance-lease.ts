@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { withSqliteIntegrityWorkerScope } from "../infra/sqlite-integrity-worker.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
@@ -55,6 +56,7 @@ async function runMaintenanceScope<T>(
       }
     } catch (error) {
       // One failed ownership observation retires every scope under the same owner.
+      materializeErrorStack(error);
       scope.ownership.failure = { error };
       throw error;
     }

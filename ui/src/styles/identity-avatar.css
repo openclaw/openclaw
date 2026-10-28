@@ -38,11 +38,25 @@
   place-items: center;
 }
 
+.identity-avatar__image {
+  z-index: 1;
+}
+
+.chat-author-avatar {
+  position: relative;
+}
+
+.chat-author-avatar__image {
+  position: absolute;
+  inset: 0;
+}
+
 .identity-avatar__hat {
   position: absolute;
   inset: 0;
   pointer-events: none;
   grid-area: 1 / 1;
+  z-index: 2;
 }
 
 .identity-avatar--agent:not(.is-fallback) > .identity-avatar__image + .identity-avatar__fallback,

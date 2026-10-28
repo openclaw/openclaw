@@ -7,6 +7,7 @@ import OpenAI from "openai";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { makeStallingStream } from "../providers/provider-stream.test-support.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import { requestPreparedOpenAIResponsesCompaction } from "./openai-responses-compact-request.js";
 import { createBoundedOpenAIResponsesCompactionFetch } from "./openai-responses-compaction-window.js";
@@ -55,12 +56,7 @@ it("settles pending reads and releases the body when the consumer cancels", asyn
 
 it("cancels and unlocks an oversized body without awaiting upstream cleanup", async () => {
   const cancel = vi.fn(() => new Promise<void>(() => {}));
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new Uint8Array(16 * 1024 * 1024 + 1));
-    },
-    cancel,
-  });
+  const body = makeStallingStream([new Uint8Array(16 * 1024 * 1024 + 1)], cancel);
   const response = await boundedResponse(body);
   await expect(response.json()).rejects.toThrow("response exceeds 16 MiB");
   expect(cancel).toHaveBeenCalledOnce();

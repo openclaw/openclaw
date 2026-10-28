@@ -12,6 +12,8 @@ import {
 import { publicationRowDefaults } from "../state/github-publication-fixtures.test-support.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
+import * as profileReads from "../state/user-profile-list.js";
+import { mergeProfiles } from "../state/user-profile-writes.worker.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -161,6 +163,13 @@ it("reuses unchanged watcher currency and retires it on owner publications", asy
       }
       expect(describes).not.toHaveBeenCalled();
       expect(selections).not.toHaveBeenCalled();
+
+      // Unrelated display churn must not reacquire the retained task audience.
+      await f.seed("agent:main:currency-unrelated", f.profile.id, { label: "Updated" });
+      await projection.ensureMaterialized();
+      captures.mockClear();
+      expect(await read()).toBe(target);
+      expect(captures.mock.calls.map(([query]) => query.key)).toEqual([sessionKey]);
     } finally {
       describes.mockRestore();
       selections.mockRestore();
@@ -208,6 +217,44 @@ it("reuses unchanged watcher currency and retires it on owner publications", asy
     captures.mockRestore();
     sharing.mockRestore();
   }
+});
+
+it("prepares creator aliases once per task audience validation", async () => {
+  for (let index = 0; index < 4; index++) {
+    await fixture.seed(`agent:main:foreign-${index}`, fixture.other.id, {
+      parentSessionKey: sessionKey,
+    });
+  }
+  const projection = getSessionRowProjection(fixture.context)!;
+  const read = createControlUiSessionPrRead({
+    client: fixture.client,
+    sessionKey,
+    getRuntimeConfig: fixture.context.getRuntimeConfig,
+    getSessionRowProjection: () => projection,
+    isCurrentClient: () => true,
+  })!;
+  const target = (await read())!;
+  expect(target.taskReceipts?.sessions).toHaveLength(5);
+  await fixture.seed("agent:main:unrelated", fixture.profile.id);
+  await projection.ensureMaterialized();
+  const aliases = vi.spyOn(profileReads, "readResidentUserProfileAliases");
+  target.assertCurrent!();
+  expect(aliases).toHaveBeenCalledTimes(1);
+
+  await fixture.seed("agent:main:foreign-0", fixture.other.id, {
+    parentSessionKey: sessionKey,
+    visibility: "draft",
+  });
+  await projection.ensureMaterialized();
+  expect(() => target.assertCurrent!()).toThrow("Task pull-request audience changed");
+  const narrowed = (await read())!;
+  expect(narrowed.taskReceipts?.sessions).toHaveLength(4);
+
+  // A later validation must prepare fresh aliases, even when the viewer ID is unchanged.
+  mergeProfiles(fixture.other.id, fixture.profile.id);
+  prepareGatewayRecipientProfile(fixture.client);
+  expect(() => narrowed.assertCurrent!()).toThrow("Task pull-request audience changed");
+  expect((await read())?.taskReceipts?.sessions).toHaveLength(5);
 });
 
 it("shares lineage work across audiences without sharing visibility or stale descendants", async () => {

@@ -19,10 +19,12 @@ import type {
   PluginInstallRequest,
 } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { PluginCatalogGrid } from "./catalog-grid.tsx";
 import { PluginCatalogSkeleton, renderCatalogGridSkeleton } from "./catalog-skeleton.tsx";
 import { PluginArtTile } from "./consent-dialog.tsx";
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
+import { PluginNativeUiDisclosure } from "./native-ui-disclosure.tsx";
 import {
   renderPluginAuthor,
   PluginCardSummary,
@@ -175,11 +177,8 @@ const CATEGORY_ICONS: Readonly<Record<string, () => JSX.Element>> = {
 };
 
 function categoryIcon(icon: string | undefined): JSX.Element {
-  return icon && Object.hasOwn(CATEGORY_ICONS, icon) ? (
-    CATEGORY_ICONS[icon]!()
-  ) : (
-    <Icon name="box" />
-  );
+  const render = icon && Object.hasOwn(CATEGORY_ICONS, icon) && CATEGORY_ICONS[icon];
+  return render ? render() : <Icon name="box" />;
 }
 
 function CatalogIcon(props: {
@@ -224,6 +223,7 @@ export function formatCompactCount(value: number): string {
 function CatalogCard(props: {
   plugin: PluginDiscoveryEntry;
   state: CatalogResultsState;
+  contentRef?: (element: HTMLDivElement) => void;
 }): JSX.Element {
   const inventoryEntry = createMemo(() => props.state.installedByCatalogId.get(props.plugin.id));
   const installedState = () => {
@@ -255,49 +255,53 @@ function CatalogCard(props: {
           handleNavigationClick(event, () => props.state.onOpenEntry(props.plugin.id))
         }
       />
-      <div class="plugin-catalog-card__head">
-        <div class="installed-plugins-card__head">
-          <span
-            class="installed-plugins-card__art plugin-catalog-card__art"
-            aria-hidden="true"
-            data-plugin-icon-id={props.plugin.local.pluginId ?? undefined}
-          >
-            <CatalogIcon plugin={props.plugin} state={props.state} />
-          </span>
-          <div class="installed-plugins-card__identity">
-            <div class="plugin-card-title-row">
-              <h3>{props.plugin.catalog.name}</h3>
-              {props.plugin.catalog.official ? renderPluginOfficialBadge() : undefined}
+      <div class="plugin-catalog-card__content" ref={props.contentRef}>
+        <div class="plugin-catalog-card__head">
+          <div class="installed-plugins-card__head">
+            <span
+              class="installed-plugins-card__art plugin-catalog-card__art"
+              aria-hidden="true"
+              data-plugin-icon-id={props.plugin.local.pluginId ?? undefined}
+            >
+              <CatalogIcon plugin={props.plugin} state={props.state} />
+            </span>
+            <div class="installed-plugins-card__identity">
+              <div class="plugin-card-title-row">
+                <h3>{props.plugin.catalog.name}</h3>
+                {props.plugin.catalog.official ? renderPluginOfficialBadge() : undefined}
+                <div class="plugin-catalog-card__action">
+                  {installed() ? (
+                    renderPluginStateStatus(installedState()!, "plugin-catalog-card__status")
+                  ) : (
+                    <PluginInstallAction
+                      registerInstallAction={props.state.registerInstallAction}
+                      buttonClass={
+                        "btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"
+                      }
+                      pluginName={props.plugin.catalog.name}
+                      busy={busy()}
+                      disabled={!canInstall()}
+                      progress={progress()}
+                      onInstall={() => props.state.onInstall(props.plugin.id)}
+                    />
+                  )}
+                </div>
+              </div>
+              {renderPluginAuthor(props.plugin.catalog.author)}
             </div>
-            {renderPluginAuthor(props.plugin.catalog.author)}
           </div>
         </div>
-        <div class="plugin-catalog-card__action">
-          {installed() ? (
-            renderPluginStateStatus(installedState()!, "plugin-catalog-card__status")
-          ) : (
-            <PluginInstallAction
-              registerInstallAction={props.state.registerInstallAction}
-              buttonClass={"btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"}
-              pluginName={props.plugin.catalog.name}
-              busy={busy()}
-              disabled={!canInstall()}
-              progress={progress()}
-              onInstall={() => props.state.onInstall(props.plugin.id)}
-            />
-          )}
-        </div>
+        <PluginCardSummary
+          summary={props.plugin.catalog.summary || t("pluginsPage.optionalCapability")}
+        />
+        {renderPluginRowMessage(props.state.messages?.[`install:${props.plugin.id}`], {
+          busy: busy(),
+          onContinue:
+            props.state.canInstall && props.state.onContinueInstall
+              ? (request) => props.state.onContinueInstall?.(props.plugin.id, request)
+              : undefined,
+        })}
       </div>
-      <PluginCardSummary
-        summary={props.plugin.catalog.summary || t("pluginsPage.optionalCapability")}
-      />
-      {renderPluginRowMessage(props.state.messages?.[`install:${props.plugin.id}`], {
-        busy: busy(),
-        onContinue:
-          props.state.canInstall && props.state.onContinueInstall
-            ? (request) => props.state.onContinueInstall?.(props.plugin.id, request)
-            : undefined,
-      })}
     </article>
   );
 }
@@ -369,15 +373,18 @@ function CatalogSection(params: {
         >
           {params.loading ? (
             renderCatalogGridSkeleton({ cards: SECTION_SIZE })
-          ) : (
+          ) : params.onViewAll ? (
             <div class="plugin-catalog-grid">
-              <For
-                each={params.onViewAll ? params.items.slice(0, SECTION_SIZE) : params.items}
-                keyed={(plugin) => plugin.id}
-              >
+              <For each={params.items.slice(0, SECTION_SIZE)} keyed={(plugin) => plugin.id}>
                 {(plugin) => <CatalogCard plugin={plugin()} state={params.state} />}
               </For>
             </div>
+          ) : (
+            <PluginCatalogGrid items={params.items}>
+              {(plugin, contentRef) => (
+                <CatalogCard plugin={plugin()} state={params.state} contentRef={contentRef} />
+              )}
+            </PluginCatalogGrid>
           )}
         </CatalogDiscoverySection>
       ) : undefined}
@@ -542,11 +549,11 @@ function RawResults(props: CatalogResultsState): JSX.Element {
               />
             </>
           ) : (
-            <div class="plugin-catalog-grid plugin-catalog-grid--results">
-              <For each={items()} keyed={(plugin) => plugin.id}>
-                {(plugin) => <CatalogCard plugin={plugin()} state={props} />}
-              </For>
-            </div>
+            <PluginCatalogGrid items={items()} results>
+              {(plugin, contentRef) => (
+                <CatalogCard plugin={plugin()} state={props} contentRef={contentRef} />
+              )}
+            </PluginCatalogGrid>
           )}
           <LoadMore {...props} />
         </>
@@ -630,6 +637,8 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
   const category = createMemo(() => props.category);
   const connected = createMemo(() => props.connected);
   const grouped = () => !query() && intent() === "all" && category() === null;
+  // Publisher headers must not repeat the virtualizer's scroll compensation.
+  const windowed = () => !grouped() && (props.result?.items.length ?? 0) > 60;
   const readCatalog = () => {
     // Same-selection refreshes must not hold live installation state or card controls.
     if (props.hasCurrentResult) {
@@ -666,15 +675,17 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
           aria-label={t("pluginsPage.searchPlugins")}
           placeholder={t("pluginsPage.searchPlugins")}
           value={props.query}
-          ref={(element) => {
-            input = element;
-          }}
+          ref={(element) => (input = element)}
           onInput={(event) => props.onQueryChange(event.currentTarget.value)}
         />
       </CatalogDiscoverySearch>
       <CategoryChips {...props} />
+      <PluginNativeUiDisclosure variant="install" />
       {props.remoteError ? renderError(props.remoteError, props.onRetry, true) : undefined}
-      <div class="plugin-catalog-results__body">
+      <div
+        class="plugin-catalog-results__body"
+        style={{ "overflow-anchor": windowed() ? "none" : undefined }}
+      >
         <Loading
           on={[
             query(),
@@ -697,14 +708,12 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
           }
         >
           <Errored
-            fallback={(error, reset) => (
-              <>
-                {renderError(formatUiError(error()), () => {
-                  props.onRetry();
-                  reset();
-                })}
-              </>
-            )}
+            fallback={(error, reset) =>
+              renderError(formatUiError(error()), () => {
+                props.onRetry();
+                reset();
+              })
+            }
           >
             {readCatalog()}
           </Errored>

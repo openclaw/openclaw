@@ -142,6 +142,8 @@ const EXPECTED_CLI_ERROR_NAMES = new Set([
   "ConfigReadOnlyError",
   "NixModeConfigMutationError",
   "LocalStateOwnerError",
+  "CompletionCacheMissingError",
+  "CompletionProfileEncodingError",
 ]);
 
 export function isExpectedCliError(error: unknown): error is Error {

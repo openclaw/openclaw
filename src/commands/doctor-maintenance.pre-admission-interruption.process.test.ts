@@ -21,22 +21,18 @@ it.skipIf(process.platform === "win32").for([
     // Keep command and signal owners real; interrupt the synthetic database inspection.
     const overrides = {
       "/commands/doctor-database-preflight.js": `import { once } from "node:events";
-      import { MessageChannel } from "node:worker_threads";
       export async function prepareDoctorDatabasePreflight() {
-        // Signal listeners alone do not keep Node alive until OS signal delivery.
-        const { port1, port2 } = new MessageChannel();
-        port1.on("message", () => {});
+        // Retain the existing parent channel until OS signal delivery settles.
+        process.channel.ref();
         try {
           const interrupted = once(process, ${JSON.stringify(signal)});
           const proceed = once(process, "message");
           process.send("preflight");
           await proceed;
-          process.disconnect();
           process.kill(process.pid, ${JSON.stringify(signal)});
           await interrupted;
         } finally {
-          port1.close();
-          port2.close();
+          process.disconnect();
         }
         console.log("preflight settled");
         return { incompatible: [], indeterminate: [] };
@@ -95,14 +91,12 @@ it.skipIf(process.platform === "win32").for([
         stdio: ["ignore", "pipe", "pipe", "ipc"],
       },
     );
-    let stdout = "";
-    let stderr = "";
-    child.stdout!.setEncoding("utf8").on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr!.setEncoding("utf8").on("data", (chunk) => {
-      stderr += chunk;
-    });
+    const output = { stdout: "", stderr: "" };
+    for (const stream of ["stdout", "stderr"] as const) {
+      child[stream]!.setEncoding("utf8").on("data", (chunk) => {
+        output[stream] += chunk;
+      });
+    }
     const closed = once(child, "close");
     try {
       const ready = await withinTest(
@@ -113,19 +107,16 @@ it.skipIf(process.platform === "win32").for([
         ),
         testSignal,
       );
-      expect(ready[0], stderr).toBe("preflight");
+      expect(ready[0], output.stderr).toBe("preflight");
       // Bound interruption settlement, without charging cold CLI imports to that deadline.
       const settlement = withinTest(
         closed,
         AbortSignal.any([testSignal, AbortSignal.timeout(10_000)]),
       );
       child.send("continue");
-      const [exitCode, exitSignal] = await settlement;
-      expect(exitSignal, stderr).toBeNull();
-      expect(exitCode, stderr).toBe(code);
-      expect(stdout, stderr).toContain("preflight settled");
-      expect(stderr).not.toContain("maintenance must not start");
-      expect(stderr).not.toContain("unsettled top-level await");
+      expect(await settlement, output.stderr).toEqual([code, null]);
+      expect(output.stdout, output.stderr).toContain("preflight settled");
+      expect(output.stderr).not.toMatch(/maintenance must not start|unsettled top-level await/);
     } finally {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGKILL");

@@ -15,8 +15,8 @@ import type { ReplyIncomingExecutionSelection } from "../../sessions/session-con
 import type { ReplyMessageJoinObservation } from "../../sessions/session-controller.message-join-observation.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { AsyncContext } from "../../shared/async-context.js";
-import type { ModelFallbackAvailability } from "../agent-scope.js";
 import type { CronScheduledToolProjectionRequest } from "../exec-tool-target-pinning.js";
+import type { ModelFallbackAvailability } from "../model-fallback.types.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 

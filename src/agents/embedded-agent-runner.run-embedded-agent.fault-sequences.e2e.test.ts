@@ -513,8 +513,17 @@ it.each([false, true])("walks the mixed fault chain (exhausted=%s)", async (exha
           { provider: "groq", model: "mock-2", reason: "server_error" },
           { provider: "groq", model: "mock-3", reason: "billing" },
         ]);
-        expect(error.message).toContain("returned a billing error");
-        expect(error.message).toContain(
+        const billingFailure = error.cause;
+        assert(isFailoverError(billingFailure), "expected typed terminal billing cause");
+        expect(billingFailure).toMatchObject({
+          reason: "billing",
+          provider: "groq",
+          model: "mock-3",
+          status: 402,
+          rawError: "402 Payment Required: insufficient credits",
+        });
+        expect(billingFailure.message).toContain("returned a billing error");
+        expect(billingFailure.message).toContain(
           "check your account's balance and usage limits before trying again.",
         );
         const billing = usageStats["groq:p1"];

@@ -108,7 +108,7 @@ type PluginDoctorRegistryParams = {
   pluginIds?: readonly string[];
   /** Candidate generation prepared by the install owner before publication. */
   manifestRegistry?: PluginManifestRegistry;
-  historicalWebhookListeners?: boolean;
+  historicalWebhookListeners?: PluginDoctorCompatibilityOptions["historicalWebhookListeners"];
   /** Port preflight inspects retained data even when its selected owner is disabled. */
   includeDisabled?: boolean;
 };
@@ -161,10 +161,13 @@ function loadPluginDoctorContractEntry(
   try {
     // External packages can be replaced at the same path during this process.
     // Bind Doctor callbacks to the selected inventory, like other setup contracts.
+    // Doctor migration contexts open stores without an operation source, so a bundled
+    // plugin's operation modules would be captured (copied) on every load and never run.
     const loader = getPluginSetupModuleLoader(
       record,
       contractArtifact.modulePath,
       contractArtifact.boundaryRoot,
+      { stateOperations: false },
     );
     const { summary, ...contract } = loader.initialize(() =>
       coercePluginDoctorContractModule(

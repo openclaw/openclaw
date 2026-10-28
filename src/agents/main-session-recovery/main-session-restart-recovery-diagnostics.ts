@@ -1,8 +1,10 @@
 import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { getAgentRunLifecycleGeneration } from "../../infra/agent-run-registry.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-store.js";
+import { mainSessionRecoveryLog } from "./main-session-restart-recovery-shared.js";
 
 export type MainSessionRecoverySkipReason =
   | "stopped"
@@ -30,6 +32,37 @@ export type MainSessionRecoveryDecision = {
   reason: string;
   nextOwner: string;
 };
+
+export function logMainSessionRecoveryDecision(params: {
+  entry: SessionEntry;
+  sessionKey: string;
+  storePath: string;
+  agentId?: string;
+  lifecycleGeneration: string;
+  passId: string;
+  decision: MainSessionRecoveryDecision;
+}): void {
+  const { entry } = params;
+  mainSessionRecoveryLog.info(
+    `main-session restart recovery candidate ${JSON.stringify({
+      boot: params.lifecycleGeneration,
+      pass: params.passId,
+      agentId: params.agentId?.slice(0, 256),
+      storePath: params.storePath.slice(0, 512),
+      sessionKey: params.sessionKey.slice(0, 256),
+      sessionId: entry.sessionId.slice(0, 256),
+      sourceRunId: (entry.restartRecoveryDeliverySourceRunId ?? entry.lifecycleRunId)?.slice(
+        0,
+        256,
+      ),
+      recoveryRunId: entry.restartRecoveryDeliveryRunId?.slice(0, 256),
+      interruptedRunIds: entry.restartRecoveryRuns
+        ?.slice(0, 8)
+        .map(({ runId }) => runId.slice(0, 256)),
+      ...params.decision,
+    })}`,
+  );
+}
 
 export function skippedMainSessionRecoveryDecision(
   reason: MainSessionRecoverySkipReason,

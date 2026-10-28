@@ -2,6 +2,7 @@ import { createMemo, onSettled } from "solid-js";
 import { Icon } from "../components/solid/icon.tsx";
 import { AgentIdentityAvatar } from "../components/solid/identity-avatar.tsx";
 import { formatUiExternalText } from "./format-error.ts";
+import { shouldHandleNavigationClick } from "./navigation-click.ts";
 import { t } from "./reactive/i18n.ts";
 import { resolveToastAnchorRect, type ToastOptions, type ToastDismissReason } from "./toast.ts";
 
@@ -79,17 +80,35 @@ export function ToastView(props: {
           ) : undefined}
           <span class="app-toast__message">{message()}</span>
           {props.toast.actionLabel && props.toast.onAction ? (
-            <button
-              type="button"
-              class="app-toast__action"
-              onClick={() => {
-                const action = props.toast?.onAction;
-                props.dismiss("action");
-                action?.();
-              }}
-            >
-              {props.toast.actionLabel}
-            </button>
+            props.toast.actionHref ? (
+              <a
+                class="app-toast__action"
+                href={props.toast.actionHref}
+                onClick={(event) => {
+                  const action = props.toast?.onAction;
+                  if (shouldHandleNavigationClick(event)) {
+                    props.dismiss("action");
+                  }
+                  action?.(event);
+                }}
+                onAuxClick={(event) => props.toast?.onAction?.(event)}
+                onContextMenu={(event) => props.toast?.onAction?.(event)}
+              >
+                {props.toast.actionLabel}
+              </a>
+            ) : (
+              <button
+                type="button"
+                class="app-toast__action"
+                onClick={() => {
+                  const action = props.toast?.onAction;
+                  props.dismiss("action");
+                  action?.();
+                }}
+              >
+                {props.toast.actionLabel}
+              </button>
+            )
           ) : undefined}
           <button
             type="button"

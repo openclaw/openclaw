@@ -27,6 +27,7 @@ import {
 } from "../../infra/sqlite-worker-database-admission-relay.js";
 import { assertDatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "../../infra/worker-idle-gc.js";
+import { serveWorkerMemorySamples } from "../../infra/worker-memory.js";
 import { encodeNativeWorkerFailure } from "../../infra/worker-native-error.js";
 import { routeLogsToStderr } from "../../logging/console.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -120,7 +121,6 @@ function stageTranscriptArchiveContent(
       rowCount += 1;
     }
     flush();
-    fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
   }
@@ -380,7 +380,7 @@ async function runArchiveSessionRequest(
   }
   let response: SqliteArchiveSessionResponse;
   if (request.operation === "cold-prepare") {
-    const { prepareSessionColdBatchInWorker } = await import("./session-cold-storage-worker.js");
+    const { prepareSessionColdBatchInWorker } = await import("./session-cold-storage-prepare.js");
     const scope = new OpenClawAgentDatabaseReadOnlyScope();
     try {
       response = {
@@ -574,19 +574,28 @@ if (isRecord(workerData) && workerData.type === "sqlite-transcript-archive-v2") 
     }
   };
   const admissionPort = workerData.databaseAdmissionPort;
-  if (admissionPort instanceof MessagePort) {
-    bindSqliteDatabaseAdmissionUpstream(admissionPort);
-    try {
-      await withSqliteDatabaseAdmissionExchange(
-        (admissions, location, create) =>
-          exchangeSqliteDatabaseAdmissions(admissionPort, admissions, location, create),
-        () => run(workerPort),
-      );
-    } finally {
-      admissionPort.close();
+  // Pooled validation serves its own diagnostics; dedicated carriers own them until exit.
+  const memorySamples =
+    workerData.operation === "canonical-validation-pool"
+      ? undefined
+      : serveWorkerMemorySamples(workerPort);
+  try {
+    if (admissionPort instanceof MessagePort) {
+      bindSqliteDatabaseAdmissionUpstream(admissionPort);
+      try {
+        await withSqliteDatabaseAdmissionExchange(
+          (admissions, location, create) =>
+            exchangeSqliteDatabaseAdmissions(admissionPort, admissions, location, create),
+          () => run(workerPort),
+        );
+      } finally {
+        admissionPort.close();
+      }
+    } else {
+      // Task-pool dispatch installs its own existing admission exchange per task.
+      await run(workerPort);
     }
-  } else {
-    // Task-pool dispatch installs its own existing admission exchange per task.
-    await run(workerPort);
+  } finally {
+    memorySamples?.close();
   }
 }

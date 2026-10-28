@@ -3,6 +3,7 @@ import { createComponent, createSignal, merge } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { phase } from "../../../test-helpers/solid-menu.tsx";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
 import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
@@ -277,7 +278,7 @@ describe("chat Details presentation", () => {
     );
   });
 
-  it("aligns the Environment diff below its branch label without shifting on hover or focus", async () => {
+  it("keeps first-attached Details insets stable and aligns the Environment diff below its branch label", async () => {
     await page.viewport(1000, 800);
     const openChanges = vi.fn();
     const styles = document.createElement("style");
@@ -319,12 +320,27 @@ describe("chat Details presentation", () => {
     );
     flush();
     const heading = panel.querySelector(".chat-details-desktop-section__heading")!;
+    const expectHeadingInsets = () => {
+      const panelBounds = panel.getBoundingClientRect();
+      const headingBounds = heading.getBoundingClientRect();
+      expect(headingBounds.left - panelBounds.left).toBeCloseTo(17);
+      expect(panelBounds.right - headingBounds.right).toBeCloseTo(17);
+    };
+    // Measure both widths before the scroll owner's first scheduled layout read.
+    for (const width of [600, 300]) {
+      panel.style.width = width + "px";
+      expectHeadingInsets();
+    }
+    // The Environment body loads lazily; capture its controls only after it renders.
+    await expect
+      .poll(() => panel.querySelector(".chat-environment__branch-controls button.chat-pr__diff"))
+      .not.toBeNull();
     const navigation = panel.querySelector<HTMLButtonElement>(
       ".chat-environment__branch-controls button.chat-pr__diff",
     )!;
     const branchLabel = panel.querySelector(".chat-environment__branch-name")!;
-    // The scroll owner applies its initial gutter measurement before the first paint.
     await new Promise(requestAnimationFrame);
+    expectHeadingInsets();
     expect(navigation.getAttribute("aria-label")).toBe("Show session changes");
     expect(navigation.textContent).toContain("+3");
     expect(navigation.textContent).toContain("−1");
@@ -459,8 +475,7 @@ describe("chat Details presentation", () => {
     const menu = progress.querySelector<HTMLElement>(".chat-details-progress__menu")!;
     const menuSurface = menu.querySelector<HTMLElement>('[role="menu"]')!;
     menu.querySelector<HTMLButtonElement>("button")!.click();
-    await expect.poll(() => menuSurface.dataset.phase).toBe("open");
-    expect(menuSurface.matches(":popover-open")).toBe(true);
+    await phase(menuSurface, "open");
     updateChat({ messages: [] });
     flush();
     expect(menuSurface.matches(":popover-open")).toBe(true);
@@ -566,8 +581,7 @@ describe("chat Details presentation", () => {
     const menu = progress.querySelector<HTMLElement>(".chat-details-progress__menu")!;
     const menuSurface = menu.querySelector<HTMLElement>('[role="menu"]')!;
     menu.querySelector<HTMLButtonElement>("button")!.click();
-    await expect.poll(() => menuSurface.dataset.phase).toBe("open");
-    expect(menuSurface.matches(":popover-open")).toBe(true);
+    await phase(menuSurface, "open");
     expect(progress.querySelector<HTMLDetailsElement>(".task-progress-details")!.open).toBe(true);
     const select = async (value: string) => {
       if (trigger.getAttribute("aria-expanded") !== "true") {
@@ -579,7 +593,7 @@ describe("chat Details presentation", () => {
       }
       if (menu.querySelector("button")!.getAttribute("aria-expanded") !== "true") {
         menu.querySelector<HTMLButtonElement>("button")!.click();
-        await expect.poll(() => menuSurface.dataset.phase).toBe("open");
+        await phase(menuSurface, "open");
       }
       menu.querySelector<HTMLButtonElement>(`[data-value="${value}"]`)!.click();
     };

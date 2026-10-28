@@ -15,22 +15,23 @@ Experimental features are preview surfaces controlled by config flags. They need
 - Roll out broadly only after testing in a smaller environment first.
 
 All [plugin APIs](/plugins/sdk-overview#api-stability) are also experimental.
-That stability label does not require a Labs switch for ordinary plugins; the
-Custom plugin UI flag below controls user-installed native browser code only.
+That stability label does not require a Labs switch. Native plugin UI is
+available by default for enabled plugins; the existing config-only
+[advanced opt-out](/plugins/feature-plugins#enable-custom-plugin-ui) remains
+available for user-installed browser code.
 
 ## Currently documented flags
 
-| Surface          | Key                                                                     | Use it when                                                                                                                       | More                                                                                   |
-| ---------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| Codex harness    | `plugins.entries.codex.config.appServer.experimental.sandboxExecServer` | You want native Codex app-server 0.143.0 or newer to target an OpenClaw sandbox-backed exec-server instead of disabling Code Mode | [Codex harness reference](/plugins/codex-harness-reference#sandboxed-native-execution) |
-| Code Mode        | `tools.codeMode.enabled`                                                | You want compact code-orchestrated access to a hidden OpenClaw tool catalog                                                       | [Code Mode](/tools/code-mode)                                                          |
-| Cloud workers    | `cloudWorkers.desktop`                                                  | You want to watch or control desktop-capable cloud worker environments from the Control UI                                        | [Cloud Worker Desktop](/gateway/cloud-workers#desktop-interactive)                     |
-| Claws            | `gateway.controlUi.experimental.claws`                                  | You want to explore and add official ClawHub agents from the Control UI                                                           | [Claws](/cli/claws)                                                                    |
-| Custom plugin UI | `gateway.controlUi.experimental.customPlugins`                          | You want trusted user-installed plugins to add native Control UI views or replace built-in views                                  | [Feature plugins](/plugins/feature-plugins#enable-custom-plugin-ui)                    |
-| Host Desktop     | `desktop.host.enabled`                                                  | You want to watch or control the Gateway host through its VNC or Screen Sharing server                                            | [Desktop](/gateway/configuration-reference#desktop)                                    |
-| Advisor          | `plugins.entries.advisor.enabled`                                       | You want an advisor model to periodically check a conversation's agent work and give the agent one short correction               | [Advisor](#advisor)                                                                    |
-| Speech bubbles   | `gateway.controlUi.experimental.chatBubbles`                            | You want to try conversation bubbles and compact activity; Home defaults on while the lab is enabled                              | [Chat](/web/control-ui/chat)                                                           |
-| Tool Search      | `tools.toolSearch.enabled`                                              | You want to control the global Tool Search default, which is enabled                                                              | [Tool Search](/tools/tool-search)                                                      |
+| Surface        | Key                                                                     | Use it when                                                                                                                       | More                                                                                   |
+| -------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Codex harness  | `plugins.entries.codex.config.appServer.experimental.sandboxExecServer` | You want native Codex app-server 0.143.0 or newer to target an OpenClaw sandbox-backed exec-server instead of disabling Code Mode | [Codex harness reference](/plugins/codex-harness-reference#sandboxed-native-execution) |
+| Code Mode      | `tools.codeMode.enabled`                                                | You want compact code-orchestrated access to a hidden OpenClaw tool catalog                                                       | [Code Mode](/tools/code-mode)                                                          |
+| Cloud workers  | `cloudWorkers.desktop`                                                  | You want to watch or control desktop-capable cloud worker environments from the Control UI                                        | [Cloud Worker Desktop](/gateway/cloud-workers#desktop-interactive)                     |
+| Claws          | `gateway.controlUi.experimental.claws`                                  | You want to explore and add official ClawHub agents from the Control UI                                                           | [Claws](/cli/claws)                                                                    |
+| Host Desktop   | `desktop.host.enabled`                                                  | You want to watch or control the Gateway host through its VNC or Screen Sharing server                                            | [Desktop](/gateway/configuration-reference#desktop)                                    |
+| Advisor        | `plugins.entries.advisor.enabled`                                       | You want an advisor model to periodically check a conversation's agent work and give the agent one short correction               | [Advisor](#advisor)                                                                    |
+| Speech bubbles | `gateway.controlUi.experimental.chatBubbles`                            | You want to try conversation bubbles and compact activity; Home defaults on while the lab is enabled                              | [Chat](/web/control-ui/chat)                                                           |
+| Tool Search    | `tools.toolSearch.enabled`                                              | You want to control the global Tool Search default, which is enabled                                                              | [Tool Search](/tools/tool-search)                                                      |
 
 ## Control UI Labs
 
@@ -39,18 +40,17 @@ Control UI switch. Enabling or disabling a lab patches the saved Gateway
 config immediately without restarting the Gateway.
 
 Labs includes Speech bubbles, Decision assistance, Advisor, Code Mode, Tool Search for all models,
-Claws, Custom plugin UI, Host Desktop, and Cloud Worker Desktop. Under the default reload mode, custom
-plugin views and desktop availability update in connected Control UI pages.
-Code Mode and Tool Search changes take effect for future agent runs.
-Reload browser tabs after disabling Custom plugin UI to clear plugin JavaScript
-that already ran. The Cloud Worker Desktop lab controls access to existing
-desktop-capable workers; changing a profile's `settings.desktop` affects only
-newly provisioned workers.
+Claws, Host Desktop, and Cloud Worker Desktop. Under the default reload mode,
+desktop availability updates in connected Control UI pages. Code Mode and Tool
+Search changes take effect for future agent runs. The Cloud Worker Desktop lab
+controls access to existing desktop-capable workers; changing a profile’s
+`settings.desktop` affects only newly provisioned workers.
 
-Custom plugin UI is off by default. Enabled bundled plugins, including
-Workboard, retain their native UI with the setting off. Backend APIs and
-ordinary plugins remain available, and installing or approving a plugin
-artifact does not enable the lab.
+Custom plugin UI has graduated from Labs. Enabled plugins can load native UI
+by default, while an existing explicit
+`gateway.controlUi.experimental.customPlugins: false` stays off. The historical
+config path remains an advanced opt-out, not a Labs requirement. It does not
+disable bundled views or backend operations.
 
 Claws is off by default. Turning it on permits official starter discovery and
 Add in Agents, Gateway catalog/Add methods, and local CLI Add. Add creates an
@@ -181,7 +181,10 @@ latency improvement.
 The current internal budget is 500 ms, not a configuration option. One existing
 Decision batch asks two independent Boolean questions: whether the latest request
 has an unresolved contextual reference, and whether fulfilling it requires tools
-in the next response. Both probabilities must be below 0.35 to omit optional tools.
+in the next response. Both probabilities must be below 0.35 to omit optional tools. The context question
+checks for a referent needed to fulfill the current request, not merely for
+additional background. A conversational acknowledgment of completed work that
+requests nothing further does not itself require a missing referent.
 Missing, affirmative, or uncertain answers preserve tools. These are probabilities
 of yes, not degrees of tool use or separate confidence values.
 

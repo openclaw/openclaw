@@ -1,7 +1,9 @@
 import "../../test/dom.setup.ts";
 import { createComponent, render } from "@solidjs/web";
-import { createRoot, flush } from "solid-js";
+import { createRoot, createSignal, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
+import { AgentAvatar } from "../../components/host-components.tsx";
+import { workboardTestHost } from "../../test/host.setup.ts";
 import { workboardPopoverRef } from "./view-popover.ts";
 import { SessionStatus } from "./view-session-status.tsx";
 
@@ -9,6 +11,54 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+
+it("updates an avatar only when its agent or label changes and disposes its host handle", () => {
+  let setProps!: (value: { agentId: string; label: string }) => void;
+  const container = document.createElement("div");
+  document.body.append(container);
+  const mount = vi.mocked(workboardTestHost().host.components.mountAgentAvatar);
+  const dispose = render(() => {
+    const [props, updateProps] = createSignal({ agentId: "writer", label: "Writer" });
+    setProps = updateProps;
+    return createComponent(AgentAvatar, {
+      get agentId() {
+        return props().agentId;
+      },
+      get label() {
+        return props().label;
+      },
+    });
+  }, container);
+  flush();
+  expect(mount).toHaveBeenCalledTimes(1);
+  const handle = mount.mock.results[0]!.value;
+  try {
+    expect(container.querySelector("[data-test-agent-avatar]")).not.toBeNull();
+    setProps({ agentId: "writer", label: "Writer" });
+    flush();
+    expect(handle.update).not.toHaveBeenCalled();
+
+    setProps({ agentId: "writer", label: "Writer renamed" });
+    flush();
+    expect(handle.update).toHaveBeenCalledExactlyOnceWith({
+      agentId: "writer",
+      label: "Writer renamed",
+    });
+
+    setProps({ agentId: "reader", label: "Writer renamed" });
+    flush();
+    expect(handle.update).toHaveBeenCalledTimes(2);
+    expect(handle.update).toHaveBeenLastCalledWith({
+      agentId: "reader",
+      label: "Writer renamed",
+    });
+    expect(mount).toHaveBeenCalledTimes(1);
+  } finally {
+    dispose();
+  }
+  expect(handle.dispose).toHaveBeenCalledTimes(1);
+  expect(container.childElementCount).toBe(0);
 });
 
 it("keeps closed status rows unregistered and shares dismissal only for open or pending rows", () => {

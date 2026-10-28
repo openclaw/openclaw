@@ -77,6 +77,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     sessionKey: initialParams.sessionKey,
     runId: initialParams.runId,
     requesterSessionKey: initialParams.spawnedBy ?? undefined,
+    modelFallbackCandidate: initialParams.isFinalFallbackAttempt !== undefined,
   };
   const sessionLanePolicy = resolveEmbeddedRunSessionLanePolicy(
     initialParams.trigger,
@@ -150,9 +151,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     releaseQueuedRunContext?.(outcome);
     releaseQueuedRunContext = undefined;
   };
-  const abandonQueuedContext = () => {
-    releaseQueuedContext("abandoned");
-  };
+  const abandonQueuedContext = () => releaseQueuedContext("abandoned");
 
   const noteLaneTaskProgress = () => {
     laneTaskProgressAtMs = Date.now();
@@ -240,6 +239,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
         attempt.setExecutionDeadline(boundedLaneDeadline());
       },
       isCurrent,
+      isAttemptCurrent,
       abortSignal: signal,
       onAttemptDeadlineChanged,
       onAttemptTimeout: (_reason: Error) => {

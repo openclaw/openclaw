@@ -1,10 +1,16 @@
 import { execFile } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as worktreeGit from "../agents/worktrees/git.js";
+import { withGitWorkerContext } from "../infra/git-worker-context.js";
+import {
+  readCheckoutGitRevision,
+  readPullRequestBranchFacts,
+} from "./control-ui-session-prs-git.runtime.js";
 import { resolveBranchLanding } from "./control-ui-session-prs-landing.js";
 
 const execFileAsync = promisify(execFile);
@@ -49,6 +55,78 @@ describe("resolveBranchLanding", () => {
     vi.unstubAllEnvs();
     await fs.rm(root, { recursive: true, force: true });
   });
+
+  it("reads packed HEAD once while preparing a checkout revision", async () => {
+    await git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+    await git("pack-refs", "--all", "--prune");
+    const opens = vi.spyOn(fsSync, "openSync");
+    const revision = await withGitWorkerContext(
+      {
+        consumeInput() {},
+        notify() {},
+        async request() {
+          throw new Error("The file-backed revision must not invoke Git");
+        },
+      },
+      () => readCheckoutGitRevision({ root, scope: "context" }),
+      "fixture-environment",
+    );
+
+    expect(revision).not.toBeNull();
+    expect(JSON.parse(revision!.key).slice(0, 4)).toEqual([
+      { branch: "main", refsBase: path.join(root, ".git") },
+      "origin/main",
+      [],
+      [],
+    ]);
+    expect(
+      opens.mock.calls.filter(([file]) => file === path.join(root, ".git", "HEAD")),
+    ).toHaveLength(1);
+    expect(
+      opens.mock.calls.filter(([file]) => file === path.join(root, ".git", "packed-refs")).length,
+    ).toBeLessThanOrEqual(3);
+  });
+
+  it.each([0, 100, 101, 10_000])(
+    "counts %i untracked files without materializing names beyond the content limit",
+    async (count) => {
+      const suffix = process.platform === "win32" ? ".txt" : "\n.txt";
+      const names = Array.from({ length: count }, (_, index) => ` file-${index}${suffix}`);
+      const inventory = names.length ? `${names.join("\0")}\0` : "";
+      for (const name of names.slice(0, 100)) {
+        await fs.writeFile(path.join(root, name), "one\ntwo");
+      }
+      const runGit = worktreeGit.runGit;
+      vi.spyOn(worktreeGit, "runGit").mockImplementation(async (...args) => {
+        const result = await runGit(...args);
+        return args[1][0] === "ls-files" ? { ...result, stdout: inventory } : result;
+      });
+      const split = vi.spyOn(String.prototype, "split");
+      const result = await readPullRequestBranchFacts({
+        root,
+        branch: "main",
+        mergedHeads: [],
+        comparison: {
+          complete: true,
+          statsBase: "HEAD",
+          creatable: true,
+          equalPushedTips: false,
+        },
+      });
+      const materialized = split.mock.results.reduce((total, call, index) => {
+        return split.mock.contexts[index] === inventory && call.type === "return"
+          ? Math.max(total, call.value.length)
+          : total;
+      }, 0);
+      split.mockRestore();
+
+      expect(result).toEqual({
+        creatable: true,
+        stats: { additions: Math.min(count, 100) * 2, deletions: 0, changedFiles: count },
+      });
+      expect(materialized).toBeLessThanOrEqual(101);
+    },
+  );
 
   it.each(["unrelated descendant", "other base", "unavailable merged head"])(
     "resolves an unpublished branch with %s against captured revisions",

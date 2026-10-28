@@ -147,20 +147,17 @@ describe("assertSandboxPath", () => {
       const admittedRoot = path.join(parent, `root-${count - 1}`);
       const target = path.join(admittedRoot, "proof.txt");
       await fs.writeFile(target, "inside");
-      const lstat = vi.spyOn(fsSync, "lstatSync");
-      try {
-        for (const root of roots) {
-          if (root === admittedRoot) {
-            await expect(sandboxPath(root, target)).resolves.toMatchObject({ resolved: target });
-          } else {
-            await expectPathRejection(root, target);
-          }
+      using lstat = vi.spyOn(fsSync, "lstatSync");
+
+      for (const root of roots) {
+        if (root === admittedRoot) {
+          await expect(sandboxPath(root, target)).resolves.toMatchObject({ resolved: target });
+        } else {
+          await expectPathRejection(root, target);
         }
-        // Root admission still checks live metadata; it must not rescan ancestors.
-        expect(lstat.mock.calls.filter(([entry]) => entry === parent)).toHaveLength(0);
-      } finally {
-        lstat.mockRestore();
       }
+      // Root admission still checks live metadata; it must not rescan ancestors.
+      expect(lstat.mock.calls.filter(([entry]) => entry === parent)).toHaveLength(0);
     });
   });
 
@@ -485,17 +482,13 @@ describe("resolveSandboxedMediaSource", () => {
   });
 
   it("rejects Windows network paths before sandbox resolution", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    using _ = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
-    try {
-      await expect(
-        resolveSandboxedMediaSource({
-          media: "\\\\attacker\\share\\photo.png",
-          sandboxRoot: "/any/path",
-        }),
-      ).rejects.toThrow(/network paths/i);
-    } finally {
-      platformSpy.mockRestore();
-    }
+    await expect(
+      resolveSandboxedMediaSource({
+        media: "\\\\attacker\\share\\photo.png",
+        sandboxRoot: "/any/path",
+      }),
+    ).rejects.toThrow(/network paths/i);
   });
 });

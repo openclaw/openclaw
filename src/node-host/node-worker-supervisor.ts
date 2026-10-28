@@ -489,8 +489,12 @@ class NodeWorkerSupervisor {
 
   observeProcesses(input: NodeWorkerProcessInput, signal?: AbortSignal) {
     signal?.throwIfAborted();
-    this.workspace.processes.captureAdmission(input, input.ownerEpoch)();
-    return this.children.observeProcesses(input, signal);
+    const assertCurrent = this.workspace.processes.captureAdmission(input, input.ownerEpoch);
+    assertCurrent();
+    return this.children.observeProcesses(input, signal).then((result) => {
+      assertCurrent();
+      return result;
+    });
   }
 
   async stopEnvironment(expected: NodeWorkerEnvironmentStopInput): Promise<void> {

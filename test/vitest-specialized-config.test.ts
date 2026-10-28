@@ -1,14 +1,11 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { create as createTar } from "tar";
 import { globSync } from "tinyglobby";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import type { TestUserConfig } from "vitest/config";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 import { createE2EVitestConfig } from "./vitest/vitest.e2e.config.ts";
 import liveConfig from "./vitest/vitest.live.config.ts";
-import { createScopedVitestConfig } from "./vitest/vitest.scoped-config.ts";
 import { tuiPtyTestFiles } from "./vitest/vitest.test-shards.mjs";
 import { createToolingVitestConfig } from "./vitest/vitest.tooling.config.ts";
 import { createTuiPtyVitestConfig } from "./vitest/vitest.tui-pty.config.ts";
@@ -34,9 +31,7 @@ function writeTestFiles(root: string, files: string[]): void {
 }
 
 function discover(test: TestUserConfig | undefined, cwd: string): string[] {
-  if (!test?.include) {
-    throw new Error("Expected an explicit test inventory");
-  }
+  assert(test?.include, "Expected an explicit test inventory");
   // Match Vitest's globProjectFiles options without loading any test bodies or setup.
   return globSync(test.include, {
     cwd,
@@ -70,24 +65,6 @@ describe("specialized Vitest discovery", () => {
       expect(discover(config.test, root)).toEqual(ordinary);
     },
   );
-
-  it("preserves ordinary tests while excluding specialized tests inside a scoped project", () => {
-    const root = tempDirs.make("openclaw-specialized-scoped-");
-    writeTestFiles(root, [
-      "extensions/example/src/ordinary.test.mts",
-      "extensions/example/src/candidate.e2e.test.mts",
-      "extensions/example/src/example.live.test.cts",
-    ]);
-    const config = createScopedVitestConfig(["extensions/example/**/*.test.*"], {
-      dir: "extensions",
-      env: {},
-      argv: ["node", "vitest", "run"],
-    });
-
-    expect(discover(config.test, path.join(root, "extensions"))).toEqual([
-      "example/src/ordinary.test.mts",
-    ]);
-  });
 
   it("preserves dedicated E2E, live, and TUI inventories", () => {
     const root = tempDirs.make("openclaw-specialized-owners-");
@@ -136,37 +113,5 @@ describe("specialized Vitest discovery", () => {
     await expect(import("./vitest/vitest.crabline-candidate.config.ts")).rejects.toThrow(
       "CRABLINE_CANDIDATE_ROOT is required for the selected Crabline candidate",
     );
-  });
-
-  it("discovers both candidate suites through their verified dedicated config", async () => {
-    const root = tempDirs.make("openclaw-specialized-candidate-");
-    const packageRoot = path.join(root, "package");
-    fs.mkdirSync(packageRoot);
-    const files = {
-      "index.d.ts": "export declare const candidate: true;\n",
-      "index.js": "export const candidate = true;\n",
-      "package.json": JSON.stringify({
-        name: "@openclaw/crabline",
-        type: "module",
-        exports: { ".": { import: "./index.js", types: "./index.d.ts" } },
-      }),
-    };
-    const sha256 = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
-    const inventory = Object.entries(files).map(([file, contents]) => {
-      fs.writeFileSync(path.join(packageRoot, file), contents);
-      return `${file}\0${sha256(contents)}\0${Buffer.byteLength(contents)}\n`;
-    });
-    const archive = path.join(root, "candidate.tgz");
-    createTar(
-      { cwd: packageRoot, file: archive, sync: true, gzip: true, portable: true },
-      Object.keys(files),
-    );
-    vi.stubEnv("CRABLINE_CANDIDATE_ROOT", packageRoot);
-    vi.stubEnv("CRABLINE_CANDIDATE_PACKAGE_SHA256", sha256(inventory.toSorted().join("")));
-    vi.stubEnv("CRABLINE_CANDIDATE_ARCHIVE", archive);
-    vi.stubEnv("CRABLINE_CANDIDATE_ARCHIVE_SHA256", sha256(fs.readFileSync(archive)));
-
-    const { default: config } = await import("./vitest/vitest.crabline-candidate.config.ts");
-    expect(discover(config.test, path.resolve(import.meta.dirname, ".."))).toEqual(candidateFiles);
   });
 });

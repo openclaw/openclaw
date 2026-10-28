@@ -89,6 +89,10 @@ describe("project registry persistence", () => {
     return { source, target };
   }
 
+  function registerClone(repoRoot: string, originUrl: string, name = "Recorded", state = options) {
+    return registerClonedProjectRegistry({ path: repoRoot, name, originUrl }, state);
+  }
+
   it.each(["new", "reused", "refreshed"] as const)(
     "keeps ordinary Git commands in a %s managed clone out of auto-GC",
     async (mode) => {
@@ -98,10 +102,7 @@ describe("project registry persistence", () => {
         await git(target, "config", "maintenance.auto", "true");
         await git(target, "config", "gc.auto", "6700");
         const originUrl = mode === "refreshed" ? source : "https://github.com/example/project.git";
-        const project = await registerClonedProjectRegistry(
-          { path: target, name: "Legacy clone", originUrl },
-          options,
-        );
+        const project = await registerClone(target, originUrl, "Legacy clone");
         if (mode === "reused") {
           await materializeProjectClone({ cfg: {}, gitUrl: originUrl }, options);
         } else {
@@ -197,10 +198,7 @@ describe("project registry persistence", () => {
     const source = await initializeRepository(root, "source");
     const checkout = path.join(root, "checkout");
     await git(root, "clone", ...(noLocal ? ["--no-local"] : []), source, checkout);
-    const project = await registerClonedProjectRegistry(
-      { path: checkout, name: "Recorded", originUrl: source },
-      options,
-    );
+    const project = await registerClone(checkout, source);
     return { source, checkout, project };
   }
 
@@ -229,10 +227,7 @@ describe("project registry persistence", () => {
       path: path.join(stateDir, "openclaw.sqlite"),
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     };
-    const project = await registerClonedProjectRegistry(
-      { path: checkout, name, originUrl },
-      stateOptions,
-    );
+    const project = await registerClone(checkout, originUrl, name, stateOptions);
     return { checkout, originUrl, options: stateOptions, project };
   }
 
@@ -266,7 +261,7 @@ describe("project registry persistence", () => {
   });
 
   it("registers, orders, resolves real paths, deduplicates roots, and removes rows", async () => {
-    const repo = await initializeRepository(root, "openclaw");
+    const repo = await initializeRepository(root, "openclaw ");
     const alias = path.join(root, "repo-link");
     await fs.symlink(repo, alias, "dir");
 
@@ -453,65 +448,47 @@ describe("project registry persistence", () => {
     );
   });
 
-  it.each(["initial", "fetched"] as const)(
-    "refreshes a large complete %s ref inventory and prunes only deleted upstream refs",
-    async (inventory) => {
-      const { source, target } = await cloneFixture();
-      const commit = await gitText(source, "rev-parse", "HEAD");
-      const branches = Array.from({ length: 7_850 }, (_, index) => String(index).padStart(65, "0"));
-      const writeRefs = (repo: string, prefix: string) =>
-        fs.writeFile(
-          path.join(repo, ".git", "packed-refs"),
-          branches.map((branch) => `${commit} ${prefix}/${branch}\n`).join(""),
-        );
-      await writeRefs(source, "refs/heads");
-      if (inventory === "initial") {
-        await writeRefs(target, "refs/remotes/origin");
-      }
-      await git(target, "update-ref", "refs/remotes/origin/deleted", commit);
-      const next = await commitFile(source, "later.txt", "new upstream commit\n");
-
-      await refreshProjectCheckout({ url: source, target });
-
-      expect(await gitText(target, "rev-parse", "origin/main")).toBe(next);
-      expect(await gitText(target, "rev-parse", `origin/${branches.at(-1)}`)).toBe(commit);
-      await expectRef(target, "origin/deleted").rejects.toMatchObject({ code: 128 });
-      expect(await gitText(target, "rev-parse", "HEAD")).toBe(commit);
-    },
-  );
-
-  it.each(["initial", "fetched"] as const)(
-    "rejects a truncated %s ref inventory before deleting tracking refs",
-    async (inventory) => {
-      const { source, target } = await cloneFixture();
-      const commit = await gitText(target, "rev-parse", "HEAD");
-      // Each record is 128 bytes, so truncation can leave only complete records.
-      const refNames = Array.from(
-        { length: 65_537 },
-        (_, index) => `refs/remotes/origin/${String(index).padStart(65, "0")}`,
-      );
-      const packed = path.join(target, ".git", "packed-refs");
-      const initialRefs = inventory === "initial" ? refNames : refNames.slice(0, 1);
-      const original = initialRefs.map((ref) => `${commit} ${ref}\n`).join("");
+  it.each([
+    ["initial", false],
+    ["fetched", false],
+    ["initial", true],
+    ["fetched", true],
+  ] as const)("refreshes %s refs atomically (truncated: %s)", async (inventory, truncated) => {
+    const { source, target } = await cloneFixture();
+    const commit = await gitText(target, "rev-parse", "HEAD");
+    // Each record is 128 bytes, so truncation can leave only complete records.
+    const names = Array.from({ length: truncated ? 65_537 : 7_850 }, (_, index) =>
+      String(index).padStart(65, "0"),
+    );
+    const refs = (prefix: string, branches = names) =>
+      branches.map((name) => `${commit} ${prefix}/${name}\n`).join("");
+    const packed = path.join(target, ".git", "packed-refs");
+    const initial = inventory === "initial" ? names : names.slice(0, 1);
+    const original = refs("refs/remotes/origin", initial);
+    if (truncated || inventory === "initial") {
       await fs.writeFile(packed, original);
-      if (inventory === "fetched") {
-        await fs.writeFile(
-          path.join(source, ".git", "packed-refs"),
-          refNames
-            .map((ref) => `${commit} ${ref.replace("refs/remotes/origin/", "refs/heads/")}\n`)
-            .join(""),
-        );
-      }
-
+    }
+    if (!truncated || inventory === "fetched") {
+      await fs.writeFile(path.join(source, ".git", "packed-refs"), refs("refs/heads"));
+    }
+    if (truncated) {
       await expect(refreshProjectCheckout({ url: source, target })).rejects.toThrow(
         "ref inventory exceeded the 8 MiB refresh limit",
       );
-      await expectRef(target, refNames[0]!).resolves.toMatchObject({
+      await expectRef(target, `origin/${names[0]}`).resolves.toMatchObject({
         stdout: `${commit}\n`,
       });
       expect(await fs.readFile(packed, "utf8")).toBe(original);
-    },
-  );
+    } else {
+      await git(target, "update-ref", "refs/remotes/origin/deleted", commit);
+      const next = await commitFile(source, "later.txt", "new upstream commit\n");
+      await refreshProjectCheckout({ url: source, target });
+      expect(await gitText(target, "rev-parse", "origin/main")).toBe(next);
+      expect(await gitText(target, "rev-parse", `origin/${names.at(-1)}`)).toBe(commit);
+      await expectRef(target, "origin/deleted").rejects.toMatchObject({ code: 128 });
+      expect(await gitText(target, "rev-parse", "HEAD")).toBe(commit);
+    }
+  });
 
   it.each(["existing clone", "registration"] as const)(
     "serializes %s with checkout deletion",
@@ -606,10 +583,7 @@ describe("project registry persistence", () => {
       await git(checkout, "remote", "add", "origin", fixtureUrl);
       const originUrl =
         operation === "refresh" ? fixtureUrl : "https://github.com/acme/refresh.git";
-      const project = await registerClonedProjectRegistry(
-        { path: checkout, name: "Refresh", originUrl },
-        options,
-      );
+      const project = await registerClone(checkout, originUrl, "Refresh");
       if (operation === "pinned commit") {
         await git(
           checkout,

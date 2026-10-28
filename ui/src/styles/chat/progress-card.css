@@ -9,10 +9,6 @@
 .session-progress-card--composer {
   flex: 1 1 100%;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--accent-subtle) 42%, var(--panel-strong));
-  animation: fade-in 0.2s var(--ease-out);
 }
 
 .session-progress-card--board {
@@ -38,13 +34,34 @@
   gap: var(--space-2);
 }
 
+.session-progress-card__runtime,
+.session-progress-card__refresh-status {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.session-progress-card__runtime {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-weight: 500;
+}
+
+.session-progress-card__runtime[data-error="true"] {
+  color: var(--danger);
+}
+
+.session-progress-card--board > .session-progress-card__runtime {
+  margin-bottom: var(--space-2);
+}
+
 .session-progress-card__summary {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
   align-items: center;
-  gap: 7px;
   min-width: 0;
-  padding: 7px 9px;
   color: var(--text);
   cursor: var(--cursor-action);
   list-style: none;
@@ -55,25 +72,10 @@
   display: none;
 }
 
-.session-progress-card__chevron {
-  display: inline-flex;
-  width: 14px;
-  height: 14px;
-  align-items: center;
-  justify-content: center;
-  color: var(--muted);
-}
-
-.session-progress-card__chevron svg,
 .session-progress-card__options svg,
 .session-progress-card__refresh svg {
   width: 14px;
   height: 14px;
-}
-
-.session-progress-card__summary:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
-  outline-offset: -2px;
 }
 
 .session-progress-card__current-marker,
@@ -115,13 +117,7 @@
 }
 
 .session-progress-card__current {
-  min-width: 0;
-  overflow: hidden;
-  font-size: var(--control-ui-text-sm);
   font-weight: 500;
-  line-height: 1.35;
-  text-overflow: clip;
-  white-space: nowrap;
 }
 
 .session-progress-card__summary-controls {
@@ -168,12 +164,7 @@
 }
 
 .session-progress-card__refresh-status {
-  grid-column: 1 / -1;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
   font-weight: 400;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
 }
 
 /* Keep live announcements accessible; the button carries the visible feedback. */
@@ -197,11 +188,6 @@
   min-width: 22px;
   height: 22px;
   min-height: 22px;
-}
-
-.session-progress-card--composer .session-progress-card__body {
-  padding: 7px 9px 8px;
-  border-top: 1px solid color-mix(in srgb, var(--accent) 16%, var(--border));
 }
 
 .session-progress-card__markdown.sidebar-markdown {

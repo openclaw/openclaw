@@ -299,6 +299,19 @@ function getWebhookCall(index: number) {
   };
 }
 
+function holdIsolatedRun() {
+  const entered = createDeferred();
+  const result = createDeferred<{ status: "ok"; summary: string }>();
+  cronIsolatedRun.mockImplementationOnce(() => {
+    entered.resolve();
+    return result.promise;
+  });
+  return {
+    entered: entered.promise,
+    finish: (summary: string) => result.resolve({ status: "ok", summary }),
+  };
+}
+
 describe("gateway server cron", () => {
   beforeAll(async () => {
     cronSuiteTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-cron-suite-"));
@@ -693,12 +706,7 @@ describe("gateway server cron", () => {
   });
 
   test("cron.run waitTimeoutMs returns the finished run, or only its runId when the wait ends first", async () => {
-    const runnerEntered = createDeferred();
-    const slowResult = createDeferred<{ status: "ok"; summary: string }>();
-    cronIsolatedRun.mockImplementationOnce(() => {
-      runnerEntered.resolve();
-      return slowResult.promise;
-    });
+    const held = holdIsolatedRun();
     const { request, add, waitForJob } = await startCronClient();
     const jobId = await add("waited job", {
       sessionTarget: "isolated",
@@ -714,9 +722,9 @@ describe("gateway server cron", () => {
       runId: expect.any(String),
       processInstanceId: getGatewayProcessInstanceId(),
     });
-    await runnerEntered.promise;
+    await held.entered;
     const slowFinished = waitForJob(jobId);
-    slowResult.resolve({ status: "ok", summary: "late report" });
+    held.finish("late report");
     await slowFinished;
 
     cronIsolatedRun.mockResolvedValueOnce({ status: "ok", summary: "waited report" });
@@ -729,12 +737,7 @@ describe("gateway server cron", () => {
   });
 
   test("returns already-running without starting background work", async () => {
-    const runnerEntered = createDeferred();
-    const runResult = createDeferred<{ status: "ok"; summary: string }>();
-    cronIsolatedRun.mockImplementationOnce(() => {
-      runnerEntered.resolve();
-      return runResult.promise;
-    });
+    const held = holdIsolatedRun();
 
     const { request, add, waitForJob } = await startCronClient();
 
@@ -753,7 +756,7 @@ describe("gateway server cron", () => {
     const firstRunRes = await request("cron.run", { id: jobId, mode: "force" }, 1_000);
     expect(firstRunRes.ok).toBe(true);
     expectEnqueuedRunPayload(firstRunRes.payload);
-    await Promise.all([startedRun, runnerEntered.promise]);
+    await Promise.all([startedRun, held.entered]);
     expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
 
     const secondRunRes = await request("cron.run", { id: jobId, mode: "force" }, 1_000);
@@ -767,7 +770,7 @@ describe("gateway server cron", () => {
     expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
 
     const finishedRun = waitForJob(jobId);
-    runResult.resolve({ status: "ok", summary: "busy done" });
+    held.finish("busy done");
     await finishedRun;
   });
 
@@ -900,40 +903,31 @@ describe("gateway server cron", () => {
       return jobId;
     };
 
-    const deliveredJobId = await runFailureAlert("delivered failure alert", {
-      mode: "webhook",
-      to: "https://example.invalid/delivered-failure-alert",
-    });
-    await expectOutcome(deliveredJobId, {
-      lastFailureNotificationDelivered: true,
-      lastFailureNotificationDeliveryStatus: "delivered",
-    });
-
-    fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("alert transport rejected"));
-    const failedJobId = await runFailureAlert("failed failure alert", {
-      mode: "webhook",
-      to: "https://example.invalid/failed-failure-alert",
-    });
-    await expectOutcome(failedJobId, {
-      lastFailureNotificationDelivered: false,
-      lastFailureNotificationDeliveryStatus: "not-delivered",
-      lastFailureNotificationDeliveryError: expect.stringContaining("alert transport rejected"),
-    });
-
-    sendCronAnnouncePayloadStrictMock.mockImplementationOnce(async (params) => {
-      params.onDeliveryAttempt?.(false);
-      return { status: "suppressed", reason: "adapter_returned_no_send" };
-    });
-    const unreachedJobId = await runFailureAlert("unreached failure alert", {
-      mode: "announce",
-      channel: "telegram",
-      to: "123",
-    });
-    await expectOutcome(unreachedJobId, {
-      lastFailureNotificationDelivered: false,
-      lastFailureNotificationDeliveryStatus: "not-delivered",
-      lastFailureNotificationDeliveryError: expect.stringContaining("adapter_returned_no_send"),
-    });
+    for (const outcome of ["delivered", "failed", "unreached"] as const) {
+      const error = outcome === "failed" ? "alert transport rejected" : "adapter_returned_no_send";
+      if (outcome === "failed") {
+        fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error(error));
+      } else if (outcome === "unreached") {
+        sendCronAnnouncePayloadStrictMock.mockImplementationOnce(async (params) => {
+          params.onDeliveryAttempt?.(false);
+          return { status: "suppressed", reason: "adapter_returned_no_send" };
+        });
+      }
+      const jobId = await runFailureAlert(
+        `${outcome} failure alert`,
+        outcome === "unreached"
+          ? { mode: "announce", channel: "telegram", to: "123" }
+          : { mode: "webhook", to: `https://example.invalid/${outcome}-failure-alert` },
+      );
+      await expectOutcome(jobId, {
+        lastFailureNotificationDelivered: outcome === "delivered",
+        lastFailureNotificationDeliveryStatus:
+          outcome === "delivered" ? "delivered" : "not-delivered",
+        ...(outcome === "delivered"
+          ? {}
+          : { lastFailureNotificationDeliveryError: expect.stringContaining(error) }),
+      });
+    }
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   }, 45_000);
   test("rejects malformed cron payload and trigger scripts before persistence", async () => {

@@ -122,7 +122,7 @@ it("detects native assignments while Doctor commits state writes and sees later 
 it("keeps the instability refusal without Doctor's admitted ownership", async () => {
   const { migration, params, writes } = await fixture();
   await expect(migration.detectLegacyState(params)).rejects.toThrow(
-    "SQLite source did not stabilize after 10 read-only inspection attempts",
+    "reason=wal-copy-unstable, attempts=10",
   );
   expect(writes()).toBeGreaterThanOrEqual(10);
 });

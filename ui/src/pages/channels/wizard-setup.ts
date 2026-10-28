@@ -1,11 +1,13 @@
 import { createSignal, createStore, onSettled } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import type { ChannelCapability } from "../../lib/channels/index.ts";
 import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { createChannelWizard, type ChannelWizardState } from "./wizard-runner.ts";
 
 export function createChannelSetup(deps: {
-  getContext: () => ApplicationContext;
+  getContext: () => Pick<ApplicationContext, "gateway" | "runtimeConfig">;
+  channels: ChannelCapability;
   clearSelection: () => void;
   presentWizard: (pending: Promise<void>) => Promise<void>;
   retire: () => void;
@@ -29,9 +31,8 @@ export function createChannelSetup(deps: {
     () => deps.getContext().gateway.snapshot.client,
     handleWizardChange,
     (value) =>
-      deps
-        .getContext()
-        .channels.state.channelsSnapshot?.channelMeta?.some((entry) => entry.id === value) ?? false,
+      deps.channels.state.channelsSnapshot?.channelMeta?.some((entry) => entry.id === value) ??
+      false,
     () => t("channels.setup.sessionExpired"),
   );
   // Completion account identity stays synchronous with the RPC runner.
@@ -68,7 +69,7 @@ export function createChannelSetup(deps: {
     const wasActive = wizard.state.phase !== "idle";
     void wizard.cancel();
     if (wasActive) {
-      void deps.getContext().channels.refresh(true);
+      void deps.channels.refresh(true);
     }
   }
 
@@ -102,7 +103,7 @@ export function createChannelSetup(deps: {
     if (!isCurrent()) {
       return;
     }
-    await context.channels.refresh(true);
+    await deps.channels.refresh(true);
     if (!isCurrent()) {
       return;
     }

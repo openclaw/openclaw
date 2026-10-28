@@ -45,6 +45,8 @@ export type AgentSchemaInspectionInput = {
 
 export type AgentSchemaInspection = {
   version: number;
+  /** Exact current shape without repair; not an integrity verdict or writable admission. */
+  readReady?: true;
   integrityGateOutcome?: "cached" | "healthy";
   preparationPending?: true;
   writerAppVersion?: string;
@@ -141,6 +143,7 @@ export function inspectAgentDatabaseSchema(
   const version = readSqliteUserVersion(database);
   const inspection: AgentSchemaInspection = { version };
   let checkingShape = false;
+  let migrationPending = true;
   try {
     if (version > input.supportedVersion) {
       const writerAppVersion = readSqliteWriterAppVersion(database);
@@ -152,7 +155,7 @@ export function inspectAgentDatabaseSchema(
       inspection.agentSchemaMeta = readExistingAgentSchemaMeta(database);
     }
     if (input.requireStartupMigrationReadiness) {
-      const migrationPending =
+      migrationPending =
         version !== input.supportedVersion ||
         hasPendingCurrentVersionAgentDatabaseMigration(database);
       if (input.startupIntegrityVerification !== undefined && !migrationPending) {
@@ -197,6 +200,8 @@ export function inspectAgentDatabaseSchema(
       });
       if (needsIndexRepair) {
         inspection.preparationPending = true;
+      } else if (!migrationPending && version === input.supportedVersion) {
+        inspection.readReady = true;
       }
     }
     return inspection;

@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { textContent } from "./chat-flow.test-support.ts";
 import { expectHistoryBoundaryState } from "./chat-history-boundary.test-support.ts";
 import {
   expectTranscriptLayoutCommitted,
@@ -199,6 +200,7 @@ suite.define(() => {
             providerOpacity: "1",
             toggleFocusVisible: false,
             toggleFocused: true,
+            toolbarButtonVisible: true,
           });
         await page.keyboard.press("Tab");
         await expect
@@ -539,9 +541,7 @@ suite.define(() => {
     const page = await suite.browser.newPage({ viewport: { width: 1280, height: 800 } });
     const historyMessage = (seq: number, prefix: string) => ({
       __openclaw: { seq },
-      content: [
-        { type: "text", text: `${prefix} ${seq}\n${"transcript detail line\n".repeat(3)}` },
-      ],
+      content: textContent(`${prefix} ${seq}\n${"transcript detail line\n".repeat(3)}`),
       role: seq % 2 === 0 ? "assistant" : "user",
       timestamp: Date.now() + seq,
     });
@@ -599,12 +599,13 @@ suite.define(() => {
     await gateway.rejectDeferred("chat.history", {
       code: "UNAVAILABLE",
       message: "history unavailable",
-      retryable: true,
+      retryable: false,
     });
-    await expect.poll(() => showEarlier.getAttribute("aria-busy")).toBe("false");
-    await expectHistoryBoundaryState(page, false);
-    // Rejection leaves the idle action in the same viewport for comparison.
-    const idleHistoryAction = await showEarlier.boundingBox();
+    const retryEarlier = page.getByRole("button", { name: "Retry earlier messages", exact: true });
+    await expect.poll(() => retryEarlier.getAttribute("aria-busy")).toBe("false");
+    expect(await retryEarlier.isEnabled()).toBe(true);
+    // Rejection leaves the retry action in the same viewport for comparison.
+    const idleHistoryAction = await retryEarlier.boundingBox();
     expect(idleHistoryAction).not.toBeNull();
     expect(loadingHistoryAction?.y).toBeCloseTo(idleHistoryAction?.y ?? 0, 0);
     expect(loadingHistoryAction?.height).toBeCloseTo(idleHistoryAction?.height ?? 0, 0);
@@ -614,7 +615,7 @@ suite.define(() => {
     );
     const failedRequestCount = (await gateway.getRequests("chat.history")).length;
     await gateway.deferNext("chat.history");
-    await showEarlier.click();
+    await retryEarlier.click();
     await gateway.waitForRequest("chat.history", { after: failedRequestCount });
     await page.locator('.chat-history-boundary__action[aria-busy="true"]').waitFor();
     await expectHistoryBoundaryState(page, true);

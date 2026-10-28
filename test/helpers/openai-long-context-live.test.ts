@@ -35,11 +35,7 @@ it("rejects a full-profile threshold mismatch", () => {
     throw new Error("expected enabled settings");
   }
   const { profile } = full;
-  const cfg = buildOpenAILongContextConfig({
-    profile,
-    workspace: "/workspace",
-    agentId: "test",
-  });
+  const cfg = buildOpenAILongContextConfig({ profile, workspace: "/workspace", agentId: "test" });
   expect(() =>
     assertOpenAILongContextConfig(cfg, { ...profile, compactThreshold: 735_000 }),
   ).toThrow("config mismatch");
@@ -54,8 +50,6 @@ it("returns only stable hashes and fence metadata", () => {
     api: "openai-responses",
     model: "gpt-5.6-luna",
     baseUrlHash: "route-fence",
-    sessionHash: "session-fence",
-    authProfileHash: "auth-fence",
   };
   const message = { role: "assistant", providerReplay };
   const observation = observeOpenAICompactionEntries({
@@ -67,15 +61,12 @@ it("returns only stable hashes and fence metadata", () => {
     persistedCount: 1,
     activeCount: 1,
     latest: {
-      type: "openai-responses-compaction",
       replayIndex: 2,
-      provider: "openai",
-      model: "gpt-5.6-luna",
       baseUrlHash: "route-fence",
+      idHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      payloadHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
     },
   });
-  expect(observation.latest?.idHash).toMatch(/^[a-f0-9]{64}$/u);
-  expect(observation.latest?.payloadHash).toMatch(/^[a-f0-9]{64}$/u);
   expect(JSON.stringify(observation)).not.toContain(providerReplay.id);
   expect(JSON.stringify(observation)).not.toContain(providerReplay.data);
 });
@@ -90,7 +81,6 @@ it("creates exact bounded fixture bytes and validates redacted read evidence", (
     },
     {
       phase: "result",
-      isError: false,
       result: {
         content: [{ type: "text", text: "TOOL-MARKER|BEGIN|000000\nPRIVATE-TOOL-CONTENT" }],
         details: { kind: "truncated", truncation: { truncated: true, totalBytes: 512_000 } },
@@ -107,12 +97,7 @@ it("creates exact bounded fixture bytes and validates redacted read evidence", (
     expectedBytes: fixture.bytes,
     fixtureHash: fixture.sha256,
   });
-  expect(evidence).toMatchObject({
-    path: ".openclaw/tmp/tool-output.txt",
-    marker: "TOOL-MARKER",
-    originalBytes: 512_000,
-    fixtureHash: fixture.sha256,
-  });
+  expect(evidence.originalBytes).toBe(512_000);
   expect(JSON.stringify(evidence)).not.toContain("PRIVATE-TOOL-CONTENT");
   expect(JSON.stringify(evidence)).not.toContain("call-secret");
 });

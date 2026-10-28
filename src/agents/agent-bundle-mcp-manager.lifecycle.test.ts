@@ -132,31 +132,28 @@ afterEach(async () => {
 
 describe("MCP manager creation ownership", () => {
   it("prepares static MCP declarations once per acquisition and observes changed config", async () => {
-    const load = vi.spyOn(embeddedMcp, "loadEmbeddedAgentMcpConfig");
+    using load = vi.spyOn(embeddedMcp, "loadEmbeddedAgentMcpConfig");
     const factory = vi.fn<CreateSessionMcpRuntime>(createRuntimeFixture);
     const manager = createManager(factory);
     const input = {
       ...params,
       cfg: { mcp: { servers: { fixture: { command: "true" } } } },
     };
-    try {
-      const first = await manager.acquire(input);
-      first.releaseLease();
-      expect(load).toHaveBeenCalledTimes(1);
-      const second = await manager.acquire(input);
-      second.releaseLease();
-      expect(second.runtime).toBe(first.runtime);
-      expect(load).toHaveBeenCalledTimes(2);
 
-      input.cfg.mcp.servers.fixture.command = "changed";
-      const changed = await manager.acquire(input);
-      changed.releaseLease();
-      expect(changed.runtime).not.toBe(first.runtime);
-      expect(changed.runtime.configFingerprint).not.toBe(first.runtime.configFingerprint);
-      expect(load).toHaveBeenCalledTimes(3);
-    } finally {
-      load.mockRestore();
-    }
+    const first = await manager.acquire(input);
+    first.releaseLease();
+    expect(load).toHaveBeenCalledTimes(1);
+    const second = await manager.acquire(input);
+    second.releaseLease();
+    expect(second.runtime).toBe(first.runtime);
+    expect(load).toHaveBeenCalledTimes(2);
+
+    input.cfg.mcp.servers.fixture.command = "changed";
+    const changed = await manager.acquire(input);
+    changed.releaseLease();
+    expect(changed.runtime).not.toBe(first.runtime);
+    expect(changed.runtime.configFingerprint).not.toBe(first.runtime.configFingerprint);
+    expect(load).toHaveBeenCalledTimes(3);
   });
 
   it("evicts the idle LRU at capacity and reconnects its session on reuse", async () => {

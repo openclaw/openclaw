@@ -9,7 +9,7 @@ import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/type
 import { configForProviders } from "../model-auth.fixtures.test-support.js";
 import { model as catalogModel } from "../model-catalog-fixtures.test-support.js";
 import { makeAgentAssistantMessage } from "./agent-message-fixtures.js";
-import { createZeroUsageFixture } from "./usage-fixtures.js";
+import { createUsageFixture } from "./usage-fixtures.js";
 
 export type EmbeddedAgentRunnerTestWorkspace = Awaited<
   ReturnType<typeof createEmbeddedAgentRunnerTestWorkspace>
@@ -61,12 +61,7 @@ export async function immediateEnqueue<T>(task: () => Promise<T>): Promise<T> {
 }
 
 export function createMockUsage(input: number, output: number) {
-  return {
-    ...createZeroUsageFixture(),
-    input,
-    output,
-    totalTokens: input + output,
-  };
+  return createUsageFixture(input, output, input + output);
 }
 
 const baseUsage = createMockUsage(0, 0);

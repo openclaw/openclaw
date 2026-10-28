@@ -9,6 +9,7 @@ import {
   PreparedModelRuntimePluginGenerationRetiredError,
 } from "../../agents/prepared-model-runtime.errors.js";
 import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
+import { createRuntimeLlmUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginEntryConfig } from "../../config/types.plugins.js";
 import { AsyncWorkScopeClosedError } from "../../shared/async-work-scope.js";
@@ -148,14 +149,7 @@ function primeCompletionMocks() {
     content: [{ type: "text", text: "done" }],
     responseModel: "gpt-5.5-2026-08-01",
     stopReason: "stop",
-    usage: {
-      input: 11,
-      output: 7,
-      cacheRead: 5,
-      cacheWrite: 2,
-      total: 25,
-      cost: { total: 0.0042 },
-    },
+    usage: createRuntimeLlmUsageFixture(),
   });
 }
 

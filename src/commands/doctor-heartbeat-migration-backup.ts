@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import type { ConfigSnapshotReadMeasure } from "../config/io.read.types.js";
+import { CronStoreSelectionRequiredError } from "../cron/store/selection-error.js";
 import type { ExistingAgentDatabaseTarget } from "../infra/session-sqlite-migration-readers.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { agentEngineInput } from "../state/openclaw-agent-db-engine.js";
@@ -100,13 +101,21 @@ async function hasPendingHeartbeatMigration(
     pluginValidation: "core-only",
   }).readConfigFileSnapshot();
   const projected = tryProjectRetiredHeartbeatConfig(sourceConfig);
-  return Boolean(
-    projected &&
-    (!isDeepStrictEqual(projected, sourceConfig) ||
-      hasPendingHeartbeatCadenceMigration(sourceConfig, env) ||
-      (await collectHeartbeatScratchMigrationFindings(sourceConfig, env)).length > 0 ||
-      hasPendingHeartbeatOutcomes(targets, env)),
-  );
+  try {
+    return Boolean(
+      projected &&
+      (!isDeepStrictEqual(projected, sourceConfig) ||
+        hasPendingHeartbeatCadenceMigration(sourceConfig, env) ||
+        (await collectHeartbeatScratchMigrationFindings(sourceConfig, env)).length > 0 ||
+        hasPendingHeartbeatOutcomes(targets, env)),
+    );
+  } catch (error) {
+    // Selection may unlock legacy heartbeat work later; preserve its full rollback group.
+    if (error instanceof CronStoreSelectionRequiredError) {
+      return true;
+    }
+    throw error;
+  }
 }
 
 /** Heartbeat retirement changes current-schema data too; preserve the complete rollback group. */

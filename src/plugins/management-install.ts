@@ -57,7 +57,7 @@ import {
 import type { PluginLifecycleRuntimeApply } from "./lifecycle.js";
 import { installPluginFromMarketplace } from "./marketplace.js";
 import { getOfficialExternalPluginCatalogEntryForPackage } from "./official-external-plugin-catalog.js";
-import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
 
 export type ManagedPluginSourceInstallRequest =
   | {
@@ -258,12 +258,20 @@ export async function installManagedPluginSource(
           clawhubUrl: resolveClawHubBaseUrl(input.request.clawhubUrl, input.env),
         }
       : input.request;
-  return await withPluginLifecycleLease({ env: input.env }, async (lease) => {
-    const assertOwned = lease.assertOwned;
+  return await withPluginLifecycleLeaseAsync({ env: input.env }, async (lease) => {
+    const assertCurrent = lease.assertCurrent;
+    const prepareSettlement = () => lease.assertOwned();
     const params = {
       ...input,
       request,
-      beforePersistentApply: composeConfigWriteAssertions(input.beforePersistentApply, assertOwned),
+      beforePersistentApply: composeConfigWriteAssertions(
+        input.beforePersistentApply,
+        assertCurrent,
+      ),
+      beforePersistentEffect: async () => {
+        await input.beforePersistentEffect?.();
+        await lease.assertOwned();
+      },
     };
     if (request.source === "official") {
       const { attempt: installAttempt, source: installedSource } = await installWithSourceFallback({
@@ -295,7 +303,11 @@ export async function installManagedPluginSource(
         : { ...installAttempt, installSource: installedSource };
     }
     if (request.source !== "npm" && request.source !== "clawhub") {
-      return await installResolvedManagedPluginSource({ ...params, request }, assertOwned);
+      return await installResolvedManagedPluginSource(
+        { ...params, request },
+        assertCurrent,
+        prepareSettlement,
+      );
     }
     let specs: Awaited<ReturnType<typeof resolveOfficialManagedInstallSpec>>;
     try {
@@ -310,7 +322,11 @@ export async function installManagedPluginSource(
       return { ok: false, error: error.message, code: error.code };
     }
     if (!specs) {
-      return await installResolvedManagedPluginSource({ ...params, request }, assertOwned);
+      return await installResolvedManagedPluginSource(
+        { ...params, request },
+        assertCurrent,
+        prepareSettlement,
+      );
     }
     const isUnavailableTarget =
       request.source === "clawhub" ? isUnavailableClawHubTarget : isUnavailableNpmTarget;
@@ -327,7 +343,8 @@ export async function installManagedPluginSource(
               expectedIntegrity: spec === request.spec ? request.expectedIntegrity : undefined,
             },
           },
-          assertOwned,
+          assertCurrent,
+          prepareSettlement,
         ),
       isRetryable: (attempt) => !attempt.ok && isUnavailableTarget(attempt),
       onFallback: (message) => params.logger?.warn?.(message),
@@ -349,6 +366,7 @@ async function installResolvedManagedPluginSource(
     request: Exclude<ManagedPluginSourceInstallRequest, { source: "official" }>;
   },
   assertOwned: () => void,
+  prepareSettlement: () => void | Promise<void>,
 ): Promise<ManagedPluginSourceInstallResult> {
   const { request } = params;
   const env = params.env ?? process.env;
@@ -425,6 +443,7 @@ async function installResolvedManagedPluginSource(
     },
     undefined,
     assertOwned,
+    prepareSettlement,
   );
   const complete = async <T extends SourceInstallerResult>(
     installResult: Promise<T>,

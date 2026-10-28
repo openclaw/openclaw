@@ -214,15 +214,19 @@ suite.define(() => {
           }
           await editor.waitFor({ state: "detached" });
           const send = side.locator(".chat-session-rail__composer button[type=submit]");
-          // A text comment alone is not a question.
-          expect(await send.isDisabled()).toBe(true);
-          await sideComposer.press("Enter");
-          expect(await gateway.getRequests("sessions.companion.ask")).toHaveLength(0);
-          expect(await chip.count()).toBe(1);
-          await sideComposer.fill("Explain the selected text.");
+          if (scenario === "normal") {
+            // Saving a comment is sufficient input; no second question is required.
+            expect(await send.isEnabled()).toBe(true);
+          } else {
+            await sideComposer.fill("Explain the selected text.");
+          }
           await send.click();
           const params = await sideQuestion(gateway);
-          expect(params.question).toBe("Explain the selected text.");
+          expect(params.question).toBe(
+            scenario === "normal"
+              ? "Respond to the selected text and comments."
+              : "Explain the selected text.",
+          );
           expect(params.attachments).toBeUndefined();
           expect(params.selectionContext).toContain(`Selected text:\n${passage}`);
           expect(params.selectionContext).toContain(

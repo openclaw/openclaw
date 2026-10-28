@@ -142,6 +142,11 @@ post-build publisher share serialization; Linux builds use a separate queue.
 Each write revalidates the active executing writer and original parent attempt
 after preparatory reads, including after a deletion and before its replacement.
 
+Public readback of API-confirmed metadata allows up to 120 seconds of scheduled
+backoff for GitHub CDN convergence. Downloads and API checks add their own time.
+Bundles and assets without an API digest remain fail-fast. On exhaustion, retry
+readback, not uploads or builds.
+
 Verify both canonical and legacy endpoints after publication, including when a
 newer Gateway release appeared during the Linux build. If canonical metadata is
 missing after an interrupted deletion, normal publication refuses recovery.

@@ -1,6 +1,7 @@
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import {
@@ -14,6 +15,42 @@ import {
 vi.mock("node:worker_threads", () => ({ isMainThread: true }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+const nativeWatchFs: {
+  watch(
+    filename: fs.PathLike,
+    options: fs.WatchOptionsWithStringEncoding,
+    listener: fs.WatchListener<string>,
+  ): fs.FSWatcher;
+} = fs;
+
+class ReplayWatch extends EventEmitter implements fs.FSWatcher {
+  close() {}
+  ref() {
+    return this;
+  }
+  unref() {
+    return this;
+  }
+}
+
+beforeEach(() => {
+  // These tests inject notifications; native transport has separate integration proof.
+  if (process.platform === "darwin") {
+    Object.defineProperty(process, "platform", { ...platform, value: "linux" });
+  }
+  vi.spyOn(nativeWatchFs, "watch").mockImplementation((directory, _options, listener) => {
+    fs.accessSync(directory, fs.constants.R_OK);
+    const watch = new ReplayWatch();
+    watch.on("change", listener);
+    return watch;
+  });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  Object.defineProperty(process, "platform", platform);
+});
 
 function registered(owner: Parameters<typeof registerDir>[0]) {
   registerDir(owner);
@@ -133,6 +170,27 @@ describe("agent directory registry", () => {
     expect(closes[parentIndex]).not.toHaveBeenCalled();
     expect(ownerOf(agentDir)).toBe("main");
     expect(watch).toHaveBeenCalledTimes(count);
+  });
+
+  it("resolves each prepared identity once per ancestor recovery sweep", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(0);
+    const root = tempDirs.make("openclaw-agent-dir-recovery-");
+    const agentDir = path.join(root, "agents", "main", "agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    try {
+      using _ = observeOwners([{ agentId: "main", agentDir }]);
+      using realpath = vi.spyOn(fs.realpathSync, "native");
+      vi.advanceTimersByTime(30_000);
+      expect(realpath).toHaveBeenCalledExactlyOnceWith(agentDir);
+      expect(ownerOf(agentDir)).toBe("main");
+      await Promise.resolve();
+      realpath.mockClear();
+      vi.advanceTimersByTime(30_000);
+      expect(realpath).toHaveBeenCalledExactlyOnceWith(agentDir);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("retires ancestor watches on shutdown without losing registered ownership", async () => {

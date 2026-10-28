@@ -1,5 +1,7 @@
-import { buildChannelOutboundSessionRoute } from "openclaw/plugin-sdk/channel-core";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  buildChannelOutboundSessionRoute,
+  type ChannelOutboundSessionRouteParams,
+} from "openclaw/plugin-sdk/channel-core";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveGoogleChatAccount, type ResolvedGoogleChatAccount } from "./accounts.js";
 import { findGoogleChatDirectMessage, getGoogleChatSpace } from "./api.js";
@@ -97,16 +99,16 @@ export async function resolveGoogleChatOutboundSpace(
   return (await resolveGoogleChatOutboundSpaceDetails(params)).name;
 }
 
-export async function resolveGoogleChatOutboundSessionRoute(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  accountId?: string | null;
-  target: string;
-}) {
+export async function resolveGoogleChatOutboundSessionRoute(
+  params: ChannelOutboundSessionRouteParams,
+) {
+  // History enrichment may follow an accepted send; new metadata I/O still
+  // belongs to the sender's transport authority, unlike local persistence.
   const account = resolveGoogleChatAccount({ cfg: params.cfg, accountId: params.accountId });
   const resolvedSpace = await resolveGoogleChatOutboundSpaceDetails({
     account,
     target: params.target,
+    assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
   });
   const spaceName = resolvedSpace.name;
   if (!isGoogleChatSpaceTarget(spaceName)) {
@@ -117,7 +119,13 @@ export async function resolveGoogleChatOutboundSessionRoute(params: {
     : undefined;
   if (!chatType) {
     try {
-      chatType = resolveGoogleChatSpaceChatType(await getGoogleChatSpace({ account, spaceName }));
+      chatType = resolveGoogleChatSpaceChatType(
+        await getGoogleChatSpace({
+          account,
+          spaceName,
+          assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+        }),
+      );
     } catch {
       // Space classification only enriches session routing. Delivery must remain
       // available when this auxiliary read is unavailable or lacks permission.

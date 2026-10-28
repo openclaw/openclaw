@@ -9,6 +9,8 @@ import type { SessionSourceAssertion } from "../../config/sessions/session-sourc
 import type { OpenClawStateAsyncLeaseContext } from "../../state/openclaw-state-lease-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 
+export type WorktreeWaitBudget = { remainingMs: number };
+
 export type ManagedWorktreeOwnerKind = "manual" | "workboard" | "session";
 
 export type ManagedWorktreeRunEndCleanupOutcome =
@@ -99,7 +101,7 @@ export type WorktreeMutationGuard = Pick<CreateManagedWorktreeParams, "signal" |
   workerAuthority?: WorktreeWorkerAuthority;
 };
 
-type WorktreeSourceCurrent = {
+export type WorktreeSourceCurrent = {
   assertCurrent: SessionSourceAssertion;
   workerAuthority?: Omit<WorktreeWorkerAuthority, "leaseSet">;
   /** Checkout custody for rollback within this callback, independent of caller/source freshness. */
@@ -140,6 +142,8 @@ export type CreateManagedWorktreeParams = {
   }) => Promise<void>;
   /** Synchronous caller-authority guard checked at allocation commit boundaries. */
   commitGuard?: () => void;
+  /** One caller-owned contention budget across source preparation and creation. */
+  waitBudget?: WorktreeWaitBudget;
   /** Revalidate the selected source for one operation without retaining its guard afterward. */
   withSource?: WorktreeSourceStage;
   /** Cleanup retains checkout custody without requiring a retired source selection. */

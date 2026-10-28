@@ -94,19 +94,51 @@ export function registerPolicyCli(program: Command): void {
     .action(async (options: PolicyWatchOptions) => {
       process.exitCode = await runPolicyCommand(options, async () => {
         const intervalMs = normalizeWatchIntervalMs(options.intervalMs);
+        const controller = new AbortController();
+        let exitCode = 0;
+        const stop = (code: number) => {
+          if (!controller.signal.aborted) {
+            exitCode = code;
+            controller.abort();
+          }
+        };
+        const onSigint = () => stop(130);
+        const onSigterm = () => stop(143);
+        // Retain signal custody until an already-admitted evaluation has settled.
+        process.on("SIGINT", onSigint);
+        process.on("SIGTERM", onSigterm);
         let previousKey: string | undefined;
-        for (;;) {
-          const report = await buildPolicyCheckReport(options, "policy watch");
-          const status = policyWatchStatus(report);
-          const key = `${status}:${report.attestation?.attestationHash ?? ""}:${report.exitCode}`;
-          if (previousKey !== key || options.once === true) {
-            writePolicyWatchReport(report, status, options);
-            previousKey = key;
+        try {
+          while (!controller.signal.aborted) {
+            const report = await buildPolicyCheckReport(options, "policy watch");
+            if (controller.signal.aborted) {
+              break;
+            }
+            const status = policyWatchStatus(report);
+            const key = `${status}:${report.attestation?.attestationHash ?? ""}:${report.exitCode}`;
+            if (previousKey !== key || options.once === true) {
+              writePolicyWatchReport(report, status, options);
+              previousKey = key;
+            }
+            if (options.once === true) {
+              return status === "stale" ? 1 : report.exitCode;
+            }
+            try {
+              await sleep(intervalMs, undefined, { signal: controller.signal });
+            } catch (error) {
+              if (
+                !controller.signal.aborted ||
+                !(error instanceof Error) ||
+                error.name !== "AbortError"
+              ) {
+                throw error;
+              }
+            }
           }
-          if (options.once === true) {
-            return status === "stale" ? 1 : report.exitCode;
-          }
-          await sleep(intervalMs);
+          return exitCode;
+        } finally {
+          process.off("SIGINT", onSigint);
+          process.off("SIGTERM", onSigterm);
         }
       });
     });
