@@ -1,4 +1,5 @@
 import { pathToFileURL } from "node:url";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, expect, it } from "vitest";
 import { resolveTsxImport } from "../../scripts/lib/tsx-cli-shim.mjs";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
@@ -24,8 +25,8 @@ async function run(root: string, args: string[], signal: AbortSignal) {
       { cwd: root, signal, maxBuffer: 128 * 1024, requireProcessTreeExit: true },
     ),
   );
-  if (result.error) {
-    throw result.error;
+  if (result.error !== undefined) {
+    throw toErrorObject(result.error, "Node preload command failed");
   }
   return { code: result.status, stdout: result.stdout, stderr: result.stderr };
 }

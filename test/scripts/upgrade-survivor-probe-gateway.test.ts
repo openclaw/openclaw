@@ -75,8 +75,8 @@ async function runProbe(
       signal,
       executable: process.execPath,
       onReady(child) {
-        child.once("exit", (_status, signal) => {
-          exitSignal = signal;
+        child.once("exit", (_status, nativeSignal) => {
+          exitSignal = nativeSignal;
         });
         onReady?.(child);
       },
@@ -113,8 +113,12 @@ it("drains stderr after process exit before publishing the probe result", ({ sig
       [],
       (child) => {
         child.stderr?.pause();
-        child.once("exit", (status, signal) => {
-          exitObserved = { status, signal, stderrPaused: child.stderr?.isPaused() === true };
+        child.once("exit", (status, nativeSignal) => {
+          exitObserved = {
+            status,
+            signal: nativeSignal,
+            stderrPaused: child.stderr?.isPaused() === true,
+          };
           child.stderr?.resume();
         });
       },
