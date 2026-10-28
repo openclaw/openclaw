@@ -66,7 +66,7 @@ Example:
 - Alternatively, deliberately set `groupPolicy: "open"` for broader delegated reads. This also admits **any group sender** (still mention-gated by default), so it is less restrictive than a scoped team/channel route.
 - Direct-operator reads and reads in the current conversation do not require an additional team/channel route.
 - The configure wizard accepts `Team/Channel` entries and stores them for you.
-- On startup, OpenClaw resolves team/channel and user allowlist names to IDs (when Graph permissions allow) and logs the mapping. Unresolved names are kept as typed but ignored for routing unless `channels.msteams.dangerouslyAllowNameMatching: true` is set.
+- On startup, when Graph permissions allow, OpenClaw resolves team/channel allowlist names to IDs, and user allowlist names too when `channels.msteams.dangerouslyAllowNameMatching: true` is set, and logs the mapping. Names that do not resolve stay in your config but are not used for routing. The resolved IDs survive config reloads that leave these allowlists and `dangerouslyAllowNameMatching` unchanged. With [config hot reload](/gateway/configuration/hot-reload#reload-modes) in its default `hybrid` mode, an edit to them applies as written right away and restarts the Teams channel, which resolves the names again; with `gateway.reload.mode: "off"`, edits wait for a manual restart.
 
 With compatible core and Teams versions, verified official npm and ClawHub installations
 can use the existing `read`, `search`, `reactions`, `list-pins`, `member-info`,

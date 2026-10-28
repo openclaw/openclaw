@@ -3,6 +3,10 @@ import { createServer, type Server } from "node:http";
 import { brotliCompressSync, deflateSync, gzipSync } from "node:zlib";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolvePluginRoutePathContext } from "openclaw/plugin-sdk/gateway-config-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { acquireTestPortBlock } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -62,6 +66,7 @@ afterEach(async () => {
   }
   await Promise.all(monitors.splice(0).map(({ task }) => task));
   resetMSTeamsMonitorMocks();
+  clearRuntimeConfigSnapshot();
 });
 
 async function resolveSdkApp() {
@@ -498,6 +503,109 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     ]);
     expect(Object.keys(registered?.teams ?? {})).toHaveLength(1);
     expect(Object.keys(registered?.teams ?? {})).not.toContain("*");
+  });
+
+  const startupAllowlists = {
+    allowFrom: ["user:40a1a0ed-4ff2-4164-a219-55518990c197"],
+    groupAllowFrom: ["msteams:user:50a1a0ed-4ff2-4164-a219-55518990c198"],
+    teams: { ...teams("Product", "Roadmap"), "*": {} },
+  };
+  const resolvedTeams = { ...teams("19:product@thread.tacv2", "19:roadmap@thread.tacv2"), "*": {} };
+  function allowlistConfig(
+    accountId: string,
+    allowlists: Parameters<typeof updateMSTeamsConfig>[1],
+    inherited = false,
+  ) {
+    if (accountId === "default") {
+      return configured(allowlists);
+    }
+    const support = {
+      appId: "support-app",
+      appPassword: "support-secret",
+      webhook: { path: "/teams/support" },
+    };
+    return configured(
+      inherited
+        ? { ...allowlists, accounts: { support } }
+        : { accounts: { support: { ...support, ...allowlists } } },
+    );
+  }
+  function reloadUnrelatedSetting(cfg: ReturnType<typeof createConfig>) {
+    setRuntimeConfigSnapshot({
+      ...structuredClone(cfg),
+      agents: { defaults: { userTimezone: "UTC" } },
+    });
+  }
+  function handlerAllowlists() {
+    const msteams = registeredDeps().readConfig?.().channels?.msteams;
+    return {
+      allowFrom: msteams?.allowFrom,
+      groupAllowFrom: msteams?.groupAllowFrom,
+      teams: msteams?.teams,
+    };
+  }
+
+  it.each([
+    { name: "default", accountId: "default", inherited: false },
+    { name: "named", accountId: "support", inherited: false },
+    { name: "inheriting named", accountId: "support", inherited: true },
+  ])(
+    "keeps the $name account's startup allowlists after an unrelated reload and applies each edit",
+    async ({ accountId, inherited }) => {
+      resolveAllowlistMocks.resolveMSTeamsTeamsConfig.mockResolvedValueOnce({
+        teams: resolvedTeams,
+        mapping: ["Product/Roadmap→19:product@thread.tacv2/19:roadmap@thread.tacv2"],
+        unresolved: [],
+      });
+      const cfg = allowlistConfig(accountId, startupAllowlists, inherited);
+      setRuntimeConfigSnapshot(cfg);
+      await startMonitor(cfg, { accountId });
+
+      reloadUnrelatedSetting(cfg);
+      expect(handlerAllowlists()).toEqual({
+        allowFrom: ["40a1a0ed-4ff2-4164-a219-55518990c197"],
+        groupAllowFrom: ["50a1a0ed-4ff2-4164-a219-55518990c198"],
+        teams: resolvedTeams,
+      });
+
+      // Each input edit restarts the channel; until then the edited lists apply as written.
+      for (const edit of [
+        { allowFrom: [] },
+        { groupAllowFrom: ["60a1a0ed-4ff2-4164-a219-55518990c199"] },
+        { teams: teams("Product", "Roadmap") },
+      ]) {
+        const edited = { ...startupAllowlists, ...edit };
+        setRuntimeConfigSnapshot(allowlistConfig(accountId, edited, inherited));
+        expect(handlerAllowlists()).toEqual(edited);
+      }
+    },
+  );
+
+  it("does not invent Teams config after channels.msteams is removed", async () => {
+    const cfg = createConfig();
+    setRuntimeConfigSnapshot(cfg);
+    await startMonitor(cfg);
+
+    setRuntimeConfigSnapshot({ ...structuredClone(cfg), channels: {} });
+    expect(registeredDeps().readConfig?.().channels?.msteams).toBeUndefined();
+  });
+
+  it("keeps startup-resolved sender names resolved after an unrelated reload", async () => {
+    resolveAllowlistMocks.resolveMSTeamsUserAllowlist.mockResolvedValueOnce([
+      { input: "Alice", resolved: true, id: "alice-aad" },
+    ]);
+    const cfg = configured({ dangerouslyAllowNameMatching: true, allowFrom: ["Alice"] });
+    setRuntimeConfigSnapshot(cfg);
+    await startMonitor(cfg);
+
+    reloadUnrelatedSetting(cfg);
+    expect(handlerAllowlists().allowFrom).toEqual(["alice-aad"]);
+
+    // Turning name matching off is an allowlist edit, so the resolved ID stops applying.
+    setRuntimeConfigSnapshot(
+      configured({ dangerouslyAllowNameMatching: false, allowFrom: ["Alice"] }),
+    );
+    expect(handlerAllowlists().allowFrom).toEqual(["Alice"]);
   });
 });
 
