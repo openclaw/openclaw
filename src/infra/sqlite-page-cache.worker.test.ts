@@ -244,4 +244,73 @@ describe.skipIf(process.platform !== "linux")("SQLite page-cache worker", () => 
     expect(result.readBytes).toBeLessThan(3 * MiB);
     expect(result.readBytes).toBeLessThan(fs.statSync(pathname).size);
   });
+
+  function stubProcSelfIo(code: string) {
+    const realReadFileSync = fs.readFileSync;
+    return vi.spyOn(fs, "readFileSync").mockImplementation(((
+      target: unknown,
+      ...rest: unknown[]
+    ) => {
+      if (target === "/proc/self/io") {
+        const error = new Error("procfs I/O accounting unavailable") as NodeJS.ErrnoException;
+        error.code = code;
+        throw error;
+      }
+      return (realReadFileSync as (target: unknown, ...rest: unknown[]) => unknown)(
+        target,
+        ...rest,
+      );
+    }) as typeof fs.readFileSync);
+  }
+
+  it("warms with zeroed byte counters when /proc/self/io is absent", () => {
+    const pathname = path.join(tempDirs.make("sqlite-state-noio-"), "state.sqlite");
+    const database = openNodeSqliteDatabase(pathname);
+    try {
+      database.exec("CREATE TABLE payload (value BLOB);");
+      database.prepare("INSERT INTO payload VALUES (zeroblob(?))").run(MiB);
+    } finally {
+      database.close();
+    }
+    const readIo = stubProcSelfIo("ENOENT");
+    try {
+      const progress = finish(
+        pathname,
+        pageCacheReadOperations["pageCache.begin"](
+          { kind: "state", maxBytes: 2 * MiB, now },
+          { path: pathname, env: {} },
+        ),
+      );
+      const result = progress.at(-1)!;
+      expect(result).toMatchObject({
+        complete: true,
+        limited: false,
+        readBytes: 0,
+        diskBytes: 0,
+      });
+    } finally {
+      readIo.mockRestore();
+    }
+  });
+
+  it("still fails when procfs I/O accounting is unreadable for another reason", () => {
+    const pathname = path.join(tempDirs.make("sqlite-state-ioerr-"), "state.sqlite");
+    const database = openNodeSqliteDatabase(pathname);
+    try {
+      database.exec("CREATE TABLE payload (value BLOB);");
+    } finally {
+      database.close();
+    }
+    const readIo = stubProcSelfIo("EACCES");
+    try {
+      expect(() =>
+        pageCacheReadOperations["pageCache.begin"](
+          { kind: "state", maxBytes: 2 * MiB, now },
+          { path: pathname, env: {} },
+        ),
+      ).toThrow("procfs I/O accounting unavailable");
+    } finally {
+      readIo.mockRestore();
+    }
+  });
 });
