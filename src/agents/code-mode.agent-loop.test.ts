@@ -314,7 +314,10 @@ describe("Code Mode agent-loop error recovery", () => {
   });
 
   it("recovers a wrong shell wait without relaunching", async ({ onTestFinished, signal }) => {
-    const { state, scopeKey, shell } = await nativeExecFixture("wrong-wait-recovery", onTestFinished);
+    const { state, scopeKey, shell } = await nativeExecFixture(
+      "wrong-wait-recovery",
+      onTestFinished,
+    );
     // Noninteractive exec closes stdin; a parent-owned file releases this same child.
     const releasePath = join(state.workspaceDir, "release-held-process");
     const command = nodeCommand(
