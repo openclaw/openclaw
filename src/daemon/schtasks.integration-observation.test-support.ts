@@ -168,6 +168,7 @@ export function readTaskPrincipal(taskName: string): ScheduledTaskPrincipal {
 export function readRelatedProcessDiagnostics(needles: string[]): {
   error: string | null;
   ok: boolean;
+  ownedProcesses: WindowsProcessDiagnostic[];
   processes: WindowsProcessDiagnostic[];
   truncated: boolean;
 } {
@@ -176,7 +177,13 @@ export function readRelatedProcessDiagnostics(needles: string[]): {
     "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine,UserModeTime,KernelModeTime,ReadOperationCount,WriteOperationCount,@{Name='CreationDate';Expression={if ($_.CreationDate) {$_.CreationDate.ToUniversalTime().ToString('o')}}} | ConvertTo-Json -Compress",
   ].join("; ");
   const result = inspectWithPowerShell(script, 1024 * 1024);
-  const failed = (error: string) => ({ error, ok: false, processes: [], truncated: false });
+  const failed = (error: string) => ({
+    error,
+    ok: false,
+    ownedProcesses: [],
+    processes: [],
+    truncated: false,
+  });
   if (result.error) {
     return failed(result.error.message);
   }
@@ -226,11 +233,57 @@ export function readRelatedProcessDiagnostics(needles: string[]): {
       (typeof entry.ProcessId === "number" &&
         (matchingPids.has(entry.ProcessId) || parentPids.has(entry.ProcessId))),
   );
+  const boundedProcesses = processes.slice(0, DIAGNOSTIC_PROCESS_LIMIT);
+  const ownedProcesses = boundedProcesses.filter(
+    (entry) => typeof entry.ProcessId === "number" && matchingPids.has(entry.ProcessId),
+  );
   return {
     error: null,
     ok: true,
-    processes: processes.slice(0, DIAGNOSTIC_PROCESS_LIMIT),
+    ownedProcesses,
+    processes: boundedProcesses,
     truncated: processes.length > DIAGNOSTIC_PROCESS_LIMIT,
+  };
+}
+
+export function getOwnedTaskProcessIds(
+  explicitPids: readonly number[],
+  processCapture: Pick<ReturnType<typeof readRelatedProcessDiagnostics>, "ownedProcesses">,
+): number[] {
+  return Array.from(
+    new Set([
+      ...explicitPids,
+      ...processCapture.ownedProcesses.flatMap((entry) =>
+        typeof entry.ProcessId === "number" ? [entry.ProcessId] : [],
+      ),
+    ]),
+  );
+}
+
+export type ExternalStopFailureSnapshot = {
+  capturedAt: string;
+  method: "schtasks /End" | "Stop-ScheduledTask";
+  gatewayPid: number;
+  childPid: number;
+  supervisorPid: number;
+  ownedPids: number[];
+  processCapture: ReturnType<typeof readRelatedProcessDiagnostics>;
+};
+
+export function sanitizeProcessCapture(
+  processCapture: ReturnType<typeof readRelatedProcessDiagnostics>,
+  replacements: Array<[string, string]>,
+): ReturnType<typeof readRelatedProcessDiagnostics> {
+  const sanitizeProcesses = (processes: WindowsProcessDiagnostic[]) =>
+    processes.map((process) => ({
+      ...process,
+      CommandLine: sanitizeDiagnosticText(process.CommandLine, replacements),
+    }));
+  return {
+    ...processCapture,
+    error: sanitizeDiagnosticText(processCapture.error, replacements),
+    ownedProcesses: sanitizeProcesses(processCapture.ownedProcesses),
+    processes: sanitizeProcesses(processCapture.processes),
   };
 }
 

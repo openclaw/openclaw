@@ -503,6 +503,15 @@ describe("published installed update progress", () => {
         ok: !failed,
         error: failed ? "observation failed token=" + secret : null,
         truncated: false,
+        ownedProcesses: failed
+          ? []
+          : [
+              {
+                ProcessId: processFacts.pid,
+                ParentProcessId: processFacts.parentPid,
+                CreationDate: processFacts.createdAt,
+              },
+            ],
         processes: failed
           ? []
           : [

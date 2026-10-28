@@ -28,16 +28,19 @@ import {
   assertUnattendedLeastPrivilegeTask,
   canBindLoopbackPort,
   DIAGNOSTIC_TEXT_LIMIT,
+  getOwnedTaskProcessIds,
   readRelatedProcessDiagnostics,
   readTaskDefinitionSnapshot,
   readTaskPrincipal,
   readTaskXml,
   resolveDiagnosticReplacements,
+  sanitizeProcessCapture,
   sanitizeDiagnosticText,
   sanitizeTaskXml,
   sanitizeVerboseQuery,
   waitForCompletedScheduledTaskRun,
   waitForRuntimeStatus,
+  type ExternalStopFailureSnapshot,
   type ScheduledTaskPrincipal,
   type WindowsProcessDiagnostic,
 } from "./schtasks.integration-observation.test-support.js";
@@ -73,6 +76,7 @@ type FailureDiagnosticSnapshot = {
   processCapture: {
     error: string | null;
     ok: boolean;
+    ownedProcesses: WindowsProcessDiagnostic[];
     processes: WindowsProcessDiagnostic[];
     truncated: boolean;
   };
@@ -190,17 +194,12 @@ async function readFailureDiagnosticSnapshot(params: {
     params.probePath,
     params.eventsPath,
   ]);
-  for (const process of processCapture.processes) {
-    process.CommandLine = sanitizeDiagnosticText(process.CommandLine, params.replacements);
-  }
+  const sanitizedProcessCapture = sanitizeProcessCapture(processCapture, params.replacements);
   return {
     capturedAt: new Date().toISOString(),
     principal,
     principalError: sanitizeDiagnosticText(principalError, params.replacements),
-    processCapture: {
-      ...processCapture,
-      error: sanitizeDiagnosticText(processCapture.error, params.replacements),
-    },
+    processCapture: sanitizedProcessCapture,
     taskXml: sanitizeTaskXml(taskXml, params.replacements),
     verboseQuery: {
       code: verboseQuery.code,
@@ -216,6 +215,7 @@ async function writeFailureDiagnostics(params: {
   postEndError: string | null;
   preCleanup: FailureDiagnosticSnapshot | null;
   preCleanupError: string | null;
+  activeExternalStop: ExternalStopFailureSnapshot | null;
   replacements: Array<[string, string]>;
   rootDir: string;
   serviceOutput: string;
@@ -226,6 +226,15 @@ async function writeFailureDiagnostics(params: {
       {
         preCleanup: params.preCleanup,
         preCleanupError: sanitizeDiagnosticText(params.preCleanupError, params.replacements),
+        activeExternalStop: params.activeExternalStop
+          ? {
+              ...params.activeExternalStop,
+              processCapture: sanitizeProcessCapture(
+                params.activeExternalStop.processCapture,
+                params.replacements,
+              ),
+            }
+          : null,
         cleanupEnd: params.cleanupEnd
           ? {
               code: params.cleanupEnd.code,
@@ -248,6 +257,7 @@ async function cleanupNativeTask(params: {
   activePidPath: string;
   eventsPath: string;
   preserveEvidence: boolean;
+  activeExternalStop?: ExternalStopFailureSnapshot | null;
   probePath: string;
   rootDir: string;
   scriptPath: string;
@@ -295,6 +305,7 @@ async function cleanupNativeTask(params: {
         postEndError,
         preCleanup,
         preCleanupError,
+        activeExternalStop: params.activeExternalStop ?? null,
         replacements,
         rootDir: params.rootDir,
         serviceOutput: params.serviceOutput,
@@ -491,6 +502,7 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
 
     let testFailed = false;
     let testError: unknown;
+    let activeExternalStop: ExternalStopFailureSnapshot | null = null;
     const lifecyclePids: number[] = [];
     let installedPrincipal: ScheduledTaskPrincipal | null = null;
     let pendingProof: { path: string; content: string } | undefined;
@@ -600,8 +612,8 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
         const externalStops = [];
         let externalRun = recoveredRun;
         let externalProcesses = recoveredProcesses;
-        for (const [stopIndex, method] of ["schtasks /End", "Stop-ScheduledTask"].entries()) {
-          if (stopIndex > 0) {
+        for (const method of ["schtasks /End", "Stop-ScheduledTask"] as const) {
+          if (method === "Stop-ScheduledTask") {
             await service.start({ env, stdout });
             const nextRun = await proof.waitForExactProbeRun(eventsPath, 2);
             const nextProcesses = await waitForGatewayTaskSupervisorProcesses({ probe });
@@ -620,20 +632,23 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
             eventsPath,
             scriptPath,
           ]);
+          const ownedPids = getOwnedTaskProcessIds(
+            [externalRun.pid, externalProcesses.childPid, externalProcesses.supervisorPid],
+            processCapture,
+          );
+          activeExternalStop = {
+            capturedAt: new Date().toISOString(),
+            method,
+            gatewayPid: externalRun.pid,
+            childPid: externalProcesses.childPid,
+            supervisorPid: externalProcesses.supervisorPid,
+            ownedPids,
+            processCapture,
+          };
           expect(processCapture.ok).toBe(true);
           expect(processCapture.truncated).toBe(false);
           expect(processCapture.processes.map((entry) => entry.ProcessId)).toEqual(
             expect.arrayContaining([externalRun.pid, externalProcesses.supervisorPid]),
-          );
-          const ownedPids = Array.from(
-            new Set([
-              externalRun.pid,
-              externalProcesses.childPid,
-              externalProcesses.supervisorPid,
-              ...processCapture.processes.flatMap((entry) =>
-                entry.ProcessId === undefined ? [] : [entry.ProcessId],
-              ),
-            ]),
           );
           // External Scheduler stop must own extinction; service.stop() also kills
           // listeners and would conceal a surviving hidden launcher process tree.
@@ -659,6 +674,7 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
             lastTaskResult: stoppedTask.lastTaskResult,
             portReleaseRebind: true,
           });
+          activeExternalStop = null;
         }
 
         const ownerlessState = readGatewayOwnerLease({ env, current: true })?.state ?? "absent";
@@ -941,6 +957,7 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
       await lifetime.verifyCleanup(() =>
         cleanupNativeTask({
           activePidPath,
+          activeExternalStop,
           eventsPath,
           preserveEvidence: testFailed,
           probePath: probe.probePath,
