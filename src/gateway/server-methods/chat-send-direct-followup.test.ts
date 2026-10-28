@@ -39,6 +39,7 @@ import { isRpcSourceQueued } from "../../sessions/session-controller.rpc-sources
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { broadcastFor, createBroadcastPeer } from "../server-broadcast.test-support.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import { loadRealChatDispatch, successfulChatTurn } from "./chat-send-authority.test-support.js";
@@ -219,6 +220,10 @@ it("preserves opt-in strict refusal and admits an explicit fresh followup", asyn
   const fixture = await createFixture({ preserveContent: true });
   const operation = expectDefined(fixture.activeRun, "incumbent reply operation");
   const alice = ensureProfileForEmail("strict-steer-alice@example.test");
+  const queueUi = createBroadcastPeer("queue-ui", true, { caps: ["chat-queue-status"] });
+  const textClient = createBroadcastPeer("text-client", true);
+  const audience = broadcastFor([queueUi, textClient]);
+  vi.mocked(fixture.context.broadcast).mockImplementation(audience.broadcast);
   const bob = ensureProfileForEmail("strict-steer-bob@example.test");
   setClientProfile(fixture.client, bob);
   fixture.params.queueMode = "steer";
@@ -274,6 +279,11 @@ it("preserves opt-in strict refusal and admits an explicit fresh followup", asyn
     expectChat(fixture, fixture.params.idempotencyKey, "final", [
       { type: "text", text: refusal, openclawStatusNotice: true },
     ]);
+    expect(
+      queueUi.frames.some((frame) =>
+        JSON.stringify(frame.payload).includes("Someone else’s turn is still running"),
+      ),
+    ).toBe(true);
     const pending = await listSessionPendingInputs(fixture.scope);
     expect(pending).toMatchObject({
       total: 1,
@@ -336,6 +346,11 @@ it("preserves opt-in strict refusal and admits an explicit fresh followup", asyn
         text: "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.",
       },
     ]);
+    const queuedNotice = (frame: { payload: unknown }) =>
+      JSON.stringify(frame.payload).includes("Your message is queued");
+    expect(textClient.frames.filter(queuedNotice)).toHaveLength(1);
+    expect(queueUi.frames.filter(queuedNotice)).toEqual([]);
+    expect(fixture.context.chatRunState.resolveBuffer(followupId).text).toBe("");
     // Dequeue reads current policy while retaining the new source's human identity.
     config.tools = { ...config.tools, deny: ["exec"] };
     setRuntimeConfigSnapshot(config, config);
@@ -358,6 +373,16 @@ it("preserves opt-in strict refusal and admits an explicit fresh followup", asyn
     release.resolve();
     await wait(settled.promise);
     await fixture.finishDispatch();
+    expect(textClient.frames.filter(queuedNotice)).toHaveLength(1);
+    expect(queueUi.frames.filter(queuedNotice)).toEqual([]);
+    expectChat(fixture, followupId, "final", [
+      { type: "text", text: "Bob's explicit followup answered." },
+    ]);
+    expect(
+      queueUi.frames.some((frame) =>
+        JSON.stringify(frame.payload).includes("Bob's explicit followup answered."),
+      ),
+    ).toBe(true);
     expect((await listSessionPendingInputs(fixture.scope)).items).toEqual(pending.items);
     fixture.params.idempotencyKey = "strict-steer-bob-input";
     fixture.params.message = "Raw follow-up awaiting approval.";
