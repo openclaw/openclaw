@@ -413,6 +413,25 @@ it.each([
   expect(splitWorkspaceFilename(name)).toEqual({ stem, extension });
 });
 
+it.each([
+  ["composed query", "München", "Mu\u0308nchen.md"],
+  ["decomposed query", "Mu\u0308nchen", "München.md"],
+])("matches a %s against the canonically equivalent stored name", (_label, query, stored) => {
+  const listing = catalogListing([
+    workspaceFile(stored, "modified"),
+    workspaceFile("munchen.md", "read"),
+  ]);
+  const results = workspaceCatalogSearch(listing, query);
+  expect(results.map((entry) => entry.name)).toEqual([stored]);
+  // Returned entries keep the stored bytes; matching never rewrites them.
+  expect(results[0]?.path).toBe(stored);
+  // ASCII stays a literal comparison: no diacritic folding and no case regression.
+  expect(workspaceCatalogSearch(listing, "munchen").map((entry) => entry.name)).toEqual([
+    "munchen.md",
+  ]);
+  expect(workspaceCatalogSearch(listing, "MÜNCHEN").map((entry) => entry.name)).toEqual([stored]);
+});
+
 it.each([false, true])(
   "unions activity for canonical aliases regardless of order (reverse: %s)",
   (reverse) => {
