@@ -2115,7 +2115,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   }
 
   .sidebar-online__list {
-    grid-template-columns: 20px minmax(0, 1fr) 32px max-content;
+    grid-template-columns: max-content minmax(0, 1fr) 32px max-content;
   }
 
   .sidebar-online__menu-trigger.oc-menu-trigger {
