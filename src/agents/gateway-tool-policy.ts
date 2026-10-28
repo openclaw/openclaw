@@ -49,6 +49,31 @@ function narrowActions(
   actions: readonly string[],
 ): TSchema | undefined {
   const schema = tool.parameters;
+  const refusal = `Gateway tool policy requires ${tool.name} to declare a top-level string action field.`;
+  if (isRecord(schema) && Array.isArray(schema.anyOf)) {
+    // Union-parameter tools (variants each declare a literal action) keep only the
+    // members the policy allows. A member whose action is missing or carries neither
+    // const nor enum cannot be narrowed, so it keeps the same refusal.
+    const anyOf = schema.anyOf.flatMap((variant) => {
+      if (!isRecord(variant) || !isRecord(variant.properties)) {
+        throw new Error(refusal);
+      }
+      const action = variant.properties.action;
+      if (!isRecord(action)) {
+        throw new Error(refusal);
+      }
+      const values = Array.isArray(action.enum)
+        ? action.enum.filter((value): value is string => typeof value === "string")
+        : typeof action.const === "string"
+          ? [action.const]
+          : [];
+      if (!values.length) {
+        throw new Error(refusal);
+      }
+      return values.some((value) => actions.includes(value)) ? [variant] : [];
+    });
+    return anyOf.length ? { ...schema, anyOf } : undefined;
+  }
   const properties = isRecord(schema) ? schema.properties : undefined;
   const action = isRecord(properties) ? properties.action : undefined;
   if (
@@ -60,9 +85,7 @@ function narrowActions(
     action.oneOf ||
     action.allOf
   ) {
-    throw new Error(
-      `Gateway tool policy requires ${tool.name} to declare a top-level string action field.`,
-    );
+    throw new Error(refusal);
   }
   const allowed = actions.filter(
     (value) =>

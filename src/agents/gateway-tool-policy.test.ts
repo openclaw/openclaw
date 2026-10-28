@@ -47,6 +47,20 @@ function actionTool() {
   };
 }
 
+function unionActionTool() {
+  return {
+    ...createStubTool("threads"),
+    parameters: Type.Union([
+      Type.Object({ action: Type.Literal("list"), limit: Type.Optional(Type.Integer()) }),
+      Type.Object({ action: Type.Literal("read"), thread_id: Type.String() }),
+      Type.Object({ action: Type.Literal("archive"), confirm: Type.Boolean() }),
+    ]),
+    execute: vi
+      .fn()
+      .mockResolvedValue({ content: [{ type: "text", text: "completed" }], details: {} }),
+  };
+}
+
 afterEach(async () => {
   await resetCodeModeTestState();
   clearRuntimeConfigSnapshot();
@@ -80,6 +94,47 @@ describe("required Gateway tool policy", () => {
     });
     expect(projected?.name).toBe("automations");
     expect(applyGatewayToolPolicy([tool], { tools: { gatewayPolicy: { allow: [] } } })).toEqual([]);
+  });
+
+  it("narrows union-parameter tools to the variants the policy allows", () => {
+    const [tool] = applyGatewayToolPolicy([unionActionTool()], {
+      tools: { gatewayPolicy: { allow: ["threads"], actions: { threads: ["list"] } } },
+    });
+    const parameters = expectDefined(tool, "allowed union tool").parameters;
+    expect(Value.Check(parameters, { action: "list", limit: 5 })).toBe(true);
+    expect(Value.Check(parameters, { action: "read", thread_id: "t1" })).toBe(false);
+    expect(Value.Check(parameters, { action: "archive", confirm: true })).toBe(false);
+  });
+
+  it("withholds a union tool when no variant action is allowed", () => {
+    expect(
+      applyGatewayToolPolicy([unionActionTool()], {
+        tools: { gatewayPolicy: { allow: ["threads"], actions: { threads: ["write"] } } },
+      }),
+    ).toEqual([]);
+  });
+
+  it("keeps the top-level action refusal for union members that cannot be narrowed", () => {
+    const tool = {
+      ...unionActionTool(),
+      parameters: Type.Union([
+        Type.Object({ action: Type.Literal("list") }),
+        Type.Object({ thread_id: Type.String() }),
+      ]),
+    };
+    expect(() =>
+      applyGatewayToolPolicy([tool], {
+        tools: { gatewayPolicy: { allow: ["threads"], actions: { threads: ["list"] } } },
+      }),
+    ).toThrow("top-level string action field");
+  });
+
+  it("still requires an explicit action list for an allowed union tool", () => {
+    expect(() =>
+      applyGatewayToolPolicy([unionActionTool()], {
+        tools: { gatewayPolicy: { allow: ["threads"] } },
+      }),
+    ).toThrow("requires tools.gatewayPolicy.actions.threads");
   });
 
   it.each(["search", "code-mode"] as const)(
