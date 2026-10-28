@@ -266,6 +266,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
       expect(readStore().lastGood?.openai).toBe(alternateId);
     }
     expect(getOAuthApiKeyMock).toHaveBeenCalledOnce();
+    expect((getOAuthApiKeyMock.mock.calls[0] as unknown[])[2]).toEqual({ forceRefresh: true });
   });
 
   it("preserves lastGood for unrelated refresh failures", async () => {
