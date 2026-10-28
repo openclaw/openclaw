@@ -116,16 +116,12 @@ describe("channel ingress monitor admission", () => {
             })
           : new Error("transient append failure");
       const append = queue.enqueue.bind(queue);
-      const enqueue = vi
-        .spyOn(queue, "enqueue")
-        .mockImplementationOnce(async (...args) => {
-          if (kind === "outcome-unknown") {
-            await append(...args);
-          }
-          throw failure;
-        })
-        .mockImplementation(append);
-      // Retention is maintenance; a locked database must not cost the event its admission.
+      const enqueue = vi.spyOn(queue, "enqueue").mockImplementationOnce(async (...args) => {
+        if (kind === "outcome-unknown") {
+          await append(...args);
+        }
+        throw failure;
+      });
       const pruneFailure = new Error("database is locked");
       vi.spyOn(queue, "prune").mockRejectedValueOnce(pruneFailure);
       const admissions: boolean[] = [];
@@ -134,9 +130,7 @@ describe("channel ingress monitor admission", () => {
         appendRetryDelaysMs: kind === "outcome-unknown" ? [0, 0, 0] : [0, 0],
         retention: { pruneIntervalMs: 0 },
         onError: (error) => errors.push(error),
-        onDurableAdmission: (_raw, { isNew }) => {
-          admissions.push(isNew);
-        },
+        onDurableAdmission: (_raw, { isNew }) => void admissions.push(isNew),
       });
       const event = { id: "event", text: "one" };
       try {
@@ -243,9 +237,7 @@ describe("channel ingress monitor asynchronous inspection", () => {
     });
     try {
       await monitor.waitForPumpIdle();
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
       expect(settled).toBe(false);
       expect(deliver).not.toHaveBeenCalled();
       if (mode === "deliver") {
