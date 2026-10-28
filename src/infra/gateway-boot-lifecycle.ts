@@ -37,15 +37,13 @@ export function formatGatewayRepeatedSignalHint(
  * different default account than the warning named.
  */
 export function formatGatewayCrashLoopManualChannelStartHint(target?: {
-  channelId: string;
+  channelId?: string;
   accountId?: string;
 }): string {
-  const params = JSON.stringify({
-    channel: target?.channelId ?? "<id>",
-    ...(target?.accountId ? { accountId: target.accountId } : {}),
-  });
-  const command = formatCliCommand("openclaw gateway call channels.start");
-  return `Start a channel manually with: ${command} --params '${params}'`;
+  const channel = target?.channelId ?? "<id>";
+  const account = target?.accountId ? ` --account ${target.accountId}` : "";
+  const command = formatCliCommand("openclaw channels start");
+  return `Start a channel manually with: ${command} --channel ${channel}${account}`;
 }
 
 const gatewayLifecycleLog = createSubsystemLogger("gateway/lifecycle");

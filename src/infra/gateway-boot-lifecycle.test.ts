@@ -429,14 +429,12 @@ describe("gateway crash-loop breaker", () => {
 
 describe("formatGatewayCrashLoopManualChannelStartHint", () => {
   it("uses a placeholder when no channel is known", () => {
-    expect(formatGatewayCrashLoopManualChannelStartHint()).toContain(
-      `--params '{"channel":"<id>"}'`,
-    );
+    expect(formatGatewayCrashLoopManualChannelStartHint()).toContain("--channel <id>");
   });
 
   it("names the channel being suppressed", () => {
     expect(formatGatewayCrashLoopManualChannelStartHint({ channelId: "telegram" })).toContain(
-      `--params '{"channel":"telegram"}'`,
+      "--channel telegram",
     );
   });
 
@@ -455,7 +453,7 @@ describe("formatGatewayCrashLoopManualChannelStartHint", () => {
     expect(
       formatGatewayCrashLoopManualChannelStartHint({ channelId: "telegram", accountId: "work" }),
     ).toBe(
-      `Start a channel manually with: ${command} gateway call channels.start --params '{"channel":"telegram","accountId":"work"}'`,
+      `Start a channel manually with: ${command} channels start --channel telegram --account work`,
     );
   });
 });

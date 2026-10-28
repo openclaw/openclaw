@@ -11,6 +11,7 @@ import { runChannelLogin, runChannelLogout } from "./channel-auth.js";
 import { formatCliChannelOptions } from "./channel-options.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { hasExplicitOptions, inheritOptionFromParent } from "./command-options.js";
+import { addGatewayClientOptions } from "./gateway-rpc.js";
 import { formatDocsHelp, formatHelpExamples } from "./help-format.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
@@ -206,6 +207,14 @@ export async function registerChannelsCli(
             "Add or update a channel account non-interactively.",
           ],
           ["openclaw channels login --channel whatsapp", "Link a WhatsApp Web account."],
+          [
+            "openclaw channels stop --channel whatsapp --account work --json",
+            "Stop one account without clearing pairing or credentials.",
+          ],
+          [
+            "openclaw channels start --channel whatsapp --account work --json",
+            "Start the same account again (manual crash-loop override).",
+          ],
         ])}\n${formatDocsHelp("/cli/channels")}`,
     );
 
@@ -465,6 +474,69 @@ export async function registerChannelsCli(
         );
       });
     });
+
+  for (const action of ["start", "stop", "reconnect"] as const) {
+    const description =
+      action === "start"
+        ? "Start one channel account runtime without re-authenticating (channels.start)"
+        : action === "stop"
+          ? "Stop one channel account runtime without clearing credentials (channels.stop)"
+          : "Stop then start one channel account (non-destructive reconnect)";
+    addGatewayClientOptions(
+      channels
+        .command(action)
+        .description(description)
+        .requiredOption("--channel <name>", `Channel (${channelNames})`)
+        .option("--account <id>", "Account id (omit for default)", parseAccountSelector)
+        .option("--json", "Output JSON", false)
+        .addHelpText(
+          "after",
+          () =>
+            `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+              [
+                `openclaw channels ${action} --channel whatsapp --account work --json`,
+                action === "reconnect"
+                  ? "Stop then start one WhatsApp account without logout."
+                  : action === "stop"
+                    ? "Stop one WhatsApp account without clearing pairing."
+                    : "Start one WhatsApp account (keeps credentials).",
+              ],
+              [
+                `openclaw channels ${action} --channel telegram --port 18789 --token $TOKEN --json`,
+                "Target an explicit local Gateway.",
+              ],
+            ])}\n\n${theme.muted(
+              action === "reconnect"
+                ? "Runs channels.stop then channels.start (operator.admin). Prefer over gateway call. Distinct from channels logout."
+                : `Backed by channels.${action} (operator.admin). Prefer over gateway call. Distinct from channels logout / gateway restart.`,
+            )}`,
+        )
+        .action(async (opts) => {
+          await runCommandWithRuntime(defaultRuntime, async () => {
+            const mod = await import("../commands/channels/start-stop.js");
+            const run =
+              action === "start"
+                ? mod.channelsStartCommand
+                : action === "stop"
+                  ? mod.channelsStopCommand
+                  : mod.channelsReconnectCommand;
+            await run(
+              {
+                channel: opts.channel as string, // SAFETY: requiredOption --channel is a string.
+                account: opts.account as string | undefined, // SAFETY: Commander optional string flag.
+                url: opts.url as string | undefined, // SAFETY: Gateway client option is string | undefined.
+                port: opts.port as string | undefined, // SAFETY: Gateway client option is string | undefined.
+                token: opts.token as string | undefined, // SAFETY: Gateway client option is string | undefined.
+                password: opts.password as string | undefined, // SAFETY: Gateway client option is string | undefined.
+                timeout: opts.timeout as string | undefined, // SAFETY: Gateway client option is string | undefined.
+                json: Boolean(opts.json),
+              },
+              defaultRuntime,
+            );
+          });
+        }),
+    );
+  }
 
   for (const mode of ["login", "logout"] as const) {
     const auth = channels

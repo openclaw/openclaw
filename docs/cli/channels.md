@@ -249,17 +249,19 @@ openclaw channels logout --channel whatsapp
 
 ## Per-account recovery (non-destructive)
 
-When one account needs to reconnect while keeping its pairing and credentials, call the `channels.stop` and `channels.start` Gateway RPCs. Both require `operator.admin`. Invoke them through `openclaw gateway call`:
+When one account needs to reconnect while keeping its pairing and credentials, use the first-class `channels stop` / `channels start` commands (or `channels reconnect` for both). They wrap the `channels.stop` / `channels.start` Gateway RPCs and require `operator.admin`:
 
 ```bash
 # Stop one WhatsApp account without clearing its pairing.
-openclaw gateway call channels.stop --params '{"channel":"whatsapp","accountId":"<accountId>"}'
+openclaw channels stop --channel whatsapp --account <accountId> --json
 # Start the same account again.
-openclaw gateway call channels.start --params '{"channel":"whatsapp","accountId":"<accountId>"}'
+openclaw channels start --channel whatsapp --account <accountId> --json
+# Or stop then start in one step:
+openclaw channels reconnect --channel whatsapp --account <accountId> --json
 openclaw channels status --channel whatsapp --probe
 ```
 
-Use the same `accountId` in both calls. Omit it from both to select the default account.
+Use the same `--account` in both calls. Omit it from both to select the default account. Prefer these over `openclaw gateway call channels.stop|start`.
 
 `channels.stop` returns `{ channel, accountId, stopped }`; `channels.start` returns `{ channel, accountId, started, outcome }`. These booleans reflect the account's runtime snapshot after the operation: `started` is true only when `running` is true, and `stopped` is true when `running` is not true. A `started: false` response does not by itself establish that the account is stopped, and `started: true` does not establish that the provider connection is healthy. Check channel status and logs after recovery.
 
