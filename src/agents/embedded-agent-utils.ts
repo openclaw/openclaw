@@ -57,14 +57,20 @@ export function sanitizeAssistantVisibleStreamText(
   });
 }
 
-export function createAssistantVisibleStreamText(phase?: AssistantPhase) {
+export function createAssistantVisibleStreamText(
+  phase?: AssistantPhase,
+  options?: { preserveTrailingWhitespace?: boolean },
+) {
   return createTextProjection([
     ...assistantVisibleTextFilters(
       phase === "final_answer" ? "final-answer-delivery" : "delivery",
       true,
+      options,
     ),
     ...userFacingTextFilters(false, true),
-    trimTextFilter("both", { preserveCodeIndentation: true }),
+    trimTextFilter(options?.preserveTrailingWhitespace ? "start" : "both", {
+      preserveCodeIndentation: true,
+    }),
   ]);
 }
 
@@ -74,8 +80,14 @@ function finalizeAssistantExtraction(errorContext: boolean, extracted: string): 
     : sanitizeUserFacingText(extracted);
 }
 
+export type AssistantTextSource = {
+  content?: unknown;
+  stopReason?: unknown;
+  phase?: unknown;
+};
+
 function prepareEmbeddedAssistantTextForPhase(
-  msg: AssistantMessage,
+  msg: AssistantTextSource,
   requestedPhase: AssistantPhase,
   prepareText?: Parameters<typeof prepareAssistantVisibleText>[1],
 ): () => string {
@@ -91,7 +103,7 @@ function prepareEmbeddedAssistantTextForPhase(
       return selectedPhase === "final_answer" && !extracted.trim() ? "" : extracted;
     };
   };
-  const messagePhase = normalizeAssistantPhase((msg as { phase?: unknown }).phase);
+  const messagePhase = normalizeAssistantPhase(msg.phase);
   if (typeof msg.content === "string") {
     const selectedPhase =
       requestedPhase === "final_answer" && messagePhase !== "final_answer"
@@ -187,7 +199,7 @@ function prepareEmbeddedAssistantTextForPhase(
 
 /** Prepare selected source parts now; render their visible text only when requested. */
 export function prepareAssistantVisibleText(
-  msg: AssistantMessage,
+  msg: AssistantTextSource,
   prepareText?: (
     text: string,
     final: boolean,
@@ -200,7 +212,7 @@ export function prepareAssistantVisibleText(
 
 /** Extract text intended for users, preferring explicit final-answer phase blocks. */
 export function extractAssistantVisibleText(
-  msg: AssistantMessage,
+  msg: AssistantTextSource,
   prepareText?: Parameters<typeof prepareAssistantVisibleText>[1],
 ): string {
   return prepareAssistantVisibleText(msg, prepareText)();

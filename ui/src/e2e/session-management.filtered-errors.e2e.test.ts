@@ -140,7 +140,7 @@ suite.define(() => {
         await page.clock.install();
         await page.goto(`${suite.server.baseUrl}chat`);
         const selectFilter = async (label: "Archived" | "All" | "Active") => {
-          await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
+          await page.getByRole("button", { name: /^Filter & sort · /, exact: true }).click();
           await chooseSidebarMenuOption(page, "Status", label);
           await closeSidebarMenu(page);
         };

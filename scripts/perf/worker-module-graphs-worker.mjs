@@ -15,6 +15,7 @@ import {
 import { isMainThread, workerData } from "node:worker_threads";
 
 const replacedFiles = new Set([
+  "src/agents/worktrees/git-worktree-operations.runtime.ts",
   "src/agents/workspace-git.ts",
   "src/gateway/worker-environments/workspace-result-git.ts",
   "src/infra/git-exec.ts",

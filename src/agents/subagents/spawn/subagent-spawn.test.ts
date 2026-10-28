@@ -19,6 +19,7 @@ import { resolveUserPath } from "../../../utils.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { installAcceptedSubagentGatewayMock } from "../../test-helpers/subagent-gateway.js";
 import type { RegisterSubagentRunOptions } from "../registry/subagent-registry.types.js";
+import type { SpawnSubagentContext, SpawnSubagentParams } from "./subagent-spawn-contract.js";
 import { expectSharedPendingSpawnCapacity } from "./subagent-spawn.pending-capacity.test-support.js";
 import {
   createConfigOverride,
@@ -73,6 +74,10 @@ function gatewayRequest(method: string): Record<string, unknown> {
   return requireRecord(request);
 }
 
+function agentParams() {
+  return requireRecord(gatewayRequest("agent").params);
+}
+
 function firstRegisteredSubagentRun(): Record<string, unknown> {
   return requireRecord(hoisted.registerSubagentRunMock.mock.calls[0]?.[0]);
 }
@@ -91,22 +96,20 @@ function expectNoChildSpawnSideEffects(): void {
 }
 
 const collectorContext = { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" };
-function spawn(
-  params: Parameters<typeof spawnSubagentDirect>[0],
-  ctx: Parameters<typeof spawnSubagentDirect>[1] = {},
-) {
+function spawn(params: SpawnSubagentParams, ctx: SpawnSubagentContext = {}) {
   return spawnSubagentDirect(params, { agentSessionKey: "agent:main:main", ...ctx });
 }
 function spawnCollector(
   task: string,
-  params: Partial<Parameters<typeof spawnSubagentDirect>[0]> = {},
+  params: Partial<SpawnSubagentParams> = {},
+  context: SpawnSubagentContext = {},
 ) {
-  return spawn({ task, collect: true, ...params }, collectorContext);
+  return spawn({ task, collect: true, ...params }, { ...collectorContext, ...context });
 }
 async function expectRefusedSpawn(
-  params: Partial<Parameters<typeof spawnSubagentDirect>[0]>,
+  params: Partial<SpawnSubagentParams>,
   error: string,
-  context: Parameters<typeof spawnSubagentDirect>[1] = {},
+  context: SpawnSubagentContext = {},
   status = "error",
 ) {
   expect(await spawn({ task: "must not launch", ...params }, context)).toMatchObject({
@@ -148,6 +151,15 @@ function replayCollectorInput() {
     swarmLaunchReplayKey: "cm-restart:bridge:1",
     swarmLaunchRequestFingerprint: "sha256:request",
   };
+}
+
+function configureMain(defaults: Record<string, unknown>) {
+  configOverride = createConfigOverride({
+    agents: {
+      defaults: { workspace: os.tmpdir(), ...defaults },
+      entries: { main: { workspace: "/tmp/workspace-main" } },
+    },
+  });
 }
 
 describe("spawnSubagentDirect seam flow", () => {
@@ -208,6 +220,7 @@ describe("spawnSubagentDirect seam flow", () => {
       await schedulerWork.close();
     } finally {
       vi.unstubAllEnvs();
+      vi.useRealTimers();
     }
   });
 
@@ -247,37 +260,11 @@ describe("spawnSubagentDirect seam flow", () => {
     },
   );
 
-  it.each([false, true])(
-    "rejects invalid worktree names before reserving native work (collect=%s)",
-    async (collect) => {
-      const onSpawnEffectsStart = vi.fn();
-      const result = await spawn(
-        {
-          task: "inspect",
-          worktree: true,
-          worktreeName: "codex/qa-telemetry-prompt-cache-20261016",
-          collect,
-        },
-        { ...collectorContext, onSpawnEffectsStart },
-      );
-      expect(onSpawnEffectsStart).not.toHaveBeenCalled();
-      expectNoChildSpawnSideEffects();
-      expect(result).toEqual({
-        status: "error",
-        error: "worktree name must match [a-z0-9][a-z0-9-]{0,63}",
-      });
-    },
-  );
-
-  it.each<
+  it.each<[Partial<SpawnSubagentParams>, string, boolean?, SpawnSubagentContext?, string?]>([
     [
-      Partial<Parameters<typeof spawnSubagentDirect>[0]>,
-      string,
-      boolean?,
-      Parameters<typeof spawnSubagentDirect>[1]?,
-      string?,
-    ]
-  >([
+      { worktree: true, worktreeName: "codex/qa-telemetry-prompt-cache-20261016", collect: true },
+      "worktree name must match [a-z0-9][a-z0-9-]{0,63}",
+    ],
     [{ completionTarget: "parent", collect: true }, 'completionTarget="parent"'],
     [
       { completionTarget: "parent" },
@@ -296,7 +283,9 @@ describe("spawnSubagentDirect seam flow", () => {
     ],
   ])("rejects %j with %s before child effects", async (params, error, enabled, context, status) => {
     configureSwarm(enabled ?? false);
-    await expectRefusedSpawn(params, error, context, status);
+    const onSpawnEffectsStart = vi.fn();
+    await expectRefusedSpawn(params, error, { ...context, onSpawnEffectsStart }, status);
+    expect(onSpawnEffectsStart).not.toHaveBeenCalled();
   });
 
   it("rejects explicit same-agent targets when allowAgents excludes the requester", async () => {
@@ -307,13 +296,8 @@ describe("spawnSubagentDirect seam flow", () => {
     });
 
     const result = await spawn(
-      {
-        task: "spawn myself explicitly",
-        agentId: "task-manager",
-      },
-      {
-        agentSessionKey: "agent:task-manager:main",
-      },
+      { task: "spawn myself explicitly", agentId: "task-manager" },
+      { agentSessionKey: "agent:task-manager:main" },
     );
 
     expect(result.status).toBe("forbidden");
@@ -325,18 +309,20 @@ describe("spawnSubagentDirect seam flow", () => {
     configureSwarm();
     const readStore = captureStore();
 
-    const result = await spawn(
+    const progressOrigin = {
+      channel: "telegram",
+      accountId: "default",
+      to: "chat:123",
+      threadId: "456",
+    };
+    const result = await spawnCollector(
+      "collect evidence",
+      { outputSchema: { type: "object", required: ["answer"] } },
       {
-        task: "collect evidence",
-        collect: true,
-        outputSchema: { type: "object", required: ["answer"] },
-      },
-      {
-        ...collectorContext,
-        agentChannel: "telegram",
-        agentAccountId: "default",
-        agentTo: "chat:123",
-        agentThreadId: "456",
+        agentChannel: progressOrigin.channel,
+        agentAccountId: progressOrigin.accountId,
+        agentTo: progressOrigin.to,
+        agentThreadId: progressOrigin.threadId,
       },
     );
 
@@ -347,31 +333,21 @@ describe("spawnSubagentDirect seam flow", () => {
       expectsCompletionMessage: false,
     });
     const registerInput = firstRegisteredSubagentRun();
-    expect(registerInput).toMatchObject({
-      progressOrigin: {
-        channel: "telegram",
-        accountId: "default",
-        to: "chat:123",
-        threadId: "456",
-      },
-    });
+    expect(registerInput).toMatchObject({ progressOrigin });
     expect(readStore()[result.childSessionKey!]).toMatchObject({
       swarmGroupId: "swarm:agent:main:main:parent-run",
       swarmCollector: true,
       swarmOutputSchema: { type: "object", required: ["answer"] },
     });
     await vi.waitFor(() => gatewayRequest("agent"));
-    expect(gatewayRequest("agent")).toMatchObject({
-      params: {
-        swarmCollector: true,
-        swarmOutputSchema: { type: "object", required: ["answer"] },
-      },
+    const request = agentParams();
+    expect(request).toMatchObject({
+      swarmCollector: true,
+      swarmOutputSchema: { type: "object", required: ["answer"] },
     });
-    const agentParams = requireRecord(gatewayRequest("agent").params);
-    expect(agentParams).not.toHaveProperty("channel");
-    expect(agentParams).not.toHaveProperty("to");
-    expect(agentParams).not.toHaveProperty("accountId");
-    expect(agentParams).not.toHaveProperty("threadId");
+    for (const key of ["channel", "to", "accountId", "threadId"]) {
+      expect(request).not.toHaveProperty(key);
+    }
     await vi.waitFor(() =>
       expect(hoisted.startQueuedSubagentRunMock).toHaveBeenCalledWith(result.runId, "run-1"),
     );
@@ -379,10 +355,7 @@ describe("spawnSubagentDirect seam flow", () => {
     hoisted.listSwarmRunsForGroupMock.mockReturnValue([
       { ...registerInput, execution: { status: "running" } },
     ]);
-    const second = await spawn(
-      { task: "collect parallel evidence", collect: true },
-      collectorContext,
-    );
+    const second = await spawnCollector("collect parallel evidence");
     expect(second.status).toBe("accepted");
   });
 
@@ -407,7 +380,7 @@ describe("spawnSubagentDirect seam flow", () => {
       swarmLaunchRequestFingerprint: "sha256:request",
     });
     await vi.waitFor(() => expect(gatewayRequest("agent")).toBeDefined());
-    expect(requireRecord(gatewayRequest("agent").params).idempotencyKey).toBe(result.runId);
+    expect(agentParams().idempotencyKey).toBe(result.runId);
   });
 
   it("carries explicit model authorization through a queued collector launch", async () => {
@@ -426,9 +399,7 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(queuedRequest).not.toHaveProperty("provider");
     expect(queuedRequest).not.toHaveProperty("model");
     expect(queuedLaunch).toMatchObject({
-      authorization: {
-        modelOverride: { provider: "openai", model: "gpt-5.4" },
-      },
+      authorization: { modelOverride: { provider: "openai", model: "gpt-5.4" } },
     });
     await vi.waitFor(() => expect(gatewayRequest("agent")).toBeDefined());
     expect(gatewayRequest("agent")).toMatchObject({
@@ -437,21 +408,31 @@ describe("spawnSubagentDirect seam flow", () => {
     });
   });
 
-  it("returns the model owner's policy refusal before creating child state", async () => {
-    const model = "fixture/blocked";
-    const error = "model not allowed: fixture/blocked";
-    hoisted.prepareModelChoiceMock.mockResolvedValue({ kind: "unavailable", error });
-    const result = await spawn({ task: "validate before launch", model });
-    expect(result.status).toBe("error");
-    expect(result.error).toContain(error);
-    expectNoChildSpawnSideEffects();
-  });
-
-  it("rejects failed model preparation without creating child state", async () => {
-    hoisted.prepareModelChoiceMock.mockRejectedValue(new Error("configuration unavailable"));
+  it.each([
+    ["unavailable", "model not allowed: fixture/blocked"],
+    ["throws", "sessions_spawn could not verify the selected model: configuration unavailable"],
+    ["no-tools", "requires a tool-capable target model"],
+  ] as const)("rejects model preparation before child effects (%s)", async (failure, error) => {
+    if (failure === "no-tools") {
+      configureSwarm();
+      hoisted.prepareModelChoiceMock.mockImplementation(async (request) => {
+        const choice = await supportedSpawnModelChoice(request);
+        if (choice.kind !== "resolved") {
+          throw new Error("Expected supported fixture model");
+        }
+        return { ...choice, model: { ...choice.model, compat: { supportsTools: false } } };
+      });
+    } else if (failure === "throws") {
+      hoisted.prepareModelChoiceMock.mockRejectedValue(new Error("configuration unavailable"));
+    } else {
+      hoisted.prepareModelChoiceMock.mockResolvedValue({ kind: "unavailable", error });
+    }
     await expectRefusedSpawn(
-      { model: "openai/gpt-5.4" },
-      "sessions_spawn could not verify the selected model: configuration unavailable",
+      failure === "no-tools"
+        ? { model: "openai/no-tools", collect: true, outputSchema: { type: "object" } }
+        : { model: "fixture/blocked" },
+      error,
+      failure === "no-tools" ? collectorContext : {},
     );
   });
 
@@ -631,74 +612,39 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
   });
 
-  it("reconciles a transport-ambiguous dispatch so an accepted run is surfaced instead of misreported as an error", async () => {
-    let dispatchAttempts = 0;
-    hoisted.callGatewayMock.mockImplementation(
-      async (request: { method?: string; timeoutMs?: number }) => {
-        if (request.method === "agent") {
-          dispatchAttempts += 1;
-          if (dispatchAttempts === 1) {
-            throw new Error("gateway timeout after 60000ms");
-          }
-          if (dispatchAttempts === 2) {
-            return {
-              runId: "accepted-ambig-run",
-              status: "in_flight",
-              admissionPending: true,
-            };
-          }
-          return { runId: "accepted-ambig-run", status: "in_flight" };
-        }
-        return request.method?.startsWith("sessions.") ? { ok: true } : {};
-      },
+  it.each([false, true])("reconciles ambiguous dispatch (terminal=%s)", async (terminal) => {
+    const accepted = { runId: "accepted-ambig-run", status: "in_flight" };
+    const dispatch = vi.fn().mockRejectedValueOnce(new Error("gateway timeout after 60000ms"));
+    // A forward wall-clock step between iterations must not exhaust the reconcile budget.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    if (!terminal) {
+      dispatch.mockImplementationOnce(() => {
+        vi.setSystemTime(Date.now() + 10_000);
+        return Promise.resolve({ ...accepted, admissionPending: true });
+      });
+    }
+    dispatch.mockResolvedValue(terminal ? { runId: "stopped-run", status: "timeout" } : accepted);
+    hoisted.callGatewayMock.mockImplementation(async ({ method }: { method?: string }) =>
+      method === "agent" ? dispatch() : { ok: true },
     );
     const result = await spawn({ task: "ambiguous child" });
-
-    expect(dispatchAttempts).toBe(3);
-    const agentRequests = gatewayRequestRecords().filter((request) => request.method === "agent");
-    expect(agentRequests.map((request) => request.params)).toEqual(
-      Array(3).fill(agentRequests[0]?.params),
+    const terminalError = expect.stringContaining("no active subagent run (status: timeout)");
+    expect(result).toMatchObject(
+      terminal
+        ? { status: "error", error: terminalError }
+        : { status: "accepted", runId: accepted.runId, childSessionKey: expect.any(String) },
     );
-    expect(agentRequests.slice(1).map((request) => request.timeoutMs)).toEqual([800, 800]);
-    expect(result).toMatchObject({
-      status: "accepted",
-      runId: "accepted-ambig-run",
-      childSessionKey: expect.any(String),
-    });
-    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not register a child when reconciliation finds a terminal run", async () => {
-    let dispatchAttempts = 0;
-    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "agent" && ++dispatchAttempts === 1) {
-        throw new Error("gateway timeout after 60000ms");
-      }
-      return request.method === "agent"
-        ? { runId: "stopped-run", status: "timeout" }
-        : { ok: true };
-    });
-
-    const result = await spawn({ task: "ambiguous terminal child" });
-
-    expect(dispatchAttempts).toBe(2);
-    expect(result).toMatchObject({
-      status: "error",
-      error: expect.stringContaining("no active subagent run (status: timeout)"),
-    });
-    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+    if (terminal) {
+      expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+    } else {
+      const requests = gatewayRequestRecords().filter((request) => request.method === "agent");
+      expect(requests.map((request) => request.params)).toEqual(Array(3).fill(requests[0]?.params));
+      expect(requests.slice(1).map((request) => request.timeoutMs)).toEqual([800, 800]);
+    }
   });
 
   it("shares pending child capacity between native and visible spawn paths", async ({ signal }) => {
-    configOverride = createConfigOverride({
-      agents: {
-        defaults: {
-          workspace: os.tmpdir(),
-          subagents: { maxChildrenPerAgent: 1 },
-        },
-        entries: { main: { workspace: "/tmp/workspace-main" } },
-      },
-    });
+    configureMain({ subagents: { maxChildrenPerAgent: 1 } });
     await expectSharedPendingSpawnCapacity({
       config: configOverride as OpenClawConfig,
       spawn,
@@ -706,28 +652,6 @@ describe("spawnSubagentDirect seam flow", () => {
       countActiveRuns: hoisted.countActiveRunsForSessionMock,
       signal,
     });
-  });
-
-  it("rejects schema collection for a model that cannot call tools", async () => {
-    configureSwarm();
-    hoisted.prepareModelChoiceMock.mockImplementation(async (request) => {
-      const choice = await supportedSpawnModelChoice(request);
-      if (choice.kind !== "resolved") {
-        throw new Error("Expected supported fixture model");
-      }
-      return { ...choice, model: { ...choice.model, compat: { supportsTools: false } } };
-    });
-
-    const rejected = await spawnCollector("structured result", {
-      model: "openai/no-tools",
-      outputSchema: { type: "object" },
-    });
-
-    expect(rejected.status).toBe("error");
-    expect(rejected.error).toContain("requires a tool-capable target model");
-    expect(hoisted.prepareModelChoiceMock).toHaveBeenCalledOnce();
-    expect(hoisted.updateSessionStoreMock).not.toHaveBeenCalled();
-    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
   });
 
   it.each(["off", "all"] as const)(
@@ -847,15 +771,7 @@ describe("spawnSubagentDirect seam flow", () => {
   );
 
   it("inherits requester selected-model thinking without a session or agent default", async () => {
-    configOverride = createConfigOverride({
-      agents: {
-        defaults: {
-          workspace: os.tmpdir(),
-          models: { "openai-codex/gpt-5.4": { params: { thinking: "low" } } },
-        },
-        entries: { main: { workspace: "/tmp/workspace-main" } },
-      },
-    });
+    configureMain({ models: { "openai-codex/gpt-5.4": { params: { thinking: "low" } } } });
     hoisted.loadSessionStoreMock.mockReturnValue({
       "agent:main:main": {
         providerOverride: "openai-codex",
@@ -865,10 +781,7 @@ describe("spawnSubagentDirect seam flow", () => {
       },
     });
     const readStore = captureStore();
-    const result = await spawn(
-      { task: "inherit requester thinking" },
-      { agentSessionKey: "agent:main:main" },
-    );
+    const result = await spawn({ task: "inherit requester thinking" });
     expect(result.status).toBe("accepted");
     expect(readStore()[result.childSessionKey!]?.thinkingLevel).toBe("low");
   });
@@ -888,7 +801,6 @@ describe("spawnSubagentDirect seam flow", () => {
       childSessionKey: expect.stringMatching(/^agent:main:subagent:/),
       error: expect.stringContaining("invalid model: bad-model"),
     });
-    expect(hoisted.updateSessionStoreMock).toHaveBeenCalledOnce();
     expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
     expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
     expect(hoisted.emitSessionLifecycleEventMock).not.toHaveBeenCalled();

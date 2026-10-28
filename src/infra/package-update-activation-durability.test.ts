@@ -53,14 +53,7 @@ beforeEach(() => {
   ({ root, assertDatabasePath, childGuardEnv } = fixture.setup());
   anchor = "";
 });
-afterEach(async () => {
-  try {
-    await fixture.lifetime.cleanup();
-  } finally {
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-  }
-});
+afterEach(async () => fixture.cleanup());
 
 describe.skipIf(process.platform === "win32")("package fingerprint bounds", () => {
   beforeEach(() => {

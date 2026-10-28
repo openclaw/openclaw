@@ -3,8 +3,14 @@
 // Pair baseline/candidate on interleaved CPUs, then swap placement. Run --allocations
 // and --work-counts separately: their instrumentation is not timing-gate evidence.
 // On Node 26, --work-counts --assert-promise-budget checks promises per native read job.
+// --sample-delay-ms 1 --seconds 30 accelerates only watcher timers for owner CPU/allocation
+// per completed sample. It is not enforcement-latency evidence; run runaway proof separately.
+// --trees 1 --descendants 9 measures an unchanged ten-process tree. All descendants
+// originate on nonleader threads; normal Node threads remain in every process.
+// --max-allocation-bytes-per-sample <bytes> asserts a measured V8 allocation
+// budget with --sample-delay-ms; use the same fixture/runtime for base and head.
 import assert from "node:assert/strict";
-import { createHook } from "node:async_hooks";
+import { AsyncLocalStorage, createHook } from "node:async_hooks";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
@@ -24,12 +30,15 @@ const { values } = parseArgs({
   options: {
     owner: { type: "string" },
     trees: { type: "string", default: "20" },
+    descendants: { type: "string", default: "2" },
     seconds: { type: "string", default: "60" },
+    "sample-delay-ms": { type: "string" },
     "start-file": { type: "string" },
     "gc-log": { type: "string" },
     allocations: { type: "boolean", default: false },
     "work-counts": { type: "boolean", default: false },
     "assert-promise-budget": { type: "boolean", default: false },
+    "max-allocation-bytes-per-sample": { type: "string" },
     runaway: { type: "boolean", default: false },
     output: { type: "string" },
   },
@@ -45,10 +54,33 @@ assert.ok(
   !values["assert-promise-budget"] || values["work-counts"],
   "--assert-promise-budget requires --work-counts",
 );
-const integer = (name: "trees" | "seconds", min: number) =>
+const integer = (name: "trees" | "descendants" | "seconds", min: number) =>
   parseStrictIntegerOption({ raw: values[name], label: `--${name}`, min, fallback: min });
 const trees = integer("trees", 1);
+const descendants = integer("descendants", 1);
+assert.ok(!values.runaway || descendants === 2, "--runaway requires --descendants 2");
 const seconds = integer("seconds", 1);
+const sampleDelayMs = values["sample-delay-ms"]
+  ? parseStrictIntegerOption({
+      raw: values["sample-delay-ms"],
+      label: "--sample-delay-ms",
+      min: 1,
+      fallback: 1,
+    })
+  : undefined;
+assert.ok(!sampleDelayMs || !values.runaway, "Run runaway proof with the real sampling intervals");
+const allocationBudget = values["max-allocation-bytes-per-sample"]
+  ? parseStrictIntegerOption({
+      raw: values["max-allocation-bytes-per-sample"],
+      label: "--max-allocation-bytes-per-sample",
+      min: 1,
+      fallback: 1,
+    })
+  : undefined;
+assert.ok(
+  !allocationBudget || sampleDelayMs,
+  "--max-allocation-bytes-per-sample requires --sample-delay-ms",
+);
 const outputPath = path.resolve(values.output);
 const profilePath = `${outputPath}.heapprofile`;
 const fixture = fileURLToPath(new URL("./child-memory-fixture.cjs", import.meta.url));
@@ -93,6 +125,25 @@ function allocated(profile: HeapProfiler.SamplingHeapProfile) {
   };
 }
 
+const watcherContext = new AsyncLocalStorage<boolean>();
+const originalSetTimeout = globalThis.setTimeout;
+let capturingSamples = false;
+let completedSamples = 0;
+const requestedIntervals: Record<string, number> = {};
+if (sampleDelayMs) {
+  globalThis.setTimeout = Object.assign((...args: Parameters<typeof setTimeout>) => {
+    if (watcherContext.getStore()) {
+      assert.ok(args[1] === 1000 || args[1] === 5000, "Unexpected watcher interval");
+      if (capturingSamples) {
+        completedSamples++;
+        requestedIntervals[args[1]] = (requestedIntervals[args[1]] ?? 0) + 1;
+      }
+      args[1] = sampleDelayMs;
+    }
+    return originalSetTimeout(...args);
+  }, originalSetTimeout);
+}
+
 const children: ChildProcess[] = [];
 const stops: Array<() => void> = [];
 const inspector = new Session();
@@ -113,7 +164,7 @@ const resourceHook = values["work-counts"]
 try {
   // Prepare each identical tree sequentially. Setup allocation is outside capture.
   for (let index = 0; index < trees; index++) {
-    const child = spawn(process.execPath, [fixture, "2"], {
+    const child = spawn(process.execPath, [fixture, String(descendants)], {
       detached: true,
       stdio: ["pipe", "pipe", "inherit"],
     });
@@ -146,10 +197,10 @@ try {
         failure ??= new Error("Fixture exited during measurement");
       }
     });
-    stops.push(
+    const startWatch = () =>
       watchChildMemory({
         pid: child.pid,
-        limitBytes: 768 * 1024 ** 2,
+        limitBytes: Math.max(768, (descendants + 1) * 128) * 1024 ** 2,
         onLimit: () => {
           if (bursting && index === trees - 1) {
             process.kill(-child.pid!, "SIGKILL");
@@ -164,8 +215,8 @@ try {
             failure ??= new Error(text);
           }
         },
-      }),
-    );
+      });
+    stops.push(sampleDelayMs ? watcherContext.run(true, startWatch) : startWatch());
   }
   await delay(5000);
   fs.writeSync(
@@ -196,7 +247,9 @@ try {
   const cpuStart = process.cpuUsage();
   resourceHook?.enable();
   marker("heap-start");
+  capturingSamples = true;
   await delay(seconds * 1000);
+  capturingSamples = false;
   marker("heap-stop");
   resourceHook?.disable();
   const cpu = process.cpuUsage(cpuStart);
@@ -213,11 +266,24 @@ try {
     allocation = allocated(profile);
   }
   assert.equal(failure, undefined);
+  assert.ok(!sampleDelayMs || completedSamples > 0, "No completed watcher samples were measured");
   const result = {
-    scope:
-      "watchChildMemory with real procfs; 20 independent trees by default, two worker-spawned descendants per tree",
-    timingGateEligible: !values.allocations && !values["gc-log"] && !values["work-counts"],
+    scope: "watchChildMemory with real procfs and worker-spawned descendants",
+    timingGateEligible:
+      !sampleDelayMs && !values.allocations && !values["gc-log"] && !values["work-counts"],
+    acceleratedSampling: sampleDelayMs
+      ? {
+          delayMs: sampleDelayMs,
+          completedSamples,
+          requestedIntervals,
+          cpuMsPerSample: (cpu.user + cpu.system) / 1000 / completedSamples,
+          mainThreadCpuMsPerSample: (threadCpu.user + threadCpu.system) / 1000 / completedSamples,
+          v8AllocationBytesPerSample: allocatedBytes / completedSamples,
+        }
+      : null,
     trees,
+    descendantsPerTree: descendants,
+    processesPerTree: descendants + 1,
     seconds,
     treeSeconds: trees * seconds,
     allocation,
@@ -263,7 +329,15 @@ try {
       "Child-memory polling exceeded four promises per native read job",
     );
   }
+  if (allocationBudget) {
+    assert.ok(
+      allocatedBytes / completedSamples <= allocationBudget,
+      `Child-memory polling exceeded ${allocationBudget} V8 allocated bytes per warm sample`,
+    );
+  }
 } finally {
+  globalThis.setTimeout = originalSetTimeout;
+  watcherContext.disable();
   resourceHook?.disable();
   diagnosticsStop?.();
   stops.forEach((stop) => stop());

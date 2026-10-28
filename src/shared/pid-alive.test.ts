@@ -134,7 +134,7 @@ it.each(["ESRCH", "EPERM", "success"])(
 );
 
 describe("process start times", () => {
-  it("parses linux /proc stat start times and rejects malformed variants", async () => {
+  it.each(["linux", "android"] as const)("parses %s /proc stat start times", async (platform) => {
     mockProcReads({
       [`/proc/${process.pid}/stat`]: procStat(process.pid, 98765),
       "/proc/42/stat": procStat(42, 55555),
@@ -144,9 +144,9 @@ describe("process start times", () => {
       "/proc/46/stat": procStat(46, 1.5),
     });
 
-    await withMockedPlatform("linux", async () => {
+    await withMockedPlatform(platform, async () => {
       expect(getProcessStartTime(process.pid)).toBe(98765);
-      expect(getProcessStartTime(42)).toBe(55555);
+      expect(getFileLockProcessStartTime(42)).toBe(55555);
       expect(getProcessInstanceStartTime(42)).toBe(55555);
       expect(getProcessStartTime(43)).toBeNull();
       expect(getProcessStartTime(44)).toBe(66666);

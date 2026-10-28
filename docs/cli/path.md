@@ -206,6 +206,10 @@ the `OC_JSONC_INPUT_TOO_LARGE` diagnostic; other file kinds use
 | JSONL         | `.jsonl`, `.ndjson`         | Top-level line addresses (`L1`, `L2`, `$first`, `$last`), then JSONC-style descent inside the line. |
 | YAML/.lobster | `.yaml`, `.yml`, `.lobster` | Map keys and sequence indexes; comments and flow style are handled by the YAML document API.        |
 
+Markdown bullet fields are terminal: `name.absent` cannot match a `name` field.
+Recursive wildcards may consume zero segments, so `name.**` and `**.name` can
+still match it. A quoted `"**"` addresses a literal field key.
+
 `resolve` returns a structured match: `root`, `node`, `leaf`, or
 `insertion-point`, with a 1-based line number. Leaf values are surfaced as
 text plus a `leafType` so plugin authors can render previews without
@@ -224,7 +228,8 @@ depending on the per-kind AST shape.
   `+++` is ordinary body text. Section bodies are not writable as a whole
   through `set`.
 - JSONC leaf writes coerce the string value to the existing leaf type
-  (`string`, finite `number`, `true`/`false`, or `null`). Use `--value-json`
+  (`string`, finite `number`, `true`/`false`, or `null`). Blank numeric replacements
+  are rejected; use `0` to write zero. Use `--value-json`
   when a JSONC/JSON/JSONL leaf replacement should parse `<value>` as JSON and
   may change shape, such as replacing a string secret-ref shorthand with an
   object. JSONC object and array insertions parse `<value>` as JSON and use

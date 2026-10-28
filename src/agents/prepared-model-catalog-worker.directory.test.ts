@@ -11,6 +11,7 @@ import {
 import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import { resolveAgentDir } from "./agent-scope-config.js";
 import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
+import { prepareModelCatalogWorkerContext } from "./prepared-model-catalog-fingerprints.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
 import { stubCatalogEnv } from "./prepared-model-catalog-worker.shared.test-support.js";
 import {
@@ -60,7 +61,11 @@ function createInspector(env: NodeJS.ProcessEnv) {
     run: (
       value: CatalogInspectionTask["value"],
       inspection?: CatalogInspectionTask["inspection"],
-    ) => pool.run({ value, request, inspection }, { timeoutMs: 30_000 }),
+    ) =>
+      pool.run(
+        { context: prepareModelCatalogWorkerContext(value), value, request, inspection },
+        { timeoutMs: 30_000 },
+      ),
     [Symbol.asyncDispose]: () => pool.close(),
   };
 }

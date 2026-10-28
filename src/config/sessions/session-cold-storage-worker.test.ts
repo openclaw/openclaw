@@ -1,8 +1,9 @@
-import { DatabaseSync } from "node:sqlite";
+import { constants, DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import * as snapshots from "../../infra/sqlite-transaction.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareSessionColdBatchInWorker } from "./session-cold-storage-prepare.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
@@ -54,15 +55,40 @@ function largestEventBytes(events: Fixture["original"]["events"]) {
     .reduce((bytes, event) => Math.max(bytes, Buffer.byteLength(event.event_json)), 0);
 }
 
-it("rejects oversized raw event bytes without preparing a transcript snapshot", () =>
+it("defers event size reads until preparation and rejects oversized bytes before snapshotting", () =>
   withFixture(async (fixture) => {
     // Exercise legacy identity accounting alongside the fixture's compressed event payload.
     fixture
       .database()
       .prepare("UPDATE transcript_events SET event_utf8_bytes = NULL WHERE seq = 0")
       .run();
-    const snapshot = vi.spyOn(snapshots, "runSqliteReadSnapshotSync");
+    const payloadReads: string[] = [];
+    const read = snapshots.runSqliteReadSnapshotSync;
+    const snapshot = vi
+      .spyOn(snapshots, "runSqliteReadSnapshotSync")
+      .mockImplementation((database, run, options) => {
+        if (options?.operationLabel !== "cold transcript selection") {
+          return read(database, run, options);
+        }
+        const native = requireNativeSqliteDatabase(database);
+        native.setAuthorizer((action, table, column) => {
+          if (
+            action === constants.SQLITE_READ &&
+            table === "transcript_events" &&
+            (column === "event_json" || column === "event_utf8_bytes")
+          ) {
+            payloadReads.push(column);
+          }
+          return constants.SQLITE_OK;
+        });
+        try {
+          return read(database, run, options);
+        } finally {
+          native.setAuthorizer(null);
+        }
+      });
     const batch = await prepare(fixture.options);
+    expect(payloadReads).toEqual([]);
     expect(
       snapshot.mock.calls.filter((call) => call[2]?.operationLabel === "cold transcript snapshot"),
     ).toHaveLength(0);

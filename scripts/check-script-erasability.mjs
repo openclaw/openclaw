@@ -117,7 +117,7 @@ export function main() {
   process.exitCode = 1;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (import.meta.main) {
   if (process.versions.bun) {
     const require = nodeModule.createRequire(import.meta.url);
     const { resolveNodeRuntimeExecutable } = require("../src/infra/node-runtime-executable.ts");

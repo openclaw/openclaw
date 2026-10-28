@@ -48,7 +48,14 @@ export function transformProviderMessages<TApi extends Api>(
           result.push({ type: "text", text });
         }
       }
-      return Object.assign({}, message, { content: result }) as Extract<Message, { role: "user" }>;
+      return (
+        Object.isFrozen(message) &&
+        Object.isFrozen(content) &&
+        result.length === content.length &&
+        result.every((block, index) => block === content[index])
+          ? message
+          : Object.assign({}, message, { content: result })
+      ) as Extract<Message, { role: "user" }>;
     }),
     target,
     normalizeToolCallId,

@@ -6,7 +6,9 @@
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/sidebar-presentation-measure.ts \
  *   --state-dir .local/sidebar/run-1 --output .local/sidebar/run-1.json
  * Add --owner-file <baseline/session-row-presentation.ts> to substitute only that
- * owner at load time. Alternate baseline/candidate runs (at least five pairs),
+ * owner at load time. Repeat --source-file <saved/session-utils-display.ts> (original
+ * basename required) to substitute additional Gateway owners; sourceHashes records each.
+ * Alternate baseline/candidate runs (at least five pairs),
  * with matched A/A controls before timing claims. Each run needs a fresh state dir.
  * Use separate --allocations runs for sampled bytes including collected objects;
  * use separate --trace-gc-nvp runs with --gc-log <redirected stdout> for promotion.
@@ -16,6 +18,11 @@
  * Timing and GC gates use untraced, unsampled runs. Defaults: 10k rows, 10 clients,
  * two identities, 100-row pages, 1,000 warm reads. --sessions 10 --operations 10
  * is a setup smoke. The clients are in-process recipients, not live sockets.
+ * <output>.wire.json captures packed bytes with fixture profile IDs and snapshotAt
+ * normalized; packedGolden compares those bytes across revisions and preserves field order.
+ * --page-size 200 --churn replaces one visible row before each measured read;
+ * measures full-page packing under writes. Call latency excludes the write;
+ * CPU/allocation include it. Use identical churn on both revisions.
  * --repeats N reuses fixture setup, writing <output>.<1-based repeat>.json.
  * With --barrier-dir <fresh directory> --side base|fix, publish <side>.ready
  * after warmup and wait for <repeat>.<side>.go before each measured repeat.
@@ -26,7 +33,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
-import { registerHooks, stripTypeScriptTypes } from "node:module";
+import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import {
@@ -38,6 +45,7 @@ import {
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { getHeapSpaceStatistics } from "node:v8";
+import { transformSync } from "esbuild";
 import { expandSessionRowFacts } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { GatewayClient } from "../../src/gateway/server-methods/types.js";
@@ -50,11 +58,14 @@ const { values } = parseArgs({
     "state-dir": { type: "string" },
     output: { type: "string" },
     "owner-file": { type: "string" },
+    "source-file": { type: "string", multiple: true },
     "gc-log": { type: "string" },
     "barrier-dir": { type: "string" },
     side: { type: "string" },
     repeats: { type: "string", default: "1" },
     sessions: { type: "string", default: "10000" },
+    "page-size": { type: "string", default: "100" },
+    churn: { type: "boolean", default: false },
     clients: { type: "string", default: "10" },
     operations: { type: "string", default: "1000" },
     allocations: { type: "boolean", default: false },
@@ -63,8 +74,10 @@ const { values } = parseArgs({
 });
 assert(values["state-dir"] && values.output, "--state-dir and --output are required");
 assert(global.gc, "run with --expose-gc");
-const integer = (name: "sessions" | "clients" | "operations" | "repeats", min: number) =>
-  parseStrictIntegerOption({ raw: values[name], label: name, min, fallback: min });
+const integer = (
+  name: "sessions" | "clients" | "operations" | "repeats" | "page-size",
+  min: number,
+) => parseStrictIntegerOption({ raw: values[name], label: name, min, fallback: min });
 const sessions = integer("sessions", 2);
 const clients = integer("clients", 2);
 const operations = integer("operations", 1);
@@ -88,7 +101,7 @@ if (barrierDir) {
   assert(values.side === "base" || values.side === "fix", "--barrier-dir requires --side base|fix");
   mkdirSync(barrierDir, { recursive: true });
 }
-const pageSize = Math.min(100, sessions);
+const pageSize = Math.min(integer("page-size", 2), sessions);
 const keyFor = (index: number) => `agent:main:sidebar-${index.toString().padStart(5, "0")}`;
 const root = path.resolve(values["state-dir"]);
 mkdirSync(root);
@@ -98,14 +111,26 @@ for (const dir of ["home", "tmp"]) {
 const output = path.resolve(values.output);
 const ownerFile = path.resolve(values["owner-file"] ?? "src/gateway/session-row-presentation.ts");
 const ownerSource = readFileSync(ownerFile, "utf8");
-let replaced = false;
+const sources = new Map<string, string>();
 if (values["owner-file"]) {
+  sources.set("session-row-presentation.ts", ownerSource);
+}
+for (const file of values["source-file"] ?? []) {
+  sources.set(path.basename(file), readFileSync(path.resolve(file), "utf8"));
+}
+const replaced = new Set<string>();
+if (sources.size) {
   registerHooks({
     load(url, context, next) {
       const loaded = next(url, context);
-      if (url.endsWith("/src/gateway/session-row-presentation.ts")) {
-        replaced = true;
-        return { ...loaded, source: stripTypeScriptTypes(ownerSource) };
+      for (const [name, source] of sources) {
+        if (url.endsWith(`/src/gateway/${name}`)) {
+          replaced.add(name);
+          return {
+            ...loaded,
+            source: transformSync(source, { loader: "ts", format: "esm", target: "esnext" }).code,
+          };
+        }
       }
       return loaded;
     },
@@ -149,6 +174,7 @@ marker("identify-stop");
 const [
   { setRuntimeConfigSnapshot },
   { writeSessionEntry },
+  { replaceSessionEntrySync },
   { runOpenClawAgentWriteTransaction, closeOpenClawAgentDatabasesAsync },
   { closeOpenClawStateDatabaseAsync },
   { ensureProfileForEmail },
@@ -162,6 +188,7 @@ const [
 ] = await Promise.all([
   import("../../src/config/runtime-snapshot.js"),
   import("../../src/config/sessions/session-accessor.sqlite-entry-store.js"),
+  import("../../src/config/sessions/session-accessor.js"),
   import("../../src/state/openclaw-agent-db.js"),
   import("../../src/state/openclaw-state-db.js"),
   import("../../src/state/user-profiles.js"),
@@ -173,7 +200,7 @@ const [
   import("../../src/plugins/registry-empty.js"),
   import("../../src/plugins/runtime.js"),
 ]);
-assert(!values["owner-file"] || replaced, "owner substitution did not run");
+assert.equal(replaced.size, sources.size, "source substitution did not run");
 setActivePluginRegistry(createEmptyPluginRegistry());
 setRuntimeConfigSnapshot(cfg, cfg);
 const profiles = ["alice", "bob"].map((name) =>
@@ -290,6 +317,8 @@ try {
   );
   const backfillDeadline = Date.now() + 120_000;
   while (pendingBackfill.size) {
+    // Keep admitting the live page while optional transcript facts settle.
+    await list(0);
     for (const key of pendingBackfill) {
       if (
         projection.capture({ agentId: "main", key })?.retainedDatabaseFacts
@@ -304,6 +333,20 @@ try {
     }
   }
   const golden: string[] = [];
+  const packedGolden: string[] = [];
+  const packedSamples = new Map<string, string>();
+  const packedDigest = (result: Awaited<ReturnType<typeof list>>) => {
+    let bytes = JSON.stringify(
+      { sessions: result.sessions, sharedFacts: result.sharedFacts },
+      (key, value) => (key === "snapshotAt" ? 1_800_000_000_000 : value),
+    );
+    for (const [index, profile] of profiles.entries()) {
+      bytes = bytes.replaceAll(profile.id, `synthetic-profile-${index}`);
+    }
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    packedSamples.set(digest, bytes);
+    return digest;
+  };
   for (let index = 0; index < clients; index++) {
     const result = await list(index, false);
     const rows = expandSessionRowFacts(result.sessions, result.sharedFacts);
@@ -314,7 +357,9 @@ try {
       index % profiles.length === (sessions - 1) % profiles.length ? "owner" : "viewer",
     );
     golden.push(createHash("sha256").update(JSON.stringify(rows)).digest("hex"));
+    packedGolden.push(packedDigest(result));
   }
+  writeFileSync(`${output}.wire.json`, JSON.stringify([...packedSamples.values()]));
   if (values.allocations) {
     inspector.connect();
     connected = true;
@@ -366,8 +411,30 @@ try {
     loop.reset();
     start = performance.now();
     for (let index = 0; index < operations; index++) {
+      if (values.churn) {
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey: keyFor(sessions - 1) },
+          {
+            sessionId: `sidebar-${sessions - 1}`,
+            updatedAt: 1_800_000_000_000 + sessions - 1,
+            label: `Changed sidebar row ${index}`,
+            visibility: "shared",
+            createdActor: {
+              type: "human",
+              source: "profile",
+              id: profiles[(sessions - 1) % profiles.length]!.id,
+            },
+          },
+        );
+      }
       const at = performance.now();
-      assert.equal((await list(index)).rowsUnchanged, true);
+      const result = await list(index);
+      if (values.churn) {
+        assert.equal(result.sessions.length, pageSize);
+        assert.equal(result.sessions[0]?.label, `Changed sidebar row ${index}`);
+      } else {
+        assert.equal(result.rowsUnchanged, true);
+      }
       latencies.push(performance.now() - at);
       await nextTurn();
     }
@@ -423,13 +490,40 @@ try {
         presentationBytesPerCall: presentationBytes / operations,
       };
     }
+    if (values.churn) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: keyFor(sessions - 1) },
+        {
+          sessionId: `sidebar-${sessions - 1}`,
+          updatedAt: 1_800_000_000_000 + sessions - 1,
+          label: `Synthetic sidebar row ${sessions - 1}`,
+          visibility: "shared",
+          createdActor: {
+            type: "human",
+            source: "profile",
+            id: profiles[(sessions - 1) % profiles.length]!.id,
+          },
+        },
+      );
+    }
+    const churnPackedGolden: string[] = [];
     for (let index = 0; index < clients; index++) {
       const result = await list(index, false);
       const digest = createHash("sha256")
         .update(JSON.stringify(expandSessionRowFacts(result.sessions, result.sharedFacts)))
         .digest("hex");
-      assert.equal(digest, golden[index], "warm recipient facts changed without a publication");
+      if (!values.churn) {
+        assert.equal(digest, golden[index], "warm recipient facts changed without a publication");
+      }
+      if (values.churn) {
+        // Replacing the row changes snapshotAt and can regroup shared facts even after
+        // its label is restored. Compare these exact normalized bytes across revisions.
+        churnPackedGolden.push(packedDigest(result));
+      } else {
+        assert.equal(packedDigest(result), packedGolden[index], "warm packed wire bytes changed");
+      }
     }
+    writeFileSync(`${repeatOutput}.wire.json`, JSON.stringify([...packedSamples.values()]));
     const gc = (kind?: number) =>
       distribution(
         collections
@@ -450,6 +544,19 @@ try {
           : "untraced-timing",
       node: process.version,
       sourceHash: createHash("sha256").update(ownerSource).digest("hex"),
+      sourceHashes: Object.fromEntries(
+        [
+          "session-row-presentation.ts",
+          "session-list-view-cache.ts",
+          "session-row-prepared-read.ts",
+          "session-utils-display.ts",
+        ].map((name) => [
+          name,
+          createHash("sha256")
+            .update(sources.get(name) ?? readFileSync(path.resolve("src/gateway", name), "utf8"))
+            .digest("hex"),
+        ]),
+      ),
       sessions,
       clients,
       identities: profiles.length,
@@ -459,14 +566,19 @@ try {
       preparedBackfillRows: pageSize,
       repeat,
       repeats,
+      churn: values.churn,
       counts: {
         calls: operations,
         selectedRows: operations * pageSize,
-        unchangedReplies: operations,
+        unchangedReplies: values.churn ? undefined : operations,
       },
       goldenScope:
         "within-run stability only; includes generated profile IDs and presentation timestamps",
       golden,
+      packedGoldenScope:
+        "Exact sessions/sharedFacts JSON, with generated profile IDs and snapshotAt normalized",
+      packedGolden,
+      churnPackedGolden,
       loadStart,
       heapSpaces,
       loadEnd: loadavg(),

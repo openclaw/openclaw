@@ -11,7 +11,7 @@ import {
   normalizeXaiLanguageCode,
   normalizeXaiTtsBaseUrl,
   type XaiSpeechResponseFormat,
-} from "./speech-provider-metadata.js";
+} from "./speech-provider-metadata-factory.js";
 import { xaiUserAgentHeaderFor } from "./src/xai-user-agent.js";
 import { WebSocket } from "./ws-runtime.js";
 

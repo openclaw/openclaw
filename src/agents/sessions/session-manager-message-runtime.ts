@@ -167,6 +167,7 @@ async function appendOwnedActorTranscriptMessage(
     const receipt = await appendSessionManagerActor({
       actor,
       toolResult: false,
+      message: prepared.persistedMessage,
       assertCurrent,
       append: {
         kind: "message",
@@ -215,7 +216,11 @@ async function appendUnboundSdkTranscriptMessage(
     assertSessionStoreReadCandidate(databasePath, [input.candidate]);
   };
   assertCurrent();
-  const admission = captureSessionMessageAdmission(assertCurrent);
+  const admission = captureSessionMessageAdmission(
+    assertCurrent,
+    undefined,
+    prepared.persistedMessage,
+  );
   const execution = captureOpenClawAgentDatabaseExecution(options);
   const publication = createSessionManagerPublicationHooks({
     agentId: input.target.agentId,

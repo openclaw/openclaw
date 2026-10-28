@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { deferOpenClawAgentPostCommitPublication } from "../../state/openclaw-agent-db.js";
 import {
   captureOpenClawAgentDatabaseExecution,
@@ -176,6 +177,7 @@ export async function applySessionEntryLifecycleMutation(
               ? undefined
               : await prepareSessionMaintenancePreservation(params.storePath, {
                   native: !reclamationOptions,
+                  env: resolved.env,
                 });
             try {
               if (reclamationOptions) {
@@ -199,11 +201,12 @@ export async function applySessionEntryLifecycleMutation(
                 };
                 const assertPreservationCurrent = (
                   plans?: readonly SessionEntryMaintenancePlan[],
+                  operation?: RetainedWorkerTransactionAdmission,
                 ) => {
                   if (maintenance?.preservation && preparedPreservation) {
                     assertMaintenancePreservationCompatible(
                       maintenance.preservation,
-                      preparedPreservation.capture(),
+                      preparedPreservation.capture(operation),
                       plans,
                     );
                   }
@@ -221,8 +224,8 @@ export async function applySessionEntryLifecycleMutation(
                       assertPrepared: () => {
                         preparedPreservation?.capture();
                       },
-                      assertCandidate: (candidate) => {
-                        assertPreservationCurrent(candidate.result.maintenancePlans);
+                      assertCandidate: (candidate, operation) => {
+                        assertPreservationCurrent(candidate.result.maintenancePlans, operation);
                         params.beforeCommitInTransaction?.();
                       },
                       onLifecycleCommitted: params.onLifecycleCommitted,
@@ -240,9 +243,9 @@ export async function applySessionEntryLifecycleMutation(
                   );
                 }
                 const result = await runSqliteSessionReclamation({
-                  assertCommitAllowed: () => {
+                  assertCommitAllowed: (operation) => {
                     assertCurrent();
-                    assertPreservationCurrent();
+                    assertPreservationCurrent(undefined, operation);
                     params.beforeCommitInTransaction?.();
                   },
                   onWorkerResult: (completed) => {

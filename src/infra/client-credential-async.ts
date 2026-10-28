@@ -43,7 +43,7 @@ const runtime = resolveGlobalSingleton(
     closing?: Promise<void>;
     resources: Map<
       string,
-      { access: ReturnType<typeof captureStateDatabaseAccess>; unregister: () => void }
+      { access: Awaited<ReturnType<typeof captureStateDatabaseAccess>>; unregister: () => void }
     >;
   } => ({ resources: new Map() }),
   () => closeClientCredentialWorker(),
@@ -128,8 +128,13 @@ async function runClientCredentialTaskAsync(
         }
         let resource = runtime.resources.get(databasePath);
         if (!resource) {
+          const access = await captureStateDatabaseAccess(databasePath);
+          assertCurrent();
+          if (runtime.closing) {
+            throw new Error("Client credential worker is closing.");
+          }
           resource = {
-            access: captureStateDatabaseAccess(databasePath),
+            access,
             unregister: registerOpenClawAgentDatabaseReadCandidateResource({
               path: databasePath,
               revoke() {

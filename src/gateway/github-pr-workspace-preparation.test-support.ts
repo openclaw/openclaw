@@ -43,6 +43,8 @@ import {
   resolveLocalWorkspaceOwner,
   withLocalWorkspaceProjection,
 } from "./worker-environments/local-workspace-projection.js";
+import * as workspaceStore from "./worker-environments/local-workspace-store.js";
+import { isLocalWorkspaceBaseRefreshRef } from "./worker-environments/workspace-result-inventory.js";
 
 export const mocks = githubPublicationTestMocks();
 
@@ -359,4 +361,31 @@ export async function bindFixtureRuntime(f: Awaited<ReturnType<typeof fixture>>)
   // Reconciliation and backend admission stay real; only container I/O is simulated.
   bindLocalSandboxWorkspace(f.sandbox, projection);
   return { projection, isPaused: () => runtimePaused };
+}
+
+export function interruptCanonicalWorkspaceAcceptance(message: string) {
+  const withStore = workspaceStore.withLocalWorkspaceStore;
+  let interrupted = false;
+  const interruption = vi
+    .spyOn(workspaceStore, "withLocalWorkspaceStore")
+    .mockImplementation((params, operation) =>
+      withStore(params, (store) =>
+        operation({
+          ...store,
+          update: async (row, patch, authority, manifest) => {
+            const result = await store.update(row, patch, authority, manifest);
+            if (
+              !interrupted &&
+              patch.pending_target === "projection" &&
+              isLocalWorkspaceBaseRefreshRef(result.pending_ref)
+            ) {
+              interrupted = true;
+              throw new Error(message);
+            }
+            return result;
+          },
+        }),
+      ),
+    );
+  return { interruption, wasInterrupted: () => interrupted };
 }

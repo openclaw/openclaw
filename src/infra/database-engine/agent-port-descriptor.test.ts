@@ -18,19 +18,17 @@ import { admitStoreSearch } from "./search-admission.js";
 import { loadSqliteVecExtension } from "./sqlite-vec.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+const cacheRow = (scope: string, key: string, value_json: string) => ({ scope, key, value_json });
 
 it("backs up a schema-36 store without requiring the later cold archive chunk table", async () => {
   const descriptor = await loadAgentPortDescriptor(36);
   using db = openNodeSqliteDatabase(":memory:");
   seedAgentV30Schema(db, 36);
-  db.exec(`
-    DROP TRIGGER memory_index_sources_revision_after_insert;
-    DROP TRIGGER memory_index_sources_revision_after_update;
-    DROP TRIGGER memory_index_sources_revision_after_delete;
-    DROP TRIGGER memory_index_chunks_revision_after_insert;
-    DROP TRIGGER memory_index_chunks_revision_after_update;
-    DROP TRIGGER memory_index_chunks_revision_after_delete;
-  `);
+  for (const table of ["sources", "chunks"]) {
+    for (const event of ["insert", "update", "delete"]) {
+      db.exec(`DROP TRIGGER memory_index_${table}_revision_after_${event}`);
+    }
+  }
   const inspected = await inspectDatabasePort({ engine: "sqlite", db }, descriptor);
   expect(inspected.tables.session_transcript_cold_archives?.rows).toBe(0);
   expect(inspected.tables.session_transcript_cold_archive_chunks).toBeUndefined();
@@ -43,6 +41,15 @@ it("backs up a schema-36 store without requiring the later cold archive chunk ta
   ).toBeUndefined();
 });
 
+it("keeps the cold archive chunk table when backing up a schema-37 store", async () => {
+  const descriptor = await loadAgentPortDescriptor(37);
+  const table = "session_transcript_cold_archive_chunks";
+  expect(descriptor.version).toBe(37);
+  expect(descriptor.tables.map(({ name }) => name)).toContain(table);
+  expect(descriptor.expectedCatalog.some((fact) => fact.table === table)).toBe(true);
+  expect(descriptor.preData).toContain(`CREATE TABLE "${table}"`);
+});
+
 it.each([21, currentVersion])(
   "migrates only the private v%s copy, retiring legacy usage partitions",
   async (version) => {
@@ -52,27 +59,24 @@ it.each([21, currentVersion])(
     const descriptor = await loadAgentPortDescriptor();
     const historical = version === 21;
     const retained = historical
-      ? [{ scope: "retained", key: "key", value_json: '{"value":1}' }]
+      ? [cacheRow("retained", "key", '{"value":1}')]
       : [
-          {
-            scope: USAGE_COST_PARTITION_SCOPE,
-            key: usageCostPartitionKey('session-"snow:雪', "2026-10-01"),
-            value_json: '{"current":true}',
-          },
-          { scope: "talk-client-voice-sessions", key: "voice", value_json: '{"status":"closed"}' },
+          cacheRow(
+            USAGE_COST_PARTITION_SCOPE,
+            usageCostPartitionKey('session-"snow:雪', "2026-10-01"),
+            '{"current":true}',
+          ),
+          cacheRow("talk-client-voice-sessions", "voice", '{"status":"closed"}'),
         ];
     {
       using db = openNodeSqliteDatabase(source);
       if (historical) {
         seedOpenClawAgentSchemaV21(db);
       } else {
-        db.exec(
-          descriptor.sqlite +
-            `
+        db.exec(`${descriptor.sqlite}
       PRAGMA user_version = ${currentVersion};
       INSERT INTO schema_meta VALUES ('primary', 'agent', ${currentVersion}, 'main', NULL, 1, 1);
-    `,
-        );
+    `);
       }
       const insert = db.prepare(
         "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, 1)",

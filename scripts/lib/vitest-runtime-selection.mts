@@ -14,6 +14,8 @@ export const TUI_PTY_BUILT_CLI_CANARY_PATTERN =
 // These built-CLI proofs still read source owners, but their only compiled
 // declarations belong to the production runtime registry.
 const runtimeOnlyBuiltCliFiles = new Set([
+  "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
+  "test/e2e/qa-lab/plugins/discord-show-widget-contextual-presenter.e2e.test.ts",
   "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
   "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
 ]);
@@ -93,11 +95,23 @@ export function shouldPrepareVitestCoreWorkers(
       ? ["test/e2e/gateway-transcripts-discord-capture.e2e.test.ts"]
       : []),
   ];
+  const gatewaySubscriptionsWorker = "src/gateway/server-runtime-subscriptions.test.ts";
   const codeModeWorker = "src/agents/code-mode.import-boundary.test.ts";
   return (
     workers.some((file) =>
       matchesVitestCliSelection(file, [file], args, "", env, includePatterns),
     ) ||
+    // The focused subscription shard needs native stores before its startup watchdog.
+    // Match its project directory so basename filters and exclusions keep working.
+    (includesProject("test/vitest/vitest.gateway-server.config.ts") &&
+      matchesVitestCliSelection(
+        gatewaySubscriptionsWorker,
+        [gatewaySubscriptionsWorker],
+        args,
+        "src/gateway",
+        env,
+        includePatterns,
+      )) ||
     ((includesProject(agentVitestProjectOwners.core.config) ||
       includesProject(agentVitestProjectOwners.all.config)) &&
       matchesVitestCliSelection(

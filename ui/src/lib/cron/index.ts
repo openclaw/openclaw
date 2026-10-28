@@ -425,7 +425,7 @@ async function updateCronJobDefinition(
 
 // Mutations reload the list and scheduler status so both canonical views stay current.
 async function reloadCronJobsSnapshot(state: CronState) {
-  await loadCronJobsPage(state, { tableFilters: true });
+  await loadCronJobsPage(state, { tableFilters: true, refresh: true });
   await loadCronStatus(state);
 }
 

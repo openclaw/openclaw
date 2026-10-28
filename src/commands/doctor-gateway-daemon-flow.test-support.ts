@@ -12,7 +12,7 @@ export function mockDoctorRuntimeFacts(runExec: Mock<typeof import("../process/e
   runExec
     .mockReset()
     .mockImplementation(async (executable: string) =>
-      createRuntimeProbeResult(/(?:^|[/\\])bun(?:\.exe)?$/i.test(executable) ? "1.4.3" : null),
+      createRuntimeProbeResult(/(?:^|[/\\])bun(?:\.exe)?$/i.test(executable) ? "1.4.4" : null),
     );
   vi.spyOn(runtimePaths, "resolvePreferredNodePath").mockResolvedValue("/opt/available/bin/node");
 }
@@ -53,13 +53,13 @@ export function registerRunningBunFallbackTest({
 }) {
   it("uses running Bun for the non-interactive runtime fallback on a Bun-only host", async () => {
     const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
-    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.3" });
+    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.4" });
     const discoverNode = vi
       .spyOn(runtimePaths, "resolvePreferredNodePath")
       .mockResolvedValue(undefined);
     const probeBun = vi
       .spyOn(runtimePaths, "resolveBunRuntimeInfo")
-      .mockResolvedValue(runtimeFixture("1.4.3", "3.53.4"));
+      .mockResolvedValue(runtimeFixture("1.4.4", "3.53.4"));
     setPlatform("linux");
     mockGatewayInstall(service);
     // Service-install consent is separate from Doctor's --fix --non-interactive runtime selection.

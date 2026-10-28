@@ -37,6 +37,14 @@ Use `current()`, a passed-in `cfg`, `mutateConfigFile(...)`, or
 
 For direct SDK imports, use `config-contracts` for types, `runtime-config-snapshot` for current process snapshots, and `config-mutation` for writes. The broad `openclaw/plugin-sdk/config-runtime` compatibility barrel has been removed. Read entry-scoped values from `api.pluginConfig`; use a supplied tool context only for its runtime-wide config snapshot, and keep plugin-specific merging at that boundary. Bundled plugin tests should mock these focused subpaths directly.
 
+Use `createPluginConfigParser(pluginId, parse)` from `openclaw/plugin-sdk/plugin-config-runtime`
+when a pure plugin-config parser runs repeatedly. It shares a frozen parsed result
+for the current published config revision or a deeply frozen input snapshot.
+Publish config changes through the host; mutating a published object alone does not invalidate it.
+Republishing config invalidates live results, including same-object updates;
+standalone mutable inputs are parsed on every call. The parser must return an owned
+JSON value without mutating its input. Errors propagate unchanged and are not cached.
+
 When using the direct `config-mutation` import to replace a source snapshot, pass
 the edited config as `sourceConfig` to `replaceConfigFile`, retaining its `snapshot`,
 `baseHash`, `writeOptions`, and explicit `afterWrite` policy. Runtime-derived
@@ -319,6 +327,12 @@ whole-card text fallbacks that must retain labels clipped by native limits. This
 shares core outbound rendering's fallback-text policy and removes the portable
 presentation fields after rendering. The callback may be synchronous or async.
 
+Before retaining a failure in a cache, owner field, or terminal abort signal, call
+`materializeErrorStack(error)` from `openclaw/plugin-sdk/error-runtime`. It formats
+lazy stacks throughout the nested error graph so captured frames can release
+request data, while preserving error identity, messages, codes, and causes.
+Formatting is best effort for immutable errors and custom stack accessors.
+
 Use `attachErrorDiagnostic(error, text)` from `openclaw/plugin-sdk/error-runtime`
 to attach supplemental operator diagnostics to a thrown error without changing
 its identity, message, or failure classification. Mask opaque credentials first;
@@ -417,6 +431,13 @@ Use `openclaw/plugin-sdk/pair-loop-guard-runtime` directly only for custom
 two-party event loops that do not go through the shared inbound reply runner.
 
 ### Bounded waits
+
+Use `performance.now()` for process-local elapsed measurements and budgets.
+Remaining time may be fractional; retain the operation's expiration, timeout
+normalization, and integer rounding policy. Never persist monotonic readings or
+send them as epoch timestamps. Persisted times, user-facing dates, and
+cross-process deadlines stay wall-clock values; translate an incoming epoch
+deadline into a local budget once when admitting the work.
 
 `openclaw/plugin-sdk/time-runtime` exports
 `raceWithTimeout(operation, timeoutMs, onTimeout, { ref?, signal?, onAbort? })`. Pass an existing

@@ -31,6 +31,28 @@ function fileTools(root: string) {
   };
 }
 
+it("explains how to bind a worker before editing another repository's linked worktree", async () => {
+  const fixture = await fs.realpath(tempDirs.make("openclaw-worker-worktree-"));
+  const workspace = path.join(fixture, "workspace");
+  await fs.mkdir(workspace);
+  const repo = await repository(fixture, "repo");
+  const unbound = fileTools(workspace);
+  const bound = fileTools(repo);
+  const linked = path.join(fixture, "repo-wt", "worker");
+  await git(repo, "worktree", "add", "--quiet", "--detach", linked);
+  const target = path.join(linked, "seed.txt");
+  const patch = {
+    input: `*** Begin Patch\n*** Update File: ${target}\n@@\n-fixture\n+patched\n*** End Patch`,
+  };
+
+  await expect(unbound("apply_patch", patch)).rejects.toThrow(
+    /Path escapes sandbox root .*parent.*sessions_spawn.*cwd.*repository.*exec.*workdir/s,
+  );
+  await expect(fs.readFile(target, "utf8")).resolves.toBe("fixture\n");
+  await bound("apply_patch", patch);
+  await expect(fs.readFile(target, "utf8")).resolves.toBe("patched\n");
+});
+
 it("uses newly registered linked worktrees for host file tools and observes unregistration", async () => {
   const fixture = await fs.realpath(tempDirs.make("openclaw-linked-worktrees-"));
   const root = await repository(fixture, "repo");

@@ -1,10 +1,49 @@
 import { MessageChannel } from "node:worker_threads";
 import { measureGatewayCloseStep } from "../../gateway/restart-trace.js";
+import { finishDiagnosticsTimeline } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { cleanupSnapshotOperations } from "../../infra/sqlite-readonly-location-cleanup.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { flushGatewayLogsBeforeExit } from "./run-loop-exit.js";
 import type { ShutdownHardExitWatchdog } from "./shutdown-hard-exit.js";
+
+/** Called only after settleFinalResources has joined every admitted cleanup owner. */
+export function finishGatewayRunCleanup(params: {
+  cleanup: Pick<ReturnType<typeof createGatewayRunCleanup>, "drained" | "failed">;
+  failures: unknown[];
+  loopFailure?: { error: unknown };
+  hostExitRequested: boolean;
+  hostExitCode: number;
+  terminalExitCode: number | undefined;
+  ownsProcessLifecycle: boolean | undefined;
+}): number {
+  const { cleanup, failures, loopFailure, hostExitRequested, hostExitCode, terminalExitCode } =
+    params;
+  if (loopFailure) {
+    failures.unshift(loopFailure.error);
+  }
+  const code = hostExitRequested && terminalExitCode === 0 ? hostExitCode : (terminalExitCode ?? 0);
+  // Foreground completion and process exit are not producer barriers. This follows
+  // canonical close, detached work, and retained cleanup, including failed joins.
+  finishDiagnosticsTimeline(
+    params.ownsProcessLifecycle === true &&
+      cleanup.drained &&
+      !cleanup.failed &&
+      failures.length === 0 &&
+      code === 0,
+  );
+  if (failures.length === 1) {
+    throw failures[0];
+  }
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Gateway loop and final resource cleanup failed", {
+      cause: failures[0],
+    });
+  }
+  // Cleanup failure promotes success, but cannot replace a supervisor-owned
+  // failure status that already selects its terminal recovery behavior.
+  return cleanup.failed && code === 0 ? 1 : code;
+}
 
 /** Retains accepted cleanup, including native watchdog cancellation, until its real settlement. */
 export function createGatewayRunCleanup(

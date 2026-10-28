@@ -554,14 +554,21 @@ vi.mock("../utils/message-channel.js", () => ({
       .toLowerCase(),
 }));
 
+vi.mock("./agent-scope-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-scope-config.js")>()),
+  resolveSessionAgentIds: () => ({ defaultAgentId: "default", sessionAgentId: "default" }),
+}));
+
+vi.mock("./model-selection-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-selection-config.js")>()),
+  resolveEffectiveModelFallbacks: (...args: unknown[]) =>
+    state.resolveEffectiveModelFallbacksMock(...args),
+}));
+
 vi.mock("./agent-scope.js", async () => {
-  const { resolveAgentModelFallbacksOverride, resolveSubagentSpawnModelFallbacksOverride } =
-    await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
+  const actual = await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
   const { createTestAgentScope } = await import("./agent-command.live-model-switch.test-mocks.js");
-  return createTestAgentScope(state, {
-    resolveAgentModelFallbacksOverride,
-    resolveSubagentSpawnModelFallbacksOverride,
-  });
+  return { ...actual, ...createTestAgentScope(state, actual) };
 });
 
 vi.mock("./auth-profiles.js", async () => ({
@@ -4038,4 +4045,3 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     );
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

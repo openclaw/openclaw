@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { stripInternalMetadataForDisplay } from "../../auto-reply/reply/display-text-sanitize.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import { buildUpdatedSessionGoalStatus } from "../../config/sessions/goals-transitions.js";
 import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../../config/sessions/restart-recovery-types.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
@@ -61,10 +62,17 @@ export async function prepareRequesterRestartRecovery(params: {
   if (recovered?.status === "ready") {
     return { outcome: "ready", source: recovered.source };
   }
-  return await settleInterruptedRestartRecovery({
+  const settlement = {
     ...params,
     reason: recovered?.reason ?? "the original completion cohort is no longer available",
-  });
+  };
+  if (!entry.spawnedBy) {
+    return await settleInterruptedRestartRecovery(settlement);
+  }
+  const outcome = await tombstoneMainRestartRecoveryWithNotice(settlement);
+  return {
+    outcome: outcome === "notice_failed" ? "failed" : outcome === "skipped" ? "changed" : "settled",
+  };
 }
 
 /** Publish one local interruption notice and retire the exact input without replay or delivery. */
@@ -92,6 +100,17 @@ async function settleInterruptedRestartRecovery(params: {
     entry.restartRecoveryDeliverySourceRunId ??
     `main-session-restart-recovery:${params.observation?.cycleId}:interrupted`;
   const endedAt = Date.now();
+  const goal =
+    entry.goal?.status === "active" && entry.goal.updatedAt <= endedAt
+      ? buildUpdatedSessionGoalStatus(
+          entry,
+          {
+            status: "paused",
+            note: "Paused after restart recovery failed. Resume to continue. " + reason,
+          },
+          endedAt,
+        )
+      : undefined;
   const capturedReply =
     entry.pendingFinalDelivery?.kind === "replayable"
       ? stripInternalMetadataForDisplay(entry.pendingFinalDelivery.text).trim()
@@ -104,6 +123,7 @@ async function settleInterruptedRestartRecovery(params: {
     expectedLifecycleRevision: entry.lifecycleRevision ?? null,
     expectedSessionState: {
       ...buildRestartRecoveryExpectedState(entry, params.observation),
+      ...(goal ? { goal: entry.goal } : {}),
       pendingFinalDelivery: entry.pendingFinalDelivery ?? null,
     },
     assertCurrent: params.assertCurrent,
@@ -122,6 +142,7 @@ async function settleInterruptedRestartRecovery(params: {
         terminalDeliveryEvidence: params.terminalDeliveryEvidence,
         clearRecoveryState: params.clearRecoveryState,
       }),
+      ...(goal ? { goal } : {}),
       status: params.terminalStatus ?? "interrupted",
       pendingFinalDelivery: undefined,
       lifecycleRunId: undefined,
@@ -226,9 +247,6 @@ export async function settleFailedWorkerRestartRecovery(
       retireOwnerlessFinal: true,
       assertCurrent,
     });
-    if (outcome === "tombstoned") {
-      await notifyInterruptedChildParent({ ...params, reason: placement.reason, assertCurrent });
-    }
     return outcome === "notice_failed" ? "failed" : outcome === "skipped" ? "skipped" : "settled";
   } finally {
     placement.release();
@@ -250,6 +268,8 @@ export async function finishDelegatedRestartRecovery(
   // turn. Retire that residue so the scheduler can re-admit the conversation.
   // Multiple unfinished turns or pending delivery still retain their custody.
   if (
+    // A child still owes its parent an outcome; retain the operator's Resume action.
+    entry.spawnedBy ||
     entry.pendingFinalDelivery ||
     entry.restartRecoveryHarnessCompletion ||
     (!(params.cronOwned && unfinishedRuns.length <= 1) &&
@@ -259,11 +279,7 @@ export async function finishDelegatedRestartRecovery(
           run.runId !== entry.restartRecoveryDeliverySourceRunId,
       ))
   ) {
-    const result = await tombstoneMainRestartRecoveryWithNotice(params);
-    if (result === "tombstoned") {
-      await notifyInterruptedChildParent(params);
-    }
-    return result;
+    return await tombstoneMainRestartRecoveryWithNotice(params);
   }
   const result = await settleInterruptedRestartRecovery(params);
   return result.outcome === "failed"
@@ -275,13 +291,16 @@ export async function finishDelegatedRestartRecovery(
 
 /** Record the failed turn for its exact parent without starting another delegated turn. */
 async function notifyInterruptedChildParent(
-  params: Parameters<typeof settleInterruptedRestartRecovery>[0],
-): Promise<void> {
+  params: Omit<Parameters<typeof settleInterruptedRestartRecovery>[0], "assertCurrent"> & {
+    assertCurrent?: () => void;
+  },
+  resumeAvailable = false,
+): Promise<boolean> {
   const parentKey = params.entry.spawnedBy;
   const parentId = params.entry.spawnedBySessionId;
   const parentRevision = params.entry.parentSessionLifecycleRevision;
   if (!parentKey || !parentId || !parentRevision) {
-    return;
+    return true;
   }
   try {
     const target = await resolveGatewaySessionStoreTargetInWorker({
@@ -296,7 +315,7 @@ async function notifyInterruptedChildParent(
       parent.lifecycleRevision !== parentRevision ||
       parent.archivedAt !== undefined
     ) {
-      return;
+      return true;
     }
     const result = await appendAssistantMessageToSessionTranscript({
       agentId: target.agentId,
@@ -306,15 +325,21 @@ async function notifyInterruptedChildParent(
       expectedLifecycleRevision: parentRevision,
       assertCurrent: params.assertCurrent,
       idempotencyKey: `child-restart-interrupted:${params.entry.sessionId}:${params.entry.restartRecoveryDeliverySourceRunId ?? params.entry.restartRecoveryDeliveryRunId ?? params.terminalRunId ?? params.observation?.cycleId}`,
-      text: `Child session ${params.sessionKey} could not resume its interrupted turn after the Gateway restarted: ${params.reason}. Its transcript is preserved.`,
+      text:
+        `Child session ${params.sessionKey} could not resume its interrupted turn after the Gateway restarted: ${params.reason}. Its transcript is preserved. ` +
+        (resumeAvailable
+          ? "Open the child session and use Resume to continue under your current permissions."
+          : "Send a new authenticated message to the child session to continue."),
     });
     if (!result.ok) {
       throw new Error(result.reason);
     }
+    return true;
   } catch (error) {
     mainSessionRecoveryLog.warn(
       `failed to record child restart interruption for parent ${parentKey}: ${String(error)}`,
     );
+    return false;
   }
 }
 
@@ -322,7 +347,7 @@ function buildTombstonedSessionNotice(reason: string): string {
   return (
     `I couldn't continue this session after a gateway restart: ${reason}. ` +
     "Your transcript is safe. In WebChat, use Resume to continue in this session; " +
-    "in other channels, use /new or /reset to start a replacement session."
+    "in other channels, use /new or /reset to start a replacement session, then describe the unfinished work."
   );
 }
 
@@ -354,14 +379,31 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
   });
   const { entry, observation } = params;
   const tombstoned = { ...entry };
+  const endedAt = Date.now();
   const transition = transitionMainSessionRecovery(tombstoned, {
     kind: "tombstone",
-    now: Date.now(),
+    now: endedAt,
     observation,
     reason: params.reason,
   });
   if (transition.kind !== "tombstoned") {
     return "skipped";
+  }
+  const goal =
+    entry.goal?.status === "active" && entry.goal.updatedAt <= endedAt
+      ? buildUpdatedSessionGoalStatus(
+          entry,
+          {
+            status: "paused",
+            note: "Paused after restart recovery failed. Resume to continue. " + params.reason,
+          },
+          endedAt,
+        )
+      : undefined;
+  // Keep automatic recovery pending until its parent outcome is durable. A restart
+  // between these writes retries the same notice through its idempotency key.
+  if (!(await notifyInterruptedChildParent(params, true))) {
+    return "notice_failed";
   }
   const pending = entry.pendingFinalDelivery;
   const retirePending =
@@ -377,10 +419,12 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
     ...params,
     expectedSessionState: {
       ...buildRestartRecoveryExpectedState(entry, observation),
+      ...(goal ? { goal: entry.goal } : {}),
       pendingFinalDelivery: pending ?? null,
     },
     sessionLifecyclePatch: {
       abortedLastRun: tombstoned.abortedLastRun,
+      ...(goal ? { goal } : {}),
       endedAt: tombstoned.endedAt,
       lifecycleRunId: tombstoned.lifecycleRunId,
       lastRunId: tombstoned.lastRunId,

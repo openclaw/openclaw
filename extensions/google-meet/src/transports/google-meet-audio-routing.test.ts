@@ -46,6 +46,7 @@ async function inspectAudioPage(
       `(${meetStatusScript({
         allowMicrophone: true,
         autoJoin: false,
+        captionSessionId: "session-1",
         captureCaptions: false,
         guestName: "OpenClaw Agent",
         readOnly: options.readOnly,
@@ -142,6 +143,7 @@ it.each([
     },
   );
   expect(health).toMatchObject({
+    inCall: true,
     audioInputRouted: verified,
     audioOutputRouted: true,
     micMuted: !verified,
@@ -170,7 +172,10 @@ it.each([true, false])("requires current Meet capture ownership (%s)", async (ow
   const result = runInNewContext(`(${source})()`, {
     URL,
     location: { href: url },
-    window: { __openclawMeetAudioSession: owns ? "session-1" : "session-2" },
+    window: {
+      __openclawMeetAudioSession: owns ? "session-1" : "session-2",
+      __openclawMeetPlayback: { early: true },
+    },
     document: {
       querySelectorAll: () => [
         { getAttribute: (name: string) => (name === "aria-label" ? "Leave call" : null) },
@@ -233,5 +238,39 @@ it.each([
     } else {
       expect(health.manualAction).toMatchObject({ reason: "meet-audio-choice-required" });
     }
+  },
+);
+
+it.each([false, true])(
+  "keeps routing Meet media after one element rejects setSinkId (audio rejects=%s)",
+  async (audioRejects) => {
+    const rejection = "AbortError: The operation could not be performed";
+    const { health } = await inspectAudioPage(nativeMicrophone, {
+      setup(document) {
+        for (const [tag, rejects] of [
+          ["video", true],
+          ["audio", audioRejects],
+        ] as const) {
+          const media = document.createElement(tag);
+          media.setSinkId = async (value) => {
+            if (rejects) {
+              throw new Error(rejection);
+            }
+            Object.defineProperty(media, "sinkId", { value, configurable: true });
+          };
+          document.body.append(media);
+        }
+      },
+    });
+    expect(health).toMatchObject({
+      audioOutputRouted: !audioRejects,
+      audioOutputRouteError: rejection,
+    });
+    expect(health.notes).toContain(
+      audioRejects
+        ? `Could not route Meet speaker output to the virtual audio device: ${rejection}`
+        : `1 Meet media element(s) rejected the speaker route: ${rejection}`,
+    );
+    expect(ready(health)).toBe(!audioRejects);
   },
 );

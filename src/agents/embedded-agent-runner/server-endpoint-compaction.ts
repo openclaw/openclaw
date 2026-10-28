@@ -12,6 +12,7 @@ import type { AgentMessage } from "../runtime/index.js";
 import type { CompactionRequestBudget } from "../sessions/compaction/request-budget.js";
 import { withSessionManagerWrite } from "../sessions/session-manager-write-admission.js";
 import { sanitizeTranscriptMessage } from "../transcript-sanitize.js";
+import type { UsageLike } from "../usage.js";
 import { compactWithSafetyTimeout } from "./compaction-safety-timeout.js";
 import { log } from "./logger.js";
 import {
@@ -39,7 +40,7 @@ export async function attemptServerEndpointCompaction(params: {
   requestOptions: Parameters<typeof requestPreparedOpenAIResponsesCompaction>[3];
   requestBudget?: CompactionRequestBudget;
   customInstructions?: string;
-  onUsage?: (usage: ServerEndpointCompactionResult["usage"]) => void;
+  onUsage?: (usage: UsageLike) => void;
   onCompactionCommitted?: (tokensBefore: number) => void;
   assertActive?: () => void;
 }): Promise<ServerEndpointCompactionResult | undefined> {
@@ -99,7 +100,7 @@ export async function attemptServerEndpointCompaction(params: {
       params.requestOptions.timeoutMs,
       params.requestOptions.signal ? { abortSignal: params.requestOptions.signal } : undefined,
     );
-    params.onUsage?.(compacted.usage);
+    params.onUsage?.(compacted.modelUsage ?? compacted.usage);
     params.assertActive?.();
     const replacement = structuredClone(owner.message);
     captureOpenAIResponsesCompaction(

@@ -74,6 +74,195 @@ function resize(backend: ReturnType<typeof bindSqliteWorkerBackend>, dimensions:
   return result;
 }
 
+it("reuses committed schema repair across worker bindings and repairs later imports", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (fixture) => {
+    const target = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: path.join(fixture.stateDir, "agent.sqlite"),
+    });
+    const db = requireNativeSqliteDatabase(target.db);
+    const initialize = (input = schema) => {
+      const backend = bindSqliteWorkerBackend(
+        { kind: "agent" },
+        { databasePath: target.path, database: db, admit: () => {} },
+      );
+      try {
+        const result = backend.execute({ type: "schema.admit", input });
+        expect(result).toMatchObject({ ok: true, value: { ftsAvailable: input.ftsEnabled } });
+        return result;
+      } finally {
+        backend.close();
+      }
+    };
+    initialize();
+    const observed = observePublishedSql(db);
+    const repairCalls = () =>
+      observed
+        .calls()
+        .filter(({ sql }) =>
+          /BEGIN IMMEDIATE|PRAGMA foreign_keys|WITH missing AS MATERIALIZED|SELECT COUNT\(\*\) FROM memory_index_chunks|INSERT INTO memory_index_paths_fts/iu.test(
+            sql,
+          ),
+        );
+    try {
+      const first = initialize();
+      const second = initialize();
+      expect(second).toEqual(first);
+      expect(repairCalls()).toEqual([]);
+
+      // A sibling import changes data without changing the admitted table contracts.
+      using sibling = openNodeSqliteDatabase(target.path);
+      sibling.exec(`
+        INSERT INTO memory_index_sources (path, source, hash, mtime, size)
+          VALUES ('notes.md', 'memory', 'imported', 1, 1);
+        INSERT INTO memory_index_chunks
+          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+          VALUES ('imported', 'notes.md', 'memory', 1, 1, 'imported', 'fixture',
+                  'searchable import', X'', 17);
+        DELETE FROM memory_index_chunks_fts;
+        DELETE FROM memory_index_paths_fts;
+      `);
+      observed.clear();
+      initialize();
+      expect(repairCalls().some(({ sql }) => /BEGIN IMMEDIATE/iu.test(sql))).toBe(true);
+      expect(db.prepare("SELECT origin_class FROM memory_index_chunk_provenance").all()).toEqual([
+        { origin_class: "untrusted" },
+      ]);
+      expect(db.prepare("SELECT hash FROM memory_index_sources").all()).toEqual([{ hash: "" }]);
+      expect(
+        db
+          .prepare(
+            "SELECT id FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'searchable'",
+          )
+          .all(),
+      ).toEqual([{ id: "imported" }]);
+      expect(db.prepare("SELECT path FROM memory_index_paths_fts").all()).toEqual([
+        { path: "notes.md" },
+      ]);
+      observed.clear();
+      initialize();
+      expect(repairCalls()).toEqual([]);
+
+      initialize({ cacheEnabled: true, ftsEnabled: false });
+      observed.clear();
+      initialize();
+      expect(repairCalls().some(({ sql }) => /BEGIN IMMEDIATE/iu.test(sql))).toBe(true);
+      observed.clear();
+      initialize();
+      expect(repairCalls()).toEqual([]);
+    } finally {
+      observed.restore();
+    }
+  });
+});
+
+it.each(["commit", "fts", "fts after import"])(
+  "does not reuse failed %s repair or bypass request revocation",
+  async (failure) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (fixture) => {
+      const target = openOpenClawAgentDatabase({
+        agentId: "main",
+        path: path.join(fixture.stateDir, "agent.sqlite"),
+      });
+      const db = requireNativeSqliteDatabase(target.db);
+      let failRepair = true;
+      let revoked = false;
+      const backend = bindSqliteWorkerBackend(
+        { kind: "agent" },
+        {
+          databasePath: target.path,
+          database: db,
+          admit: (stage) => {
+            if (revoked || (failRepair && failure === "commit" && stage === "commit")) {
+              throw new Error("synthetic admission refusal");
+            }
+          },
+        },
+      );
+      const observed = observeHostDataSql((sql) => {
+        if (
+          failRepair &&
+          failure.startsWith("fts") &&
+          /CREATE VIRTUAL TABLE|SELECT COUNT\(\*\) FROM memory_index_chunks/iu.test(sql)
+        ) {
+          throw new Error("synthetic FTS failure");
+        }
+      });
+      const initialize = () => backend.execute({ type: "schema.admit", input: schema });
+      try {
+        if (failure === "fts after import") {
+          failRepair = false;
+          expect(initialize()).toMatchObject({ ok: true, value: { ftsAvailable: true } });
+          db.exec(`INSERT INTO memory_index_sources (path, source, hash, mtime, size)
+            VALUES ('imported.md', 'memory', 'imported', 1, 1)`);
+          failRepair = true;
+        }
+        expect(initialize()).toMatchObject(
+          failure === "commit"
+            ? { ok: false, entered: true, committed: false }
+            : { ok: true, value: { ftsAvailable: false } },
+        );
+        failRepair = false;
+        observed.queries.length = 0;
+        expect(initialize()).toMatchObject({ ok: true, value: { ftsAvailable: true } });
+        expect(observed.queries.some((sql) => /BEGIN IMMEDIATE/iu.test(sql))).toBe(true);
+        observed.queries.length = 0;
+        revoked = true;
+        expect(initialize).toThrow("synthetic admission refusal");
+        expect(observed.queries).toEqual([]);
+        revoked = false;
+        expect(initialize()).toMatchObject({ ok: true, value: { ftsAvailable: true } });
+        expect(observed.queries.some((sql) => /BEGIN IMMEDIATE/iu.test(sql))).toBe(false);
+      } finally {
+        observed.restore();
+        backend.close();
+      }
+    });
+  },
+);
+
+it("preserves memory schema admission when a fresh handle reuses repair then replaces vectors", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (fixture) => {
+    const target = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: path.join(fixture.stateDir, "agent.sqlite"),
+    });
+    const first = bindSqliteWorkerBackend(
+      { kind: "agent" },
+      { databasePath: target.path, database: target.db, admit: () => {} },
+    );
+    expect(first.execute({ type: "schema.admit", input: schema })).toMatchObject({ ok: true });
+    first.close();
+    using db = openNodeSqliteDatabase(target.path, { allowExtension: true });
+    const backend = await admit(db, target.path, {
+      fileIdentity: readMemoryShadowIdentity(target.path),
+      pragmas: readMemoryConnectionPragmas(db, "Unable to read fixture pragmas"),
+    });
+    try {
+      resize(backend, 2);
+      const observed = observePublishedSql(db);
+      try {
+        expect(backend.execute({ type: "schema.admit", input: schema })).toMatchObject({
+          ok: true,
+        });
+        expect(
+          observed
+            .calls()
+            .filter(({ sql }) =>
+              /sqlite_(?:schema|master)|pragma_(?:table|index)|PRAGMA main\.table_xinfo|\b(?:CREATE|ALTER|DROP)\b/iu.test(
+                sql,
+              ),
+            ),
+        ).toEqual([]);
+      } finally {
+        observed.restore();
+      }
+    } finally {
+      backend.close();
+    }
+  });
+});
+
 it.each(["clean", "unclean"])(
   "retains reindexed memory admission across a %s restart without skipping required integrity",
   async (shutdown) => {

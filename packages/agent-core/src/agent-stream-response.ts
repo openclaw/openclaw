@@ -1,4 +1,5 @@
 import { isResponsesOutputLimitToolCallError } from "@openclaw/ai/diagnostics";
+import { prepareSystemPrompt } from "@openclaw/ai/internal/shared";
 import {
   createEmptyTransportUsage,
   replaceCompactionReplayOwnerContent,
@@ -192,8 +193,13 @@ export async function streamAgentResponse(
   const llmMessages = await convertMessages(sourceMessages);
   let requestPrefix: string | undefined;
 
+  context.preparedSystemPrompt = prepareSystemPrompt(
+    context.systemPrompt,
+    context.preparedSystemPrompt,
+  );
   const llmContext: Context = {
     systemPrompt: context.systemPrompt,
+    preparedSystemPrompt: context.preparedSystemPrompt,
     messages: llmMessages,
     tools: context.tools,
   };
@@ -431,7 +437,11 @@ export async function streamAgentResponse(
                 await emit({
                   type: "message_update",
                   assistantMessageEvent: fragmentEvent,
-                  message: { ...fragment },
+                  // Partial-free text already has a fresh envelope; providers still own snapshots.
+                  message:
+                    event.type === "text_delta" && !event.partial
+                      ? Object.freeze(fragment)
+                      : { ...fragment },
                 });
                 if (
                   completedToolCall &&

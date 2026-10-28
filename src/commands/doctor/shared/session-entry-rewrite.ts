@@ -40,6 +40,7 @@ import {
 import { hasUpdateDoctorMigrationCapture } from "../../../infra/update-doctor-migration-attribution.js";
 import { agentEngineInput } from "../../../state/openclaw-agent-db-engine.js";
 import { assertOpenClawAgentDatabaseIdentity } from "../../../state/openclaw-agent-db-identity.js";
+import { withFreshOpenClawAgentDatabaseReadOnly } from "../../../state/openclaw-agent-db-readonly-open.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../../state/openclaw-agent-db-readonly.js";
 import {
   runOpenClawAgentWriteTransaction,
@@ -88,8 +89,12 @@ export function scanDoctorSessionEntryRecords(
       expectedIdentity.birthtime,
     );
   };
+  // The snapshot owner removes its copy immediately; its reader must not enter the idle cache.
+  const readDatabase = captured
+    ? withFreshOpenClawAgentDatabaseReadOnly
+    : withOpenClawAgentDatabaseReadOnly;
   const scan = (options: typeof databaseOptions, identity: DatabaseFileIdentity) =>
-    withOpenClawAgentDatabaseReadOnly((database) => {
+    readDatabase((database) => {
       assertOpenClawAgentDatabaseIdentity(database, identity);
       const legacyState = isPostgresSqlConnection(database.db)
         ? /* kysely-allow-raw: native JSON filtering bounds parsing; JSON.parse owns duplicate-key precedence. */ sql<boolean>`CASE WHEN entry_json IS JSON OBJECT THEN EXISTS (

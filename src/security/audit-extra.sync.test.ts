@@ -1,14 +1,10 @@
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { setConfigResolutionFacts } from "../config/resolution-facts.js";
 import {
   collectAttackSurfaceSummaryFindings,
   collectSmallModelRiskFindings,
 } from "./audit-extra.summary.js";
 import { collectSecretsInConfigFindings } from "./audit-secrets.js";
-
-vi.mock("../plugins/web-search-credential-presence.js", () => ({
-  hasConfiguredWebSearchCredential: () => false,
-}));
 
 it("distinguishes an unresolved password from byte-identical literal text", () => {
   const config = { gateway: { auth: { password: "${GATEWAY_PASSWORD}" } } };
@@ -27,15 +23,18 @@ it("summarizes enabled internal hooks", async () => {
   expect(finding?.detail).toContain("hooks.internal: enabled");
 });
 
-it.each<[string, boolean | undefined, string[] | undefined, string]>([
+it.each<[string, boolean | undefined, string[] | undefined, string, string?]>([
   ["disabled", false, undefined, "info"],
   ["default", undefined, undefined, "critical"],
   ["blocked by plugin policy", true, ["openai"], "info"],
-])("%s", (_name, enabled, allow, severity) => {
+  ["configured web search without browser", false, undefined, "critical", "brave-key"],
+])("%s", (_name, enabled, allow, severity, searchKey) => {
   const [finding] = collectSmallModelRiskFindings({
     cfg: {
       agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
-      tools: { web: { fetch: { enabled: false } } },
+      tools: {
+        web: { fetch: { enabled: false }, ...(searchKey ? { search: { apiKey: searchKey } } : {}) },
+      },
       browser: { enabled },
       plugins: { allow },
     },
@@ -45,6 +44,8 @@ it.each<[string, boolean | undefined, string[] | undefined, string]>([
   expect(finding).toMatchObject({
     checkId: "models.small_params",
     severity,
-    detail: expect.stringContaining(unsafe ? "web=[browser]" : "web=[off]"),
+    detail: expect.stringContaining(
+      unsafe ? (searchKey ? "web=[web_search]" : "web=[browser]") : "web=[off]",
+    ),
   });
 });

@@ -18,7 +18,7 @@ describe("Solid model picker interop", () => {
       options: [
         { value: "", label: "Automatic" },
         { value: "openai/other", label: "Other", provider: "openai", disabled: true },
-        { value: "openai/selected", label: "Selected", provider: "openai", detail: "API" },
+        { value: "openai/selected", label: "Selected", provider: "openai", description: "API" },
       ],
       onChange,
     });
@@ -43,13 +43,16 @@ describe("Solid model picker interop", () => {
       ...current,
       value: "openai/new",
       disabled: true,
-      options: [{ value: "openai/new", label: "New model", provider: "openai" }],
+      options: [
+        { value: "openai/new", label: "New model", provider: "openai", description: "Updated API" },
+      ],
     }));
     flush();
     await updatePickers(view.container);
     expect(view.container.querySelector("openclaw-select-picker")).toBe(picker);
     expect(picker.querySelector<HTMLButtonElement>(".picker-select__trigger")?.disabled).toBe(true);
     expect(picker.textContent).toContain("New model");
+    expect(trigger.textContent).toContain("Updated API");
   });
 
   it("reveals a custom editor without publishing its sentinel and commits on the configured event", async () => {

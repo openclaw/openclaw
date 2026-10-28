@@ -7,7 +7,7 @@ import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
-import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -270,6 +270,7 @@ it.each(["state", "reset"] as const)(
     expect(companion[operation]).toHaveBeenCalledWith({
       agentId: "main",
       sessionKey: "agent:main:main",
+      ownerId: "shared",
     });
     success(respond, operation === "state" ? state : { ok: true });
 
@@ -321,7 +322,11 @@ it("reads companion visibility while an unrelated writer remains admitted", asyn
       const hidden = expectDefined(results[1], "hidden response");
       success(visible, { exchanges });
       expectError(hidden, "INVALID_REQUEST");
-      expect(state).toHaveBeenCalledExactlyOnceWith({ agentId: "main", sessionKey: keys[0] });
+      expect(state).toHaveBeenCalledExactlyOnceWith({
+        agentId: "main",
+        sessionKey: keys[0],
+        ownerId: `profile:${client.authenticatedUserProfile?.profileId}`,
+      });
     } finally {
       release.resolve();
       await Promise.allSettled([writer, ...reads]);
@@ -358,6 +363,23 @@ it.each(["ask", "state"] as const)(
   },
 );
 
+it("addresses only the requester's own Side chat thread", async () => {
+  const reset = vi.fn();
+  const clients = [
+    { connId: "conn-alice", authenticatedUserProfile: { profileId: "alice" } },
+    { connId: "conn-bob", authenticatedUserProfile: { profileId: "bob" } },
+    { connId: "conn-token" },
+  ];
+  for (const client of clients) {
+    await invoke("reset", { sessionKey: "agent:main:main" }, { reset }, { client });
+  }
+  expect(reset.mock.calls.map(([target]) => target.ownerId)).toEqual([
+    "profile:alice",
+    "profile:bob",
+    "shared",
+  ]);
+});
+
 it("threads an explicit owner for a bare key and returns typed selection errors", async () => {
   const config = { agents: { ownership: "explicit", entries: { main: {}, work: {} } } };
   const state = vi.fn(() => ({ exchanges: [] }));
@@ -367,7 +389,7 @@ it("threads an explicit owner for a bare key and returns typed selection errors"
     { state },
     { config },
   );
-  expect(state).toHaveBeenCalledWith({ agentId: "work", sessionKey: "global" });
+  expect(state).toHaveBeenCalledWith({ agentId: "work", sessionKey: "global", ownerId: "shared" });
   success(selected, { exchanges: [] });
 
   state.mockClear();

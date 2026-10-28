@@ -69,13 +69,17 @@ export function formatGoalElapsed(elapsedMs: number): string {
     return `${totalSeconds}s`;
   }
   const totalMinutes = Math.floor(totalSeconds / 60);
-  const seconds = String(totalSeconds % 60).padStart(2, "0");
   if (totalMinutes < 60) {
-    return `${totalMinutes}m ${seconds}s`;
+    return `${totalMinutes}m`;
   }
   const hours = Math.floor(totalMinutes / 60);
-  const minutes = String(totalMinutes % 60).padStart(2, "0");
-  return `${hours}h ${minutes}m ${seconds}s`;
+  const minutes = totalMinutes % 60;
+  if (hours < 24) {
+    return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+  }
+  const days = Math.floor(hours / 24);
+  const period = days >= 7 ? `${Math.floor(days / 7)}wk ${days % 7}d` : `${days}d`;
+  return `${period} ${hours % 24}h ${minutes}m`;
 }
 
 export function formatGoalDetail(goal: SessionGoal): string {

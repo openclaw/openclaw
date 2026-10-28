@@ -310,6 +310,7 @@ function createManifestPluginRecord(params: {
     channelIds: manifestRecord.channels,
     providerIds: manifestRecord.providers,
     declaredContextEngineIds: manifestRecord.contextEngineIds,
+    turnHandover: manifestRecord.reload?.turnHandover === true,
     configSchema: Boolean(manifestRecord.configSchema),
   });
   if (!params.shouldLoadModules) {

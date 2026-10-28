@@ -9,6 +9,7 @@ openclaw-new-session-page,
 }
 
 .new-session-page {
+  container: new-session / size;
   position: relative;
   flex-direction: column;
   width: 100%;
@@ -1018,12 +1019,6 @@ span.new-session-page__select {
    than the other while the chat composer stayed symmetric. */
 .new-session-page__composer .new-session-page__message {
   max-height: calc(10lh + var(--chat-box-inset) + var(--chat-box-inset));
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--muted) 42%, transparent) transparent;
-}
-
-.new-session-page__composer .new-session-page__message::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--muted) 42%, transparent);
 }
 
 .new-session-page__composer::after {
@@ -1042,21 +1037,12 @@ span.new-session-page__select {
   opacity: 0.1;
 }
 
-.new-session-page__composer > * {
-  transition: opacity 140ms cubic-bezier(0.23, 1, 0.32, 1);
-}
-
-.new-session-page__composer[data-attachment-drop-active] > * {
-  opacity: 0.5;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .new-session-page__start-submit.new-session-page__start-submit--busy svg {
     animation: none;
   }
 
-  .new-session-page__composer::after,
-  .new-session-page__composer > * {
+  .new-session-page__composer::after {
     transition-duration: 0ms;
   }
 }
@@ -1326,10 +1312,20 @@ span.new-session-page__select {
   }
 }
 
-@media (max-width: 768px) and (max-height: 500px),
-  (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+/* Safari keeps height media queries on the full layout viewport while the
+   keyboard shrinks the shell. Use the page's actual available canvas instead. */
+@container new-session (max-width: 932px) and (max-height: 500px) {
   .new-session-page .agent-chat__welcome {
-    padding-block: 12px;
+    padding-block: 8px;
+  }
+
+  .new-session-page__draft {
+    margin-top: 8px;
+  }
+
+  .new-session-page__composer .new-session-page__message {
+    min-height: 48px;
+    max-height: min(10lh, max(48px, 25cqh));
   }
 
   .new-session-page .agent-chat__welcome-identity {
@@ -1366,19 +1362,6 @@ span.new-session-page__select {
 }
 
 @media (max-width: 560px) {
-  .agent-chat__input--mobile-toolbar .new-session-page__start-submit {
-    width: var(--chat-composer-send-size);
-    min-width: var(--chat-composer-send-size);
-    height: var(--chat-composer-send-size);
-    padding: var(--chat-mobile-row-action-padding);
-  }
-
-  .agent-chat__input--mobile-toolbar .new-session-page__start-submit > svg {
-    width: var(--chat-mobile-row-icon-size);
-    height: var(--chat-mobile-row-icon-size);
-    color: inherit;
-  }
-
   .new-session-page .agent-chat__welcome-clawd {
     margin-bottom: 0;
   }

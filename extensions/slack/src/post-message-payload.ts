@@ -28,36 +28,3 @@ export type SlackBasePostMessagePayload = (
 // Every payload built here carries accessible text even though Slack's upstream
 // argument type is a union where some members do not expose `text` or `blocks`.
 export type SlackPostMessagePayload = ChatPostMessageArguments & SlackBasePostMessagePayload;
-
-export function buildSlackPostMessagePayload(params: {
-  channelId: string;
-  text: string;
-  threadTs?: string;
-  replyBroadcast?: boolean;
-  blocks?: (Block | KnownBlock)[];
-  metadata?: MessageMetadata;
-  mrkdwn?: boolean;
-  unfurl?: SlackUnfurlOptions;
-}): SlackBasePostMessagePayload {
-  const threadPayload =
-    params.replyBroadcast && params.threadTs
-      ? { thread_ts: params.threadTs, reply_broadcast: true as const }
-      : params.threadTs
-        ? { thread_ts: params.threadTs }
-        : {};
-  return {
-    channel: params.channelId,
-    text: params.text,
-    ...(params.blocks?.length ? { blocks: params.blocks } : {}),
-    ...(params.metadata ? { metadata: params.metadata } : {}),
-    ...(params.mrkdwn !== undefined ? { mrkdwn: params.mrkdwn } : {}),
-    ...threadPayload,
-    // Default unfurl_links to false so bot messages don't expand inline
-    // link previews (Slack message links, URLs, etc.) unless the operator
-    // explicitly opts in via `channels.slack.unfurlLinks: true`.
-    unfurl_links: params.unfurl?.unfurlLinks ?? false,
-    ...(params.unfurl?.unfurlMedia !== undefined
-      ? { unfurl_media: params.unfurl.unfurlMedia }
-      : {}),
-  };
-}

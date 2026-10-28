@@ -67,7 +67,6 @@ export type SubagentRegistryWorkerWrite<T> = {
       execute: (scope: DomainScope) => Promise<unknown>;
       decode: (value: unknown) => T;
       terminalEvents: SubagentRunMutation<unknown>["terminalEvents"];
-      acknowledged: () => boolean;
     }
   | {
       kind: "completion";

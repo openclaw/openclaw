@@ -2,6 +2,7 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES } from "../../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { sqliteSessionEntriesEqual } from "../../../config/sessions/session-accessor.sqlite-entry-equality.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import type {
   SessionEntryCurrentCheck,
@@ -227,7 +228,7 @@ export async function persistSubagentSessionTiming(
     } else if (status && status !== "killed") {
       delete next.abortedLastRun;
     }
-    return next;
+    return sqliteSessionEntriesEqual(sessionEntry, next) ? null : next;
   };
   const persist = async (expected: SessionEntry | undefined, assertSessionCurrent?: () => void) => {
     let selected: InternalSessionEntry | undefined;

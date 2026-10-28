@@ -13,6 +13,7 @@ import { publishSqliteWalCheckpointObservation } from "../../infra/sqlite-wal-ch
 import { recordWorkerMessage } from "../../infra/worker-message-metrics.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import type { OpenClawAgentDatabaseClaim } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "../../state/openclaw-agent-db-lease.js";
@@ -89,6 +90,7 @@ export class SqliteReclamationWorker {
   private transport?: SqliteMutationWorkerTransport;
   private workerThreadId?: number;
   private ended?: Promise<void>;
+  private readonly nativeStopped = createDeferredCore();
   private failure?: Error;
   private cleanup?: WorkerCleanup;
   private lease?: OpenClawAgentDatabaseWorkerLeaseReceipt;
@@ -102,7 +104,7 @@ export class SqliteReclamationWorker {
   private readonly unregisterAgent: () => void;
   private readonly unregisterState: () => void;
   private readonly stateContext;
-  private readonly stateAccess;
+  private stateAccess?: ReturnType<typeof captureStateDatabaseAccess>;
   private readonly beforeExit = () => {
     void this.close().catch((error: unknown) => log.error(String(error)));
   };
@@ -119,7 +121,6 @@ export class SqliteReclamationWorker {
   ) {
     this.options = structuredClone(options);
     this.stateContext = captureOpenClawStateWorkerContext({ env: options.env });
-    this.stateAccess = captureStateDatabaseAccess(this.stateContext.admission.databasePath);
     this.unregisterAgent = registerOpenClawAgentDatabaseAsyncResource({
       agentId: options.agentId,
       path: options.path,
@@ -321,6 +322,10 @@ export class SqliteReclamationWorker {
   ): Promise<Result> {
     const startedAt = performance.now();
     params.assertCurrent();
+    const stateAccess = await (this.stateAccess ??= captureStateDatabaseAccess(
+      this.stateContext.admission.databasePath,
+    ));
+    params.assertCurrent();
     const transport = (this.transport ??= await this.start());
     params.assertCurrent();
     if (params.diagnostics) {
@@ -336,9 +341,10 @@ export class SqliteReclamationWorker {
         runSqliteMutationWorkerRequest<Result>({
           transport,
           operationId,
+          nativeStopped: this.nativeStopped.promise,
           completion: "result",
           databaseAuthority: {
-            stateAccess: this.stateAccess,
+            stateAccess,
             maintenanceScope: this.stateContext.maintenanceScope,
             creationPaths: [
               this.options.path,
@@ -421,6 +427,13 @@ export class SqliteReclamationWorker {
               [this.options.path, this.stateContext.admission.databasePath],
             ),
           };
+      if (transport.kind === "pooled") {
+        const terminate = transport.terminate;
+        transport.terminate = async () => {
+          await terminate();
+          this.nativeStopped.resolve();
+        };
+      }
       const worker = transport.channel;
       this.workerThreadId = sqliteMutationWorkerThreadId(transport);
       if (transport.kind === "pooled") {
@@ -455,6 +468,12 @@ export class SqliteReclamationWorker {
       });
       this.ended = new Promise((resolve) => {
         observeSqliteMutationWorkerEnd(transport, (ending) => {
+          if (
+            ending.kind === "native-exit" ||
+            (ending.kind === "task-complete" && ending.cleanup.settled)
+          ) {
+            this.nativeStopped.resolve();
+          }
           if (ending.kind === "task-complete") {
             this.cleanup = ending.cleanup;
           }

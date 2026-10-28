@@ -14,6 +14,19 @@ stale connection. These signals do not retry a connection that requires a page
 reload, corrected credentials, or a new pairing request. Follow the displayed
 recovery instructions; automatic document refresh remains available after an update.
 
+While a visible tab is connecting or reconnecting, it checks same-origin Gateway
+reachability at randomized intervals. A fresh response can resume a retry sooner
+or replace an opening attempt stuck for at least eight seconds, even when airplane
+Wi-Fi never reports an offline/online change. Young opening attempts and opened
+sockets keep their normal handshake. Announced startup, restart, suspension, and
+busy-Gateway waits keep their existing retry pacing; hidden tabs do not poll.
+Expected reachability failures do not trigger sign-in recovery notifications.
+
+An unanswered send starts a liveness check after about five seconds. Any inbound
+frame proves the connection is alive; otherwise, ten more seconds without a
+response moves the UI into reconnecting so queued input can recover. Idle
+connections keep their longer heartbeat window.
+
 If an update or rollback leaves a tab using an incompatible connection protocol,
 the Control UI stops reconnecting and reloads the document served by the same
 Gateway. The tab records the attempt in session storage: it reloads once for a
@@ -97,6 +110,10 @@ identity. A one-time bootstrap credential is never retained for offline admissio
 a successful pairing can use the reusable device grant already issued and stored
 by the browser client.
 
+The cached agent roster supplies the conversation's agent name and text avatar
+on the first render, including when the offline shell cannot fetch bootstrap
+config. Reconnecting keeps the displayed identity until a live refresh replaces it.
+
 The retained identity is for local display and storage, not permission to call
 the Gateway. Reading, drafting, and queuing input remain available offline;
 sending and synchronization wait for the Gateway to revalidate the account.
@@ -121,7 +138,13 @@ cached transcript opens at its latest messages without an initial scroll animati
 It retains participant and completed-work timing information and the last task
 progress card for display while connecting; live Gateway results replace those
 cached facts in place. Cached progress does not authorize offline actions. The
-first chat request uses the saved cursor if the cached transcript is ready when
+header also retains its last three viewer avatars and overflow count for that
+conversation while connecting. The reconnect indicator describes connection
+state; the full live presence roster replaces these last-known viewers when it
+arrives. The identity-only hello does not clear them. The header retains the
+sharing control's displayed mode and geometry while connecting, without enabling
+its menu or membership actions until live authority is available.
+The first chat request uses the saved cursor if the cached transcript is ready when
 the live message subscription finishes connecting. Otherwise, the live read and
 cache restoration run in parallel. Agent switches and stale asynchronous reads
 retain their own identity checks. When the cached conversation also has the exact
@@ -138,8 +161,11 @@ discovery; the Gateway revalidates the established session after connecting.
 Unique display-name links use the same cached route resolution, including the
 `/dashboard` namespace. Missing or ambiguous names still wait for the Gateway.
 
-Exact conversation links also wait for the scoped cached roster before presenting
-their header. Dashboard layouts restore before the pane renders, and embedded
+Exact conversation links can restore their scoped transcript without waiting for
+the sidebar roster or the socket to open. A prepared snapshot supplies the header,
+transcript, and composer in the first pane frame. The existing header connection
+indicator remains visible until live history and route confirmation finish; cached
+content stays visible while those checks run. Dashboard layouts restore before the pane renders, and embedded
 HTML widgets restore their last board metadata from the same scoped conversation
 cache and start loading the isolated sandbox while connecting. Document requests
 still require the current Gateway connection and overlap the live board refresh.
@@ -256,6 +282,17 @@ and respect unsaved-work protection.
 The current route and stored drafts survive the reload. If browser storage is unavailable
 or reload protection blocks recovery, reload the tab after saving your work;
 do not clear site data while drafts or queued messages still need recovery.
+Unsent highlighted-text comments in Side chat also restore after a Gateway restart
+or page reload, including their quoted text and source anchors. They use the same
+Gateway- and account-scoped browser draft storage, not shared session history.
+Editing or removing a comment updates that saved draft; sending the Side chat
+question or clearing Side chat retires its unsent comments. Incognito comments
+remain memory-only. Clearing browser site data removes saved comments too.
+While a Side chat comment autosave is pending, the composer shows **Saving…**.
+Automatic and in-app reloads are blocked, and a browser reload or close warns
+before discarding that unsaved input. Wait for saving to finish before refreshing;
+a forced exit can still discard a write that has not committed. Storage failures
+keep the comment available in memory with the existing browser-storage warning.
 
 If a view or stylesheet download fails during a network interruption, the open
 page keeps checking reachability with a backoff capped at 15 seconds. Coming

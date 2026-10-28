@@ -15,10 +15,10 @@ import { runGitWorkerOperation } from "./git-worker.js";
 vi.mock("./git-worker.js", () => ({ runGitWorkerOperation: vi.fn() }));
 
 const gitRead = vi.fn<typeof runGitWorkerOperation>();
-const readRevision = vi.fn<() => Promise<string | null>>();
+const readRevision = vi.fn<() => Promise<GitReadOperations["checkout.revision"]["output"]>>();
 
 beforeEach(() => {
-  readRevision.mockResolvedValue("unchanged");
+  readRevision.mockResolvedValue({ key: "unchanged" });
   vi.mocked(runGitWorkerOperation).mockImplementation((operation, options) =>
     operation.type === "checkout.revision"
       ? readRevision()
@@ -60,6 +60,10 @@ function contextRead(root: string) {
   return { type: "checkout.context" as const, input: { root } };
 }
 
+function workerCalls(type: keyof GitReadOperations) {
+  return vi.mocked(runGitWorkerOperation).mock.calls.filter(([command]) => command.type === type);
+}
+
 describe("typed Git read ownership", () => {
   it("retains interleaved PR histories while sharing checks of the same checkout refs", async () => {
     const read = (sha: string, branch = "feature", refreshIndex = false) =>
@@ -95,7 +99,7 @@ describe("typed Git read ownership", () => {
     await read("a", "other");
     await read("a", "feature", true);
     expect(gitRead).toHaveBeenCalledTimes(4);
-    readRevision.mockResolvedValue("refs-or-index-changed");
+    readRevision.mockResolvedValue({ key: "refs-or-index-changed" });
     expect(await Promise.all([read("a"), read("b")])).toEqual(expected);
     expect(gitRead).toHaveBeenCalledTimes(6);
   });
@@ -112,7 +116,7 @@ describe("typed Git read ownership", () => {
           operation.type === "checkout.revision" ? 2 : 5;
         options.diffTiming.durations["git-wall"] = operation.type === "checkout.revision" ? 0 : 10;
       }
-      return operation.type === "checkout.revision" ? "unchanged" : emptyDiff;
+      return operation.type === "checkout.revision" ? { key: "unchanged" } : emptyDiff;
     });
     const operation = {
       type: "checkout.diff" as const,
@@ -167,13 +171,13 @@ describe("typed Git read ownership", () => {
       const input = { cwd: `/revision-reasons-${component}`, summaryOnly: true };
       const read = (baseCommit?: string) =>
         runGitReadOperation({ type: "checkout.diff", input: { ...input, baseCommit } });
-      readRevision.mockResolvedValue(JSON.stringify(unchanged));
+      readRevision.mockResolvedValue({ key: JSON.stringify(unchanged) });
       await read();
       await read("a".repeat(40));
       await read();
-      readRevision.mockResolvedValue(
-        JSON.stringify({ ...unchanged, [component]: "private-changed" }),
-      );
+      readRevision.mockResolvedValue({
+        key: JSON.stringify({ ...unchanged, [component]: "private-changed" }),
+      });
       await read();
       await read("a".repeat(40));
       await read();
@@ -210,7 +214,7 @@ describe("typed Git read ownership", () => {
       if (operation.input.root === "/reason-oversized" && options?.diffTiming) {
         options.diffTiming.revisionUnavailableReason = "oversized";
       }
-      return operation.input.root.startsWith("/reason-") ? null : "unchanged";
+      return operation.input.root.startsWith("/reason-") ? null : { key: "unchanged" };
     });
     await read("/reason-unavailable");
     await read("/reason-oversized");
@@ -314,7 +318,7 @@ describe("typed Git read ownership", () => {
     vi.useFakeTimers();
     vi.mocked(runGitWorkerOperation).mockImplementation((operation, options) =>
       operation.type === "checkout.revision"
-        ? Promise.resolve(operation.input.summaryOnly ? null : "unchanged-full-diff")
+        ? Promise.resolve(operation.input.summaryOnly ? null : { key: "unchanged-full-diff" })
         : gitRead(operation, options),
     );
     const held = createDeferredCore<GitReadOperations["checkout.diff"]["output"]>();
@@ -376,7 +380,7 @@ describe("typed Git read ownership", () => {
       await read(params);
     }
     expect(gitRead).toHaveBeenCalledTimes(4);
-    readRevision.mockResolvedValue("edited-checkout");
+    readRevision.mockResolvedValue({ key: "edited-checkout" });
     await expect(read(summary)).resolves.toMatchObject({ additions: 2 });
     await expect(read(input)).resolves.toMatchObject({ additions: 2 });
     expect(gitRead).toHaveBeenCalledTimes(6);
@@ -386,7 +390,7 @@ describe("typed Git read ownership", () => {
     await drainGlobalSingletonLifecycleState("restart");
     await read(input);
     expect(gitRead).toHaveBeenCalledTimes(7);
-    readRevision.mockResolvedValue("retryable-checkout");
+    readRevision.mockResolvedValue({ key: "retryable-checkout" });
     gitRead.mockResolvedValueOnce({ ...emptyDiff, unavailableReason: "not_git" });
     await read(input);
     await expect(read(input)).resolves.toMatchObject({ unavailableReason: "not_git" });
@@ -397,7 +401,7 @@ describe("typed Git read ownership", () => {
 
   it("polls one cold checkout without waiting for revision work or losing unversioned results", async () => {
     vi.useFakeTimers();
-    const revision = createDeferredCore<string | null>();
+    const revision = createDeferredCore<GitReadOperations["checkout.revision"]["output"]>();
     readRevision.mockReturnValue(revision.promise);
     gitRead.mockResolvedValue({ ...emptyDiff, additions: 7 });
     const input = { cwd: "/poll-cold-checkout", sessionId: "first" };
@@ -473,7 +477,7 @@ describe("typed Git read ownership", () => {
     gitRead.mockResolvedValueOnce({ ...emptyDiff, additions: 1 });
     await expect(poll()).resolves.toMatchObject({ additions: 1 });
     await vi.advanceTimersByTimeAsync(1_001);
-    const revision = createDeferredCore<string>();
+    const revision = createDeferredCore<GitReadOperations["checkout.revision"]["output"]>();
     readRevision.mockReturnValue(revision.promise);
     gitRead.mockResolvedValueOnce({ ...emptyDiff, additions: 2 });
     const responses: unknown[] = [];
@@ -484,7 +488,7 @@ describe("typed Git read ownership", () => {
     try {
       await vi.advanceTimersByTimeAsync(2_001);
       expect(responses).toEqual([]);
-      revision.resolve("edited");
+      revision.resolve({ key: "edited" });
       await expect(Promise.all(requests)).resolves.toEqual([
         { ...emptyDiff, additions: 2 },
         { ...emptyDiff, additions: 2 },
@@ -498,7 +502,7 @@ describe("typed Git read ownership", () => {
         ),
       ).toHaveLength(3);
     } finally {
-      revision.resolve("edited");
+      revision.resolve({ key: "edited" });
       await Promise.allSettled(requests);
     }
   });
@@ -508,7 +512,7 @@ describe("typed Git read ownership", () => {
     await drainGlobalSingletonLifecycleState("restart");
     readRevision.mockResolvedValue(null);
     const held = createDeferredCore<GitReadOperations["checkout.diff"]["output"]>();
-    const retiringRevision = createDeferredCore<string | null>();
+    const retiringRevision = createDeferredCore<GitReadOperations["checkout.revision"]["output"]>();
     gitRead.mockReturnValue(held.promise);
     const poll = (index: number) =>
       runGitReadOperation(
@@ -557,7 +561,7 @@ describe("typed Git read ownership", () => {
     vi.useFakeTimers();
     await drainGlobalSingletonLifecycleState("restart");
     onTestFinished(() => drainGlobalSingletonLifecycleState("restart"));
-    readRevision.mockResolvedValue("unchanged");
+    readRevision.mockResolvedValue({ key: "unchanged" });
     gitRead.mockResolvedValue(emptyDiff);
     for (let index = 0; index < 32; index++) {
       await runGitReadOperation(
@@ -573,8 +577,8 @@ describe("typed Git read ownership", () => {
   });
 
   it("shares only in-flight revision checks with identical inputs and environment", async () => {
-    const held = createDeferredCore<string>();
-    onTestFinished(() => held.resolve("unchanged"));
+    const held = createDeferredCore<GitReadOperations["checkout.revision"]["output"]>();
+    onTestFinished(() => held.resolve({ key: "unchanged" }));
     readRevision.mockReturnValue(held.promise);
     gitRead.mockResolvedValue(emptyDiff);
     const input = { cwd: "/revision-sharing" };
@@ -588,14 +592,62 @@ describe("typed Git read ownership", () => {
     const otherEnvironment = read(input);
     vi.unstubAllEnvs();
     const revisionCount = readRevision.mock.calls.length;
-    held.resolve("unchanged");
+    held.resolve({ key: "unchanged" });
     await Promise.all([first, otherCheckout, otherBase, second, otherEnvironment]);
     expect(revisionCount).toBe(3);
     expect(gitRead).toHaveBeenCalledTimes(4);
-    readRevision.mockResolvedValue("edited");
+    readRevision.mockResolvedValue({ key: "edited" });
     await read(input);
     expect(readRevision).toHaveBeenCalledTimes(4);
     expect(gitRead).toHaveBeenCalledTimes(5);
+  });
+
+  it("prepares request identity and Git environment once per warm poll while observing changes", async () => {
+    vi.useFakeTimers();
+    gitRead.mockResolvedValue(emptyDiff);
+    const environment = process.env;
+    let configPath = "/first";
+    const gitConfigRead = vi.fn(() => configPath);
+    const unrelatedRead = vi.fn(() => "unused");
+    const sessionIdentity = vi.fn(() => "fixture");
+    process.env = {
+      ...environment,
+      get GIT_CONFIG_GLOBAL() {
+        return gitConfigRead();
+      },
+      get UNRELATED_DIFF_FIXTURE() {
+        return unrelatedRead();
+      },
+    };
+    try {
+      const poll = () =>
+        runGitReadOperation(
+          {
+            type: "checkout.diff",
+            input: {
+              cwd: "/poll-environment",
+              get sessionId() {
+                return sessionIdentity();
+              },
+            },
+          },
+          { poll: true },
+        );
+      await poll();
+      await vi.advanceTimersByTimeAsync(1_001);
+      gitConfigRead.mockClear();
+      sessionIdentity.mockClear();
+      await poll();
+      expect(gitRead).toHaveBeenCalledOnce();
+      expect(gitConfigRead).toHaveBeenCalledOnce();
+      expect(sessionIdentity).toHaveBeenCalledOnce();
+      configPath = "/second";
+      await poll();
+      expect(gitRead).toHaveBeenCalledTimes(2);
+      expect(unrelatedRead).not.toHaveBeenCalled();
+    } finally {
+      process.env = environment;
+    }
   });
 
   it("separates unavailable checkouts by environment and honors explicit refresh", async () => {
@@ -660,11 +712,8 @@ describe("typed Git read ownership", () => {
   });
 
   it("observes an unversioned refresh without an older completion replacing it", async () => {
-    const old = createDeferredCore<GitReadOperations["checkout.context"]["output"]>();
-    onTestFinished(() => old.resolve(null));
-    const fresh = createDeferredCore<GitReadOperations["checkout.context"]["output"]>();
-    onTestFinished(() => fresh.resolve(null));
-    gitRead.mockReturnValueOnce(old.promise).mockReturnValueOnce(fresh.promise);
+    const old = holdRead("checkout.context", null);
+    const fresh = holdRead("checkout.context", null);
     const operation = contextRead("/refresh-generation");
     readRevision.mockResolvedValue(null);
     const pending = runGitReadOperation(operation);
@@ -730,14 +779,8 @@ describe("typed Git read ownership", () => {
       const second = new AbortController();
       const cancelled = runGitReadOperation(operation, { signal: first.signal });
       const retained = runGitReadOperation(operation, { signal: second.signal });
-      await vi.waitFor(() =>
-        expect(
-          vi.mocked(runGitWorkerOperation).mock.calls.filter(([command]) => command.type === phase),
-        ).toHaveLength(1),
-      );
-      const owner = vi
-        .mocked(runGitWorkerOperation)
-        .mock.calls.find(([command]) => command.type === phase)?.[1]?.signal;
+      await vi.waitFor(() => expect(workerCalls(phase)).toHaveLength(1));
+      const owner = workerCalls(phase)[0]?.[1]?.signal;
       const rejected = expect(cancelled).rejects.toThrow("first retired");
       first.abort(new Error("first retired"));
       await rejected;
@@ -779,14 +822,8 @@ describe("typed Git read ownership", () => {
       const operation = contextRead(`/restart-lifecycle-${phase}`);
       const pending = runGitReadOperation(operation);
       const rejected = expect(pending).rejects.toThrow();
-      await vi.waitFor(() =>
-        expect(
-          vi.mocked(runGitWorkerOperation).mock.calls.some(([command]) => command.type === phase),
-        ).toBe(true),
-      );
-      const owner = vi
-        .mocked(runGitWorkerOperation)
-        .mock.calls.find(([command]) => command.type === phase)?.[1]?.signal;
+      await vi.waitFor(() => expect(workerCalls(phase).length).toBeGreaterThan(0));
+      const owner = workerCalls(phase)[0]?.[1]?.signal;
       const retiring = drainGlobalSingletonLifecycleState("restart");
       await Promise.resolve();
       expect(owner?.aborted).toBe(true);

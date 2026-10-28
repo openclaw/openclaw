@@ -18,6 +18,7 @@ type PluginIconOwnerHost = {
   timeoutError?: () => DOMException;
   onUrlsChange: (urls: Record<string, string>) => void;
   onLoadingChange?: () => void;
+  onUnavailable?: () => void;
 };
 
 export function pluginIconFetchContext(context: ApplicationContext): PluginIconFetchContext {
@@ -70,6 +71,7 @@ export class PluginIconOwner {
   }
 
   readonly isLoading = (key: string): boolean => this.requests.has(key);
+  readonly isUnavailable = (key: string): boolean => this.misses.has(key);
 
   reconcile(result: PluginListResult | null) {
     const eligiblePluginIds = new Set(
@@ -205,6 +207,7 @@ export class PluginIconOwner {
           this.publish({ ...this.urls, [pluginId]: url });
         } else {
           this.misses.add(pluginId);
+          this.host.onUnavailable?.();
         }
       })
       .catch(() => {
@@ -213,6 +216,7 @@ export class PluginIconOwner {
           (this.host.kind !== "catalog" || !controller.signal.aborted)
         ) {
           this.misses.add(pluginId);
+          this.host.onUnavailable?.();
         }
       })
       .finally(() => {

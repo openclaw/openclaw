@@ -17,7 +17,7 @@ import {
 import { trackSqliteDatabaseAdmissionWorker } from "../../infra/sqlite-database-admission.js";
 import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
 import { createSqliteDatabaseAdmissionRelay } from "../../infra/sqlite-worker-operation-admission.js";
-import { createCpuTrackedWorker } from "../../infra/worker-cpu.js";
+import { createCpuTrackedWorker, receiveWorkerMemoryPort } from "../../infra/worker-cpu.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -99,6 +99,7 @@ export function createSqliteTranscriptArchiveWorker(
   }
   trackSqliteArchiveWorkerCleanup(worker);
   trackSqliteDatabaseAdmissionWorker(worker);
+  worker.on("message", (message: unknown) => receiveWorkerMemoryPort(worker, message));
   worker.once("exit", finish);
   return worker;
 }
@@ -193,9 +194,13 @@ function runSqliteColdMutation<Result>(
       env: input.workerData.plan.databaseOptions.env,
     }),
   };
-  const stateAccess = captureStateDatabaseAccess(params.stateContext.admission.databasePath);
   return withSqliteTranscriptArchiveSession(params.workerData.plan.databaseOptions, () =>
-    runExclusiveSqliteTranscriptArchiveWorker(() => {
+    runExclusiveSqliteTranscriptArchiveWorker(async () => {
+      params.assertCurrent?.();
+      const stateAccess = await captureStateDatabaseAccess(
+        params.stateContext.admission.databasePath,
+      );
+      params.stateContext.admission.assertCurrent();
       params.assertCurrent?.();
       return runScopedSqliteArchiveMutation(
         params.workerData,

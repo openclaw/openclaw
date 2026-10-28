@@ -143,25 +143,19 @@ function isoFromUnix(raw: unknown): string | undefined {
 
 function cleanMessageText(value: string): string {
   const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (
-    (trimmed.includes("asset_pointer") ||
-      trimmed.includes("image_asset_pointer") ||
-      trimmed.includes("dalle") ||
-      trimmed.includes("file_service")) &&
-    trimmed.length > 40
-  ) {
-    return "";
-  }
-  if (
-    trimmed.startsWith("{") &&
-    trimmed.length > 80 &&
-    (trimmed.includes(":") || trimmed.includes("content_type"))
-  ) {
-    const textMatch = trimmed.match(/["']text["']\s*:\s*(["'])(.+?)\1/s);
-    return textMatch?.[2] ? normalizeWhitespace(textMatch[2]) : "";
+  if (trimmed.startsWith("{")) {
+    let part: Record<string, unknown> | null;
+    try {
+      part = asNullableRecord(JSON.parse(trimmed));
+    } catch {
+      return trimmed;
+    }
+    if (part?.content_type === "text" && typeof part.text === "string") {
+      return normalizeWhitespace(part.text);
+    }
+    if (part?.content_type === "image_asset_pointer") {
+      return "";
+    }
   }
   return trimmed;
 }

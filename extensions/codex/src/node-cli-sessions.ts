@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   floorPositiveFiniteNumber,
   resolveIntegerOption,
@@ -36,6 +37,10 @@ import {
   unwrapNodeInvokePayload,
 } from "./session-catalog-parsing.js";
 import type { CodexSessionCatalogControlFactory } from "./session-catalog-types.js";
+
+const loadSessionCatalogNodeAdoption = createLazyRuntimeModule(
+  () => import("./session-catalog-node-adoption.js"),
+);
 
 const CODEX_CLI_SESSIONS_LIST_COMMAND = "codex.cli.sessions.list";
 export const CODEX_CLI_SESSION_RESUME_COMMAND = "codex.cli.session.resume";
@@ -214,7 +219,7 @@ export async function resumeCodexCliSessionOnNode(params: {
       params.storePath ??
       params.runtime.agent.session.resolveStorePath(undefined, { agentId: params.agentId });
     const { adoptionSessionKeyRest, CODEX_NODE_SESSION_KEY_PREFIX, readNodeSessionMarker } =
-      await import("./session-catalog-node-adoption.js");
+      await loadSessionCatalogNodeAdoption();
     const entry = await params.runtime.agent.session.getSessionEntryAsync({
       agentId: params.agentId,
       storePath,

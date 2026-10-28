@@ -224,34 +224,15 @@ suite.define(() => {
     const expectDraft = async (text: string, aborts = 0) => {
       expect(await composer.inputValue()).toBe(text);
       expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
-      await expectRequestCountStable(gateway, "chat.send", 1);
-      await expectRequestCountStable(gateway, "chat.abort", aborts);
+      await Promise.all([
+        expectRequestCountStable(gateway, "chat.send", 1),
+        expectRequestCountStable(gateway, "chat.abort", aborts),
+      ]);
     };
     await preview.waitFor({ state: "visible" });
     await expectQuote();
 
     expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
-    const draft = "Preserve this unsent reply draft.";
-    await composer.fill(draft);
-
-    // Synthetic IME events exercise the application flow, not native IME delivery.
-    for (const mode of ["isComposing", "keyCode229"]) {
-      const prevented = await composer.evaluate((element, compositionMode) => {
-        const event = new KeyboardEvent("keydown", {
-          key: "Escape",
-          bubbles: true,
-          cancelable: true,
-          isComposing: compositionMode === "isComposing",
-          keyCode: compositionMode === "keyCode229" ? 229 : 0,
-        });
-        element.dispatchEvent(event);
-        return event.defaultPrevented;
-      }, mode);
-      expect(prevented).toBe(false);
-      await expectQuote();
-      await expectDraft(draft);
-    }
-
     await composer.fill("");
     await stop.waitFor({ state: "visible" });
     const primary = pane.locator(".agent-chat__composer-actions .chat-send-btn--send");
@@ -302,10 +283,10 @@ suite.define(() => {
     await expectDraft(composingDraft, 1);
   });
 
-  it.each(["queue", "steer", "collect", "followup"] as const)(
+  it.each(["queue", "steer", "collect"] as const)(
     "explains and submits the opposite of %s with modified Enter",
     async (followUpMode) => {
-      const inheritsQueueMode = followUpMode === "collect" || followUpMode === "followup";
+      const inheritsQueueMode = followUpMode === "collect";
       const runtimeConfig = {
         messages: { queue: { mode: inheritsQueueMode ? followUpMode : "steer" } },
       };

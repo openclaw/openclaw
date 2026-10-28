@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { fstatSync, renameSync } from "node:fs";
+import fs, { fstatSync, renameSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { getEnvironmentData, MessageChannel, type MessagePort, Worker } from "node:worker_threads";
@@ -15,6 +15,9 @@ import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import type { PostgresSqlConnection } from "./sql-connection.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import {
+  admitSqliteDatabaseFactValue,
+  publishSqliteDatabaseFact,
+  readSqliteDatabaseFactRevision,
   readSqliteDatabaseAdmissionFact as readFact,
   SqliteDatabaseAdmissionRegistry,
 } from "./sqlite-database-admission-record.js";
@@ -23,6 +26,7 @@ import {
   discardSqliteDatabaseTransactionAdmissions as discardFacts,
   getSqliteDatabaseAdmission as getFact,
   getOrLoadSqliteDatabaseAdmissionForPath as loadFact,
+  prepareSqliteDatabaseAdmissionForPath as prepareFact,
   hasPendingSqliteDatabaseSchemaMutation as schemaDirty,
   invalidateLocalSqliteSchemaAdmissions as invalidateSchema,
   publishSqliteDatabaseAdmission as publishFact,
@@ -202,18 +206,24 @@ it("retains active source receipts until their last release without suppressing 
     const committed = scopedToken(database, key);
     expect(committed).not.toBe(before);
     releaseSibling();
-    expect(recordsFor(location)[0]!.writeScopes.size).toBe(0);
+    expect(
+      recordsFor(location)[0]!.writeScopes.reduce((size, bucket) => size + bucket.size, 0),
+    ).toBe(0);
     const releaseDeleted = retainScopes(location, ["deleted"])!;
     try {
       retireScopes(database, ["deleted"]);
-      expect(recordsFor(location)[0]!.writeScopes.size).toBe(0);
+      expect(
+        recordsFor(location)[0]!.writeScopes.reduce((size, bucket) => size + bucket.size, 0),
+      ).toBe(0);
     } finally {
       releaseDeleted();
     }
   } finally {
     release();
     releaseSibling();
-    expect(recordsFor(location)[0]!.writeScopes.size).toBe(0);
+    expect(
+      recordsFor(location)[0]!.writeScopes.reduce((size, bucket) => size + bucket.size, 0),
+    ).toBe(0);
   }
 });
 
@@ -229,7 +239,8 @@ it("bounds cold session receipts by bytes without evicting hot receipts or reviv
     expect(scopedToken(database, key)).toBeTypeOf("string");
     expect(scopedToken(database, "hot")).toBe(hot);
   }
-  const retained = () => recordsFor(location)[0]!.writeScopes;
+  const retained = () =>
+    new Map(recordsFor(location)[0]!.writeScopes.flatMap((bucket) => Array.from(bucket)));
   expect([...retained().keys()].reduce((bytes, key) => bytes + key.length * 2, 0)).toBeLessThan(
     1024 * 1024,
   );
@@ -262,6 +273,21 @@ it("retires the final closed handle's facts while preserving open siblings and d
   using second = openNodeSqliteDatabase(location);
   admitSqliteSchema(second);
   const original = recordsFor(location)[0]!;
+  {
+    using stat = vi.spyOn(fs, "statSync");
+    using fstat = vi.spyOn(fs, "fstatSync");
+    using realpath = vi.spyOn(fs.realpathSync, "native");
+    using open = vi.spyOn(fs, "openSync");
+    using read = vi.spyOn(fs, "readFileSync");
+    using lstat = vi.spyOn(fs, "lstatSync");
+    retainLocation(location, original.physicalIdentity);
+    retainLocation(location, original.physicalIdentity);
+    expect(recordsFor(location)[0]?.generationId).toBe(original.generationId);
+    expect(recordsFor(location)[0]?.descriptor).toBe(original.descriptor);
+    for (const probe of [stat, fstat, realpath, open, read, lstat]) {
+      expect(probe).not.toHaveBeenCalled();
+    }
+  }
   const stale = structuredClone([original]);
   publishFact(first, key, "connection-scoped");
   first.close();
@@ -718,22 +744,58 @@ it.each([false, true])(
   },
 );
 
-it("path revocation invalidates scoped receipts and admission facts with a live handle", () => {
-  using fixture = databaseFixture("sqlite-admission-path-revocation-");
-  const { database, location } = fixture;
-  const beforeRevocation = scopedToken(database, "proof");
-  publishFact(database, key, "healthy");
-  publishFact(database, schemaKey, "admitted");
-
-  revokePath(location);
-
-  expect(scopedToken(database, "proof")).not.toBe(beforeRevocation);
-  expect(getFact(database, key)).toBeUndefined();
-  expect(getFact(database, schemaKey)).toBeUndefined();
-});
-
 const key = { name: "test.engine-admission", read: (value: unknown) => value };
 const schemaKey = { ...key, name: "test.engine-schema-admission", schemaDependent: true };
+
+it("prepared facts follow a worker whose snapshot predates the host seed", () => {
+  using fixture = databaseFixture("sqlite-prepared-publication-");
+  const { database, location } = fixture;
+  const worker = new SqliteDatabaseAdmissionRegistry();
+  worker.install(structuredClone(recordsFor(location)));
+  const workerRecord = worker.forLocation(location)!;
+  publishFact(database, schemaKey, "host seed");
+  const read = prepareFact(location, schemaKey);
+  expect(read()).toBe("host seed");
+  publishSqliteDatabaseFact(
+    workerRecord,
+    schemaKey,
+    admitSqliteDatabaseFactValue(schemaKey, "worker replacement"),
+    readSqliteDatabaseFactRevision(workerRecord, true),
+    "worker-publication",
+  );
+  worker.publish(workerRecord);
+  installAdmissions(worker.capture());
+  expect(getFact(database, schemaKey)).toBe("worker replacement");
+  expect(read()).toBe("worker replacement");
+});
+
+it.each([
+  [key, false],
+  [schemaKey, true],
+] as const)("prepared facts follow publication and revocation (%j)", (factKey, schemaDependent) => {
+  using fixture = databaseFixture("sqlite-prepared-admission-");
+  const { database, location } = fixture;
+  const read = prepareFact(location, factKey);
+  expect(read()).toBeUndefined();
+  publishFact(database, factKey, "first");
+  expect(read()).toBe("first");
+  publishFact(database, factKey, "replacement");
+  expect(read()).toBe("replacement");
+  const beforeRevocation = scopedToken(database, "proof");
+  revokePath(location);
+  expect(scopedToken(database, "proof")).not.toBe(beforeRevocation);
+  expect(getFact(database, factKey)).toBeUndefined();
+  expect(read()).toBeUndefined();
+  publishFact(database, factKey, "recovered");
+  expect(read()).toBe("recovered");
+  publishSchema(database);
+  expect(read()).toBe(schemaDependent ? undefined : "recovered");
+  publishFact(database, factKey, "new-schema");
+  expect(read()).toBe("new-schema");
+  database.close();
+  retireAdmission(location);
+  expect(read()).toBeUndefined();
+});
 
 it.each(["committed", "native", "sqlite-transaction", "postgres-transaction"] as const)(
   "decodes admission values once at publication (%s)",

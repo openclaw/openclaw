@@ -29,6 +29,28 @@ describe("realtime Talk conversation", () => {
       isStreaming: false,
     });
   });
+  it("keeps each caption at the history position where it started", () => {
+    update("user", "Hello", false, { afterMessageId: "m-1" });
+    update("assistant", "Hi", false, { itemId: "a", afterMessageId: "m-1" });
+    update("user", "Hello there", true, { afterMessageId: "m-2" });
+    update("assistant", "Hi again", true, { itemId: "a", afterMessageId: "m-2" });
+    update("user", "Next", true, { afterMessageId: "m-2" });
+    expect(state.entries.map(({ text, afterMessageId }) => [text, afterMessageId])).toEqual([
+      ["Hello there", "m-1"],
+      ["Hi again", "m-1"],
+      ["Next", "m-2"],
+    ]);
+  });
+
+  it("keeps delayed speech beside the caption the provider orders after it", () => {
+    update("assistant", "Answer", true, { itemId: "a", order: 2, afterMessageId: "m-1" });
+    update("user", "Question", true, { itemId: "q", order: 1, afterMessageId: "m-2" });
+    expect(state.entries.map(({ text, afterMessageId }) => [text, afterMessageId])).toEqual([
+      ["Question", "m-1"],
+      ["Answer", "m-1"],
+    ]);
+  });
+
   it("keeps a corrected snapshot before the answer without adding another user entry", () => {
     update("user", "How", false, { textMode: "snapshot" });
     update("assistant", "Earth is", false);

@@ -9,13 +9,19 @@ import {
   type MovePathPublicationReceipt,
 } from "@openclaw/fs-safe/atomic";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { hasErrnoCode } from "./errno.js";
 import { isRemovalIoError, removePathWithinRoot } from "./fs-safe-remove.js";
 import { FsSafeError, pathExists } from "./fs-safe.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import { withInstallActivity, type InstallActivityObserver } from "./install-progress.js";
-import { assertCanonicalPathWithinBase } from "./install-safe-path.js";
+import {
+  assertCanonicalPathWithinBase,
+  assertInstallBaseStable,
+  INSTALL_BASE_CHANGED_ERROR_MESSAGE,
+  resolveInstallPublishTarget,
+} from "./install-safe-path.js";
 import { formatNpmCommandFailureOutput } from "./install-source-utils.js";
 import { tryReadJson, writeJson } from "./json-files.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
@@ -24,7 +30,6 @@ import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-packag
 
 type InstallSourceHardlinks = "package-manager" | "reject";
 
-const INSTALL_BASE_CHANGED_ERROR_MESSAGE = "install base directory changed during install";
 const INSTALL_BASE_CHANGED_ABORT_WARNING =
   "Install base directory changed during install; aborting staged publish.";
 const INSTALL_BASE_CHANGED_BACKUP_WARNING =
@@ -131,41 +136,6 @@ function isInstallBaseChangedError(error: unknown): boolean {
   return error instanceof Error && error.message === INSTALL_BASE_CHANGED_ERROR_MESSAGE;
 }
 
-async function assertInstallBaseStable(params: {
-  installBaseDir: string;
-  expectedRealPath: string;
-}): Promise<void> {
-  const baseStat = await fs.stat(params.installBaseDir);
-  if (!baseStat.isDirectory()) {
-    throw new Error(INSTALL_BASE_CHANGED_ERROR_MESSAGE);
-  }
-  const currentRealPath = await fs.realpath(params.installBaseDir);
-  if (currentRealPath !== params.expectedRealPath) {
-    throw new Error(INSTALL_BASE_CHANGED_ERROR_MESSAGE);
-  }
-}
-
-async function resolveInstallPublishTarget(params: {
-  installBaseDir: string;
-  targetDir: string;
-}): Promise<{ installBaseRealPath: string; canonicalTargetDir: string }> {
-  const installBaseResolved = path.resolve(params.installBaseDir);
-  const targetResolved = path.resolve(params.targetDir);
-  const targetRelativePath = path.relative(installBaseResolved, targetResolved);
-  if (
-    !targetRelativePath ||
-    targetRelativePath === ".." ||
-    targetRelativePath.startsWith(`..${path.sep}`)
-  ) {
-    throw new Error("invalid install target path");
-  }
-  const installBaseRealPath = await fs.realpath(params.installBaseDir);
-  return {
-    installBaseRealPath,
-    canonicalTargetDir: path.join(installBaseRealPath, targetRelativePath),
-  };
-}
-
 export type PackageDirInstallTransaction = {
   commit(assertCurrent?: () => void): Promise<void>;
   rollback(assertCurrent?: () => void): Promise<void>;
@@ -173,6 +143,7 @@ export type PackageDirInstallTransaction = {
 
 type PackageDirInstallTransactionRequest = {
   assertOwned?: () => void;
+  prepareSettlement?: () => void | Promise<void>;
 };
 
 const PACKAGE_DIR_INSTALL_TRANSACTION = Symbol.for("openclaw.packageDirInstallTransaction");
@@ -183,11 +154,12 @@ const PACKAGE_DIR_INSTALL_TRANSACTION_REQUEST = Symbol.for(
 export function requestDeferredPackageDirInstall<T extends object>(
   params: T,
   assertOwned?: () => void,
+  prepareSettlement?: () => void | Promise<void>,
 ): T {
   Object.defineProperty(params, PACKAGE_DIR_INSTALL_TRANSACTION_REQUEST, {
     configurable: false,
     enumerable: true,
-    value: { assertOwned } satisfies PackageDirInstallTransactionRequest,
+    value: { assertOwned, prepareSettlement } satisfies PackageDirInstallTransactionRequest,
   });
   return params;
 }
@@ -197,7 +169,9 @@ export function copyPackageDirInstallTransactionRequest<T extends object>(
   target: T,
 ): T {
   const request = resolvePackageDirInstallTransactionRequest(source);
-  return request ? requestDeferredPackageDirInstall(target, request.assertOwned) : target;
+  return request
+    ? requestDeferredPackageDirInstall(target, request.assertOwned, request.prepareSettlement)
+    : target;
 }
 
 function resolvePackageDirInstallTransactionRequest(
@@ -264,12 +238,30 @@ export async function installPackageDir<
   const deferCommit = transactionRequest !== undefined;
   // A retry cannot revive a refused transaction or borrow a successor's lease.
   // Publication-only cancellation remains separate so the owner can still roll back.
-  const assertOwned = retainMutationAuthority(transactionRequest?.assertOwned ?? (() => {}));
+  const originalAssertOwned = transactionRequest?.assertOwned;
+  const originalPrepareSettlement = transactionRequest?.prepareSettlement;
+  let settlementRefusal: { error: unknown } | undefined;
+  const assertOwned = retainMutationAuthority(() => {
+    if (settlementRefusal) {
+      throw settlementRefusal.error;
+    }
+    originalAssertOwned?.();
+  });
+  const prepareSettlement = async () => {
+    assertOwned();
+    try {
+      await originalPrepareSettlement?.();
+      assertOwned();
+    } catch (error) {
+      settlementRefusal = { error };
+      throw error;
+    }
+  };
   const assertSettlementOwned = retainMutationAuthority((assertCurrent?: () => void) => {
     assertOwned();
     assertCurrent?.();
   });
-  params.logger?.info?.(`Installing to ${params.targetDir}…`);
+  params.logger?.info?.(terminalText`Installing to ${params.targetDir}…`);
   const installBaseDir = path.dirname(params.targetDir);
   let initialInstallBaseRealPath: string;
   try {
@@ -374,11 +366,12 @@ export async function installPackageDir<
         );
         const identity = await readDirectoryIdentity(directory);
         try {
-          assertDirectoryIdentity(directory, identity);
-          assertDirectoryIdentity(canonicalTargetDir, installedIdentity);
           // Detach atomically before any recursive deletion. Copy fallback would still
           // clean the shared source after ownership can close, so it is forbidden here.
+          await prepareSettlement();
           assertRollbackOwned(assertCurrent);
+          assertDirectoryIdentity(directory, identity);
+          assertDirectoryIdentity(canonicalTargetDir, installedIdentity);
           fsSync.renameSync(canonicalTargetDir, path.join(directory, "package"));
           quarantine = { directory, identity };
         } catch (error) {
@@ -445,6 +438,8 @@ export async function installPackageDir<
     }
     const restoring = published.backup;
     try {
+      await prepareSettlement();
+      assertRollbackOwned(assertCurrent);
       if (!published.restore && fsSync.lstatSync(canonicalTargetDir, { throwIfNoEntry: false })) {
         if (!originalIdentity) {
           throw new Error(`install target changed during rollback: ${canonicalTargetDir}`);
@@ -748,6 +743,8 @@ export async function installPackageDir<
           }
           assertOwner();
           if (published.backup) {
+            await prepareSettlement();
+            assertOwner();
             await removeInstallTree({
               directory: published.backup.path,
               identity: published.backup,

@@ -181,6 +181,24 @@ test("keeps committed node bindings across bootstrap writes and caller-owned row
   expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(binding);
 });
 
+test("preserves device keys and equal-timestamp ordering in the committed publication", async () => {
+  const node = expectDefined(await getPairedDevice("node", baseDir), "paired node");
+  persistNodes(
+    Object.fromEntries(
+      ["__proto__", "constructor", "10", "2"].map((deviceId) => [deviceId, { ...node, deviceId }]),
+    ),
+  );
+  const snapshot = await readDevicePairingNodeSnapshot(baseDir);
+  expect(snapshot.paired.map((device) => device.deviceId)).toEqual([
+    "2",
+    "10",
+    "__proto__",
+    "constructor",
+  ]);
+  expect(await getPairedDevice("__proto__", baseDir)).toMatchObject({ deviceId: "__proto__" });
+  expect(await getPairedDevice("toString", baseDir)).toBeNull();
+});
+
 test("keeps node authority available while retained setup cleanup is pending", async () => {
   await inState(async () => {
     const snapshot = await readDevicePairingNodeSnapshot(baseDir);
@@ -259,6 +277,7 @@ test.for([
       const committedBinding = change === "token revocation" ? null : binding;
       expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(committedBinding);
       using read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+      using index = vi.spyOn(Object, "fromEntries");
       const updated = await readDevicePairingNodeSnapshot(baseDir);
       expect(updated).not.toBe(snapshot);
       expect(await readDevicePairingNodeSnapshot(baseDir)).toBe(updated);
@@ -266,6 +285,7 @@ test.for([
       expect(updated.paired[0]).toMatchObject(expected);
       expect(JSON.stringify(snapshot.paired)).toBe(original);
       expect(read).not.toHaveBeenCalled();
+      expect(index).not.toHaveBeenCalled();
     } finally {
       releaseMutation.resolve();
       await Promise.allSettled([mutation]);

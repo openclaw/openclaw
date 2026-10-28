@@ -13,6 +13,7 @@ import type { SessionDiffBaseline } from "../config/sessions/types.js";
 import { normalizeGitPathForFilesystem } from "../infra/git-exec.js";
 import type { GitCheckoutDiffInput, GitReadOperations } from "../infra/git-read-operations.js";
 import { hasGitWorkerContext, requestGitWorkerEffect } from "../infra/git-worker-context.js";
+import type { GitWorkerOperations } from "../infra/git-worker-contract.js";
 import { isSqliteFilePath } from "../infra/sqlite-file-path.js";
 import { parseDiffInventoryZ, parseNameStatusZ, splitPatchByFile } from "./session-diff-parser.js";
 import {
@@ -351,8 +352,9 @@ async function collectTrackedFiles(
       continue;
     }
     // Like the deleted-file exemption, two-revision commit diffs read every
-    // path from the object DB. Only working-tree content needs the hardlink guard.
+    // path from the object DB. Only emitted working-tree content needs the hardlink guard.
     const safe =
+      !chunk ||
       revisions.length === 2 ||
       entry.status === "deleted" ||
       (await isPatchableWorkingTreePath(realRoot, entry.path));
@@ -370,7 +372,7 @@ async function collectTrackedFiles(
 type CheckoutDiffResult = GitReadOperations["checkout.diff"]["output"];
 
 export async function collectCheckoutDiff(
-  params: GitCheckoutDiffInput,
+  params: GitWorkerOperations["checkout.diff"]["input"],
 ): Promise<CheckoutDiffResult> {
   const empty = (
     unavailableReason?: NonNullable<SessionsDiffResult["unavailableReason"]>,
@@ -411,6 +413,9 @@ export async function collectCheckoutDiff(
     unavailableReason: "unknown_commit",
   });
   const scope = params.scope ?? "all";
+  // Fresh status already inventoried tracked and untracked changes at this HEAD.
+  const cleanWorktree =
+    params.cleanWorktree?.root === realRoot && params.cleanWorktree.head === head;
   let revisions: readonly [string] | readonly [string, string] | undefined;
   if (scope === "commit") {
     if (!head || !branchBase || branchBase.base === "HEAD" || branchBase.base === head) {
@@ -447,12 +452,15 @@ export async function collectCheckoutDiff(
   } else {
     revisions = branchBase ? [branchBase.base] : undefined;
   }
+  if (cleanWorktree && revisions?.length === 1 && revisions[0] === head) {
+    return { ...repositoryFields, files: [], additions: 0, deletions: 0 };
+  }
   const budget: PatchBudget = { remaining: MAX_TOTAL_PATCH_BYTES };
   const tracked = revisions
     ? await collectTrackedFiles(root, realRoot, revisions, budget, params.summaryOnly === true)
     : { files: [], truncated: false };
   const untracked =
-    scope === "commit"
+    scope === "commit" || cleanWorktree
       ? { files: [], truncated: false }
       : await collectUntrackedFiles(root, realRoot, budget, params.summaryOnly === true);
   const files = [...tracked.files, ...untracked.files].toSorted((a, b) =>

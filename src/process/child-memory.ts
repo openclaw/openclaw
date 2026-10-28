@@ -4,8 +4,31 @@ import os from "node:os";
 import { promisify } from "node:util";
 import { hasErrnoCode } from "../infra/errno.js";
 
+const rssField = Buffer.from("\nVmRSS:");
+const swapField = Buffer.from("\nVmSwap:");
+
 // Avoid fs/promises' extra promise layers for every tiny procfs read.
 const readFile = promisify(readFileCallback);
+
+function readKilobytes(buffer: Buffer, field: Buffer): number {
+  // status starts with Name, so memory fields always follow a newline.
+  const start = buffer.indexOf(field);
+  if (start < 0) {
+    return 0;
+  }
+  let offset = start + field.length;
+  while (buffer[offset] === 32 || buffer[offset] === 9) {
+    offset++;
+  }
+  let value = 0;
+  while (true) {
+    const digit = buffer[offset++];
+    if (digit === undefined || digit < 48 || digit > 57) {
+      return value;
+    }
+    value = value * 10 + digit - 48;
+  }
+}
 
 /** Host exec budgets physical memory, not V8/Go's virtual address reservations. */
 export function resolveHostExecMemoryLimit(): number | undefined {
@@ -35,11 +58,9 @@ async function readTreeMemory(
       return { bytes, pids: seen };
     }
     try {
-      const status = await readFile(`/proc/${pid}/status`, "utf8");
+      const status = await readFile(`/proc/${pid}/status`);
       // Include swapped private pages so swapping cannot hide a runaway allocation.
-      for (const match of status.matchAll(/^(?:VmRSS|VmSwap):\s+(\d+) kB$/gm)) {
-        bytes += Number(match[1]) * 1024;
-      }
+      bytes += (readKilobytes(status, rssField) + readKilobytes(status, swapField)) * 1024;
       if (bytes > limitBytes) {
         return { bytes, pids: seen };
       }
@@ -48,12 +69,18 @@ async function readTreeMemory(
           return { bytes, pids: seen };
         }
         try {
-          const children = await readFile(`/proc/${pid}/task/${tid}/children`, "utf8");
-          for (const child of children.trim().split(/\s+/)) {
-            const childPid = Number(child);
-            if (childPid > 0 && !seen.has(childPid)) {
-              seen.add(childPid);
-              pending.push(childPid);
+          const children = await readFile(`/proc/${pid}/task/${tid}/children`);
+          let childPid = 0;
+          for (let offset = 0; offset <= children.length; offset++) {
+            const digit = children[offset];
+            if (digit !== undefined && digit >= 48 && digit <= 57) {
+              childPid = childPid * 10 + digit - 48;
+            } else {
+              if (childPid > 0 && !seen.has(childPid)) {
+                seen.add(childPid);
+                pending.push(childPid);
+              }
+              childPid = 0;
             }
           }
         } catch (error) {

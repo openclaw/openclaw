@@ -81,7 +81,6 @@ export const CHAINED_ASSERTION_EXCLUDED_ROOTS = [
   "extensions/reef/protocol/envelope.ts", // signed version fields authenticate before unsupported versions are rejected
   "extensions/signal/src/approval-native.ts", // approval runtime dynamically implements the public channel adapter seam
   "extensions/slack/src/approval-native.ts", // approval runtime dynamically implements the public channel adapter seam
-  "extensions/slack/src/monitor/events/agent.ts", // Slack app typings omit the agent event registrar
   "extensions/slack/src/monitor/events/assistant.ts", // Slack app typings omit the assistant event registrar
   "extensions/slack/src/monitor/events/messages.ts", // app mentions adapt into the shared Slack message pipeline
   "extensions/slack/src/monitor/slash.ts", // Slack action and options overloads omit runtime middleware fields

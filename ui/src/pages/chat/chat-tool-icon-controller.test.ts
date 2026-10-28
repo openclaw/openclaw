@@ -123,6 +123,100 @@ afterEach(() => {
 });
 
 describe("chat tool icon ownership", () => {
+  it("uses third-party logos only for plugin-owned tools and falls back through activity artwork", async () => {
+    const { icon, request, fetch } = setup();
+    const logo = vi.spyOn(iconLoader, "fetchPluginIconBlobUrl").mockResolvedValue("blob:brand");
+    request.mockImplementation(async (method) =>
+      method === "plugins.list"
+        ? {
+            ...plugins,
+            plugins: plugins.plugins.map((plugin) =>
+              Object.assign({}, plugin, { hasToolBrandIcon: true }),
+            ),
+          }
+        : {
+            ...catalog,
+            groups: [
+              {
+                ...catalog.groups[0]!,
+                tools: [
+                  ...catalog.groups[0]!.tools.map((tool) =>
+                    tool.id === "meeting_list" ? Object.assign({}, tool, { source: "mcp" }) : tool,
+                  ),
+                  { ...catalog.groups[0]!.tools[0]!, id: "web_search", source: "core" },
+                ],
+              },
+            ],
+          },
+    );
+    icon("meeting_status");
+    icon("meeting_list");
+    icon("web_search");
+    await vi.waitFor(() => expect(icon("meeting_status")?.url).toBe("blob:brand"));
+    expect(icon("meeting_list")?.url).toBe("blob:brand");
+    expect(icon("web_search")).toBeUndefined();
+    expect(logo).toHaveBeenCalledOnce();
+    expect(fetch).not.toHaveBeenCalled();
+    icon("meeting_status")?.onError();
+    flush();
+    await vi.waitFor(() => expect(icon("meeting_status")?.url).toBe("blob:plugin-icon"));
+    expect(icon("meeting_list")?.url).toBe("blob:plugin-icon");
+    expect(fetch).toHaveBeenCalledOnce();
+    icon("meeting_status")?.onError();
+    flush();
+    expect(icon("meeting_status")).toBeUndefined();
+    expect(icon("meeting_list")).toBeUndefined();
+  });
+
+  it("keeps activity SVGs for canonical tools even when plugin-owned, without treating namespaced tools as core", async () => {
+    const { icon, request, fetch } = setup();
+    const logo = vi.spyOn(iconLoader, "fetchPluginIconBlobUrl").mockResolvedValue("blob:brand");
+    request.mockImplementation(async (method) =>
+      method === "plugins.list"
+        ? {
+            ...plugins,
+            plugins: plugins.plugins.map((plugin) =>
+              Object.assign({}, plugin, { hasToolBrandIcon: true }),
+            ),
+          }
+        : {
+            ...catalog,
+            groups: [
+              {
+                ...catalog.groups[0]!,
+                tools: ["browser", "canvas", "web_search", "mcp__notes__browser"].map((id) =>
+                  Object.assign({}, catalog.groups[0]!.tools[0]!, { id }),
+                ),
+              },
+            ],
+          },
+    );
+    for (const name of ["browser", "canvas", "web_search"]) {
+      await vi.waitFor(() => expect(icon(name)?.url).toBe("blob:plugin-icon"));
+      expect(icon(name)?.branding).toBe(false);
+    }
+    await vi.waitFor(() => expect(icon("mcp__notes__browser")?.url).toBe("blob:brand"));
+    expect(logo).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("uses activity artwork when a third-party logo cannot be fetched", async () => {
+    const { icon, request, fetch } = setup();
+    vi.spyOn(iconLoader, "fetchPluginIconBlobUrl").mockResolvedValue(null);
+    request.mockImplementation(async (method) =>
+      method === "plugins.list"
+        ? {
+            ...plugins,
+            plugins: plugins.plugins.map((plugin) =>
+              Object.assign({}, plugin, { hasToolBrandIcon: true }),
+            ),
+          }
+        : catalog,
+    );
+    await vi.waitFor(() => expect(icon("meeting_status")?.url).toBe("blob:plugin-icon"));
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
   it("invalidates rendered fallbacks when the session identity first becomes available", async () => {
     const { icon, update, setSession } = setup();
     setSession(undefined);

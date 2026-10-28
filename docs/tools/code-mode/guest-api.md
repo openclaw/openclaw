@@ -53,6 +53,11 @@ provide local byte conversion, not filesystem, module, or network access.
 Returned values still use the JSON-only bridge; emit decoded text or an array of
 byte values rather than a binary attachment.
 
+Module loading is unavailable. Direct `import()` and `require()` calls are
+rejected before execution. In the Node executor, dynamic imports constructed
+through `eval` or `Function` reject with the same module-access guidance and
+can be caught inside the cell. Uncaught rejections fail the owning cell.
+
 `console.log`, `console.info`, `console.warn`, `console.error`, and
 `console.debug` emit diagnostic text through the same ordered output channel as
 `text` and `json`, not through host logs. They return `undefined`;
@@ -246,6 +251,10 @@ retain the native MCP result (`content`, optional `structuredContent`, and
 optional `isError`). Exact catalog ids and raw `{ tool, result }` envelopes are
 not guest-visible.
 
+Native Gateway and sandbox exec workdir errors and foreground process failures
+include their concise diagnostic in `message`, with command output in `aggregated`. Returned failures
+remain values; thrown tool errors remain catchable.
+
 The `ls`, `find`, and `grep` tools include their bounded listing or search text
 in `content`, including empty-result messages and truncation notices. Directory
 pages retain `nextAfter`; search results retain their existing limit and
@@ -272,6 +281,12 @@ with `TypeError`. Values use the normal bridge JSON normalization. Each
 serialized value may use at most 256 KiB of encoded JSON, and all stored values
 together may use at most 1 MiB. Exceeding either limit rejects with `RangeError`
 and leaves the store unchanged. `await store(key, undefined)` deletes a key.
+Catch a capacity error by `error instanceof RangeError` or
+`error.code === "store_range"`, then store a summary or smaller value. If the
+total is full, delete unneeded keys before retrying the write. For larger data
+needed only in this reply, use `results.save(value)` instead. An uncaught
+capacity error reports `invalid_input`; it does not automatically replay the
+cell or commit that cell's pending writes.
 `await load(key)` returns `undefined` when missing and otherwise returns a
 detached copy; editing that copy does not change the saved value.
 

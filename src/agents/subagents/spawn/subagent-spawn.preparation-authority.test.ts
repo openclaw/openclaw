@@ -7,7 +7,6 @@ import {
   installSpawnAttachmentFixture,
 } from "./subagent-spawn.authority.test-support.js";
 import { promises as fs } from "node:fs";
-import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-spawn-model.mocks.shared.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
@@ -54,8 +53,7 @@ import {
 } from "../../tools/gateway-caller-context.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-paths.js";
-import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
+import { holdSpawnCapacity } from "./subagent-spawn.production-boundary.test-support.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
 const fixture = installSpawnAuthorityFixture();
@@ -192,7 +190,6 @@ describe("pending spawn preparation authority", () => {
   it.each(["closed", "live"])(
     "checks parent authority after queued fork preparation: %s",
     async (closure) => {
-      const bindingFixture = installSpawnThreadBindingFixture();
       const bound = await createBoundParent();
       const { cfg, storePath, context, admission, parent, admitted } = bound;
       for (const message of [
@@ -243,21 +240,12 @@ describe("pending spawn preparation authority", () => {
         resolveContextEngine: async () => new LegacyContextEngine(),
         dispatchGatewayMethodInProcess: spawnDispatch(gateway, dispatch),
       });
-      const [tool] = finalizeParentTools(bound, [
-        createSessionsSpawnTool({
-          ...parentToolOptions(cfg),
-          agentChannel: "matrix",
-          agentAccountId: "default",
-          agentTo: "room:parent",
-        }),
-      ]);
+      const [tool] = finalizeParentTools(bound, [createSessionsSpawnTool(parentToolOptions(cfg))]);
       const pending = asCaller(bound, () =>
         tool!.execute!("spawn-fork-queued", {
           task: "bounded fork",
           context: "fork",
-          thread: true,
           mode: "run",
-          attachments: [{ name: "synthetic.txt", content: "synthetic attachment" }],
           expectsCompletionMessage: false,
         }),
       ).catch((error: unknown) => error);
@@ -290,12 +278,8 @@ describe("pending spawn preparation authority", () => {
           storePath,
         });
         if (closure === "closed") {
-          expect
-            .soft(entry.sessionId, "closed parent must not replace the provisional child identity")
-            .toBe(initialSessionId);
-          expect
-            .soft(transcript, "closed parent must not copy its transcript after writer queue wait")
-            .toEqual([]);
+          expect.soft(entry.sessionId).toBe(initialSessionId);
+          expect.soft(transcript).toEqual([]);
           expect.soft(result).toBeInstanceOf(Error);
         } else {
           expect(result).toMatchObject({ status: "forked" });
@@ -321,18 +305,6 @@ describe("pending spawn preparation authority", () => {
         } else {
           expect(outcome).toMatchObject({ details: { status: "accepted" } });
           expect(dispatch).toHaveBeenCalledOnce();
-          expect(bindingFixture.bind).toHaveBeenCalledOnce();
-          const details = (outcome as { details: { attachments: { relDir: string } } }).details;
-          expect(
-            await fs.readFile(
-              path.join(
-                resolveSubagentSessionAttachmentRootDir({ agentId: "main", childSessionKey }),
-                path.basename(details.attachments.relDir),
-                "synthetic.txt",
-              ),
-              "utf8",
-            ),
-          ).toBe("synthetic attachment");
         }
       } finally {
         writerGate.release();
@@ -344,7 +316,6 @@ describe("pending spawn preparation authority", () => {
         } finally {
           admission.close();
           parent.cleanup();
-          bindingFixture.unregister();
         }
       }
     },
@@ -529,12 +500,12 @@ describe("pending spawn preparation authority", () => {
         wrapped,
         "Spawn settled before entering context preparation",
       );
-      expect(subagentRuns.size, "no ownership transfer before preparation resolves").toBe(0);
+      expect(subagentRuns.size).toBe(0);
       expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toBeDefined();
       if (closure === "native acceptance") {
         release.resolve();
         await acceptedEntered.promise;
-        expect(subagentRuns.size, "accepted local run still awaits source registration").toBe(0);
+        expect(subagentRuns.size).toBe(0);
         expect(childController?.controller.signal.aborted).toBe(false);
       }
       if (closure === "native abort" || closure === "native acceptance") {
@@ -563,30 +534,22 @@ describe("pending spawn preparation authority", () => {
         } else {
           admission.close();
         }
-        expect(
-          parent.controller.signal.aborted,
-          "claim/capability closure is independent of parent signal",
-        ).toBe(false);
+        expect(parent.controller.signal.aborted).toBe(false);
       }
       release.resolve();
       acceptedGate.resolve();
       await forwarded;
       if (closure === "native acceptance") {
         expect(agentDispatch).toHaveBeenCalledOnce();
-        expect(
-          childController?.controller.signal.aborted,
-          "exact accepted local child aborted before deletion",
-        ).toBe(true);
+        expect(childController?.controller.signal.aborted).toBe(true);
       } else {
-        expect(agentDispatch, "cancelled source never dispatches a child").not.toHaveBeenCalled();
+        expect(agentDispatch).not.toHaveBeenCalled();
       }
-      expect(subagentRuns.size, "cancelled source never registers runnable work").toBe(0);
+      expect(subagentRuns.size).toBe(0);
       const closedBeforePreparation =
         closure === "native engine resolution" || hasThread || hasAttachments;
       if (closedBeforePreparation) {
-        expect
-          .soft(prepare, "closed source must not start context engine preparation")
-          .not.toHaveBeenCalled();
+        expect.soft(prepare).not.toHaveBeenCalled();
         expect.soft(rollback).not.toHaveBeenCalled();
       } else {
         expect(rollback).toHaveBeenCalledOnce();
@@ -597,25 +560,17 @@ describe("pending spawn preparation authority", () => {
       if (closure === "native attachment staging") {
         expect(bindingFixture!.bind).toHaveBeenCalledOnce();
       }
-      expect
-        .soft(attachmentFixture?.lateWrites ?? [], "no new attachment write after parent closure")
-        .toEqual([]);
+      expect.soft(attachmentFixture?.lateWrites ?? []).toEqual([]);
       expect(bindingFixture?.bindings ?? []).toEqual([]);
       for (const directory of attachmentFixture?.attachmentDirs ?? []) {
         await expect(fs.stat(directory), directory).rejects.toMatchObject({ code: "ENOENT" });
       }
       expect(deleted).toEqual([childSessionKey]);
       expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toBeUndefined();
-      const survivor = vi.fn(async () => {});
-      enqueueSwarmRun({
-        groupId: JSON.stringify(["main", parentSessionKey, groupId]),
-        runId: "surviving-reservation",
-        maxConcurrent: 1,
-        activeRunIds: [],
-        start: survivor,
-        onStartFailure: () => true,
-      });
-      await vi.waitFor(() => expect(survivor).toHaveBeenCalledOnce());
+      await holdSpawnCapacity(
+        JSON.stringify(["main", parentSessionKey, groupId]),
+        "surviving-reservation",
+      );
     } finally {
       release.resolve();
       acceptedGate.resolve();

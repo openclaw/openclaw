@@ -1,6 +1,6 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { setConfiguredMcpServer, unsetConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
-import { withClawMcpLifecycleLease } from "../agents/mcp-lifecycle-lease.js";
+import { withMcpLifecycleLease } from "../agents/mcp-lifecycle-lease.js";
 import { canonicalizeConfiguredMcpServer } from "../config/mcp-config-normalize.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import { digestClawValue } from "./digest.js";
@@ -9,16 +9,6 @@ import type { ClawMutationStateOptions } from "./state-mutation-options.js";
 import type { ClawAddPlan, ClawMcpServer } from "./types.js";
 
 export type { PersistedClawMcpServerRef } from "./mcp-records.js";
-
-export class ClawMcpInstallError extends Error {
-  constructor(
-    message: string,
-    readonly mcpServers: PersistedClawMcpServerRef[],
-  ) {
-    super(message);
-    this.name = "ClawMcpInstallError";
-  }
-}
 
 function mcpServerFromActionDetails(details: Record<string, unknown>): ClawMcpServer | undefined {
   const { expectedState: _expectedState, prerequisites: _prerequisites, ...server } = details;
@@ -29,40 +19,42 @@ export function digestClawMcpServer(server: Record<string, unknown>): string {
   return digestClawValue(canonicalizeConfiguredMcpServer(server));
 }
 
-/** Add a shared MCP requirement without creating a Claw ownership record. */
+/**
+ * Add a shared MCP requirement without creating a Claw ownership record.
+ * Each ref is recorded in the caller's `refs` before its write, because a write
+ * that throws may still have committed. Rollback re-reads the config and drops
+ * refs with no matching entry.
+ */
 export async function installClawMcpServersStateless(
-  plan: ClawAddPlan,
+  plan: Pick<ClawAddPlan, "actions"> & { agent: Pick<ClawAddPlan["agent"], "finalId"> },
   options: ClawMutationStateOptions & {
+    refs: PersistedClawMcpServerRef[];
     assertForwardCurrent?: () => void;
     nowMs?: number;
-  } = {},
-): Promise<PersistedClawMcpServerRef[]> {
-  const refs: PersistedClawMcpServerRef[] = [];
+  },
+): Promise<void> {
+  const { refs } = options;
   for (const action of plan.actions.filter((candidate) => candidate.kind === "mcpServer")) {
-    await withClawMcpLifecycleLease(action.id, options, async (assertOwned) => {
+    await withMcpLifecycleLease(action.id, options, async (lease) => {
       const assertCurrent = () => {
-        assertOwned();
+        lease.assertCurrent();
         options.assertCurrent?.();
         options.assertForwardCurrent?.();
       };
       const server = action.details ? mcpServerFromActionDetails(action.details) : undefined;
       if (!server) {
-        throw new ClawMcpInstallError(
-          `MCP server action ${JSON.stringify(action.id)} is invalid.`,
-          refs,
-        );
+        throw new Error(`MCP server action ${JSON.stringify(action.id)} is invalid.`);
       }
       const listed = await listConfiguredMcpServers();
       assertCurrent();
       if (!listed.ok) {
-        throw new ClawMcpInstallError(listed.error, refs);
+        throw new Error(listed.error);
       }
       const configured = listed.mcpServers[action.id];
       const configDigest = digestClawMcpServer(server);
       if (configured && digestClawMcpServer(configured) !== configDigest) {
-        throw new ClawMcpInstallError(
+        throw new Error(
           `MCP server ${JSON.stringify(action.id)} already exists with different configuration.`,
-          refs,
         );
       }
       const nowMs = options.nowMs ?? Date.now();
@@ -78,33 +70,29 @@ export async function installClawMcpServersStateless(
         createdAtMs: nowMs,
         updatedAtMs: nowMs,
       };
+      refs.push(ref);
       if (!configured) {
-        try {
-          const result = await setConfiguredMcpServer({
-            name: action.id,
-            server,
-            createOnly: true,
-            skipLifecycleLease: true,
-            assertCurrent,
-          });
-          if (!result.ok) {
-            throw new ClawMcpInstallError(result.error, refs);
-          }
-          refs.push(ref);
-          assertCurrent();
-        } catch (error) {
-          if (error instanceof ClawMcpInstallError) {
-            throw error;
-          }
-          throw new ClawMcpInstallError(coerceErrorMessage(error), refs);
+        const result = await setConfiguredMcpServer({
+          name: action.id,
+          server,
+          createOnly: true,
+          skipLifecycleLease: true,
+          assertCurrent,
+          assertCurrentAsync: async () => {
+            await options.prepareEffect?.();
+            await lease.assertOwned();
+            assertCurrent();
+          },
+        });
+        if (!result.ok) {
+          // Refused before writing, so there is nothing to roll back.
+          refs.pop();
+          throw new Error(result.error);
         }
-      }
-      if (configured) {
-        refs.push(ref);
+        assertCurrent();
       }
     });
   }
-  return refs;
 }
 
 /** Remove unchanged MCP entries introduced before a failed Add published its agent. */
@@ -118,9 +106,9 @@ export async function rollbackStatelessClawMcpServers(
       continue;
     }
     try {
-      await withClawMcpLifecycleLease(ref.name, options, async (assertOwned) => {
+      await withMcpLifecycleLease(ref.name, options, async (lease) => {
         const assertCurrent = () => {
-          assertOwned();
+          lease.assertCurrent();
           options.assertCurrent?.();
         };
         const listed = await listConfiguredMcpServers();
@@ -141,6 +129,11 @@ export async function rollbackStatelessClawMcpServers(
           expectedServer: configured,
           skipLifecycleLease: true,
           assertCurrent,
+          assertCurrentAsync: async () => {
+            await options.prepareEffect?.();
+            await lease.assertOwned();
+            assertCurrent();
+          },
         });
         assertCurrent();
         if (!removed.ok) {

@@ -253,12 +253,7 @@ export async function listSessionWorkspaceFiles(
     search?: string;
     assertCurrent?: () => void;
   },
-): Promise<{
-  root?: string;
-  gitCheckout?: boolean;
-  files: SessionFileEntry[];
-  browser?: SessionFileBrowserResult;
-}> {
+) {
   const root = params.root;
   const workspaceRoot = root ? await openWorkspaceRoot(root) : undefined;
   const gitCheckout =
@@ -298,7 +293,8 @@ export async function listSessionWorkspaceFiles(
     const readRoot = workspaceRoot ?? root;
     if (search) {
       const entries: SessionFileBrowserEntry[] = [];
-      const query = search.toLowerCase();
+      // Normalize comparison text only; on-disk filenames stay original.
+      const query = search.toLowerCase().normalize("NFC");
       let visitedEntries = 0;
       let truncated = false;
       const shouldStop = (): boolean => {
@@ -322,7 +318,7 @@ export async function listSessionWorkspaceFiles(
           }
           visitedEntries += 1;
           const browserPath = dir ? `${dir}/${dirent.name}` : dirent.name;
-          if (browserPath.toLowerCase().includes(query)) {
+          if (browserPath.toLowerCase().normalize("NFC").includes(query)) {
             const entry = toWorkspaceBrowserEntry(browserPath, dirent, relevance);
             if (entry) {
               entries.push(entry);
@@ -353,8 +349,11 @@ export async function listSessionWorkspaceFiles(
     if (!resolved) {
       return undefined;
     }
-    const stat = await statWorkspacePath(readRoot, browserPath, assertCurrent);
-    if (!stat?.isDirectory) {
+    // Local roots are admitted directories; listing rechecks their identity.
+    if (
+      (browserPath || !workspaceRoot || "access" in workspaceRoot) &&
+      !(await statWorkspacePath(readRoot, browserPath, assertCurrent))?.isDirectory
+    ) {
       return undefined;
     }
     const dirents = await listWorkspacePath(readRoot, browserPath, assertCurrent);
@@ -448,13 +447,6 @@ export async function getSessionWorkspaceFile(
   };
 }
 
-export type SessionWorkspaceWriteResult =
-  | { status: "updated"; root: string; file: SessionFileEntry }
-  | { status: "conflict"; currentHash: string }
-  | { status: "unsafe" }
-  | { status: "missing" }
-  | { status: "too-large"; size: number };
-
 export async function setSessionWorkspaceFile(params: {
   root?: string;
   fileRoot?: string;
@@ -462,20 +454,20 @@ export async function setSessionWorkspaceFile(params: {
   content: string;
   expectedHash: string;
   assertCurrent?: () => void;
-}): Promise<SessionWorkspaceWriteResult> {
+}) {
   // Reject content the preview cannot round-trip, before encoding oversized input.
   if (params.content.includes("\0")) {
-    return { status: "unsafe" };
+    return { status: "unsafe" as const };
   }
   const size = Buffer.byteLength(params.content, "utf8");
   if (size > WORKSPACE_PREVIEW_MAX_BYTES) {
-    return { status: "too-large", size };
+    return { status: "too-large" as const, size };
   }
   if (Buffer.from(params.content, "utf8").toString("utf8") !== params.content) {
-    return { status: "unsafe" };
+    return { status: "unsafe" as const };
   }
   if (!params.root) {
-    return { status: "missing" };
+    return { status: "missing" as const };
   }
   const candidates = resolveSessionFileCandidates({
     root: params.root,
@@ -492,7 +484,7 @@ export async function setSessionWorkspaceFile(params: {
     }
   }
   if (!browserPath) {
-    return { status: "missing" };
+    return { status: "missing" as const };
   }
   let update: WorkspaceFileUpdateResult;
   try {
@@ -507,19 +499,19 @@ export async function setSessionWorkspaceFile(params: {
     if (!(error instanceof FsSafeError)) {
       throw error;
     }
-    return { status: "unsafe" };
+    return { status: "unsafe" as const };
   }
   if (update.status !== "updated") {
     return update;
   }
   return {
-    status: "updated",
+    status: "updated" as const,
     root: params.root,
     file: {
       path: params.path,
       workspacePath: update.canonicalPath,
       name: displayNameForPath(update.canonicalPath),
-      kind: "modified",
+      kind: "modified" as const,
       missing: false,
       size: update.stat.size,
       updatedAtMs: toUpdatedAtMs(update.stat.mtimeMs),

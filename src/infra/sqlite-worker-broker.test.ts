@@ -14,6 +14,8 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
 import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
+import { withDatabaseEngineSelection } from "./database-engine/context.js";
+import { createSqliteFamilyEngines } from "./database-engine/selection-fixture.test-support.js";
 import { onInternalDiagnosticEvent, waitForDiagnosticEventsDrained } from "./diagnostic-events.js";
 import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.js";
 import { readGatewayLockProcessNamespace } from "./gateway-lock-payload.js";
@@ -53,6 +55,39 @@ const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRun
 const poolIt = explicitSqliteCloseReleasesNativeResources ? it : it.skip;
 const queueRows = Array.from({ length: 128 }, (_, index) => String(index));
 const rejectedOutcome = (reason: unknown) => ({ status: "rejected", reason });
+
+it.each([false, true])(
+  "dispatches captured SQLite selection without an engine scope (different ambient: %s)",
+  async (differentAmbient) => {
+    const file = databasePath();
+    const store = await open(file);
+    const selected = { effectiveEngines: createSqliteFamilyEngines() };
+    const ambient = differentAmbient
+      ? {
+          effectiveEngines: createSqliteFamilyEngines({ state: "postgres" }),
+          postgres: { connection: "postgresql://localhost/synthetic", schemaPrefix: "test" },
+        }
+      : selected;
+    await withDatabaseEngineSelection(ambient, async () => {
+      const enterContext = vi.spyOn(AsyncLocalStorage.prototype, "run");
+      try {
+        await runSqliteWorkerStoreOperation(
+          store,
+          async (scope) => {
+            await scope.execute({ type: "append", input: { value: "captured SQLite selection" } });
+            expect(await scope.execute({ type: "read", input: undefined })).toEqual([
+              "captured SQLite selection",
+            ]);
+          },
+          { databaseEngineSelection: selected, environment: { OPENCLAW_STATE_DIR: file } },
+        );
+        expect(enterContext.mock.calls.filter(([value]) => value === selected)).toHaveLength(0);
+      } finally {
+        enterContext.mockRestore();
+      }
+    });
+  },
+);
 
 it("retires a disk-full nested transaction without claiming a definite write outcome", async () => {
   const file = databasePath();
@@ -205,8 +240,8 @@ it.for(["resume", "replace", "replace-inode", "symlink", "release"] as const)(
 
 async function openWithRetainedAccess(pathname: string) {
   const capture = stateOwner.captureStateDatabaseAccess;
-  const access = capture(pathname);
-  vi.spyOn(stateOwner, "captureStateDatabaseAccess").mockImplementation((location) =>
+  const access = await capture(pathname);
+  vi.spyOn(stateOwner, "captureStateDatabaseAccess").mockImplementation(async (location) =>
     location === pathname ? access : capture(location),
   );
   return { store: await open(pathname), access };
@@ -214,7 +249,7 @@ async function openWithRetainedAccess(pathname: string) {
 
 function holdDatabaseAdmission(
   pathname: string,
-  access: ReturnType<typeof stateOwner.captureStateDatabaseAccess>,
+  access: Awaited<ReturnType<typeof stateOwner.captureStateDatabaseAccess>>,
 ) {
   const pending = new StateDatabaseAdmissionPendingError(pathname, "Schema publication pending");
   const prepareAccess = access.prepareAccess.bind(access);

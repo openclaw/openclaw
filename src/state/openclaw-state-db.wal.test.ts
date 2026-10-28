@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
@@ -315,6 +316,15 @@ it("keeps periodic WAL off-host across native contention", async ({ signal }) =>
   const writer = new DatabaseSync(database.path);
   const { observations, wait, stop } = observeCheckpoints(database.path);
   const sql = observeHostSql(database.db);
+  const stat = fs.statSync;
+  const hostIdentityReads: string[] = [];
+  const inspection = vi.spyOn(fs, "statSync").mockImplementation((pathname, options) => {
+    if (String(pathname) === database.path) {
+      hostIdentityReads.push(String(pathname));
+    }
+    return stat(pathname, options);
+  });
+  syncBuiltinESMExports();
   let periodicWork: Promise<unknown> | undefined;
   try {
     writer.exec("BEGIN IMMEDIATE");
@@ -327,8 +337,11 @@ it("keeps periodic WAL off-host across native contention", async ({ signal }) =>
     expect(writer.isTransaction).toBe(true);
     expect(observations.every((state) => state === "complete" || state === "blocked")).toBe(true);
     sql.assertIdle();
+    expect(hostIdentityReads).toEqual([]);
     expect(readRow(writer, statsTableQuery)).toBeUndefined();
   } finally {
+    inspection.mockRestore();
+    syncBuiltinESMExports();
     stop();
     if (writer.isTransaction) {
       writer.exec("ROLLBACK");

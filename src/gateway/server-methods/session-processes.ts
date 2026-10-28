@@ -62,7 +62,7 @@ async function observeProcesses(options: GatewayRequestHandlerOptions, stop: boo
     const row = read.describe(query, captured);
     if (
       !row ||
-      presentation.sharing.entryFilter?.(row.key, row.entry) === false ||
+      !presentation.sharing.canReadTarget(presentation.target(query)!) ||
       (captured &&
         (row.entry.sessionId !== captured.entry.sessionId ||
           row.entry.lifecycleRevision !== captured.entry.lifecycleRevision ||

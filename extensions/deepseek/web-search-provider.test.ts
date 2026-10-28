@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describeWebSearchProviderContracts } from "openclaw/plugin-sdk/provider-test-contracts";
 import { jsonResponse, mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEEPSEEK_MODEL_CATALOG } from "./models.js";
 import { createDeepSeekWebSearchProvider } from "./web-search-provider.js";
 
 const KEY = "deepseek-synthetic-search-key";
@@ -14,9 +15,38 @@ function requestBody(index = 0) {
   }
   return JSON.parse(body);
 }
-function modelKey(baseUrl: string): OpenClawConfig {
-  return { models: { providers: { deepseek: { apiKey: "model-key", baseUrl, models: [] } } } };
+function modelKey(baseUrl?: string, modelBaseUrl?: string): OpenClawConfig {
+  const model = expectDefined(DEEPSEEK_MODEL_CATALOG[0], "Expected a bundled DeepSeek model");
+  const deepseek = {
+    apiKey: "model-key",
+    models: modelBaseUrl ? [{ ...model, baseUrl: modelBaseUrl }] : [],
+    ...(baseUrl === undefined ? {} : { baseUrl }),
+  };
+  return { models: { providers: { deepseek } } } as OpenClawConfig;
 }
+const CHAT_PROXY = "https://chat-proxy.example/v1";
+// The model-provider key belongs to chat's routes; only DeepSeek's own API origin may reuse it.
+const CHAT_ROUTES = [
+  [undefined, undefined, true],
+  ["", undefined, true],
+  ["https://api.deepseek.com", undefined, true],
+  ["https://api.deepseek.com/v1", undefined, true],
+  ["https://API.DeepSeek.com/beta", undefined, true],
+  ["https://api.deepseek.com./v1", undefined, true],
+  ["https://api.deepseek.com:443", undefined, true],
+  [CHAT_PROXY, undefined, false],
+  ["https://api.deepseek.com.chat-proxy.example/v1", undefined, false],
+  ["https://chat-proxy.example/api.deepseek.com/v1", undefined, false],
+  ["https://proxy-user@api.deepseek.com/v1", undefined, false],
+  ["https://api.deepseek.com:8443/v1", undefined, false],
+  ["http://api.deepseek.com", undefined, false],
+  ["blob:https://api.deepseek.com/v1", undefined, false],
+  ["api.deepseek.com", undefined, false],
+  ["not a url", undefined, false],
+  [undefined, "https://api.deepseek.com/v1", true],
+  [undefined, CHAT_PROXY, false],
+  ["https://api.deepseek.com", CHAT_PROXY, false],
+] as const;
 function searchTool(config: OpenClawConfig = {}, searchConfig: Record<string, unknown> = {}) {
   return expectDefined(
     createDeepSeekWebSearchProvider().createTool({ config, searchConfig }),
@@ -73,16 +103,53 @@ describe("DeepSeek search execution", () => {
 
   it.each([
     ["plugin key before env/model", configKey("plugin-key"), KEY, "plugin-key"],
-    ["env before model", modelKey("https://chat-proxy.example/v1"), KEY, KEY],
+    ["env before model", modelKey("https://api.deepseek.com"), KEY, KEY],
+    ["env with a chat proxy", modelKey("https://chat-proxy.example/v1"), KEY, KEY],
     ["model fallback", modelKey("https://api.deepseek.com"), undefined, "model-key"],
-  ] as const)("resolves %s at the search endpoint", async (_, config, env, expected) => {
+  ] as const)("resolves %s at the search endpoint", async (label, config, env, expected) => {
     vi.stubEnv("DEEPSEEK_API_KEY", env);
-    await searchTool(config).execute({ query: `credential ${expected}` });
+    await searchTool(config).execute({ query: `credential ${label}` });
     expect(fetch.mock.calls[0]?.[0]).toBe("https://api.deepseek.com/v1/tools/search");
     expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
       `Bearer ${expected}`,
     );
   });
+
+  it.each(CHAT_ROUTES)(
+    "reuses the model key only on DeepSeek's API (provider %s, model %s): %s",
+    async (baseUrl, modelBaseUrl, owned) => {
+      vi.stubEnv("DEEPSEEK_API_KEY", undefined);
+      const query = `chat ${baseUrl} model ${modelBaseUrl}`;
+      const result = await searchTool(modelKey(baseUrl, modelBaseUrl)).execute({ query });
+      if (owned) {
+        expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
+          "Bearer model-key",
+        );
+      } else {
+        expect(result).toMatchObject({ error: "missing_deepseek_api_key" });
+        expect(fetch).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each([
+    [CHAT_PROXY, "https://api.deepseek.com"],
+    ["https://api.deepseek.com", CHAT_PROXY],
+  ])(
+    "does not reuse a model key while any entry for the provider routes chat elsewhere (%s, %s)",
+    async (first, second) => {
+      vi.stubEnv("DEEPSEEK_API_KEY", undefined);
+      // Whitespace variants of one provider id: chat reads key and route through different views.
+      const providers = {
+        deepseek: { apiKey: "model-key", baseUrl: first, models: [] },
+        " deepseek ": { baseUrl: second, models: [] },
+      };
+      await expect(
+        searchTool({ models: { providers } }).execute({ query: `variants ${first} ${second}` }),
+      ).resolves.toMatchObject({ error: "missing_deepseek_api_key" });
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
 
   it("reports missing and unresolved credentials without network access", async () => {
     vi.stubEnv("DEEPSEEK_API_KEY", undefined);

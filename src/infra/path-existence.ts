@@ -31,6 +31,24 @@ export function realpathExistingAncestorSync(candidate: string): string | undefi
   }
 }
 
+/** Async counterpart for runtime identity capture, including unreadable intermediate paths. */
+export async function realpathExistingAncestor(candidate: string): Promise<string | undefined> {
+  const suffix: string[] = [];
+  let current = candidate;
+  while (true) {
+    try {
+      return path.join(await fsPromises.realpath(current), ...suffix.toReversed());
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) {
+        return undefined;
+      }
+      suffix.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
 /** Only definite absence, including a non-directory ancestor, permits an absent verdict. */
 export function pathMayExistSync(filePath: string): boolean {
   try {

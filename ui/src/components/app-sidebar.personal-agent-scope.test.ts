@@ -94,3 +94,12 @@ it("keeps selected owners across agents and resumes the selected agent's own con
     ).toBeNull();
   });
 });
+
+it("keeps an explicitly empty route selection instead of discovering ambient Home", async () => {
+  await withOwnerSidebar([], [viewer], "personal", async ({ sidebar, context }) => {
+    context.gateway.snapshot.sessionKey = "agent:main:main";
+    sidebar.sessionKey = "";
+    await settleLitElement(sidebar);
+    expect(sidebar.getRouteSessionKey()).toBe("");
+  });
+});

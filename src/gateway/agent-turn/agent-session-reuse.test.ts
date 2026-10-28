@@ -140,7 +140,7 @@ it("backfills the current candidate header while new windows start at the curren
     const candidates: Array<[SessionEntry, SessionEntry, string, number]> = [
       [current, current, scope.sessionId, 42],
       [{ ...current, sessionId: "predecessor" }, current, scope.sessionId, 42],
-      [current, { ...current, lastInteractionAt: 1 }, "replacement", now],
+      [current, { ...current, lastInteractionAt: 1 }, scope.sessionId, now],
     ];
     for (const [initialEntry, candidate, sessionId, sessionStartedAt] of candidates) {
       const result = await buildReusePatch({
@@ -155,13 +155,14 @@ it("backfills the current candidate header while new windows start at the curren
 });
 
 it.each<[Partial<PatchParams>, string, boolean, boolean?]>([
-  [{}, "replacement", true],
+  [{}, "original", true],
   [{ freshEntry: undefined, initialEntry: undefined }, "replacement", true],
   [{ freshEntry }, "original", false],
   [{ expectedExistingSessionId: "original" }, "original", false],
+  [{ requestedSessionId: "original" }, "original", true],
   [{ hasRestoredCronContinuation: true }, "original", false],
   [{ freshEntry: failedEntry }, "original", false],
-  [{ freshEntry: failedEntry, visibleRequest: false }, "replacement", true],
+  [{ freshEntry: failedEntry, visibleRequest: false }, "original", true],
   [{ freshEntry: { ...freshEntry, status: "failed" } }, "replacement", true, true],
   [{ ...requested, freshEntry: undefined, initialEntry: undefined }, "requested", true],
 ])(
@@ -218,7 +219,7 @@ it("keeps a concurrent replacement after preparing a rotation from the stored ro
       fallbackSessionId: undefined,
     });
     expect(initialPatch.isNewSession).toBe(true);
-    expect(initialPatch.patch.sessionId).not.toBe("original");
+    expect(initialPatch.patch.sessionId).toBe("original");
     const concurrent: SessionEntry = {
       ...freshEntry,
       sessionId: "concurrent",

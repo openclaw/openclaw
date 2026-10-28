@@ -33,7 +33,7 @@ const HEARTBEAT_TASK_PROMPT_COMPLETIONS = [
   `After completing all due tasks, reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer.`,
   `After completing all due tasks, use ${HEARTBEAT_RESPONSE_TOOL_NAME}`,
 ];
-type HeartbeatTranscriptMessage = { role: string; content?: unknown };
+type HeartbeatTranscriptMessage = { role: string; content?: unknown; __openclaw?: unknown };
 
 function isVisibleHeartbeatResponseToolCall(block: Record<string, unknown>): boolean {
   const nested = isRecord(block.function) ? block.function : undefined;

@@ -63,11 +63,35 @@ it("reuses revision-bound projections and reads unversioned entries every time",
   expect(snapshot.entriesForCatalog).toHaveBeenCalledTimes(4);
 });
 
+it("skips catalog metadata for unrelated sessions and resolves the plugin identity once", () => {
+  const metadata = vi.fn(() => undefined);
+  const entries = Array.from({ length: 100 }, (_, index) => ({
+    sessionKey: `agent:main:ordinary-${index}`,
+    entry: {
+      sessionId: `ordinary-${index}`,
+      updatedAt: index,
+      get pluginExtensions() {
+        return metadata();
+      },
+      get execHost() {
+        return metadata();
+      },
+    },
+  }));
+  const api = apiFor(entries);
+  const identity = vi.fn(() => "anthropic");
+  Object.defineProperty(api, "id", { get: identity });
+  expect(listBoundClaudeSessions(api)).toEqual(new Map());
+  expect(metadata).not.toHaveBeenCalled();
+  expect(identity).toHaveBeenCalledTimes(1);
+});
+
 it.each([
   [
     {
       pluginOwnerId: "anthropic",
       modelSelectionLocked: true,
+      cliSessionBindings: {},
       pluginExtensions: {
         anthropic: {
           sessionCatalog: { sourceHostId: "node:node-a", sourceThreadId: "shared-thread" },
@@ -91,6 +115,43 @@ it.each([
       [
         adoptedSourceKey("node:node-a", threadId),
         { adopted: nodeAdopted, sessionKey: "agent:main:node" },
+      ],
+    ]),
+  );
+});
+
+it("requires locked adoption for marker fallback while preserving valid CLI bindings", () => {
+  const marker: Partial<SessionEntry> = {
+    pluginOwnerId: "anthropic",
+    modelSelectionLocked: true,
+    cliSessionBindings: {},
+    pluginExtensions: {
+      anthropic: { sessionCatalog: { sourceThreadId: "" } },
+    },
+  };
+  const bound = listBoundClaudeSessions(
+    apiFor([
+      session("agent:main:empty-source", marker),
+      session("agent:main:unlocked", { ...marker, modelSelectionLocked: false }),
+      session("agent:main:foreign", { ...marker, pluginOwnerId: "other" }),
+      session("agent:main:missing-marker", { ...marker, pluginExtensions: {} }),
+      session("agent:main:routed", {
+        ...marker,
+        pluginOwnerId: "other",
+        modelSelectionLocked: false,
+        cliSessionBindings: { "claude-cli": { sessionId: threadId } },
+      }),
+    ]),
+  );
+  expect(bound).toEqual(
+    new Map([
+      [
+        adoptedSourceKey("gateway:local", ""),
+        { adopted: true, sessionKey: "agent:main:empty-source" },
+      ],
+      [
+        adoptedSourceKey("gateway:local", threadId),
+        { adopted: false, sessionKey: "agent:main:routed" },
       ],
     ]),
   );

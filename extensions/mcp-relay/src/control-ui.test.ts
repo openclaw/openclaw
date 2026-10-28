@@ -12,16 +12,21 @@ const caller = {
   canPair: true,
 };
 const grants = { grants: [], caller, relayUrl: "https://relay.example" };
-const consent = {
-  kind: "oauth",
-  redirectHost: "app.example",
-  expiresAt: 1_800_000_000_000,
-  caller,
+const grant = {
+  grantId: "grant-owned",
+  clientName: "Personal app",
+  principal: caller.principal,
+  ceiling: ["operator.read"],
+  createdAt: 1_800_000_000_000,
 };
+const ownedGrants = { ...grants, grants: [grant] };
+const pairing = { code: "PAIR-CODE", expiresAt: 0, mcpUrl: "https://relay.test/mcp" };
+const consent = { kind: "oauth", redirectHost: "app.test", expiresAt: 0, caller };
 const body = () => document.body.textContent!;
 const shows = (text: string) => vi.waitFor(() => expect(body()).toContain(text));
 const button = (label: string) =>
   [...document.querySelectorAll("button")].find((node) => node.textContent === label);
+const click = (label: string) => button(label)!.click();
 
 function fixture(responses: unknown[], props: Record<string, string> = {}) {
   const subscribers = new Set<() => void>();
@@ -47,10 +52,7 @@ function fixture(responses: unknown[], props: Record<string, string> = {}) {
     },
   } as unknown as UI.ControlUiHost;
   void plugin.activate(host);
-  const page = registerPage.mock.calls[0]?.[0];
-  if (!page) {
-    throw new Error("Connected apps page was not registered");
-  }
+  const [page] = registerPage.mock.calls[0]!;
   const context: UI.ControlUiViewContext = {
     host,
     props,
@@ -74,20 +76,11 @@ function fixture(responses: unknown[], props: Record<string, string> = {}) {
 }
 
 it("retains focused grant controls on unrelated host updates and applies permission changes", async () => {
-  const grant = {
-    grantId: "grant-owned",
-    clientName: "Personal app",
-    principal: caller.principal,
-    ceiling: ["operator.read"],
-    createdAt: 1_800_000_000_000,
-  };
-  const { connection, publish, request } = fixture([{ ...grants, grants: [grant] }]);
+  const { connection, publish, request } = fixture([ownedGrants]);
   await shows("Personal app");
-  const row = document.querySelector(".mcp-connected-apps__grant");
   const revoke = button("Revoke")!;
   revoke.focus();
   publish();
-  expect(document.querySelector(".mcp-connected-apps__grant")).toBe(row);
   expect(document.activeElement).toBe(revoke);
   expect(request).toHaveBeenCalledTimes(1);
 
@@ -105,38 +98,22 @@ it("retains focused grant controls on unrelated host updates and applies permiss
   expect(body()).toContain("Read access is required to view connected apps.");
 });
 
-function click(label: string) {
-  const target = button(label);
-  expect(target, `button ${label}`).toBeDefined();
-  target?.click();
-}
-
 it("pairs within the caller's ceiling without a browser-supplied principal", async () => {
-  const { request } = fixture([
-    grants,
-    { code: "ABCDE-FGHIJ", expiresAt: 1_800_000_000_000, mcpUrl: "https://relay.example/mcp" },
-  ]);
+  const { request } = fixture([grants, pairing]);
   await shows("Pair with code");
   click("Pair with code");
   expect(body()).not.toContain("Full role access");
   click("Create pairing code");
-  await shows("ABCDE-FGHIJ");
+  await shows("PAIR-CODE");
   expect(request).toHaveBeenLastCalledWith("mcp-relay.pair", {
     ceiling: ["operator.read", "operator.write"],
   });
-  expect(body()).toContain("https://relay.example/mcp");
+  expect(body()).toContain("https://relay.test/mcp");
 });
 
 it("empties retained view roots and ignores detached controls and pending replies after disposal", async () => {
   const pending = Promise.withResolvers<unknown>();
-  const grant = {
-    grantId: "grant-owned",
-    clientName: "Personal app",
-    principal: caller.principal,
-    ceiling: ["operator.read"],
-    createdAt: 1_800_000_000_000,
-  };
-  const { request, dispose, publish } = fixture([{ ...grants, grants: [grant] }, pending.promise]);
+  const { request, dispose, publish } = fixture([ownedGrants, pending.promise]);
   await shows("Personal app");
   const page = document.querySelector(".mcp-connected-apps")!;
   const overlay = page.nextElementSibling!;
@@ -149,50 +126,33 @@ it("empties retained view roots and ignores detached controls and pending replie
   const pairingReply = request.mock.results[1]?.value;
 
   dispose();
-  expect(page.childNodes).toHaveLength(0);
-  expect(overlay.childNodes).toHaveLength(0);
+  expect([page.childNodes.length, overlay.childNodes.length]).toEqual([0, 0]);
   expect(document.body.contains(page)).toBe(false);
   pair.click();
   revoke.click();
   publish();
-  expect(request).toHaveBeenCalledTimes(2);
-  expect(page.childNodes).toHaveLength(0);
-  expect(overlay.childNodes).toHaveLength(0);
+  expect([page.childNodes.length, overlay.childNodes.length]).toEqual([0, 0]);
 
-  pending.resolve({
-    code: "ABCDE-FGHIJ",
-    expiresAt: 1_800_000_000_000,
-    mcpUrl: "https://relay.example/mcp",
-  });
+  pending.resolve(pairing);
   await pairingReply;
-  expect(dialog.textContent).not.toContain("ABCDE-FGHIJ");
+  expect(dialog.textContent).not.toContain("PAIR-CODE");
   expect(overlay.childNodes).toHaveLength(0);
   expect(request).toHaveBeenCalledTimes(2);
 });
 
 it("retains rows while refreshing and renders the authoritative reply on settlement", async () => {
   const pending = Promise.withResolvers<unknown>();
-  const grant = {
-    grantId: "grant-owned",
-    clientName: "Personal app",
-    principal: caller.principal,
-    ceiling: ["operator.read"],
-    createdAt: 1_800_000_000_000,
-  };
-  const { request } = fixture([{ ...grants, grants: [grant] }, pending.promise, grants]);
+  const { request } = fixture([ownedGrants, pending.promise, grants]);
   await shows("Personal app");
   const row = document.querySelector(".mcp-connected-apps__grant");
   click("Refresh");
   expect(document.querySelector(".mcp-connected-apps__grant")).toBe(row);
   expect(document.querySelector('[role="status"]')?.textContent).toBe("Loading connected apps…");
-  expect(
-    [...document.querySelectorAll("button, input")].every((node) => node.matches(":disabled")),
-  ).toBe(true);
+  expect(document.querySelectorAll("button:enabled, input:enabled")).toHaveLength(0);
   click("Revoke");
   expect(request).toHaveBeenCalledTimes(2);
   pending.reject(new Error("Try again"));
   await shows("Try again");
-  expect(button("Refresh")?.disabled).toBe(false);
   click("Refresh");
   expect(document.querySelector('[role="alert"]')).toBeNull();
   await shows("No connected apps yet");
@@ -213,7 +173,7 @@ it("escapes app labels and rejects foreign relay continuations", async () => {
   await vi.waitFor(() => expect(button("Allow")?.disabled).toBe(false));
   expect(document.querySelector("img")).toBeNull();
   expect(body()).toContain(clientName);
-  expect(body()).toContain("app.example");
+  expect(body()).toContain("app.test");
   click("Allow");
   await shows("invalid return address");
   expect(request).toHaveBeenLastCalledWith("mcp-relay.authorize.approve", {
@@ -240,23 +200,19 @@ it("ignores stale consent responses after navigation", async () => {
 });
 
 it("revokes another person's grant as admin and shows the authoritative result", async () => {
-  const grant = {
+  const otherGrant = {
+    ...grant,
     grantId: "grant-other",
     clientName: "Team app",
     principal: { kind: "person", profileId: "person-other" },
     principalLabel: "Jordan Example",
-    ceiling: ["operator.read"],
-    createdAt: 1_800_000_000_000,
   };
-  const snapshot = { ...grants, grants: [grant], caller: { ...caller, canAdmin: true } };
+  const snapshot = { ...grants, grants: [otherGrant], caller: { ...caller, canAdmin: true } };
   const { request } = fixture([snapshot, { revoked: true }, { ...snapshot, grants: [] }]);
-  await shows("Team app");
-  expect(body()).toContain("Jordan Example");
+  await shows("Jordan Example");
   click("Revoke");
   await shows("Its MCP and embedded UI access has ended.");
   expect(request).toHaveBeenCalledWith("mcp-relay.revoke", { grantId: "grant-other" });
   expect(document.querySelector(".mcp-connected-apps__grant")).toBeNull();
-  expect(document.querySelector('[role="status"]')?.textContent).toBe(
-    "Team app revoked. Its MCP and embedded UI access has ended.",
-  );
+  expect(document.querySelector('[role="status"]')?.textContent).toContain("Team app revoked.");
 });

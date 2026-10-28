@@ -11,6 +11,12 @@ const { workers } = vi.hoisted(() => ({
   workers: [] as (EventEmitter & { shared: BigInt64Array })[],
 }));
 
+// Controlled startup uses synthetic paths; real owner admission has integration coverage.
+vi.mock("../infra/gateway-state-owner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/gateway-state-owner.js")>()),
+  captureStateDatabaseAccess: async () => ({ processOwner: undefined }),
+}));
+
 vi.mock("../infra/sqlite-worker-identity.js", async () => ({
   ...(await vi.importActual<typeof import("../infra/sqlite-worker-identity.js")>(
     "../infra/sqlite-worker-identity.js",

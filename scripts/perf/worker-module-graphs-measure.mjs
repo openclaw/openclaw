@@ -2,7 +2,10 @@
 // separate inspector allocation pass; its timing must not be used for latency gates.
 // --discovery-skills scales each of four workspaces; --discovery-plugins adds shared contributions.
 // --worker identity-avatar-file measures a 64 KiB local avatar: startup, retained heap and warm reads.
+// --worker memory-search measures the read worker's import floor; use memory-search-status-measure.ts for actual queries.
 // --built loads dist workers; source-mode heap includes the TypeScript loader and is not packaged RSS.
+// --build-dir selects a preserved runtime build for --built comparisons.
+// --git-operation provisioning measures the common inspection with no .worktreeinclude file.
 // Run on the benchmark host: node --import ./scripts/tsx.mjs scripts/perf/worker-module-graphs-measure.mjs --state-dir <owned-dir> --output <json>
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -11,6 +14,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { MessageChannel, Worker } from "node:worker_threads";
 import { distribution, installBaselineHook } from "./worker-module-graphs-worker.mjs";
@@ -28,11 +32,15 @@ const { values } = parseArgs({
     "trace-gc": { type: "boolean" },
     snapshots: { type: "boolean" },
     worker: { type: "string" },
+    "git-operation": { type: "string", default: "branches" },
     built: { type: "boolean" },
+    "build-dir": { type: "string" },
   },
 });
 assert(values["state-dir"] && values.output, "--state-dir and --output are required");
 assert(!values.built || !values["baseline-dir"], "--baseline-dir substitutes source files only");
+assert(!values["build-dir"] || values.built, "--build-dir requires --built");
+assert(["branches", "provisioning"].includes(values["git-operation"]), "unknown --git-operation");
 const state = path.resolve(values["state-dir"]);
 const samples = Number(values.samples);
 const skillCount = Number(values["discovery-skills"]);
@@ -219,6 +227,7 @@ const entries = {
   "plugin-generation-preparation": "src/plugins/plugin-generation-preparation.worker.ts",
   "code-mode-node": "src/agents/code-mode-node.worker.ts",
   discovery: "src/skills/runtime/discovery.worker.ts",
+  "memory-search": "extensions/memory-core/src/memory/manager-search.worker.ts",
 };
 const report = {
   samples,
@@ -236,6 +245,8 @@ const report = {
   ],
   baselineDir: values["baseline-dir"] ?? null,
   built: values.built === true,
+  buildDir: values["build-dir"] ? path.resolve(values["build-dir"]) : null,
+  gitOperation: values["git-operation"],
   workers: {},
 };
 if (values.worker) {
@@ -274,8 +285,14 @@ for (const [name, relative] of Object.entries(entries)) {
         ? { baselineFiles: ["src/agents/identity-avatar-file.ts"] }
         : {}),
       entry: new URL(
-        `../../${values.built ? relative.replace(/^src\//, "dist/").replace(/\.ts$/, ".js") : relative}`,
-        import.meta.url,
+        values.built
+          ? name === "memory-search"
+            ? "dist/extensions/memory-core/memory-search.worker.js"
+            : relative.replace(/^src\//, "dist/").replace(/\.ts$/, ".js")
+          : relative,
+        values["build-dir"]
+          ? pathToFileURL(`${path.resolve(values["build-dir"])}${path.sep}`)
+          : new URL("../../", import.meta.url),
       ).href,
       diagnostics: diagnostics.port2,
       baselineDir: values["baseline-dir"],
@@ -393,42 +410,52 @@ for (const [name, relative] of Object.entries(entries)) {
       assert.equal(resolveHandle?.kind, "function");
     }
     const request = () =>
-      name === "identity-avatar-file"
-        ? { workspaceDir: state, source: "avatar.png", readBody: true }
-        : name === "git-operation"
-          ? { type: "repository.branches", input: { repoRoot: repository } }
-          : name === "plugin-generation-preparation"
-            ? {
-                operation: "call",
-                handle: resolveHandle.id,
-                args: [{ kind: "value", value: entry }],
-                asynchronous: false,
-              }
-            : name === "discovery"
-              ? { kind: "scan", path: process.env.PATH, requests }
-              : {
-                  kind: "exec",
-                  source:
-                    "const values = Array.from({length: 128}, (_, i) => i); return values.reduce((a, b) => a + b, 0);",
-                  initialization: initBuffer,
-                  progress: new SharedArrayBuffer(64 + 16384),
-                  inlineHost: false,
-                  config: {
-                    timeoutMs: 30000,
-                    memoryLimitBytes: 64 * 1024 * 1024,
-                    maxOutputBytes: 16384,
-                    maxSnapshotBytes: 65536,
-                    maxPendingToolCalls: 128,
-                  },
-                };
+      name === "memory-search"
+        ? { kind: "prewarm" }
+        : name === "identity-avatar-file"
+          ? { workspaceDir: state, source: "avatar.png", readBody: true }
+          : name === "git-operation"
+            ? values["git-operation"] === "provisioning"
+              ? { type: "worktree.provisioning-inspection", input: { sourceRoot: repository } }
+              : { type: "repository.branches", input: { repoRoot: repository } }
+            : name === "plugin-generation-preparation"
+              ? {
+                  operation: "call",
+                  handle: resolveHandle.id,
+                  args: [{ kind: "value", value: entry }],
+                  asynchronous: false,
+                }
+              : name === "discovery"
+                ? { kind: "scan", path: process.env.PATH, requests }
+                : {
+                    kind: "exec",
+                    source:
+                      "const values = Array.from({length: 128}, (_, i) => i); return values.reduce((a, b) => a + b, 0);",
+                    initialization: initBuffer,
+                    progress: new SharedArrayBuffer(64 + 16384),
+                    inlineHost: false,
+                    config: {
+                      timeoutMs: 30000,
+                      memoryLimitBytes: 64 * 1024 * 1024,
+                      maxOutputBytes: 16384,
+                      maxSnapshotBytes: 65536,
+                      maxPendingToolCalls: 128,
+                    },
+                  };
     const verify = (reply) => {
-      if (name === "identity-avatar-file") {
+      if (name === "memory-search") {
+        assert.deepEqual(reply, { kind: "prewarm" });
+      } else if (name === "identity-avatar-file") {
         assert(reply.ok);
         assert.equal(reply.file.body.byteLength, 65536);
         assert.equal(reply.file.body[0], 42);
         assert.equal(reply.file.body[65535], 42);
       } else if (name === "git-operation") {
         assert(reply.ok, JSON.stringify(reply.error));
+        if (values["git-operation"] === "provisioning") {
+          assert.deepEqual(reply.value, { paths: [], estimatedBytes: 0 });
+          return;
+        }
         assert.equal(reply.value.headBranch, "main");
         assert(
           reply.value.branches.some((branch) => branch.name === "main" && branch.kind === "local"),
@@ -491,7 +518,7 @@ for (const [name, relative] of Object.entries(entries)) {
     const elapsedMs = performance.now() - started;
     const diagnosticsResult = await diagnose("end");
     const retained = await diagnose("inspect");
-    if (name === "git-operation") {
+    if (name === "git-operation" && values["git-operation"] === "branches") {
       git("branch", "observed-after-measurement");
       const changed = await run(request());
       verify(changed);

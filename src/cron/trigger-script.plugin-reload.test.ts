@@ -36,6 +36,7 @@ function preparePluginRuntime(generation: number, execute = () => jsonResult({ g
     pluginRegistry: registry,
     context: { config: {}, agentId: "main", sessionKey: "agent:main:cron:reload:trigger" },
     createTools,
+    scheduledToolPolicy: undefined,
   };
   return { prepared, instance, registry };
 }

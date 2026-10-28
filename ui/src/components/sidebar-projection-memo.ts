@@ -6,6 +6,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import { i18n } from "../i18n/index.ts";
 import type { SidebarOutboxSummary } from "../lib/chat/outbox-store-projection.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
+import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
 import {
   projectSidebarHomeSession,
   type SidebarHomeSession,
@@ -25,6 +26,7 @@ import {
   isListedInPinnedSection,
   type SidebarEmptyGroupsMode,
   type SidebarRecentSession,
+  type SidebarPinZone,
   type SidebarSessionSortMode,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
@@ -62,6 +64,12 @@ export type SidebarProjectionHost = {
   readonly sessionInvolvingMeFilterActive: boolean;
   readonly storedOutboxes: SidebarOutboxSummary | undefined;
   resolveSessionAttention: Parameters<typeof projectSidebarHomeSession>[0]["resolveAttention"];
+  personalGroupSessionReferences(): readonly (GatewaySessionRow | undefined)[];
+  personalGroupSessionRows(
+    group: PersonalSessionGroup,
+    zone?: SidebarPinZone,
+  ): SidebarRecentSession[];
+  reconciledSidebarZone(rows?: SidebarRecentSession[]): SidebarPinZone;
   getRouteSessionKey(): string;
   getSessionNavigationState(): SidebarSessionNavigationState;
   effectiveSessionSortMode(): SidebarSessionSortMode;
@@ -123,9 +131,14 @@ export function memoizedSidebarSections(
 ): SidebarVisibleSections {
   const context = host.sessionDataContext;
   const roster = host.sidebarAgentsMode === "roster" ? host.rosterSessionSource : null;
+  const groups = context?.navigation.snapshot.personalSessionGroups;
+  const references = groups?.length ? host.personalGroupSessionReferences() : [];
   return memo.read(
     () => [
       rows,
+      groups?.length ? host.getSessionNavigationState() : undefined,
+      groups?.length ? groups : undefined,
+      ...references,
       catalogs,
       roster,
       host.collapsedSessionSections,
@@ -157,8 +170,10 @@ export function memoizedSidebarSections(
       for (const agentId of roster?.collapsedAgentIds ?? []) {
         collapsedSections.add(`agent:${agentId}:recent`);
       }
+      const zone = groups?.length ? host.reconciledSidebarZone(rows) : undefined;
       return host.sessionProjection.project({
         rows,
+        referencedRows: groups?.flatMap((group) => host.personalGroupSessionRows(group, zone)),
         sections,
         pinnedKeys,
         grouping,

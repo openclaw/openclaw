@@ -304,21 +304,6 @@ function resolveTelegramInboundConversation(params: {
   };
 }
 
-function buildTelegramCanonicalTopicThreadId(params: {
-  chatId: string;
-  topicId: number;
-  scope: TelegramThreadSpec["scope"];
-}): string {
-  // Core session routing sees one canonical thread id. Telegram topic ids are
-  // chat-scoped, so direct-topic sessions include the chat id to avoid collisions.
-  return params.scope === "direct-messages"
-    ? buildTelegramConversationId({
-        chatId: params.chatId,
-        thread: { id: params.topicId, scope: params.scope },
-      })
-    : `${params.chatId}:${params.topicId}`;
-}
-
 function resolveTelegramNativeTopicThreadId(
   threadId?: string | number,
   nativeTopicId?: number,
@@ -571,13 +556,16 @@ export const telegramPlugin = createChatChannelPlugin({
           sessionKey: inboundBaseSessionKey,
           baseSessionKey: inboundBaseSessionKey,
         };
+        // Core session routing sees one canonical thread id. Telegram topic ids are
+        // chat-scoped, so direct-topic sessions include the chat id to avoid collisions.
         const canonicalThreadId =
           resolvedThreadId !== undefined
-            ? buildTelegramCanonicalTopicThreadId({
-                chatId,
-                topicId: resolvedThreadId,
-                scope: topicScope,
-              })
+            ? topicScope === "direct-messages"
+              ? buildTelegramConversationId({
+                  chatId,
+                  thread: { id: resolvedThreadId, scope: topicScope },
+                })
+              : `${chatId}:${resolvedThreadId}`
             : undefined;
         const route = buildThreadAwareOutboundSessionRoute({
           route: directBaseRoute,

@@ -320,6 +320,43 @@ describe("config mutations against a running Gateway", () => {
     },
   );
 
+  // The Windows companion app runs baseline setup after onboarding, with its Gateway running.
+  it("runs baseline setup through the Gateway with the offline result, then as a no-op", async () => {
+    const before = await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8");
+    const offlineRoot = await fs.realpath(roots.make("openclaw-setup-offline-"));
+    const offlineEnv = stateOwnerEnv(offlineRoot, prefixEnv);
+    await fs.mkdir(offlineEnv.OPENCLAW_STATE_DIR!, { recursive: true });
+    await fs.writeFile(offlineEnv.OPENCLAW_CONFIG_PATH!, before);
+    const setup = (runEnv: NodeJS.ProcessEnv, ...extra: string[]) =>
+      run(runEnv, ["setup", "--baseline", "--workspace", path.join(runEnv.HOME!, "ws"), ...extra]);
+    const comparable = async (runEnv: NodeJS.ProcessEnv) => {
+      const { meta: _meta, ...config } = JSON.parse(
+        (await fs.readFile(runEnv.OPENCLAW_CONFIG_PATH!, "utf8")).replaceAll(runEnv.HOME!, "~"),
+      ) as Record<string, unknown>;
+      return config;
+    };
+
+    const offline = await setup(offlineEnv);
+    expect(offline.code, offline.stderr).toBe(0);
+    const routed = await setup(env);
+    expect(routed.code, routed.stderr).toBe(0);
+    expect(routed.stdout).toContain("set agents.defaults.workspace");
+    expect(await comparable(env)).toEqual(await comparable(offlineEnv));
+    expect((await gatewayConfig()).agents.defaults.workspace).toBe(path.join(env.HOME!, "ws"));
+
+    const written = await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8");
+    const rerun = await setup(env, "--json");
+    expect(rerun.code, rerun.stderr).toBe(0);
+    expect(JSON.parse(rerun.stdout)).toMatchObject({ ok: true, configStatus: "unchanged" });
+    expect(await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8")).toBe(written);
+
+    const skip = await setup(env, "--skip-bootstrap", "--json");
+    expect(skip.code, skip.stderr).toBe(0);
+    expect(JSON.parse(skip.stdout)).toMatchObject({ ok: true, configStatus: "updated" });
+    expect((await gatewayConfig()).agents.defaults.skipBootstrap).toBe(true);
+    expectGatewayKeptRunning();
+  });
+
   it("refuses database settings, which stay offline-only", async () => {
     const before = await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8");
     const result = await run(env, ["config", "set", "database.postgres.schemaPrefix", "repaired"]);

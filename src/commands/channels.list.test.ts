@@ -252,6 +252,7 @@ describe("channels list", () => {
             tokenStatus: "available",
             enabled: true,
           },
+          { accountId: "ops", name: "operator", configured: true, tokenSource: "env" },
         ],
       },
     });
@@ -264,7 +265,10 @@ describe("channels list", () => {
       timeoutMs: 5000,
     });
     const output = stripAnsi(loggedText(runtime));
-    expect(output).toContain("Discord default (clawsweeper):");
+    const accountLines = output.split("\n").filter((line) => line.startsWith("- Discord "));
+    expect(accountLines).toHaveLength(2);
+    expect(accountLines[0]).toContain("Discord default (clawsweeper):");
+    expect(accountLines[1]).toContain("Discord ops (operator):");
     expect(output).toContain("configured");
     expect(output).toContain("token=env");
     expect(output).not.toContain("not configured");

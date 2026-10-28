@@ -449,6 +449,7 @@ export async function fixture(
       | "modelTarget"
       | "modelRef"
       | "automaticSetup"
+      | "assertCurrent"
     > = {},
   ) =>
     metadata.run(() =>

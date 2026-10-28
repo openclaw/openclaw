@@ -207,7 +207,10 @@ also retain the prepared display label after secret redaction and the
 128-character bound. A resolved durable profile, including one established by
 verified trusted-proxy or Tailscale identity, supplies a pseudonymized person
 invoker. A paired device adds device assurance but never becomes a person.
-Shared tokens, passwords, auth-none connections, and other profileless clients
+Unidentified operator connections can receive the Gateway's durable
+[shared owner profile](/concepts/user-model), including authenticated ephemeral
+CLI and backend clients. That profile supplies attribution, not a verified
+personal login or additional permissions. Connections without a durable profile
 remain unattributed. If authenticated user evidence promises a durable profile
 but profile resolution fails, the invoker is `unknown` rather than guessed from
 headers, device ids, connection ids, or credentials.
@@ -489,8 +492,14 @@ what was recorded, not as proof of what happened:
   A rejected metadata record does not stop the queue from accepting later records.
 - Shutdown drops waiting metadata at its existing deadline but joins submitted
   worker operations before releasing the writer.
-  The writer submits up to 32 already-queued items together, preserving each
-  item's independent commit. Lock contention retains the unprocessed suffix;
+  Idle arrivals and lone queued items dispatch immediately. After an in-flight write
+  settles, a partial batch of at least two items can wait one fixed 5 ms window before submitting
+  up to 32 queued items in one transaction, preserving FIFO order. Later arrivals do
+  not extend that window. A full batch, maintenance, or shutdown flushes it immediately.
+  Per-item savepoints isolate rejected records; successful items are
+  acknowledged to the queue only after the shared commit. Queue acceptance itself
+  still does not acknowledge persistence. Lock contention retains the unprocessed suffix;
+  a failed batch commit retains the whole batch for a contention retry;
   an unknown worker outcome replays the unacknowledged batch with its original
   identities, so already committed records and their bindings are not duplicated.
   After the third consecutive unknown outcome, the writer reports and drops that

@@ -154,11 +154,7 @@ function blockToolCalls(blockReason: string) {
 }
 
 function structuredControlStubs(): AnyAgentTool[] {
-  return [
-    fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
-    fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
-    fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
-  ];
+  return controlNames.map((name) => fakeTool(name, name));
 }
 
 function pluginTool(name: string, description: string, pluginId = "fake-catalog"): AnyAgentTool {
@@ -607,12 +603,9 @@ describe("Tool Search", () => {
   it("preserves trusted output schemas through normalization, discovery, and execution", async () => {
     const target = pluginTool("orchard_shipments", "List orchard shipments");
     target.outputSchema = Type.Array(
-      Type.Object(
-        { id: Type.String(), paid: Type.Boolean(), tons: Type.Number() },
-        { additionalProperties: false },
-      ),
+      Type.Object({ id: Type.String() }, { additionalProperties: false }),
     );
-    target.execute = vi.fn(async () => jsonResult([{ id: "H-1", paid: false, tons: 14 }]));
+    target.execute = vi.fn(async () => jsonResult([{ id: "H-1" }]));
     const normalized = normalizeAgentRuntimeTools({
       tools: [target],
       provider: "openai",
@@ -629,14 +622,14 @@ describe("Tool Search", () => {
     await expect(runtime.search("orchard shipments")).resolves.toContainEqual(
       expect.objectContaining({
         name: "orchard_shipments",
-        output: "Array<{ id: string; paid: boolean; tons: number }>",
+        output: "Array<{ id: string }>",
       }),
     );
     await expect(runtime.describe("orchard_shipments")).resolves.toMatchObject({
       outputSchema: { type: "array" },
     });
     const result = await runtime.callValue("orchard_shipments");
-    expect(result).toEqual([{ id: "H-1", paid: false, tons: 14 }]);
+    expect(result).toEqual([{ id: "H-1" }]);
     expect(Object.isFrozen(result)).toBe(true);
     expect(Object.isFrozen((result as unknown[])[0])).toBe(true);
   });

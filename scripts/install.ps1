@@ -293,10 +293,10 @@ function Test-NodeVersionSupported {
         return $false
     }
     if ($major -eq 24) {
-        return ($minor -gt 22 -or ($minor -eq 22 -and $patch -ge 1))
+        return ($minor -ge 16)
     }
     if ($major -eq 26) {
-        return ($minor -gt 12 -or ($minor -eq 12 -and $patch -ge 1))
+        return ($minor -ge 1)
     }
     return ($major -gt 26)
 }
@@ -393,7 +393,7 @@ process.stdout.write(JSON.stringify(result));
                 Write-Host "[!] Node.js $nodeVersion uses SQLite $sqliteVersionLabel; SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x is required" -ForegroundColor Yellow
                 return $false
             } else {
-                Write-Host "[!] Node.js $nodeVersion found, but Node 24.22.1+ or Node 26.12.1+ is required" -ForegroundColor Yellow
+                Write-Host "[!] Node.js $nodeVersion found, but Node 24.16.0+ or Node 26.1.0+ is required" -ForegroundColor Yellow
                 return $false
             }
         }
@@ -1949,6 +1949,55 @@ function New-TransactionalGitCheckout {
     }
 }
 
+function Get-GitCheckoutState {
+    param([string]$RepoDir)
+
+    $state = $null
+    try {
+        $gitDir = git -C $RepoDir rev-parse --absolute-git-dir 2>$null
+        if ($LASTEXITCODE -ne 0) { return $null }
+        $head = git -C $RepoDir rev-parse --verify HEAD 2>$null
+        if ($LASTEXITCODE -ne 0) { return $null }
+        $porcelain = (git -C $RepoDir status --porcelain=v1 --untracked-files=all 2>$null | Out-String)
+        if ($LASTEXITCODE -ne 0) { return $null }
+        $state = [PSCustomObject]@{
+            Head = [string]$head
+            Status = $porcelain
+            Rebasing = (Test-Path -LiteralPath (Join-Path $gitDir "rebase-merge")) -or (Test-Path -LiteralPath (Join-Path $gitDir "rebase-apply"))
+        }
+    } catch {}
+    return $state
+}
+
+# A failed pull --rebase can stop mid-rebase with HEAD, index, or files changed.
+# Continue on the current revision only after proving the checkout is unchanged.
+function Update-GitCheckoutBestEffort {
+    param([string]$RepoDir)
+
+    # Windows PowerShell 5.1 and PowerShell 7.0/7.1 turn Git's stderr progress into
+    # terminating errors under Stop; judge Git only by its exit code.
+    $ErrorActionPreference = "Continue"
+    $before = Get-GitCheckoutState -RepoDir $RepoDir
+    if (-not $before -or $before.Rebasing) {
+        throw "Could not record the Git checkout state before updating: $RepoDir. Inspect the checkout (git status), then retry."
+    }
+    git -C $RepoDir pull --rebase 2>$null | Out-Host
+    if ($LASTEXITCODE -eq 0) {
+        return
+    }
+
+    $after = Get-GitCheckoutState -RepoDir $RepoDir
+    if ($after -and $after.Rebasing) {
+        git -C $RepoDir rebase --abort 2>$null | Out-Null
+        $after = Get-GitCheckoutState -RepoDir $RepoDir
+    }
+    if ($after -and -not $after.Rebasing -and $after.Head -eq $before.Head -and $after.Status -eq $before.Status) {
+        Write-Host "[!] git pull --rebase failed; the checkout is unchanged, continuing with the current revision" -ForegroundColor Yellow
+        return
+    }
+    throw "git pull --rebase failed and the checkout could not be restored: $RepoDir. Run git -C `"$RepoDir`" rebase --abort, inspect git status, then retry."
+}
+
 function Install-OpenClawFromGit {
     param(
         [string]$RepoDir,
@@ -1973,11 +2022,11 @@ function Install-OpenClawFromGit {
     if (-not $SkipUpdate) {
         # PowerShell 7+ surfaces native-command stderr as terminating errors when
         # $ErrorActionPreference=Stop, so git's normal "From <url>" progress line
-        # would abort the script. Swallow failures here — pull is best-effort.
+        # would abort the script. Pull stays best-effort, but only from a verified checkout.
         $dirty = $null
         try { $dirty = git -C $RepoDir status --porcelain 2>$null } catch {}
         if (-not $dirty) {
-            try { git -C $RepoDir pull --rebase 2>$null } catch {}
+            Update-GitCheckoutBestEffort -RepoDir $RepoDir
         } else {
             Write-Host "[!] Repo is dirty; skipping git pull" -ForegroundColor Yellow
         }

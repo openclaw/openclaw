@@ -98,12 +98,8 @@ function failUnlink(source: string, message: string) {
 }
 
 function walRows(file: string) {
-  const db = new DatabaseSync(file, { readOnly: true });
-  try {
-    return db.prepare("SELECT value FROM wal_proof").all();
-  } finally {
-    db.close();
-  }
+  using db = new DatabaseSync(file, { readOnly: true });
+  return db.prepare("SELECT value FROM wal_proof").all();
 }
 
 const expectWarning = (result: MigrationMessages, text: string) =>

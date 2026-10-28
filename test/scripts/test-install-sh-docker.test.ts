@@ -1756,7 +1756,7 @@ syncBuiltinESMExports();
       `#!/usr/bin/env bash
 set -euo pipefail
 if [ "\${1:-}" = "--version" ]; then
-  echo "1.4.3"
+  echo "1.4.4"
   exit 0
 fi
 if [ "\${1:-}" = "pm" ] && [ "\${2:-}" = "-g" ] && [ "\${3:-}" = "untrusted" ]; then
@@ -1895,7 +1895,7 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
       expect(result.stdout).not.toContain("Gateway runtime OK");
     } else if (statusExit === 0) {
       expect(result.stdout).toContain(
-        `bun-global-install-smoke: Bun 1.4.3 install with ${bunRuntime === "supported" ? "Bun" : "Node"} CLI, local agent, and Gateway runtime OK`,
+        `bun-global-install-smoke: Bun 1.4.4 install with ${bunRuntime === "supported" ? "Bun" : "Node"} CLI, local agent, and Gateway runtime OK`,
       );
     } else {
       expectIncludes(

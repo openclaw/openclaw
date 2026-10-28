@@ -5,13 +5,20 @@ import type {
   PluginWorkRelease,
 } from "../plugins/plugin-instance.types.js";
 import { collectRegistryInvocationInstances } from "../plugins/plugin-invocation-scope.js";
+import { watchPluginReplacement } from "../plugins/plugin-replacement-watchers.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
 
-/** Mark finite host custody without granting execution or joining instance disposal. */
+/**
+ * Mark finite host custody without granting execution or joining instance disposal.
+ * `onReplacementRequested` hears which held plugin a reload reserved; calling its
+ * `yieldHold` releases this holder's work count on that plugin while it keeps the
+ * rest of its custody.
+ */
 export function retainRuntimePluginWork(
   registries: Iterable<PluginRegistry>,
   reason: PluginRetentionReason = "unknown",
+  onReplacementRequested?: (pluginId: string, yieldHold: () => void) => void,
 ): PluginWorkRelease {
   const releases: PluginWorkRelease[] = [];
   const release: PluginWorkRelease = Object.assign(
@@ -27,7 +34,16 @@ export function retainRuntimePluginWork(
     for (const registry of registries) {
       for (const instance of collectRegistryInvocationInstances(registry)) {
         if (!instances.has(instance)) {
-          releases.push(instance.retainWork(reason));
+          const close = instance.retainWork(reason);
+          releases.push(close);
+          if (onReplacementRequested) {
+            const unwatch = watchPluginReplacement(instance, () =>
+              onReplacementRequested(instance.pluginId, close),
+            );
+            releases.push(() => {
+              unwatch();
+            });
+          }
           instances.add(instance);
         }
       }

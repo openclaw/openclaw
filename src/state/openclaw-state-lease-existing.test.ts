@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it as baseIt, vi } from "vitest";
+import { captureThrown } from "../../test/helpers/capture-thrown.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -81,12 +82,7 @@ function inspect(pathname: string) {
   };
 }
 function thrown(operation: () => void) {
-  try {
-    operation();
-  } catch (error) {
-    return error;
-  }
-  throw new Error("Expected ownership assertion to fail");
+  return captureThrown(operation, "Expected ownership assertion to fail");
 }
 it("acquires, verifies, renews and releases a timer lease without migrating", async ({ f }) => {
   const before = inspect(f.pathname);

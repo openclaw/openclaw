@@ -38,6 +38,11 @@ vi.mock("./update-check.js", async (importOriginal) => ({
 }));
 
 vi.mock("./telemetry.js", () => ({ checkTelemetryUpdate: vi.fn(async () => null) }));
+// These cases clear the runner markers and settle real runs; keep outcome reports offline.
+vi.mock("./update-result-telemetry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-result-telemetry.js")>()),
+  sendUpdateResultTelemetry: vi.fn(async () => {}),
+}));
 vi.mock("../model-catalog/remote-refresh.js", async (original) => ({
   ...(await original<typeof import("../model-catalog/remote-refresh.js")>()),
   refreshRemoteModelCatalog: async () => ({ status: "disabled" }),

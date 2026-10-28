@@ -1,5 +1,5 @@
 {
-  "originHash" : "45f89582bbc08bc045d26db81202bd019ed7af5ccd022c6976d1cceae5ca417a",
+  "originHash" : "932c68a6b45be560ab6a86616e507b3a18d219c50aaf459cd0d19c533c820d46",
   "pins" : [
     {
       "identity" : "axorcist",
@@ -87,8 +87,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/pointfreeco/swift-concurrency-extras",
       "state" : {
-        "revision" : "695e5d125a475ac0a2c30ece03d7985f54ffc7c9",
-        "version" : "1.4.2"
+        "revision" : "8a4260f7373493435bd21194585c95b72bfdd401",
+        "version" : "1.4.3"
       }
     },
     {
@@ -123,8 +123,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/swiftlang/swift-subprocess.git",
       "state" : {
-        "revision" : "55d30558b8b12c0343793421328fe81a4919c776",
-        "version" : "1.0.1"
+        "revision" : "dbe21bd7dfd4ffef8c32588918542a8abfa1b54c",
+        "version" : "1.0.2"
       }
     },
     {

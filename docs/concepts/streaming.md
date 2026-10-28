@@ -89,6 +89,14 @@ the nested shape before starting the Gateway. See the
   output. Still uses the chunker if the buffered text exceeds `maxChars`, so it
   can emit multiple chunks at the end.
 
+Final-answer blocks wait while trailing tool syntax or Markdown ownership is still
+ambiguous. Recognized calls are hidden; literal examples and unfinished text are
+released when the text ends. Channel previews also withhold a possible standalone
+bracket/JSON tool call from its opening marker until the grammar settles it. Only that pending
+tail waits: ordinary prose and fenced examples keep streaming. Unfinished literal
+text is released in the final reply. Raw and ACP event streams keep their existing
+append-only behavior.
+
 <a id="pending-text-phases" />
 
 ### Text phases and final replies
@@ -418,6 +426,9 @@ Slack-only:
   parallel and consecutive tool updates share the current tool-activity post.
 - Falls back to sending a fresh final post if the preview post was deleted or
   is otherwise unavailable at finalize time.
+- Sends the final answer as a new post and deletes the preview when anything
+  was posted after the preview in its thread (or channel), such as a `message`
+  tool send, so the answer lands last and notifies.
 - Final media/error payloads cancel pending preview updates before normal
   delivery instead of flushing a temporary preview post.
 
@@ -475,6 +486,15 @@ Supported surfaces:
   that use OpenClaw's compact progress renderer, including Discord, Matrix,
   Microsoft Teams, Mattermost, Slack session cards, and Telegram. To disable
   preview edits entirely, set `streaming.mode` to `off`.
+
+In Telegram's status-only `progress` tool log, consecutive invocations of the
+same tool share one row: `Bash`, then `Bash ×2`, then `Bash ×3`. Repeated reads
+of the same skill and identical Sessions limits keep their detail
+(`Skill Read: github ×2`, `Sessions: 30 ×2`). A different tool or detail, an
+authored progress item, a preamble, or a plan starts a new row. Failures,
+approvals, and other detailed rows stay separate. Raw command mode and other
+streaming modes are unchanged. Only the temporary preview changes; execution and
+session history are unchanged.
 
 ## Progress draft rendering
 

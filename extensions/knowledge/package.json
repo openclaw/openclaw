@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/knowledge",
-  "version": "2026.10.5",
+  "version": "2026.10.8",
   "private": true,
   "description": "OpenClaw evidence-backed knowledge vault and memory provider",
   "type": "module",
@@ -8,7 +8,7 @@
     "@openclaw/fs-safe": "0.26.13",
     "dompurify": "3.4.17",
     "marked": "18.1.1",
-    "typebox": "1.4.1",
+    "typebox": "1.4.2",
     "yaml": "2.9.1"
   },
   "devDependencies": {
@@ -17,7 +17,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.10.5"
+    "openclaw": ">=2026.10.8"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -30,7 +30,7 @@
     ],
     "controlUi": "./src/control-ui.ts",
     "compat": {
-      "pluginApi": ">=2026.10.5"
+      "pluginApi": ">=2026.10.8"
     },
     "build": {
       "bundledDist": true,

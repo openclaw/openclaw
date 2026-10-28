@@ -1,3 +1,4 @@
+import { createHook } from "node:async_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   createAssistantMessageEventStream,
@@ -6,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
@@ -29,12 +31,12 @@ import {
 import type { AgentSessionEvent } from "./agent-session-types.js";
 import type {
   ExtensionAPI,
-  ExtensionFactory,
   ToolDefinition,
   TurnEndEvent,
   TurnStartEvent,
 } from "./extensions/types.js";
 import { SessionManager } from "./session-manager.js";
+import { text as textContent } from "./session-message-fixtures.test-support.js";
 import { getSteeringMessageIdentity } from "./steering-message-identity.js";
 
 registerAgentSessionLoopTestLifecycle();
@@ -151,14 +153,11 @@ describe("AgentSession loop correctness", () => {
     vi.spyOn(sessionManager, "appendMessageAsync").mockRejectedValue(persistenceError);
     const publishedUserMessages: unknown[] = [];
     onUserMessageEnd(session, (event) => publishedUserMessages.push(event.message));
-    let sourceConsumed = false;
     const abortController = new AbortController();
     const wait = steerActiveSessionWithOptionalDeliveryWait(session, "retain queued source", {
       deliveryTimeoutMs: 10_000,
       waitForTranscriptCommit: true,
       abortSignal: abortController.signal,
-    }).then(() => {
-      sourceConsumed = true;
     });
     const rejection = expect(wait).rejects.toBe(persistenceError);
 
@@ -171,7 +170,6 @@ describe("AgentSession loop correctness", () => {
       );
       await rejection;
 
-      expect(sourceConsumed).toBe(false);
       expect(publishedUserMessages).toEqual([]);
       expect(sessionManager.getEntries().filter((entry) => entry.type === "message")).toEqual([]);
     } finally {
@@ -261,13 +259,74 @@ describe("AgentSession loop correctness", () => {
     expect(observed).toEqual(["first", "second", "third", "second", "late"]);
   });
 
+  it("scans extensions once per streamed update without a forwarding promise", async () => {
+    const updates = 16;
+    let promises = 0;
+    let delivered = 0;
+    const hook = createHook({
+      init(_id, type) {
+        if (type === "PROMISE") {
+          promises++;
+        }
+      },
+    });
+    const message = createAssistant(testModel, "synthetic answer");
+    const resourceLoader = await createResourceLoader((api) => {
+      api.on("session_start", () => {});
+    });
+    const handlers = resourceLoader.getExtensions().extensions[0]!.handlers;
+    using lookups = vi.spyOn(handlers, "get");
+    const { session } = await createTestSession({ resourceLoader });
+    session.agent.streamFn = () => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: "start", partial: message } as const;
+        for (let index = 0; index < updates; index++) {
+          hook.enable();
+          yield { type: "text_delta", contentIndex: 0, delta: "x", partial: message } as const;
+        }
+        yield { type: "done", reason: "stop", message } as const;
+      },
+      result: async () => message,
+    });
+    session.subscribe((event) => {
+      if (event.type === "message_update") {
+        hook.disable();
+        delivered++;
+      }
+    });
+    try {
+      await session.agent.prompt("answer");
+    } finally {
+      hook.disable();
+    }
+    expect(delivered).toBe(updates);
+    expect(lookups.mock.calls.filter(([event]) => event === "message_update")).toHaveLength(
+      updates,
+    );
+    // Three iterator handoff promises, Agent dispatch, and the awaited session handler.
+    if (!process.versions.bun) {
+      expect(promises).toBeLessThanOrEqual(updates * 5);
+    }
+  });
+
   it("carries the canonical assistant entry id through ordered terminal listeners", async () => {
-    const assistant = createAssistant(testModel, [{ type: "text", text: "same answer" }]);
+    const assistant = createAssistant(testModel, "same answer");
     const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
+    sessionManager.appendMessage(makeUserMessage("old prompt", 1));
     const priorAssistantEntryId = sessionManager.appendMessage({ ...assistant });
     streamMocks.streamSimple.mockImplementation(() => createAssistantResultStream(assistant));
-    const { session } = await createTestSession({ sessionManager });
+    const lifecycleEvents: string[] = [];
+    const { session } = await createTestSession({
+      sessionManager,
+      extension: (api) => {
+        api.on("agent_end", async () => {
+          lifecycleEvents.push("agent_end");
+        });
+        api.on("agent_settled", async () => {
+          lifecycleEvents.push("agent_settled");
+        });
+      },
+    });
     const order: string[] = [];
     const releaseFirst = createDeferred();
     let terminalEntryId: string | undefined;
@@ -307,29 +366,6 @@ describe("AgentSession loop correctness", () => {
     expect(persistedAssistant?.id).not.toBe(priorAssistantEntryId);
     expect(terminalEntryId).toBe(persistedAssistant?.id);
     expect(order).toEqual(["first:start", "first:end", "second", "settled"]);
-  });
-
-  it("emits agent_settled once after a normal run", async () => {
-    const lifecycleEvents: string[] = [];
-    const handlers: ExtensionFactory = (api) => {
-      api.on("agent_end", async () => {
-        lifecycleEvents.push("agent_end");
-      });
-      api.on("agent_settled", async () => {
-        lifecycleEvents.push("agent_settled");
-      });
-    };
-    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
-      createAssistantResultStream(
-        createAssistant(activeModel, [{ type: "text", text: "complete answer" }]),
-      ),
-    );
-    const { session } = await createTestSession({
-      resourceLoader: await createResourceLoader(handlers),
-    });
-
-    await session.prompt("new prompt");
-
     expect(lifecycleEvents).toEqual(["agent_end", "agent_settled"]);
   });
 
@@ -393,7 +429,7 @@ describe("AgentSession loop correctness", () => {
     const model = { ...testModel, contextWindow: 1_000 };
     const sessionManager = SessionManager.inMemory();
     await appendHistory(sessionManager, createAssistant(model, "old cumulative turn", "stop", 950));
-    sessionManager.appendMessage({ role: "user", content: "CLI prompt", timestamp: Date.now() });
+    sessionManager.appendMessage(makeUserMessage("CLI prompt", Date.now()));
     sessionManager.appendMessage({
       ...createAssistant(model, "usage unavailable"),
       usage: {
@@ -567,7 +603,7 @@ describe("AgentSession loop correctness", () => {
       expect(conversationRequests).toBe(1);
       expect(session.model).toBe(model);
       expect(sessionManager.getBranch().at(-1)).toMatchObject({
-        message: { role: "assistant", content: [{ type: "text", text: "usable next reply" }] },
+        message: { role: "assistant", content: textContent("usable next reply") },
       });
     },
   );

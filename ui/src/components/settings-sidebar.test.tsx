@@ -372,7 +372,7 @@ describe("settings sidebar search", () => {
   });
 
   it.each(["sidebar", "embed-list", "embed-page"] as const)(
-    "preserves save feedback in web settings and native connection recovery in %s",
+    "preserves actionable save feedback in web settings and native connection recovery in %s",
     async (presentation) => {
       const onRetryConnect = vi.fn();
       const renderSidebar = (
@@ -389,7 +389,7 @@ describe("settings sidebar search", () => {
           lastError,
           gatewayVersion: "1.0.0",
           onRetryConnect,
-          saveIndicator: { ...saveIndicator(), status: "saving" },
+          saveIndicator: { ...saveIndicator(), status: "error", lastError: "Save failed" },
         });
 
       renderSidebar(null);
@@ -397,7 +397,7 @@ describe("settings sidebar search", () => {
       await vi.waitFor(() => {
         expect(
           container.querySelector<HTMLElement>(".settings-save-indicator")?.textContent,
-        ).toContain(t("configView.autoSaveSaving"));
+        ).toContain(t("configView.autoSaveFailed"));
       });
 
       renderSidebar(null);
@@ -438,7 +438,7 @@ describe("settings sidebar search", () => {
         expect(suspended?.hasAttribute("role")).toBe(false);
         expect(
           container.querySelector<HTMLElement>(".settings-save-indicator")?.textContent,
-        ).toContain(t("configView.autoSaveSaving"));
+        ).toContain(t("configView.autoSaveFailed"));
       }
 
       renderSidebar("offline", "connection refused?token=settings-secret");
@@ -650,7 +650,11 @@ it("follows agent owner replacement and publications without remounting", async 
   const selectionSubscriptions = [...selectionListeners];
   const identitySubscriptions = [...identityListeners];
   const subscriptions = [selectionSubscriptions, identitySubscriptions];
+  const optionCopy = selector.querySelector(".agent-select__option-copy");
+  expect(optionCopy).not.toBeNull();
   render({ ...props, gatewayVersion: "test" });
+  await selector.updateComplete;
+  expect(selector.querySelector(".agent-select__option-copy")).toBe(optionCopy);
   expect([[...selectionListeners], [...identityListeners]]).toEqual(subscriptions);
   settingsAgentSelection.state.selectedId = "research";
   settingsAgentSelection.state.scopeId = "research";
@@ -684,5 +688,13 @@ it("follows agent owner replacement and publications without remounting", async 
     expect(replacement.agentIdentity.ensure).toHaveBeenLastCalledWith(["research"]);
     expect(avatar()).toBe("🦊");
   });
+  render({
+    ...props,
+    ...replacement,
+    agents: props.agents.map((agent) =>
+      agent.id === "research" ? Object.assign({}, agent, { name: "Research renamed" }) : agent,
+    ),
+  });
+  await waitForSolid(() => expect(label()).toContain("Research renamed"));
   expect(container.querySelector<HTMLElement>("openclaw-agent-select")).toBe(selector);
 });

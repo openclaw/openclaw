@@ -8,6 +8,10 @@ import {
 } from "../../infra/gateway-state-owner.js";
 import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
 import { createSqliteDatabaseAdmissionRelay } from "../../infra/sqlite-worker-operation-admission.js";
+import type {
+  RetainedWorkerTransactionAdmission,
+  SqliteWorkerOperationSettlement,
+} from "../../infra/sqlite-worker-operation-settlement.js";
 import { recordWorkerMessage } from "../../infra/worker-message-metrics.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -116,6 +120,7 @@ export function withSqliteMutationWorkerLifetime<T>(
 export type SqliteWorkerWriteAdmission<Result> = (
   run: (refusal?: { error: unknown }) => Promise<Result | undefined>,
   diagnostics: SqliteSessionReclamationAdmissionDiagnostics,
+  operation: RetainedWorkerTransactionAdmission,
 ) => Promise<void>;
 
 export type SqliteMutationWorkerValidationOwner =
@@ -153,12 +158,13 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
   operationId: number;
   completion: "result" | "exit";
   databaseAuthority?: {
-    stateAccess: ReturnType<typeof captureStateDatabaseAccess>;
+    stateAccess: Awaited<ReturnType<typeof captureStateDatabaseAccess>>;
     creationPaths: readonly string[];
     maintenanceScope?: OpenClawDatabaseMaintenanceScope;
     assertCurrent(): void;
   };
   onCommitRequest?: () => void;
+  nativeStopped?: Promise<void>;
   withWriteAdmission: SqliteWorkerWriteAdmission<Result>;
   validationOwner?: SqliteMutationWorkerValidationOwner;
   validationPath?: string;
@@ -219,6 +225,8 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
     // TODO(bun): Rely on the Worker's native async resource once Bun ships
     // https://github.com/oven-sh/bun/pull/42593.
     const runInOperationContext = AsyncLocalStorage.snapshot();
+    const settlement = createDeferredCore<SqliteWorkerOperationSettlement>();
+    const retained = { settled: settlement.promise, nativeStopped: params.nativeStopped };
     let result: Result | undefined;
     let validation: OpenClawAgentDatabaseValidation | undefined;
     let workerError: Error | undefined;
@@ -261,6 +269,13 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
         return;
       }
       completed = true;
+      settlement.resolve({
+        kind: "unknown",
+        error:
+          workerError ??
+          transportError ??
+          new Error("SQLite reclamation ended without a settlement receipt"),
+      });
       if (admission) {
         admission.diagnostics.releaseCause = code === undefined ? "worker-release" : "worker-exit";
         admission.released.resolve();
@@ -320,114 +335,126 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
         };
         admission = requested;
         const task = params
-          .withWriteAdmission(async (refusal) => {
-            if (completed) {
-              return undefined;
-            }
-            if (refusal) {
-              workerError ??= toStringifiedError(refusal.error);
-            }
-            const allowed = refusal === undefined && workerError === undefined;
-            const authority = params.databaseAuthority;
-            const assertCreationCurrent = () => {
-              if (!allowed || completed || workerError || transportError || params.getFailure?.()) {
-                throw new Error("SQLite reclamation creation grant is no longer current");
+          .withWriteAdmission(
+            async (refusal) => {
+              if (completed) {
+                return undefined;
               }
-              authority?.assertCurrent();
-            };
-            const assertStateAccess =
-              allowed && authority
-                ? await authority.stateAccess.prepareAccess({
-                    maintenanceScope: authority.maintenanceScope,
-                  })
-                : undefined;
-            if (assertStateAccess) {
-              assertCreationCurrent();
-              assertStateAccess();
-            }
-            const metadata =
-              allowed && authority
-                ? createSqliteDatabaseAdmissionRelay(assertCreationCurrent)
-                : undefined;
-            const creationPaths = new Set(
-              authority?.creationPaths.map(resolveIdentityPathViaExistingAncestorSync),
-            );
-            if (metadata && authority) {
-              let schemaLease: StateDatabaseSchemaLease | undefined;
-              const assertAccess = () => {
-                assertCreationCurrent();
-                authority.maintenanceScope?.assertAdmission();
-                assertStateAccess?.({
-                  maintenanceScope: authority.maintenanceScope,
-                  schemaLease,
-                });
+              if (refusal) {
+                workerError ??= toStringifiedError(refusal.error);
+              }
+              const allowed = refusal === undefined && workerError === undefined;
+              const authority = params.databaseAuthority;
+              const assertCreationCurrent = () => {
+                if (
+                  !allowed ||
+                  completed ||
+                  workerError ||
+                  transportError ||
+                  params.getFailure?.()
+                ) {
+                  throw new Error("SQLite reclamation creation grant is no longer current");
+                }
+                authority?.assertCurrent();
               };
-              metadata.bindDatabaseAuthority({
-                databasePath: authority.stateAccess.canonicalPath,
-                assertRequest: assertCreationCurrent,
-                assertAccess,
-                assertCreate(location) {
-                  if (!creationPaths.has(resolveIdentityPathViaExistingAncestorSync(location))) {
-                    throw new Error(
-                      "SQLite reclamation creation target differs from its admitted databases",
-                    );
-                  }
-                },
-                acquireSchema() {
-                  assertAccess();
-                  const acquire = () =>
-                    acquireStateDatabaseSchemaLease(authority.stateAccess.canonicalPath);
-                  const lease = authority.maintenanceScope
-                    ? authority.maintenanceScope.run(acquire)
-                    : acquire();
-                  schemaLease = lease;
-                  authority.maintenanceScope?.own(lease, "shared-resources", () => lease.release());
-                  return lease;
-                },
-              });
-            }
-            const releaseService =
-              metadata && authority
-                ? retainSqliteWriteAdmissionService(authority.creationPaths, () =>
-                    metadata.service(),
-                  )
-                : undefined;
-            try {
+              const assertStateAccess =
+                allowed && authority
+                  ? await authority.stateAccess.prepareAccess({
+                      maintenanceScope: authority.maintenanceScope,
+                    })
+                  : undefined;
               if (assertStateAccess) {
                 assertCreationCurrent();
                 assertStateAccess();
               }
-              worker.postMessage(
-                {
-                  type: "admission",
-                  operationId,
-                  allowed,
-                  validation: allowed ? readValidation() : undefined,
-                  integrityRevoked:
-                    allowed && validationPath !== undefined
-                      ? hasRevokedOpenClawAgentDatabaseValidation(validationPath)
-                      : false,
-                  ...(metadata ? { databaseAdmissionPort: metadata.port } : {}),
-                },
-                metadata ? [metadata.port] : [],
+              const metadata =
+                allowed && authority
+                  ? createSqliteDatabaseAdmissionRelay(assertCreationCurrent)
+                  : undefined;
+              const creationPaths = new Set(
+                authority?.creationPaths.map(resolveIdentityPathViaExistingAncestorSync),
               );
-              if (transport.kind === "pooled") {
-                recordWorkerMessage("admission", "to_worker");
+              if (metadata && authority) {
+                let schemaLease: StateDatabaseSchemaLease | undefined;
+                const assertAccess = () => {
+                  assertCreationCurrent();
+                  authority.maintenanceScope?.assertAdmission();
+                  assertStateAccess?.({
+                    maintenanceScope: authority.maintenanceScope,
+                    schemaLease,
+                  });
+                };
+                metadata.bindDatabaseAuthority({
+                  databasePath: authority.stateAccess.canonicalPath,
+                  assertRequest: assertCreationCurrent,
+                  assertAccess,
+                  assertCreate(location) {
+                    if (!creationPaths.has(resolveIdentityPathViaExistingAncestorSync(location))) {
+                      throw new Error(
+                        "SQLite reclamation creation target differs from its admitted databases",
+                      );
+                    }
+                  },
+                  acquireSchema() {
+                    assertAccess();
+                    const acquire = () =>
+                      acquireStateDatabaseSchemaLease(authority.stateAccess.canonicalPath);
+                    const lease = authority.maintenanceScope
+                      ? authority.maintenanceScope.run(acquire)
+                      : acquire();
+                    schemaLease = lease;
+                    authority.maintenanceScope?.own(lease, "shared-resources", () =>
+                      lease.release(),
+                    );
+                    return lease;
+                  },
+                });
               }
-              // Refusal holds the FIFO until exit. The owner publishes successful results
-              // before returning this writer section; preliminary admissions release separately.
-              await requested.released.promise;
-              if (metadata?.failure) {
-                throw toErrorObject(metadata.failure, "SQLite worker admission failed");
+              const releaseService =
+                metadata && authority
+                  ? retainSqliteWriteAdmissionService(authority.creationPaths, () =>
+                      metadata.service(),
+                    )
+                  : undefined;
+              try {
+                if (assertStateAccess) {
+                  assertCreationCurrent();
+                  assertStateAccess();
+                }
+                worker.postMessage(
+                  {
+                    type: "admission",
+                    operationId,
+                    allowed,
+                    validation: allowed ? readValidation() : undefined,
+                    integrityRevoked:
+                      allowed && validationPath !== undefined
+                        ? hasRevokedOpenClawAgentDatabaseValidation(validationPath)
+                        : false,
+                    ...(metadata ? { databaseAdmissionPort: metadata.port } : {}),
+                  },
+                  metadata ? [metadata.port] : [],
+                );
+                if (transport.kind === "pooled") {
+                  recordWorkerMessage("admission", "to_worker");
+                }
+                // Refusal holds the FIFO until exit. The owner publishes successful results
+                // before returning this writer section; preliminary admissions release separately.
+                await requested.released.promise;
+                if (metadata?.failure) {
+                  throw toErrorObject(metadata.failure, "SQLite worker admission failed");
+                }
+                return completed && !workerError && !transportError && !params.getFailure?.()
+                  ? result
+                  : undefined;
+              } finally {
+                metadata?.finish();
+                releaseService?.();
               }
-              return completed && !workerError && !transportError && !params.getFailure?.()
-                ? result
-                : undefined;
-            } finally {
-              metadata?.finish();
-              releaseService?.();
-            }
-          }, requested.diagnostics)
+            },
+            requested.diagnostics,
+            retained,
+          )
           .catch(async (failure: unknown) => {
             workerError ??= toStringifiedError(failure);
             if (!completed) {
@@ -455,10 +482,12 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
           admission = undefined;
         }
       } else if (message.type === "refused") {
+        settlement.resolve({ kind: "completed" });
         settledRefusal = true;
         workerError ??= new Error("SQLite reclamation Worker request was refused");
         finish();
       } else if (message.type === "reclaimed") {
+        settlement.resolve({ kind: "completed" });
         result = message.result;
         validation = message.validation;
         if (params.completion === "result") {

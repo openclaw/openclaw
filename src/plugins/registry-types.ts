@@ -239,6 +239,8 @@ export type PluginRecord = {
   migrationProviderIds: string[];
   contextEngineIds?: string[];
   declaredContextEngineIds?: readonly string[];
+  /** Manifest `reload.turnHandover`: a reload hands this generation's running turns to the next one. */
+  turnHandover?: boolean;
   agentHarnessIds: string[];
   cliCommands: string[];
   services: string[];

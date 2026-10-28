@@ -46,27 +46,32 @@ export async function proveOversizedWorkspaceRecovery({
   const projection = first!.workspaceDir;
   const sourceText = "guest source remains recoverable\n";
   const oversizedBytes = 64 * 1024 * 1024 + 1;
-  const oversizedError = "Cloud workspace result is too large: artifacts/archive.tgz";
   const readProjection = () => readLocalWorkspaceProjection(owner.worktree.id);
-  const artifact = path.join(projection, "artifacts/archive.tgz");
+  const relativePath = ".artifacts/beta's build/package.tgz";
+  const artifact = path.join(projection, relativePath);
+  const guidance =
+    `Pending workspace changes were preserved. Ask a Gateway administrator to run:\n` +
+    `openclaw sandbox recover --session '${owner.sessionKey}' --path '.artifacts/beta'"'"'s build/package.tgz'`;
   await fs.mkdir(path.dirname(artifact), { recursive: true });
   await fs.writeFile(artifact, "retained binary contents\n");
   await fs.truncate(artifact, oversizedBytes);
   await fs.writeFile(path.join(projection, "source.txt"), sourceText);
-  await expect(first!.checkpoint()).rejects.toThrow(oversizedError);
+  const failures: unknown[] = [await first!.checkpoint().catch((error: unknown) => error)];
   first![Symbol.dispose]();
   const pending = await readProjection();
   expect(pending).toMatchObject({ pending_target: "canonical" });
   expect(pending!.pending_ref).toBeTruthy();
-  await expect(prepareSandbox()).rejects.toThrow(oversizedError);
-  expect((await readProjection())!.pending_ref).toBe(pending!.pending_ref);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    failures.push(await prepareSandbox().catch((error: unknown) => error));
+    expect((await readProjection())!.pending_ref).toBe(pending!.pending_ref);
+  }
   expect((await fs.stat(artifact)).size).toBe(oversizedBytes);
   expect(await fs.readFile(path.join(canonical, "source.txt"), "utf8")).toBe("original\n");
   const { recoverLocalWorkspaceFile } = await import("./local-workspace-recovery.js");
   const recovery = {
     cfg,
     sessionKey: owner.sessionKey,
-    path: "artifacts/archive.tgz",
+    path: relativePath,
     recoveryId: randomUUID(),
     assertCurrent: owner.assertCurrent,
   };
@@ -79,11 +84,26 @@ export async function proveOversizedWorkspaceRecovery({
   await fs.unlink(path.join(projection, "alias"));
   await fs.link(artifact, path.join(projection, "hardlink"));
   await expect(recover()).rejects.toThrow();
+  const linkedFailure = await prepareSandbox().catch((error: unknown) => error);
+  expect(linkedFailure).toBeInstanceOf(Error);
+  expect(String(linkedFailure)).not.toContain("openclaw sandbox recover");
   await fs.unlink(path.join(projection, "hardlink"));
   const recovered = await recover();
+  expect(recovered).toEqual({
+    path: path.join(
+      stateRoot,
+      "workspace-recovery",
+      owner.worktree.id,
+      recovery.recoveryId,
+      relativePath,
+    ),
+    bytes: oversizedBytes,
+  });
+  const originalBytes = Buffer.alloc(oversizedBytes);
+  originalBytes.write("retained binary contents\n");
+  expect((await fs.readFile(recovered.path)).equals(originalBytes)).toBe(true);
   expect(await recover()).toEqual(recovered);
   const relocated = recovered.path;
-  expect(recovered.bytes).toBe(oversizedBytes);
   await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
   using resumed = await prepareSandbox();
   expect(resumed).toBeDefined();
@@ -99,4 +119,16 @@ export async function proveOversizedWorkspaceRecovery({
     pending_ref: null,
     pending_target: null,
   });
+  // Existing source must not be advertised as eligible for artifact relocation.
+  const source = path.join(projection, "source.txt");
+  await fs.truncate(source, oversizedBytes);
+  const sourceFailure = await resumed!.checkpoint().catch((error: unknown) => error);
+  await fs.writeFile(source, sourceText);
+  await resumed!.checkpoint();
+  expect(sourceFailure).toBeInstanceOf(Error);
+  expect(String(sourceFailure)).toBe("Error: Cloud workspace result is too large: source.txt");
+  for (const failure of failures) {
+    expect(failure).toBeInstanceOf(Error);
+    expect(String(failure)).toContain(guidance);
+  }
 }

@@ -40,3 +40,36 @@ export function successSummary(
     ...overrides,
   };
 }
+
+export function backupRollbackProof(baselineVersion: string, candidateVersion: string) {
+  const digest = "a".repeat(64);
+  return {
+    status: "passed",
+    baselineVersion,
+    candidateVersion,
+    runtime: {
+      version: baselineVersion,
+      schemaVersions: { state: 16, agent: 19 },
+      manifestSha256: digest,
+      entrySha256: digest,
+    },
+    candidateSchemaVersions: { state: 17, agent: 21 },
+    archive: { sha256: digest },
+    before: {
+      databases: [
+        {
+          kind: "agent",
+          agentId: "main",
+          present: true,
+          userVersion: 19,
+          contentVersion: 19,
+          sessions: [{ key: "synthetic", sessionId: "synthetic" }],
+          tables: [{ table: "transcript_events", rows: 1, sha256: digest }],
+        },
+      ],
+      files: [],
+    },
+    preflights: [{ agentId: "main", status: "exact", foundVersion: 19, targetVersion: 19 }],
+    sessionReads: [{ agentId: "main", count: 1 }],
+  };
+}

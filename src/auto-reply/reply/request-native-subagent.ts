@@ -31,7 +31,7 @@ type RequesterAuthorization = {
  * Host metadata/provenance and current authority are explicit inputs; prepare verifies
  * both native tools and commits the ingress-owned user turn. No fake message is needed.
  */
-export async function resolveCommandNativeSubagentEligibility(params: {
+async function resolveCommandNativeSubagentEligibility(params: {
   command: NativeSubagentRuntimeGuard["command"];
   ingressEligible: boolean;
   assertCurrent: () => void;

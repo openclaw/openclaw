@@ -211,7 +211,7 @@ suite.define(() => {
         await gateway.deferNext("config.get");
         await gateway.resolveDeferred("config.set");
         const indicator = page.locator("openclaw-settings-save-indicator");
-        await expect(indicator).toContainText("Saved");
+        await expect(indicator).toContainText("Apply changes");
         await gateway.waitForRequest("config.get", { after: refreshReads });
         await gateway.resolveDeferred("config.get");
         if (artifacts) {
@@ -228,7 +228,7 @@ suite.define(() => {
         );
         expect(JSON.parse(String(clearedAgent.raw))).toEqual(makeConfig("", ""));
         await gateway.resolveDeferred("config.set");
-        await expect(indicator).toContainText("Saved");
+        await expect(indicator).toContainText("Apply changes");
         await expect(researchSelect).toHaveValue("__default__");
         await expect(researchSelect).toBeDisabled();
         await expect(defaultSelect).toBeDisabled();

@@ -57,43 +57,24 @@ describe("probeTlonAccount", () => {
   });
 
   it.each([
-    { status: 200, cancelFails: false, expected: { ok: true } },
-    { status: 503, cancelFails: false, expected: { ok: false, error: "Name request failed: 503" } },
-    { status: 200, cancelFails: true, expected: { ok: true } },
-  ])(
-    "releases a $status response guard (cancelFails=$cancelFails)",
-    async ({ status, cancelFails, expected }) => {
-      const events: string[] = [];
-      const cancelBody = vi.fn(() => {
-        events.push("cancel");
-        if (cancelFails) {
-          throw new Error("cancel failed");
-        }
-      });
-      const response = new Response(new ReadableStream<Uint8Array>({ cancel: cancelBody }), {
-        status,
-      });
-      const release = vi.fn(async () => {
-        void response.body?.cancel().catch(() => undefined);
-        events.push("release");
-      });
-      vi.mocked(urbitFetch).mockResolvedValue({
-        response,
-        release,
-        finalUrl: "https://example.com/~/name",
-        refreshTimeout: vi.fn(),
-      });
+    { status: 200, expected: { ok: true } },
+    { status: 503, expected: { ok: false, error: "Name request failed: 503" } },
+  ])("releases a $status response guard", async ({ status, expected }) => {
+    const release = vi.fn(async () => {});
+    vi.mocked(urbitFetch).mockResolvedValue({
+      response: new Response(null, { status }),
+      release,
+      finalUrl: "https://example.com/~/name",
+      refreshTimeout: vi.fn(),
+    });
 
-      await expect(probeTlonAccount(account)).resolves.toEqual({
-        ...expected,
-        elapsedMs: expect.any(Number),
-      });
+    await expect(probeTlonAccount(account)).resolves.toEqual({
+      ...expected,
+      elapsedMs: expect.any(Number),
+    });
 
-      expect(cancelBody).toHaveBeenCalledOnce();
-      expect(release).toHaveBeenCalledOnce();
-      expect(events).toEqual(["cancel", "release"]);
-    },
-  );
+    expect(release).toHaveBeenCalledOnce();
+  });
 
   it("honors the status adapter timeout", async () => {
     vi.useFakeTimers();

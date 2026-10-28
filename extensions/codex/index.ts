@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   resolveEffectiveEnableState,
   resolveLivePluginConfigObject,
@@ -72,6 +73,20 @@ import {
 } from "./src/supervision-tools.js";
 import { createCodexWebSearchProvider } from "./src/web-search-provider.js";
 
+const loadAccountUsage = createLazyRuntimeModule(() => import("./src/account-usage-runtime.js"));
+const loadPluginState = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/plugin-state-runtime"),
+);
+const loadConfigMutation = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/config-mutation"),
+);
+const loadSessionBinding = createLazyRuntimeModule(
+  () => import("./src/app-server/session-binding.js"),
+);
+const loadSessionRetirement = createLazyRuntimeModule(
+  () => import("./src/app-server/session-retirement.js"),
+);
+
 const ENDED_SESSION_REASONS: ReadonlySet<string> = new Set(["new", "reset", "idle", "daily"]);
 
 export default definePluginEntry({
@@ -85,7 +100,7 @@ export default definePluginEntry({
     api.registerGatewayMethod(
       "codex.accountUsage",
       async (options) => {
-        const { handleCodexAccountUsage } = await import("./src/account-usage-runtime.js");
+        const { handleCodexAccountUsage } = await loadAccountUsage();
         await handleCodexAccountUsage(options);
       },
       { scope: "operator.admin" },
@@ -153,12 +168,11 @@ export default definePluginEntry({
       // Final effect guards retain raw SDK revocations through 2026-12-31.
       lookup: (key) => openBindingStateStore().lookup(key),
       prepareRead: async (key) => {
-        const { preparePluginStateRead } = await import("openclaw/plugin-sdk/plugin-state-runtime");
+        const { preparePluginStateRead } = await loadPluginState();
         return await preparePluginStateRead(openBindingMutationStore(), key);
       },
       prepareGuard: async (key, assertValueCurrent) => {
-        const { preparePluginStateGuard } =
-          await import("openclaw/plugin-sdk/plugin-state-runtime");
+        const { preparePluginStateGuard } = await loadPluginState();
         return await preparePluginStateGuard(openBindingMutationStore(), key, assertValueCurrent);
       },
       asyncReads: {
@@ -259,7 +273,7 @@ export default definePluginEntry({
             });
           },
         },
-        { names: [...CODEX_SUPERVISION_COMPAT_TOOL_NAMES] },
+        { names: [...CODEX_SUPERVISION_COMPAT_TOOL_NAMES], workspaceAccess: "execute" },
       );
     }
     const agentHarnessOptions = {
@@ -290,7 +304,7 @@ export default definePluginEntry({
             getPluginConfig: resolveCurrentPluginConfig,
           }),
       },
-      { name: "codex_threads" },
+      { name: "codex_threads", workspaceAccess: "execute" },
     );
     api.registerToolMetadata({
       toolName: "codex_threads",
@@ -309,7 +323,7 @@ export default definePluginEntry({
             getPluginConfig: resolveCurrentPluginConfig,
           }),
       },
-      { name: "codex_plugins" },
+      { name: "codex_plugins", workspaceAccess: "execute" },
     );
     api.registerToolMetadata({
       toolName: "codex_plugins",
@@ -355,7 +369,7 @@ export default definePluginEntry({
               });
             },
             mutate: async (update, assertCurrent) => {
-              const { mutateConfigFile } = await import("openclaw/plugin-sdk/config-mutation");
+              const { mutateConfigFile } = await loadConfigMutation();
               await mutateConfigFile({
                 writeOptions: { assertCurrent },
                 mutate: (draft) => {
@@ -411,10 +425,7 @@ export default definePluginEntry({
       }
       const config = resolveCurrentConfig();
       const [{ sessionBindingIdentity }, { retireCodexAppServerSessionGeneration }] =
-        await Promise.all([
-          import("./src/app-server/session-binding.js"),
-          import("./src/app-server/session-retirement.js"),
-        ]);
+        await Promise.all([loadSessionBinding(), loadSessionRetirement()]);
       await retireCodexAppServerSessionGeneration({
         bindingStore,
         identity: sessionBindingIdentity({

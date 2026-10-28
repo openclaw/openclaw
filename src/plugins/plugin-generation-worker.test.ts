@@ -469,13 +469,14 @@ it.each(["capture", "custody", "fork"] as const)(
   },
 );
 
-it("isolates an active artifact from a sibling capture waiting on host publication", async () => {
+it("shares one worker while a sibling capture waits on host publication", async () => {
   const root = fs.realpathSync(temp.make("plugin-generation-worker-sibling-"));
   const fixture = createFixture(path.join(root, "installed"), false);
   const cache = createPluginCache();
   const siblingCache = createPluginCache();
   const { promise: gate, resolve: releasePublication } = createDeferredCore();
   const { promise: started, resolve: publicationStarted } = createDeferredCore();
+  const posts = vi.spyOn(NativeWorker.prototype, "postMessage");
   try {
     await withInstalledCapture(root, cache, async () => {
       preparePluginNativeAdmissions(fixture.index, cache);
@@ -494,6 +495,16 @@ it("isolates an active artifact from a sibling capture waiting on host publicati
         () => withPluginCache(siblingCache, () => prepare(fixture)),
       );
       try {
+        // Resolve synchronously before the sibling's result continuation can run.
+        // The shared transport must service and release its preceding capture.
+        const now = performance.now();
+        const clock = vi.spyOn(performance, "now").mockReturnValue(now + 30_001);
+        clock.mockReturnValueOnce(now);
+        try {
+          first.artifact.prepareModule(first.artifact.resolve(fixture.entry));
+        } finally {
+          clock.mockRestore();
+        }
         await Promise.race([
           started,
           preparing.then(() => {
@@ -503,6 +514,13 @@ it("isolates an active artifact from a sibling capture waiting on host publicati
         // Registration may schedule a lazy import while another plugin is preparing.
         await nextTimer(0);
         expectSource(first.artifact, fixture.entry);
+        const captureWorkers = posts.mock.calls.flatMap(([value], index) =>
+          isRecord(value) && isRecord(value.input) && value.input.operation === "capture"
+            ? [posts.mock.contexts[index]]
+            : [],
+        );
+        expect(captureWorkers).toHaveLength(2);
+        expect(new Set(captureWorkers).size).toBe(1);
         await expect(
           preparePluginGenerationArtifact({
             rootDir: path.join(root, "missing"),

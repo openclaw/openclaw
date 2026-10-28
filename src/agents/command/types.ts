@@ -210,6 +210,8 @@ export type AgentCommandOpts = {
   cleanupCliLiveSessionOnRunEnd?: boolean;
   /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
   oneShotCliRun?: boolean;
+  /** Record a root session this run creates as a direct chat with its local operator. */
+  operatorDirectRoot?: boolean;
   /** Gateway-owned runs can late-bind plugin subagent and node runtime helpers. */
   allowGatewaySubagentBinding?: boolean;
   /** Opaque foreground fence transferred by Gateway after atomic session admission. */
@@ -297,6 +299,7 @@ export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = {
   isTerminalOutcomeObserved: undefined,
   prepareAssistantTranscriptMessage: undefined,
   internalDeliverySuppressErrors: undefined,
+  operatorDirectRoot: undefined,
 } as const satisfies Partial<AgentCommandOpts>;
 
 type AgentCommandGatewayOnlyKey = Exclude<

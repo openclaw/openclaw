@@ -273,13 +273,16 @@ export function DailyChartCompact(props: {
                         height: `${scale() > 0 ? (((totals()[index] ?? 0) / scale()) * 100).toFixed(2) : 0}%`,
                       }}
                     >
-                      <For each={series().filter((entry) => (entry.values[index] ?? 0) > 0)}>
+                      <For
+                        each={series().filter((entry) => (entry.values[index] ?? 0) > 0)}
+                        keyed={(entry) => entry.id}
+                      >
                         {(entry) => (
                           <span
                             class="cost-segment"
                             style={{
-                              background: entry.color,
-                              "flex-grow": String(entry.values[index] ?? 0),
+                              background: entry().color,
+                              "flex-grow": String(entry().values[index] ?? 0),
                             }}
                           />
                         )}
@@ -291,7 +294,7 @@ export function DailyChartCompact(props: {
                         { "daily-bar-label--hidden": index % labelEvery() !== 0 },
                       ]}
                     >
-                      {formatDayLabel(date())}
+                      {index % labelEvery() === 0 ? formatDayLabel(date()) : ""}
                     </span>
                   </button>
                 )}

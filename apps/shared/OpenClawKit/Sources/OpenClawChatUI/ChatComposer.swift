@@ -1262,6 +1262,7 @@ extension OpenClawChatComposer {
             .contentShape(Rectangle())
             .accessibilityLabel("Stop response")
             .disabled(self.viewModel.isAborting)
+            .modifier(ChatStopGuard())
         } else {
             Button {
                 self.sendDraftIfEnabled()

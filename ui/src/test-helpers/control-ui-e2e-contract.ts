@@ -26,6 +26,12 @@ export type MockGatewayRequest = {
   params?: unknown;
 };
 
+export type ControlUiMockGatewayInstallOptions = {
+  requestHandlers?: Record<string, (params: unknown) => unknown>;
+  /** Run probes after the mock WebSocket is installed, in the same init script. */
+  afterInitScript?: string;
+};
+
 export type MockGatewayRequestSelector = {
   method: string;
   match?: Record<string, unknown>;

@@ -508,6 +508,7 @@ function prepareStream(
         questionAuthority(assertCurrent, authorityKind, toolAuthorityPreparation),
         prepareCurrent,
         supportsUserReplyPromotion ? () => recordUserReply(options) : undefined,
+        admission.closedSignal,
       );
     } finally {
       activeQueueAdmissions--;

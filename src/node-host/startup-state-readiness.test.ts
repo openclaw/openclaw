@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { seedMacNodeWorkerProofState } from "../../scripts/lib/mac-node-worker-proof-state.mjs";
 import { ClientCredentialMigrationRequiredError } from "../infra/client-credential-readiness.js";
-import { readDeviceAuthTokenForTest } from "../infra/device-auth-store.test-support.js";
+import { loadDeviceAuthToken as readDeviceAuthTokenForTest } from "../infra/device-auth-store.js";
 import { generateStoredDeviceIdentity } from "../infra/device-identity-store.js";
 import * as identityStore from "../infra/device-identity.js";
 import {
@@ -162,9 +162,9 @@ describe("node-host state readiness", () => {
       const { db } = stateDb.openOpenClawStateDatabase({ env });
       expect(fixture.prepare).toHaveBeenCalledOnce();
       if (auth) {
-        expect(readDeviceAuthTokenForTest({ deviceId: "device-1", role: "node", env })?.token).toBe(
-          "test-legacy-token",
-        );
+        expect(
+          (await readDeviceAuthTokenForTest({ deviceId: "device-1", role: "node", env }))?.token,
+        ).toBe("test-legacy-token");
       } else if (device) {
         expect(contents).toMatchObject({ deviceId: identity()?.deviceId });
       } else {

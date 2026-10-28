@@ -194,6 +194,7 @@ it.each([
     kind: "internal_system",
     runId: "goal:peer-session:goal-1:announce:requester-settle:main:parent:child:yield-1",
   },
+  { sourceTool: "tool_handoff", kind: "internal_system", runId: "publication-continuation" },
 ] as const)("retains the operator source for an authenticated $sourceTool continuation", (input) =>
   withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     setRuntimeConfigSnapshot({});
