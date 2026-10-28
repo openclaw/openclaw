@@ -75,6 +75,52 @@ suite.define(() => {
     });
   });
 
+  it("waits through a Gateway suspension, then opens a short session link", async () => {
+    await withPage(async (page) => {
+      await page.clock.install();
+      const sessionKey = "agent:main:dashboard:43c2d790-c468-4950-b706-c6492f410e05";
+      const diagnostic = "sessions.resolve unavailable during gateway suspension";
+      const gateway = await installMockGateway(page, {
+        awaitInitialRoster: false,
+        sessionKey,
+        sessions: [{ key: sessionKey, label: "Spawned investigation" }],
+        historyMessages: [{ role: "assistant", content: readyText }],
+        methodResponses: {
+          "sessions.resolve": {
+            cases: [
+              {
+                match: { shortId: "43c2d790" },
+                response: {
+                  __mockError: {
+                    code: "UNAVAILABLE",
+                    message: diagnostic,
+                    retryable: true,
+                    retryAfterMs: 1_000,
+                    details: { method: "sessions.resolve", reason: "gateway-suspending" },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      });
+      await page.goto(new URL("/chat/main/43c2d790", suite.server.baseUrl).href);
+      const startup = page.locator(".agent-startup-state");
+      await startup.waitFor();
+      await pauseVirtualClock(page);
+      expect(await page.getByText("Panel failed to load", { exact: true }).count()).toBe(0);
+      expect(await page.locator("body").textContent()).not.toContain(diagnostic);
+      await page.clock.runFor(10_000);
+      expect((await gateway.getRequests("sessions.resolve")).length).toBeGreaterThan(1);
+
+      // Resume: the fixture's default resolver answers the short link again.
+      await gateway.setMethodResponse("sessions.resolve", { cases: [] });
+      await page.clock.runFor(30_000);
+      await page.getByText(readyText, { exact: true }).waitFor();
+      expect(await startup.count()).toBe(0);
+    });
+  });
+
   it("shows a real inspection failure after pending startup", async () => {
     await suite.withPage({}, async ({ page }) => {
       const diagnostic = "Agent main database inspection failed. Run openclaw doctor --fix.";

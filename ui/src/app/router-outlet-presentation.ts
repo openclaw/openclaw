@@ -1,7 +1,7 @@
 import type { RouteMatch, Router, RouterState } from "@openclaw/uirouter";
 import { createEffect, createSignal, onCleanup } from "solid-js";
 import {
-  isAgentDatabaseInspectionPendingError,
+  isAwaitingGatewayFailure,
   resolveGatewayReadRetryDelayMs,
 } from "../lib/gateway-availability.ts";
 
@@ -104,7 +104,8 @@ export function createRouterOutletPresentation<
       startupTimer = undefined;
       return;
     }
-    if (!isAgentDatabaseInspectionPendingError(match.error)) {
+    // Startup, restart, and suspension refusals clear on their own; revalidate until they do.
+    if (!isAwaitingGatewayFailure(match.error, null)) {
       clearStartupRetry();
       return;
     }

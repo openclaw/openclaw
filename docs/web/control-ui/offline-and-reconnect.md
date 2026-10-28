@@ -490,6 +490,8 @@ save clears the previous error.
 Page and sidebar refreshes that fail because the Gateway is suspending, restarting, starting,
 or unreachable show no inline error: the footer connection indicator owns that state. Each panel
 keeps its last data and refreshes automatically once the Gateway accepts work again.
+Opening a page or session link during that window shows **Starting up** instead of a
+panel error, and the page loads automatically once the Gateway accepts work again.
 Agent pickers and the agent directory clear their roster while reconnecting and
 wait for a fresh authorized list, including when the same user's role has changed.
 Established conversation names remain visible in the browser tab and chat headings,
