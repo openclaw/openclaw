@@ -47,6 +47,12 @@ it("accepts checkout-configured hooks while snapshot commands keep every hook di
     await write(path.join("git-hooks", hook), `#!/bin/sh\nprintf hook > '${sentinel}'\n`, 0o755);
   }
   await git("config", "core.hooksPath", "git-hooks");
+  await write("global-config", '[core]\nfsmonitor = "./monitor"\n');
+  await write("monitor", `#!/bin/sh\nprintf monitor > '${sentinel}'\n`, 0o755);
+  vi.stubEnv("GIT_CONFIG_GLOBAL", path.join(root, "global-config"));
+  onTestFinished(() => {
+    vi.unstubAllEnvs();
+  });
   await write("artifact.txt", "accepted\n");
 
   await expect(assertSafeWorkspace(root, runGit)).resolves.toBeUndefined();

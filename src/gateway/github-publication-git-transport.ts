@@ -408,6 +408,8 @@ async function assertGitHubPublicationIndexHasNoFilters(
   const listing = await runPublicationCommand(
     [
       "git",
+      "-c",
+      "core.fsmonitor=false",
       "ls-files",
       "--cached",
       "--format=%(objectname)",
