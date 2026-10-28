@@ -18,6 +18,7 @@ const pathMocks = vi.hoisted(() => ({
 
 vi.mock("../session-groups.js", () => ({
   deleteSessionGroup: vi.fn(),
+  ensureSessionGroupRegistered: vi.fn(),
   putSessionGroups: groupMocks.put,
   renameSessionGroup: groupMocks.rename,
   SessionGroupNotEmptyError: groupMocks.NotEmpty,
