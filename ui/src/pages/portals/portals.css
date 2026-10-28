@@ -2,7 +2,7 @@
   display: grid;
   grid-template-columns: minmax(210px, 260px) minmax(0, 1fr);
   gap: var(--space-4);
-  min-height: min(720px, calc(100vh - 190px));
+  min-height: calc(100vh - 190px);
 }
 
 .portals-rail {
