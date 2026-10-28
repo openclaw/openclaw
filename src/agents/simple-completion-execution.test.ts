@@ -4,7 +4,7 @@ import { reasoningTagTextPolicy } from "@openclaw/ai/internal/openai";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { findSourceImportBackedges } from "../../test/helpers/source-import-closure.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { hasInternalDiagnosticEventListeners } from "../infra/diagnostic-events.js";
+import { hasInternalDiagnosticEventListeners } from "../infra/diagnostic-event-listener-presence.js";
 import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { bindModelCompletionOwner } from "../llm/model-runtime-binding.js";
 import type { Model } from "../llm/types.js";
